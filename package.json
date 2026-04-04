@@ -1,6 +1,6 @@
 {
   "name": "clawdad",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Multi-agent orchestration CLI for AI coding agents. Manages persistent spoke agents across projects using ORP as the canonical data store.",
   "bin": {
     "clawdad": "bin/clawdad"
@@ -20,7 +20,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/SproutSeeds/clawdad"
+    "url": "git+https://github.com/SproutSeeds/clawdad.git"
   },
   "homepage": "https://frg.earth",
   "os": [
