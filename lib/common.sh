@@ -6,7 +6,7 @@ CLAWDAD_ROOT="${CLAWDAD_ROOT:-/Volumes/Code_2TB/code/clawdad}"
 CLAWDAD_HOME="${CLAWDAD_HOME:-$HOME/.clawdad}"
 CLAWDAD_STATE="$CLAWDAD_HOME/state.json"
 CLAWDAD_LOG="${CLAWDAD_LOG:-$HOME/Library/Logs/clawdad.log}"
-CLAWDAD_VERSION="0.2.0"
+CLAWDAD_VERSION="0.3.0"
 
 # ORP integration
 CLAWDAD_ORP="${CLAWDAD_ORP:-orp}"
@@ -20,9 +20,17 @@ CLAWDAD_DEFAULT_PROVIDER="${CLAWDAD_DEFAULT_PROVIDER:-claude}"
 
 # Provider binaries (override via env)
 CLAWDAD_JQ="${CLAWDAD_JQ:-jq}"
+CLAWDAD_NODE="${CLAWDAD_NODE:-node}"
 CLAWDAD_CLAUDE="${CLAWDAD_CLAUDE:-claude}"
 CLAWDAD_CODEX="${CLAWDAD_CODEX:-codex}"
 CLAWDAD_TMUX="${CLAWDAD_TMUX:-/opt/homebrew/bin/tmux}"
+
+# Listener defaults
+CLAWDAD_SERVER_HOST="${CLAWDAD_SERVER_HOST:-127.0.0.1}"
+CLAWDAD_SERVER_PORT="${CLAWDAD_SERVER_PORT:-4477}"
+CLAWDAD_SERVER_TOKEN_FILE="${CLAWDAD_SERVER_TOKEN_FILE:-$CLAWDAD_HOME/server.token}"
+CLAWDAD_SERVER_DEFAULT_PROJECT="${CLAWDAD_SERVER_DEFAULT_PROJECT:-}"
+CLAWDAD_SERVER_BODY_LIMIT_BYTES="${CLAWDAD_SERVER_BODY_LIMIT_BYTES:-65536}"
 
 # Supported providers
 CLAWDAD_PROVIDERS=("claude" "codex")
@@ -30,6 +38,13 @@ CLAWDAD_PROVIDERS=("claude" "codex")
 require_jq() {
   if ! command -v "$CLAWDAD_JQ" &>/dev/null; then
     echo "error: jq is required but not found" >&2
+    exit 1
+  fi
+}
+
+require_node() {
+  if ! command -v "$CLAWDAD_NODE" &>/dev/null; then
+    echo "error: node is required but not found" >&2
     exit 1
   fi
 }

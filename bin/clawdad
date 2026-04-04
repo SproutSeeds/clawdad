@@ -32,6 +32,10 @@ Commands:
   list                          List registered projects
   read <slug|path>              Read the latest response from a spoke
   watch [options]               Monitor mailboxes for responses
+  serve [options]               Run the secure HTTP listener entrypoint
+  gen-token [options]           Generate a bearer token for the listener
+  print-launch-agent [opts]     Print a macOS launchd plist for clawdad serve
+  install-launch-agent [opts]   Install a macOS launchd plist for clawdad serve
   help                          Show this help
 
 Options for register:
@@ -59,7 +63,19 @@ Environment:
   CLAWDAD_PERMISSION_MODE       Default permission mode (default: plan)
   CLAWDAD_DEFAULT_PROVIDER      Default provider (default: claude)
   CLAWDAD_ORP_WORKSPACE         ORP workspace name (default: main)
+  CLAWDAD_SERVER_HOST           Listener host (default: 127.0.0.1)
+  CLAWDAD_SERVER_PORT           Listener port (default: 4477)
+  CLAWDAD_SERVER_TOKEN_FILE     Listener bearer token file
+  CLAWDAD_SERVER_DEFAULT_PROJECT Default project for remote dispatches
 EOF
+}
+
+run_server_helper() {
+  require_node
+  export CLAWDAD_ROOT CLAWDAD_HOME CLAWDAD_LOG CLAWDAD_BIN_PATH="$_clawdad_self"
+  export CLAWDAD_SERVER_HOST CLAWDAD_SERVER_PORT CLAWDAD_SERVER_TOKEN_FILE
+  export CLAWDAD_SERVER_DEFAULT_PROJECT CLAWDAD_SERVER_BODY_LIMIT_BYTES
+  "$CLAWDAD_NODE" "$CLAWDAD_ROOT/lib/server.mjs" "$@"
 }
 
 cmd_init() {
@@ -209,6 +225,7 @@ cmd_dispatch() {
     clawdad_info "Waiting for response (timeout: ${timeout}s)..."
 
     local elapsed=0
+    local poll_interval="$CLAWDAD_POLL_INTERVAL"
     while (( elapsed < timeout )); do
       local mailbox_status
       mailbox_status=$(mailbox_read_status "$project_path")
@@ -222,10 +239,30 @@ cmd_dispatch() {
         mailbox_read_response "$project_path"
         return 1
       fi
-      sleep "$CLAWDAD_POLL_INTERVAL"
-      elapsed=$((elapsed + CLAWDAD_POLL_INTERVAL))
+
+      local sleep_for="$poll_interval"
+      if (( elapsed + sleep_for > timeout )); then
+        sleep_for=$((timeout - elapsed))
+      fi
+      (( sleep_for > 0 )) || break
+
+      sleep "$sleep_for"
+      elapsed=$((elapsed + sleep_for))
       printf "."
     done
+
+    local mailbox_status
+    mailbox_status=$(mailbox_read_status "$project_path")
+    if [[ "$mailbox_status" == "completed" ]]; then
+      echo ""
+      mailbox_read_response "$project_path"
+      return 0
+    fi
+    if [[ "$mailbox_status" == "failed" ]]; then
+      echo ""
+      mailbox_read_response "$project_path"
+      return 1
+    fi
 
     echo ""
     clawdad_warn "Timed out after ${timeout}s. Check with: clawdad status $slug"
@@ -381,6 +418,22 @@ cmd_watch() {
   watch_loop "$interval"
 }
 
+cmd_serve() {
+  run_server_helper serve "$@"
+}
+
+cmd_gen_token() {
+  run_server_helper gen-token "$@"
+}
+
+cmd_print_launch_agent() {
+  run_server_helper print-launch-agent "$@"
+}
+
+cmd_install_launch_agent() {
+  run_server_helper install-launch-agent "$@"
+}
+
 # Main dispatch
 main() {
   local cmd="${1:-help}"
@@ -395,6 +448,10 @@ main() {
     list)       cmd_list "$@" ;;
     read)       cmd_read "$@" ;;
     watch)      cmd_watch "$@" ;;
+    serve)      cmd_serve "$@" ;;
+    gen-token)  cmd_gen_token "$@" ;;
+    print-launch-agent) cmd_print_launch_agent "$@" ;;
+    install-launch-agent) cmd_install_launch_agent "$@" ;;
     help|--help|-h) usage ;;
     version|--version|-v) echo "clawdad v$CLAWDAD_VERSION" ;;
     *)

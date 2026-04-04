@@ -43,6 +43,9 @@ clawdad read my-project
 | `clawdad list` | List registered projects (from ORP) |
 | `clawdad read <slug>` | Read latest response from a spoke |
 | `clawdad watch` | Monitor mailboxes for responses |
+| `clawdad serve` | Run a secure HTTP listener for remote/iPhone entrypoints |
+| `clawdad gen-token --write` | Generate and store a bearer token for the listener |
+| `clawdad install-launch-agent` | Install a macOS launchd plist for always-on listening |
 
 ## How It Works
 
@@ -81,7 +84,65 @@ clawdad dispatches to the right CLI based on the ORP tab's `resumeTool`:
 ## Requirements
 
 - zsh
+- node >= 18
 - jq
 - orp CLI (workspace tab management)
 - claude CLI and/or codex CLI
 - tmux (for watch daemon mode)
+
+## Home Server Listener
+
+For an always-on private entrypoint, run `clawdad` as a small authenticated HTTP service on your home machine.
+
+### 1. Generate a token
+
+```bash
+clawdad gen-token --write
+```
+
+By default this writes a bearer token to `~/.clawdad/server.token`.
+
+### 2. Install the always-on listener
+
+```bash
+clawdad install-launch-agent --default-project my-project
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.sproutseeds.clawdad.server.plist
+launchctl kickstart -k gui/$(id -u)/com.sproutseeds.clawdad.server
+```
+
+That launch agent runs:
+
+```bash
+clawdad serve --host 127.0.0.1 --port 4477 --token-file ~/.clawdad/server.token --default-project my-project
+```
+
+### 3. Send a message into Clawdad
+
+```bash
+curl -X POST http://127.0.0.1:4477/v1/dispatch \
+  -H "Authorization: Bearer $(cat ~/.clawdad/server.token)" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "What changed in this repo today?",
+    "wait": true,
+    "timeout": 120
+  }'
+```
+
+The listener also exposes:
+
+- `GET /healthz`
+- `GET /v1/list`
+- `GET /v1/status?project=<slug>`
+- `GET /v1/read?project=<slug>&raw=1`
+
+### iPhone Shortcut Path
+
+The easiest private MVP is:
+
+1. Run `clawdad serve` on your home machine.
+2. Put the machine behind Tailscale or another private network tunnel.
+3. Create an iPhone Shortcut that sends `POST /v1/dispatch` with your bearer token.
+4. Add that Shortcut to your home screen as your Clawdad app icon.
+
+If you bind the listener to anything other than `127.0.0.1`, treat the bearer token like a password and prefer an encrypted private network path.
