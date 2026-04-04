@@ -1,6 +1,6 @@
 # .clawdad
 
-This directory is managed by [clawdad](https://github.com/codymitchell/clawdad) — a multi-agent orchestration CLI for Claude Code.
+This directory is managed by [clawdad](https://github.com/SproutSeeds/clawdad) — a multi-agent orchestration CLI for Claude Code.
 
 ## What's here
 
