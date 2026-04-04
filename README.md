@@ -11,7 +11,7 @@ Provider-agnostic — works with both Claude and Codex.
 ## Install
 
 ```bash
-ln -sf /Volumes/Code_2TB/code/clawdad/bin/clawdad ~/bin/clawdad
+npm install -g clawdad
 clawdad init
 ```
 

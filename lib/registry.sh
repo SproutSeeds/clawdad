@@ -90,9 +90,12 @@ registry_add() {
     "--resume-session-id" "$session_id"
     "--json")
 
-  local result
-  result=$("${orp_cmd[@]}" 2>&1)
-  local exit_code=$?
+  local result exit_code
+  if result=$("${orp_cmd[@]}" 2>&1); then
+    exit_code=0
+  else
+    exit_code=$?
+  fi
 
   if (( exit_code != 0 )); then
     clawdad_error "Failed to add tab to ORP: $result"

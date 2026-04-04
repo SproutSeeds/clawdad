@@ -210,12 +210,17 @@ cmd_dispatch() {
 
     local elapsed=0
     while (( elapsed < timeout )); do
-      local status
-      status=$(mailbox_read_status "$project_path")
-      if [[ "$status" == "completed" || "$status" == "failed" ]]; then
+      local mailbox_status
+      mailbox_status=$(mailbox_read_status "$project_path")
+      if [[ "$mailbox_status" == "completed" ]]; then
         echo ""
         mailbox_read_response "$project_path"
         return 0
+      fi
+      if [[ "$mailbox_status" == "failed" ]]; then
+        echo ""
+        mailbox_read_response "$project_path"
+        return 1
       fi
       sleep "$CLAWDAD_POLL_INTERVAL"
       elapsed=$((elapsed + CLAWDAD_POLL_INTERVAL))

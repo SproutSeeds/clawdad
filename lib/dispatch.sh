@@ -51,13 +51,15 @@ _build_cmd_codex() {
 _extract_result_claude() {
   local output="$1"
   local result_text
-  result_text=$(echo "$output" | "$CLAWDAD_JQ" -r '
+  if ! result_text=$(echo "$output" | "$CLAWDAD_JQ" -r '
     if type == "array" then
       [.[] | select(.type == "result")] | last | .result // ""
     else
       .result // ""
     end
-  ' 2>/dev/null)
+  ' 2>/dev/null); then
+    result_text=""
+  fi
 
   # Fallback: if jq parsing fails, use raw output
   if [[ -z "$result_text" || "$result_text" == "null" ]]; then
@@ -157,8 +159,11 @@ _dispatch_background() {
   }
 
   local output exit_code
-  output=$("${cmd[@]}" 2>&1)
-  exit_code=$?
+  if output=$("${cmd[@]}" 2>&1); then
+    exit_code=0
+  else
+    exit_code=$?
+  fi
 
   if (( exit_code == 0 )); then
     # Extract result using provider-specific parser
