@@ -1,0 +1,44 @@
+{
+  "name": "clawdad",
+  "version": "0.2.0",
+  "description": "Multi-agent orchestration CLI for AI coding agents. Manages persistent spoke agents across projects using ORP as the canonical data store.",
+  "bin": {
+    "clawdad": "bin/clawdad"
+  },
+  "keywords": [
+    "ai",
+    "agents",
+    "orchestration",
+    "claude",
+    "codex",
+    "multi-agent",
+    "orp",
+    "open-research-protocol",
+    "cli"
+  ],
+  "author": "Cody Mitchell <cody@frg.earth>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fractal-research-group/clawdad"
+  },
+  "homepage": "https://frg.earth",
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "templates/",
+    "assets/clawdad-mascot.jpg",
+    "README.md",
+    "CLAUDE.md"
+  ],
+  "dependencies": {
+    "open-research-protocol": ">=0.4.18"
+  }
+}

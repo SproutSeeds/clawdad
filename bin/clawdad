@@ -1,0 +1,403 @@
+#!/usr/bin/env zsh
+# clawdad — Multi-agent orchestration CLI for Claude Code sessions
+set -euo pipefail
+
+# Resolve CLAWDAD_ROOT from the script's real location (follows symlinks)
+_clawdad_self="${0:A}"
+CLAWDAD_ROOT="${CLAWDAD_ROOT:-${_clawdad_self:h:h}}"
+
+# Source libraries
+source "$CLAWDAD_ROOT/lib/common.sh"
+source "$CLAWDAD_ROOT/lib/log.sh"
+source "$CLAWDAD_ROOT/lib/registry.sh"
+source "$CLAWDAD_ROOT/lib/mailbox.sh"
+source "$CLAWDAD_ROOT/lib/dispatch.sh"
+source "$CLAWDAD_ROOT/lib/watch.sh"
+
+usage() {
+  cat <<EOF
+clawdad v$CLAWDAD_VERSION — Multi-agent orchestration for AI coding agents
+
+Usage:
+  clawdad <command> [options]
+
+Requires: orp, jq, claude and/or codex
+
+Commands:
+  init                          Initialize clawdad (~/.clawdad + verify ORP)
+  register <path> [options]     Register a project (writes ORP tab)
+  unregister <slug|path>        Remove a project (removes ORP tab)
+  dispatch <slug|path> <msg>    Send a message to a spoke agent
+  status [slug|path]            Show status of one or all projects
+  list                          List registered projects
+  read <slug|path>              Read the latest response from a spoke
+  watch [options]               Monitor mailboxes for responses
+  help                          Show this help
+
+Options for register:
+  --slug <name>                 Custom slug (default: directory basename)
+  --description <text>          Project description
+  --provider <name>             AI provider: claude, codex (default: claude)
+
+Options for dispatch:
+  --file <path>                 Read message from file
+  --wait                        Block until response arrives
+  --timeout <sec>               Max wait seconds (default: 600)
+  --model <model>               Override model for this dispatch
+  --permission-mode <mode>      Permission mode (default: plan)
+
+Options for watch:
+  --interval <sec>              Poll interval (default: 5)
+  --daemon                      Run as tmux background daemon
+  --stop                        Stop the watch daemon
+  --once                        Single poll pass, then exit
+
+Environment:
+  CLAWDAD_HOME                  Config directory (default: ~/.clawdad)
+  CLAWDAD_LOG                   Log file (default: ~/Library/Logs/clawdad.log)
+  CLAWDAD_POLL_INTERVAL         Default poll interval (default: 5)
+  CLAWDAD_PERMISSION_MODE       Default permission mode (default: plan)
+  CLAWDAD_DEFAULT_PROVIDER      Default provider (default: claude)
+  CLAWDAD_ORP_WORKSPACE         ORP workspace name (default: main)
+EOF
+}
+
+cmd_init() {
+  require_jq
+  require_orp
+  registry_init
+}
+
+cmd_register() {
+  require_jq
+  require_orp
+
+  local project_path="" slug="" description="" provider="$CLAWDAD_DEFAULT_PROVIDER"
+
+  # Parse arguments
+  while (( $# > 0 )); do
+    case "$1" in
+      --slug) slug="$2"; shift 2 ;;
+      --description) description="$2"; shift 2 ;;
+      --provider) provider="$2"; shift 2 ;;
+      -*) clawdad_error "Unknown option: $1"; return 1 ;;
+      *) project_path="$1"; shift ;;
+    esac
+  done
+
+  if [[ -z "$project_path" ]]; then
+    clawdad_error "Usage: clawdad register <path> [--slug <name>] [--provider <claude|codex>]"
+    return 1
+  fi
+
+  # Validate provider
+  require_provider "$provider"
+
+  # Resolve to absolute path
+  project_path=$(to_absolute_path "$project_path")
+  if [[ ! -d "$project_path" ]]; then
+    clawdad_error "Directory not found: $project_path"
+    return 1
+  fi
+
+  # Default slug from basename
+  [[ -z "$slug" ]] && slug="${project_path:t}"
+
+  # Check for duplicates
+  if registry_has_path "$project_path"; then
+    clawdad_error "Project already registered: $project_path"
+    clawdad_error "Use 'clawdad unregister $slug' first to re-register"
+    return 1
+  fi
+  if registry_has_slug "$slug"; then
+    clawdad_error "Slug '$slug' already in use. Use --slug to choose a different name."
+    return 1
+  fi
+
+  # Generate session ID
+  local session_id
+  session_id=$(gen_uuid)
+
+  # Register in registry
+  registry_add "$project_path" "$session_id" "$slug" "$description" "$provider"
+
+  # Initialize mailbox
+  mailbox_init "$project_path"
+
+  clawdad_info "Registered: $slug -> $project_path (provider: $provider, session: $session_id)"
+}
+
+cmd_unregister() {
+  require_jq
+
+  local input="$1"
+  local clean=false
+  [[ "${2:-}" == "--clean" ]] && clean=true
+
+  local project_path
+  project_path=$(resolve_project "$input") || return 1
+  local slug
+  slug=$(registry_field "$project_path" "slug")
+
+  registry_remove "$project_path"
+
+  if $clean; then
+    rm -rf "$project_path/.clawdad"
+    clawdad_info "Removed .clawdad/ from $project_path"
+  fi
+
+  clawdad_info "Unregistered: $slug ($project_path)"
+}
+
+cmd_dispatch() {
+  require_jq
+
+  local input="" message="" file="" wait=false timeout="$CLAWDAD_DISPATCH_TIMEOUT"
+  local model="" permission_mode="$CLAWDAD_PERMISSION_MODE"
+
+  # Parse arguments
+  while (( $# > 0 )); do
+    case "$1" in
+      --file) file="$2"; shift 2 ;;
+      --wait) wait=true; shift ;;
+      --timeout) timeout="$2"; shift 2 ;;
+      --model) model="$2"; shift 2 ;;
+      --permission-mode) permission_mode="$2"; shift 2 ;;
+      --stdin) message=$(cat); shift ;;
+      -*)
+        clawdad_error "Unknown option: $1"; return 1 ;;
+      *)
+        if [[ -z "$input" ]]; then
+          input="$1"
+        elif [[ -z "$message" ]]; then
+          message="$1"
+        else
+          message="$message $1"
+        fi
+        shift
+        ;;
+    esac
+  done
+
+  if [[ -z "$input" ]]; then
+    clawdad_error "Usage: clawdad dispatch <slug|path> <message>"
+    return 1
+  fi
+
+  # Read from file if specified
+  if [[ -n "$file" ]]; then
+    if [[ ! -f "$file" ]]; then
+      clawdad_error "File not found: $file"
+      return 1
+    fi
+    message=$(cat "$file")
+  fi
+
+  if [[ -z "$message" ]]; then
+    clawdad_error "No message provided"
+    return 1
+  fi
+
+  local project_path
+  project_path=$(resolve_project "$input") || return 1
+
+  dispatch_to_spoke "$project_path" "$message" "$permission_mode" "$model"
+
+  if $wait; then
+    local slug
+    slug=$(registry_field "$project_path" "slug")
+    clawdad_info "Waiting for response (timeout: ${timeout}s)..."
+
+    local elapsed=0
+    while (( elapsed < timeout )); do
+      local status
+      status=$(mailbox_read_status "$project_path")
+      if [[ "$status" == "completed" || "$status" == "failed" ]]; then
+        echo ""
+        mailbox_read_response "$project_path"
+        return 0
+      fi
+      sleep "$CLAWDAD_POLL_INTERVAL"
+      elapsed=$((elapsed + CLAWDAD_POLL_INTERVAL))
+      printf "."
+    done
+
+    echo ""
+    clawdad_warn "Timed out after ${timeout}s. Check with: clawdad status $slug"
+    return 1
+  fi
+}
+
+cmd_status() {
+  require_jq
+  require_orp
+
+  local input="${1:-}" json=false
+  [[ "$input" == "--json" ]] && { json=true; input=""; }
+
+  if [[ -n "$input" ]]; then
+    local project_path
+    project_path=$(resolve_project "$input") || return 1
+
+    if $json; then
+      registry_get "$project_path"
+    else
+      local _slug _prov _st _last _cnt
+      _slug=$(registry_field "$project_path" "slug")
+      _prov=$(registry_field "$project_path" "provider")
+      _st=$(registry_field "$project_path" "status")
+      _last=$(registry_field "$project_path" "last_dispatch")
+      _cnt=$(registry_field "$project_path" "dispatch_count")
+
+      printf "%-24s %-8s %-12s last: %-20s dispatches: %s\n" \
+        "$_slug" "${_prov:-claude}" "${_st:-idle}" "${_last:-never}" "${_cnt:-0}"
+    fi
+  else
+    if $json; then
+      _orp_tabs_json
+    else
+      local tabs_json
+      tabs_json=$(_orp_tabs_json) || {
+        clawdad_error "Failed to read ORP workspace '$CLAWDAD_ORP_WORKSPACE'"
+        return 1
+      }
+
+      local tab_count
+      tab_count=$(echo "$tabs_json" | "$CLAWDAD_JQ" '.tabCount // 0')
+
+      if (( tab_count == 0 )); then
+        echo "No projects in ORP workspace '$CLAWDAD_ORP_WORKSPACE'. Use 'clawdad register <path>' to add one."
+        return 0
+      fi
+
+      printf "%-24s %-8s %-12s %-22s %s\n" "SLUG" "PROVIDER" "STATUS" "LAST DISPATCH" "COUNT"
+
+      local _tab_lines _slug _prov _path _st _last _cnt
+      _tab_lines=$(echo "$tabs_json" | "$CLAWDAD_JQ" -r '.tabs[] | "\(.title // (.path | split("/") | last))\t\(.resumeTool // "none")\t\(.path)"')
+
+      echo "$_tab_lines" | while IFS=$'\t' read -r _slug _prov _path; do
+          _st=$(state_field "$_path" "status")
+          _last=$(state_field "$_path" "last_dispatch")
+          _cnt=$(state_field "$_path" "dispatch_count")
+          printf "%-24s %-8s %-12s %-22s %s\n" \
+            "$_slug" "${_prov:-none}" "${_st:-idle}" "${_last:-never}" "${_cnt:-0}"
+        done
+    fi
+  fi
+}
+
+cmd_list() {
+  require_jq
+  require_orp
+
+  local mode="full"
+  [[ "${1:-}" == "--paths" ]] && mode="paths"
+  [[ "${1:-}" == "--slugs" ]] && mode="slugs"
+
+  local tabs_json
+  tabs_json=$(_orp_tabs_json) || {
+    clawdad_error "Failed to read ORP workspace '$CLAWDAD_ORP_WORKSPACE'"
+    return 1
+  }
+
+  case "$mode" in
+    paths)
+      echo "$tabs_json" | "$CLAWDAD_JQ" -r '.tabs[].path'
+      ;;
+    slugs)
+      echo "$tabs_json" | "$CLAWDAD_JQ" -r '.tabs[] | .title // (.path | split("/") | last)'
+      ;;
+    full)
+      local entries
+      entries=$(echo "$tabs_json" | "$CLAWDAD_JQ" -r '.tabs[] | "\(.title // (.path | split("/") | last))\t\(.resumeTool // "none")\t\(.path)"')
+      if [[ -z "$entries" ]]; then
+        echo "No projects in ORP workspace '$CLAWDAD_ORP_WORKSPACE'."
+        return 0
+      fi
+      printf "%-24s %-8s %s\n" "SLUG" "PROVIDER" "PATH"
+      echo "$entries" | while IFS=$'\t' read -r slug provider path; do
+        printf "%-24s %-8s %s\n" "$slug" "$provider" "$path"
+      done
+      ;;
+  esac
+}
+
+cmd_read() {
+  require_jq
+
+  local input="${1:-}" raw=false
+  [[ "${2:-}" == "--raw" ]] && raw=true
+
+  if [[ -z "$input" ]]; then
+    clawdad_error "Usage: clawdad read <slug|path>"
+    return 1
+  fi
+
+  local project_path
+  project_path=$(resolve_project "$input") || return 1
+
+  if $raw; then
+    mailbox_read_response_raw "$project_path"
+  else
+    mailbox_read_response "$project_path"
+  fi
+}
+
+cmd_watch() {
+  require_jq
+
+  local interval="$CLAWDAD_POLL_INTERVAL" daemon=false stop=false once=false
+
+  while (( $# > 0 )); do
+    case "$1" in
+      --interval) interval="$2"; shift 2 ;;
+      --daemon) daemon=true; shift ;;
+      --stop) stop=true; shift ;;
+      --once) once=true; shift ;;
+      *) clawdad_error "Unknown option: $1"; return 1 ;;
+    esac
+  done
+
+  if $stop; then
+    watch_daemon_stop
+    return 0
+  fi
+
+  if $daemon; then
+    watch_daemon_start
+    return 0
+  fi
+
+  if $once; then
+    watch_poll_once
+    return 0
+  fi
+
+  watch_loop "$interval"
+}
+
+# Main dispatch
+main() {
+  local cmd="${1:-help}"
+  shift 2>/dev/null || true
+
+  case "$cmd" in
+    init)       cmd_init "$@" ;;
+    register)   cmd_register "$@" ;;
+    unregister) cmd_unregister "$@" ;;
+    dispatch)   cmd_dispatch "$@" ;;
+    status)     cmd_status "$@" ;;
+    list)       cmd_list "$@" ;;
+    read)       cmd_read "$@" ;;
+    watch)      cmd_watch "$@" ;;
+    help|--help|-h) usage ;;
+    version|--version|-v) echo "clawdad v$CLAWDAD_VERSION" ;;
+    *)
+      clawdad_error "Unknown command: $cmd"
+      usage
+      return 1
+      ;;
+  esac
+}
+
+main "$@"
