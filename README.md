@@ -1,7 +1,7 @@
 # clawdad
 
 <p align="center">
-  <img src="assets/clawdad-mascot.jpg" alt="clawdad mascot" width="300">
+  <img src="assets/clawdad-readme-carousel.gif" alt="Clawdad carousel" width="420">
 </p>
 
 Multi-agent orchestration CLI for AI coding agents. Manages persistent spoke agents across your projects from a single hub, using [ORP](https://github.com/open-research-protocol/orp) as the canonical data store.
