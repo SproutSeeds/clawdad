@@ -4,7 +4,7 @@
   <img src="assets/clawdad-readme-carousel.gif" alt="Clawdad carousel" width="420">
 </p>
 
-Multi-agent orchestration CLI for AI coding agents. Manages persistent spoke agents across your projects from a single hub, using [ORP](https://github.com/open-research-protocol/orp) as the canonical data store.
+Multi-agent orchestration CLI for AI coding agents. Manages persistent spoke agents across your projects from a single hub, using [ORP](https://orp.earth) as the canonical data store.
 
 Provider-agnostic — works with Claude, Codex, and Chimera.
 
