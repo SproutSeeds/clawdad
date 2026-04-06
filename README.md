@@ -10,18 +10,68 @@ Provider-agnostic — works with Claude, Codex, and Chimera.
 
 ## Install
 
+Before you start:
+
+- install [ORP](https://orp.earth), `jq`, and at least one agent CLI: `claude` or `codex`
+- install [Tailscale](https://tailscale.com/download) on your Mac and phone if you want the private mobile app
+
 ```bash
 npm install -g clawdad
 clawdad init
 ```
 
-## Quick Start
+## Fastest Secure Setup
+
+1. Sign into Tailscale on your Mac and your phone.
+2. Register a repo with the provider you want to use.
+3. Bootstrap the private listener.
+4. Start the service once.
+5. Open the private tailnet URL on your phone.
 
 ```bash
-# Register a project bucket with an initial tracked session
-clawdad register /path/to/my-project --provider claude
+# Register a project bucket with its first tracked session
+clawdad register ~/code/my-project --provider claude
 
-# Dispatch to the active session inside that project bucket
+# Write the secure listener config, shortcut template, and service file
+clawdad secure-bootstrap --default-project my-project --apply-serve
+
+# Start it once on macOS
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.sproutseeds.clawdad.server.plist
+launchctl kickstart -k gui/$(id -u)/com.sproutseeds.clawdad.server
+
+# Or start it once on Linux
+systemctl --user daemon-reload
+systemctl --user enable --now clawdad-server.service
+
+# Verify the deployment
+clawdad secure-doctor
+```
+
+Then open:
+
+```text
+https://YOUR-DEVICE.YOUR-TAILNET.ts.net/
+```
+
+`secure-bootstrap` usually infers your current Tailscale login automatically. Add the app to your iPhone home screen if you want it to feel native.
+
+If you ever just want the local CLI and not the phone app yet, you can stop after `clawdad register`.
+
+## What You Get
+
+- project picker
+- session picker
+- add-project flow for existing repos or new repos under allowed roots
+- per-session thread viewer with lazy-loaded history
+- cross-project queue for in-flight and completed work
+- saved project summary snapshots with manual refresh
+
+Tap the summary icon beside the project picker to open the latest saved snapshot or request a fresh one.
+
+## CLI Quick Start
+
+```bash
+# Dispatch to the active session inside a tracked project bucket
 clawdad dispatch my-project "What's the architecture of this project?"
 
 # Inspect or switch tracked sessions for that directory
@@ -102,140 +152,31 @@ clawdad dispatches to the right CLI based on the active session's `resumeTool`:
 - claude CLI and/or codex CLI and/or chimera CLI
 - tmux (for watch daemon mode)
 
-## Secure Self-Hosted Setup
+## Secure Setup Notes
 
-The recommended deployment is:
+- `clawdad serve` stays on `127.0.0.1`.
+- `tailscale serve` gives you a private HTTPS URL on your tailnet.
+- the recommended path does not need a bearer token
+- `secure-bootstrap` writes `~/.clawdad/server.json`, the iPhone Shortcut template, and the OS service file for you
+- if you want multiple Tailscale users, add `--allow-user <login>` more than once
+- if you skip `--apply-serve`, `secure-bootstrap` prints the exact `tailscale serve` command to run
 
-1. `clawdad serve` listens on `127.0.0.1` only.
-2. `tailscale serve` exposes a private HTTPS URL to your tailnet.
-3. `clawdad` trusts Tailscale identity headers only on loopback requests.
-4. Your iPhone Shortcut calls the private tailnet URL instead of a public endpoint.
+The mobile app and automation routes live under the same origin:
 
-That keeps the listener off the public internet and avoids a shared bearer token in the main path.
-
-### 1. Bootstrap the secure listener
-
-```bash
-clawdad secure-bootstrap --default-project my-project --apply-serve
-```
-
-That command:
-
-- writes `~/.clawdad/server.json`
-- writes an iPhone Shortcut request template
-- writes a macOS launch agent on macOS
-- writes a systemd user unit on Linux
-- optionally runs `tailscale serve --bg` for you when `--apply-serve` is set
-
-If you want to allow more than one Tailscale user:
-
-```bash
-clawdad secure-bootstrap \
-  --default-project my-project \
-  --allow-user alice@example.com \
-  --allow-user bob@example.com \
-  --apply-serve
-```
-
-If you want an extra application-layer permission gate, require a Tailscale app capability:
-
-```bash
-clawdad secure-bootstrap \
-  --default-project my-project \
-  --require-capability example.com/cap/clawdad-dispatch \
-  --apply-serve
-```
-
-### 2. Start the always-on listener
-
-On macOS, bootstrap writes a launch agent. Start it with:
-
-```bash
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.sproutseeds.clawdad.server.plist
-launchctl kickstart -k gui/$(id -u)/com.sproutseeds.clawdad.server
-```
-
-On Linux, bootstrap writes a user unit. Start it with:
-
-```bash
-systemctl --user daemon-reload
-systemctl --user enable --now clawdad-server.service
-```
-
-If you do not use `--apply-serve`, `secure-bootstrap` prints the exact `tailscale serve` command to run.
-
-### 3. Verify the deployment
-
-```bash
-clawdad secure-doctor
-```
-
-The doctor checks:
-
-- localhost-only binding
-- auth mode
-- Tailscale status
-- Tailscale Serve forwarding
-- shortcut template presence
-- local listener health
-
-### 4. Wire up the iPhone Shortcut
-
-`secure-bootstrap` writes a request template to `~/.clawdad/shortcuts/dispatch-request.json` with the private tailnet URL, request body, and follow-up endpoints.
-
-The secure request flow is:
-
-```bash
-curl -X POST https://YOUR-DEVICE.YOUR-TAILNET.ts.net/v1/dispatch \
-  -H "Content-Type: application/json" \
-  -d '{
-    "project": "my-project",
-    "message": "What changed in this repo today?",
-    "wait": true
-  }'
-```
-
-No bearer token is required in the recommended Tailscale path. Authentication comes from your tailnet identity and optional app capabilities.
-
-For remote Codex dispatches, Clawdad now defaults to `permissionMode=approve` unless you override it in the request body. That keeps mobile/server Codex sessions in workspace-write mode with network access instead of silently falling back to read-only planning mode.
-
-The listener exposes:
-
-- `GET /` mobile web app for iPhone/home-screen use
-- `GET /healthz`
+- `GET /`
 - `GET /v1/whoami`
 - `GET /v1/projects`
 - `GET /v1/project-roots`
+- `GET /v1/project-summary`
+- `GET /v1/history`
 - `POST /v1/projects`
 - `POST /v1/active-session`
+- `POST /v1/project-summary`
 - `POST /v1/dispatch`
-- `GET /v1/list`
-- `GET /v1/status?project=<path-or-slug>`
-- `GET /v1/read?project=<path-or-slug>&raw=1`
+- `GET /v1/status`
+- `GET /v1/read`
 
-### 5. Open the built-in front end
-
-Once `tailscale serve` is active, open your private tailnet URL in Safari:
-
-```text
-https://YOUR-DEVICE.YOUR-TAILNET.ts.net/
-```
-
-The root URL now serves a mobile-first Clawdad web app with:
-
-- project picker
-- add-project flow for choosing an existing repo under an allowed root or creating a new repo inside that root
-- plain-language message composer
-- session switching inside the selected project bucket
-- chat-thread viewer for the selected session with lazy-loaded history
-- collapsible cross-project work queue
-- a manifest/apple-touch-icon path so you can add it to your iPhone home screen
-
-The API routes still remain available underneath the same origin for Shortcuts and automation.
-
-## Legacy Token Listener
-
-The original token-based listener still works for local-only or transitional setups:
+If you want a local-only or transitional listener instead, token auth still works:
 
 ```bash
 clawdad gen-token --write

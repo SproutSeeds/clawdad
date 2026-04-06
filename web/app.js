@@ -5,6 +5,8 @@ const state = {
   selectedSessionId: "",
   threadEntries: [],
   modalThread: null,
+  summaryModalProject: "",
+  projectSummaries: {},
   projectModalOpen: false,
   projectModalMode: "existing",
   projectModalRoot: "",
@@ -52,6 +54,7 @@ const elements = {
   detailSession: document.querySelector("#detailSession"),
   detailHistoryState: document.querySelector("#detailHistoryState"),
   detailHistoryList: document.querySelector("#detailHistoryList"),
+  projectSummaryButton: document.querySelector("#projectSummaryButton"),
   projectModal: document.querySelector("#projectModal"),
   projectModalBackdrop: document.querySelector("#projectModalBackdrop"),
   projectModalClose: document.querySelector("#projectModalClose"),
@@ -64,6 +67,14 @@ const elements = {
   projectCreateButton: document.querySelector("#projectCreateButton"),
   projectModeExisting: document.querySelector("#projectModeExisting"),
   projectModeNew: document.querySelector("#projectModeNew"),
+  summaryModal: document.querySelector("#summaryModal"),
+  summaryBackdrop: document.querySelector("#summaryBackdrop"),
+  summaryClose: document.querySelector("#summaryClose"),
+  summaryProject: document.querySelector("#summaryProject"),
+  summarySession: document.querySelector("#summarySession"),
+  summaryState: document.querySelector("#summaryState"),
+  summaryList: document.querySelector("#summaryList"),
+  summaryRefreshButton: document.querySelector("#summaryRefreshButton"),
 };
 
 const autoRefreshMs = 15000;
@@ -996,6 +1007,10 @@ function currentModalThread() {
   return state.modalThread || null;
 }
 
+function currentSummaryProject() {
+  return projectByPath(state.summaryModalProject) || null;
+}
+
 function currentProjectRoot() {
   return state.projectRoots.find((root) => root.path === state.projectModalRoot) || null;
 }
@@ -1024,6 +1039,27 @@ function setHistoryState(projectPath, sessionId, nextState) {
   const key = historyKey(projectPath, sessionId);
   state.historyThreads[key] = {
     ...historyStateFor(projectPath, sessionId),
+    ...nextState,
+  };
+}
+
+function projectSummaryStateFor(projectPath) {
+  return (
+    state.projectSummaries[projectPath] || {
+      snapshots: [],
+      latestSnapshot: null,
+      loading: false,
+      pending: false,
+      initialized: false,
+      error: "",
+      summarySession: null,
+    }
+  );
+}
+
+function setProjectSummaryState(projectPath, nextState) {
+  state.projectSummaries[projectPath] = {
+    ...projectSummaryStateFor(projectPath),
     ...nextState,
   };
 }
@@ -1103,6 +1139,20 @@ function normalizeHistoryItem(item) {
     seenAt:
       String(item?.seenAt || "").trim() ||
       (normalizedStatus === "queued" ? null : answeredAt || String(item?.sentAt || "").trim() || new Date().toISOString()),
+  };
+}
+
+function normalizeProjectSummarySnapshot(snapshot) {
+  return {
+    id: String(snapshot?.id || "").trim() || makeEntryId(),
+    projectPath: String(snapshot?.projectPath || "").trim() || "",
+    createdAt: String(snapshot?.createdAt || "").trim() || null,
+    provider: String(snapshot?.provider || "").trim() || "session",
+    sessionId: String(snapshot?.sessionId || "").trim() || null,
+    sessionLabel: String(snapshot?.sessionLabel || "").trim() || "",
+    sourceEntryCount: Number.parseInt(String(snapshot?.sourceEntryCount || "0"), 10) || 0,
+    sourceSessionCount: Number.parseInt(String(snapshot?.sourceSessionCount || "0"), 10) || 0,
+    summary: String(snapshot?.summary || ""),
   };
 }
 
@@ -1608,7 +1658,10 @@ function repoOptionLabel(repo) {
 }
 
 function updateBodyModalState() {
-  document.body.classList.toggle("modal-open", Boolean(currentModalThread()) || state.projectModalOpen);
+  document.body.classList.toggle(
+    "modal-open",
+    Boolean(currentModalThread()) || state.projectModalOpen || Boolean(state.summaryModalProject),
+  );
 }
 
 function renderProjectModal() {
@@ -1933,6 +1986,113 @@ function renderModal() {
   elements.detailModal.hidden = false;
 }
 
+function buildSummaryCard(snapshot) {
+  const card = document.createElement("article");
+  card.className = "summary-card";
+
+  const copyButton = buildCopyButton({
+    copyKey: `summary:${snapshot.id}`,
+    label: "Copy summary",
+    text: snapshot.summary,
+  });
+  card.append(copyButton);
+
+  const head = document.createElement("div");
+  head.className = "summary-head";
+
+  const timestamp = document.createElement("div");
+  timestamp.className = "summary-timestamp";
+  timestamp.textContent = formatTimestamp(snapshot.createdAt) || "Saved summary";
+
+  const sourceMeta = document.createElement("div");
+  sourceMeta.className = "summary-source-meta";
+  const sourceCountLabel = `${snapshot.sourceEntryCount} note${snapshot.sourceEntryCount === 1 ? "" : "s"}`;
+  const sessionCountLabel = `${snapshot.sourceSessionCount} session${snapshot.sourceSessionCount === 1 ? "" : "s"}`;
+  const providerText = snapshot.sessionLabel || providerLabel(snapshot.provider);
+  sourceMeta.textContent = `${providerText} • ${sourceCountLabel} • ${sessionCountLabel}`;
+
+  head.append(timestamp, sourceMeta);
+
+  const body = document.createElement("div");
+  body.className = "thread-text";
+  renderRichText(body, snapshot.summary, { emptyText: "No saved summary yet." });
+
+  card.append(head, body);
+  return card;
+}
+
+function renderSummaryModal() {
+  const project = currentSummaryProject();
+  if (!project) {
+    setText(elements.summaryState, "", { empty: true });
+    clearNode(elements.summaryList);
+    elements.summaryModal.hidden = true;
+    return;
+  }
+
+  const summaryState = projectSummaryStateFor(project.path);
+  const summarySession =
+    summaryState.summarySession ||
+    currentSession() ||
+    project.activeSession ||
+    project.sessions?.find((session) => session.active) ||
+    project.sessions?.[0] ||
+    null;
+
+  elements.summaryProject.textContent = project.displayName || project.slug || fallbackProjectLabel(project.path);
+  elements.summarySession.textContent =
+    summarySession?.sessionId
+      ? `${sessionOptionLabel(summarySession)} • snapshots`
+      : "Project snapshots";
+
+  const refreshButtonLabel = elements.summaryRefreshButton.querySelector(".button-text");
+  if (refreshButtonLabel) {
+    refreshButtonLabel.textContent = summaryState.pending ? "Refreshing…" : "New summary";
+  }
+  elements.summaryRefreshButton.disabled =
+    summaryState.pending || !project.path || !summarySession?.sessionId;
+
+  if (summaryState.pending) {
+    setText(elements.summaryState, "Refreshing summary", { empty: false });
+  } else if (summaryState.error) {
+    setText(elements.summaryState, summaryState.error, { empty: false });
+  } else if (!summaryState.initialized && summaryState.loading) {
+    setText(elements.summaryState, "Loading saved summary", { empty: false });
+  } else if (summaryState.latestSnapshot?.createdAt) {
+    setText(
+      elements.summaryState,
+      `Latest snapshot • ${formatTimestamp(summaryState.latestSnapshot.createdAt)}`,
+      { empty: false },
+    );
+  } else {
+    setText(elements.summaryState, "No saved summary yet", { empty: false });
+  }
+
+  clearNode(elements.summaryList);
+  if (!summaryState.initialized && summaryState.loading) {
+    const card = document.createElement("div");
+    card.className = "history-state-card";
+    card.textContent = "Loading saved summary…";
+    elements.summaryList.append(card);
+  } else if (summaryState.error && summaryState.snapshots.length === 0) {
+    const card = document.createElement("div");
+    card.className = "history-state-card";
+    card.textContent = summaryState.error;
+    elements.summaryList.append(card);
+  } else if (summaryState.snapshots.length === 0) {
+    const card = document.createElement("div");
+    card.className = "history-state-card";
+    card.textContent = "No saved summary yet.";
+    elements.summaryList.append(card);
+  } else {
+    for (const snapshot of summaryState.snapshots) {
+      elements.summaryList.append(buildSummaryCard(snapshot));
+    }
+  }
+
+  elements.summaryModal.hidden = false;
+}
+
 function projectIsBusy(project) {
   const projectStatus = String(project?.status || "").trim().toLowerCase();
   return projectStatus === "running" || projectStatus === "dispatched";
@@ -2016,6 +2176,10 @@ function updateThreadButtonAvailability() {
     Boolean(session?.pendingCreation);
 }
 
+function updateSummaryButtonAvailability() {
+  elements.projectSummaryButton.disabled = state.projectsLoading || !state.selectedProject;
+}
+
 function updateQueueChrome() {
   elements.queueSection.classList.toggle("is-collapsed", state.queueCollapsed);
   elements.queueToggle.setAttribute("aria-expanded", String(!state.queueCollapsed));
@@ -2031,11 +2195,13 @@ function renderAll() {
   renderSessionOptions();
   renderQueueList();
   renderModal();
+  renderSummaryModal();
   renderProjectModal();
   updateMailboxState();
   updateQueueUnreadOrb();
   updateSendAvailability();
   updateThreadButtonAvailability();
+  updateSummaryButtonAvailability();
   updateQueueChrome();
   updateBodyModalState();
 }
@@ -2456,6 +2622,7 @@ async function openSessionThread(projectPath = state.selectedProject, sessionId 
     return;
   }
 
+  state.summaryModalProject = "";
   state.selectedProject = projectPath;
   state.selectedSessionId = sessionId;
   state.modalThread = {
@@ -2492,6 +2659,145 @@ function closeSessionThread() {
   renderAll();
 }
 
+async function loadProjectSummary(projectPath, { force = false } = {}) {
+  if (!projectPath) {
+    return projectSummaryStateFor(projectPath);
+  }
+
+  const existing = projectSummaryStateFor(projectPath);
+  if (existing.loading || existing.pending) {
+    return existing;
+  }
+  if (!force && existing.initialized) {
+    return existing;
+  }
+
+  setProjectSummaryState(projectPath, {
+    loading: true,
+    error: "",
+  });
+  renderAll();
+
+  try {
+    const payload = await fetchJson(
+      `/v1/project-summary?project=${encodeURIComponent(projectPath)}`,
+    );
+    setProjectSummaryState(projectPath, {
+      loading: false,
+      initialized: true,
+      error: "",
+      latestSnapshot: payload.latestSnapshot
+        ? normalizeProjectSummarySnapshot(payload.latestSnapshot)
+        : null,
+      snapshots: Array.isArray(payload.snapshots)
+        ? payload.snapshots.map(normalizeProjectSummarySnapshot)
+        : [],
+      summarySession: payload.summarySession || null,
+    });
+  } catch (error) {
+    setProjectSummaryState(projectPath, {
+      loading: false,
+      initialized: true,
+      error: error.message,
+    });
+  }
+
+  renderAll();
+  return projectSummaryStateFor(projectPath);
+}
+
+async function openProjectSummary(projectPath = state.selectedProject) {
+  if (!projectPath) {
+    return;
+  }
+
+  state.modalThread = null;
+  state.projectModalOpen = false;
+  state.summaryModalProject = projectPath;
+  renderAll();
+  await loadProjectSummary(projectPath);
+}
+
+function closeProjectSummary() {
+  state.summaryModalProject = "";
+  renderAll();
+}
+
+async function requestNewProjectSummary() {
+  const project = currentSummaryProject();
+  if (!project?.path) {
+    return;
+  }
+
+  const summaryState = projectSummaryStateFor(project.path);
+  if (summaryState.pending) {
+    return;
+  }
+
+  const session =
+    currentSession() ||
+    project.activeSession ||
+    project.sessions?.find((item) => item.active) ||
+    project.sessions?.[0] ||
+    null;
+  if (!session?.sessionId) {
+    setProjectSummaryState(project.path, {
+      error: "No tracked session is available for this project.",
+    });
+    renderAll();
+    return;
+  }
+
+  setProjectSummaryState(project.path, {
+    pending: true,
+    loading: false,
+    initialized: true,
+    error: "",
+    summarySession: {
+      sessionId: session.sessionId,
+      provider: session.provider,
+      label: sessionOptionLabel(session),
+    },
+  });
+  renderAll();
+
+  try {
+    const payload = await fetchJson("/v1/project-summary", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        project: project.path,
+        sessionId: session.sessionId,
+      }),
+    });
+
+    setProjectSummaryState(project.path, {
+      pending: false,
+      loading: false,
+      initialized: true,
+      error: "",
+      latestSnapshot: payload.latestSnapshot
+        ? normalizeProjectSummarySnapshot(payload.latestSnapshot)
+        : null,
+      snapshots: Array.isArray(payload.snapshots)
+        ? payload.snapshots.map(normalizeProjectSummarySnapshot)
+        : [],
+      summarySession: payload.summarySession || null,
+    });
+  } catch (error) {
+    setProjectSummaryState(project.path, {
+      pending: false,
+      loading: false,
+      initialized: true,
+      error: error.message,
+    });
+  }
+
+  renderAll();
+}
+
 function setProjectModalMode(mode) {
   state.projectModalMode = mode === "new" ? "new" : "existing";
   state.projectModalStatus = "";
@@ -2500,6 +2806,7 @@ function setProjectModalMode(mode) {
 }
 
 async function openProjectModal() {
+  state.summaryModalProject = "";
   state.modalThread = null;
   state.projectModalOpen = true;
   state.projectModalStatus = "";
@@ -2803,12 +3110,20 @@ function bindEvents() {
       void advanceHeaderCarousel();
     });
   }
+  elements.projectSummaryButton.addEventListener("click", () => {
+    void openProjectSummary();
+  });
   elements.projectAddButton.addEventListener("click", () => {
     void openProjectModal();
   });
   elements.dispatchForm.addEventListener("submit", handleDispatch);
   elements.detailBackdrop.addEventListener("click", closeSessionThread);
   elements.detailClose.addEventListener("click", closeSessionThread);
+  elements.summaryBackdrop.addEventListener("click", closeProjectSummary);
+  elements.summaryClose.addEventListener("click", closeProjectSummary);
+  elements.summaryRefreshButton.addEventListener("click", () => {
+    void requestNewProjectSummary();
+  });
   elements.projectModalBackdrop.addEventListener("click", closeProjectModal);
   elements.projectModalClose.addEventListener("click", closeProjectModal);
   elements.projectModalForm.addEventListener("submit", handleProjectCreate);
@@ -2924,6 +3239,10 @@ function bindEvents() {
   window.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && currentModalThread()) {
       closeSessionThread();
+      return;
+    }
+    if (event.key === "Escape" && state.summaryModalProject) {
+      closeProjectSummary();
       return;
     }
     if (event.key === "Escape" && state.projectModalOpen) {

@@ -17,7 +17,7 @@
     <link rel="manifest" href="/manifest.webmanifest?v=20260406h">
     <link rel="apple-touch-icon" href="/assets/clawdad-mascot-app.png?v=20260406h">
     <link rel="icon" href="/assets/clawdad-mascot-app.png?v=20260406h">
-    <link rel="stylesheet" href="/app.css?v=20260406af">
+    <link rel="stylesheet" href="/app.css?v=20260406ag">
   </head>
   <body>
     <main class="app-shell">
@@ -55,6 +55,16 @@
             <select id="projectSelect" name="project" disabled>
               <option value="">Loading projects…</option>
             </select>
+            <button
+              id="projectSummaryButton"
+              class="thread-button"
+              type="button"
+              aria-label="Open project summary"
+            >
+              <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M4 4.5h8M4 8h8M4 11.5h5.5" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"></path>
+              </svg>
+            </button>
             <button
               id="projectAddButton"
               class="thread-button"
@@ -176,6 +186,27 @@
       </section>
     </div>
 
-    <script type="module" src="/app.js?v=20260406af"></script>
+    <div id="summaryModal" class="detail-modal" hidden>
+      <button id="summaryBackdrop" class="detail-backdrop" type="button" aria-label="Close"></button>
+      <section class="detail-panel project-modal-panel" role="dialog" aria-modal="true" aria-labelledby="summaryProject">
+        <div class="detail-head">
+          <div class="detail-meta">
+            <div id="summaryProject" class="detail-project"></div>
+            <div id="summarySession" class="detail-session"></div>
+          </div>
+          <div class="detail-actions">
+            <button id="summaryRefreshButton" class="detail-action-button" type="button">
+              <span class="button-text">New summary</span>
+            </button>
+            <button id="summaryClose" class="detail-close" type="button" aria-label="Close">×</button>
+          </div>
+        </div>
+
+        <div id="summaryState" class="detail-history-state is-empty"></div>
+        <div id="summaryList" class="detail-history-list summary-list"></div>
+      </section>
+    </div>
+
+    <script type="module" src="/app.js?v=20260406ag"></script>
   </body>
 </html>

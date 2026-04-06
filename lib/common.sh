@@ -6,7 +6,12 @@ CLAWDAD_ROOT="${CLAWDAD_ROOT:-/Volumes/Code_2TB/code/clawdad}"
 CLAWDAD_HOME="${CLAWDAD_HOME:-$HOME/.clawdad}"
 CLAWDAD_STATE="$CLAWDAD_HOME/state.json"
 CLAWDAD_LOG="${CLAWDAD_LOG:-$HOME/Library/Logs/clawdad.log}"
-CLAWDAD_VERSION="0.3.0"
+if [[ -f "$CLAWDAD_ROOT/package.json" ]]; then
+  CLAWDAD_VERSION="$(
+    sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' "$CLAWDAD_ROOT/package.json" | head -1
+  )"
+fi
+CLAWDAD_VERSION="${CLAWDAD_VERSION:-dev}"
 
 # ORP integration
 CLAWDAD_ORP="${CLAWDAD_ORP:-orp}"
