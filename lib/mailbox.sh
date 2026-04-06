@@ -31,6 +31,7 @@ mailbox_write_request() {
   local project_path="$1" request_id="$2" message="$3"
   local mbox
   mbox="$(mailbox_dir "$project_path")"
+  mkdir -p "$mbox"
   local ts
   ts="$(iso_timestamp)"
 
@@ -52,6 +53,7 @@ mailbox_write_response() {
   local project_path="$1" request_id="$2" session_id="$3" exit_code="$4" content="$5"
   local mbox
   mbox="$(mailbox_dir "$project_path")"
+  mkdir -p "$mbox"
   local ts
   ts="$(iso_timestamp)"
 
@@ -77,6 +79,7 @@ mailbox_update_status() {
   local error="${5:-null}"
   local mbox
   mbox="$(mailbox_dir "$project_path")"
+  mkdir -p "$mbox"
   local ts
   ts="$(iso_timestamp)"
 

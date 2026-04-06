@@ -10,7 +10,13 @@ watch_poll_once() {
   # Find projects with "running" status in local state
   local running_projects
   running_projects=$("$CLAWDAD_JQ" -r \
-    '.projects | to_entries[] | select(.value.status == "running") | .key' \
+    '.projects
+      | to_entries[]
+      | select(
+          .value.status == "running"
+          or ((.value.sessions // {}) | to_entries | any(.value.status == "running"))
+        )
+      | .key' \
     "$CLAWDAD_STATE" 2>/dev/null)
 
   [[ -z "$running_projects" ]] && return 0
@@ -23,15 +29,25 @@ watch_poll_once() {
     mbox_status=$(mailbox_read_status "$project_path")
     local slug
     slug=$(registry_field "$project_path" "slug")
+    local active_session_id
+    active_session_id=$(state_field "$project_path" "active_session_id")
 
     case "$mbox_status" in
       completed)
         state_update "$project_path" "status" "completed"
         state_update "$project_path" "last_response" "$(iso_timestamp)"
+        if [[ -n "$active_session_id" ]]; then
+          state_update_session "$project_path" "$active_session_id" "status" "completed"
+          state_update_session "$project_path" "$active_session_id" "last_response" "$(iso_timestamp)"
+        fi
         clawdad_info "[$slug] completed"
         ;;
       failed)
         state_update "$project_path" "status" "failed"
+        if [[ -n "$active_session_id" ]]; then
+          state_update_session "$project_path" "$active_session_id" "status" "failed"
+          state_update_session "$project_path" "$active_session_id" "last_response" "$(iso_timestamp)"
+        fi
         clawdad_warn "[$slug] failed"
         ;;
       running)
@@ -43,6 +59,10 @@ watch_poll_once() {
           # Process died without updating status
           mailbox_update_status "$project_path" "failed" "" "" "Process $pid exited unexpectedly"
           state_update "$project_path" "status" "failed"
+          if [[ -n "$active_session_id" ]]; then
+            state_update_session "$project_path" "$active_session_id" "status" "failed"
+            state_update_session "$project_path" "$active_session_id" "last_response" "$(iso_timestamp)"
+          fi
           clawdad_warn "[$slug] process $pid exited unexpectedly"
         fi
         ;;

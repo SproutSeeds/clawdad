@@ -1,0 +1,38 @@
+<svg width="360" height="140" viewBox="0 0 360 140" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="claw-shell" x1="68" y1="32" x2="286" y2="118" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F1935B"/>
+      <stop offset="0.54" stop-color="#D96A36"/>
+      <stop offset="1" stop-color="#A94222"/>
+    </linearGradient>
+    <linearGradient id="claw-shadow" x1="170" y1="42" x2="170" y2="126" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#733019"/>
+      <stop offset="1" stop-color="#33140E"/>
+    </linearGradient>
+    <radialGradient id="claw-glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(182 92) rotate(90) scale(52 128)">
+      <stop stop-color="#FFD8B2" stop-opacity="0.34"/>
+      <stop offset="1" stop-color="#FFD8B2" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <g opacity="0.92">
+    <path d="M172.5 40C161.3 46.6 150.7 57.4 145.6 69.8C140.1 83.1 140.2 99.2 146.4 113.2L128.8 120C119.4 99.1 119.2 75.3 127.6 54.9C135.6 35.6 151.8 19.5 171.9 12.2L172.5 40Z" fill="url(#claw-shadow)"/>
+    <path d="M184.6 40.3C196.7 45.5 208.7 55.6 215.7 68.1C223.3 81.8 225.2 99.2 220.9 115L239.7 120.6C246.2 98.3 243.7 73.6 233.4 53.6C223.6 34.6 206 19.1 185.6 12.3L184.6 40.3Z" fill="url(#claw-shadow)"/>
+    <path d="M108.8 90.7C95.4 87.5 82.9 88.2 72.4 93.6C60.2 99.8 51.8 111.2 47.5 126.4C64.5 132.6 79.9 133.1 92.8 128.3C106.8 123 117.8 111.4 124.6 95.1L108.8 90.7Z" fill="url(#claw-shell)"/>
+    <path d="M97.4 30.8C87.1 41.2 80.4 52.9 78.3 65.4C75.8 80.1 80.1 94.5 91.3 106.1C106.5 96.1 115.9 83.9 119.7 70.5C123.9 55.9 121.4 40.1 112 23L97.4 30.8Z" fill="url(#claw-shell)"/>
+    <path d="M251.6 92.1C265.4 89.3 278.2 90.5 288.8 96.7C301 103.8 309 115.8 312.4 131.5C295.1 136.7 279.6 136.2 266.9 130.3C253 123.9 242.7 111.4 236.9 94.4L251.6 92.1Z" fill="url(#claw-shell)"/>
+    <path d="M264.4 31.7C274.1 42.8 280 55 281.4 67.6C283 82.3 277.8 96.4 265.8 107.1C251.3 96.3 242.6 83.5 239.7 69.9C236.4 55 240 39.4 250.9 21.7L264.4 31.7Z" fill="url(#claw-shell)"/>
+    <path d="M170.5 26.4C150.8 30 136.1 43.1 130.4 61.5C124.3 81.1 129.6 103.8 145.2 121.2C158.4 128.2 171.5 129.8 184.4 126.1C201.2 121.3 214.1 108 219.3 89.5C224.4 71.7 221.3 51.4 210 33.7C197.7 25.7 184.6 23.9 170.5 26.4Z" fill="url(#claw-shell)"/>
+    <path d="M142.1 121.1C156.6 126.7 170.9 128.2 184.7 125.1C198.8 121.9 210 113.6 217.4 100.4C212.1 112 203.6 119.8 191.5 124.3C177 129.7 161.6 129.4 145.4 123.4L142.1 121.1Z" fill="#FFD1AB" opacity="0.38"/>
+    <path d="M164.3 44.7C157.7 51 152.6 57.9 149.9 66.8C147 76.3 147.4 86.7 151.3 98.5" stroke="#FFDFC3" stroke-width="4" stroke-linecap="round" opacity="0.48"/>
+    <path d="M193 42.6C200 48 205.8 55.5 209.2 64.8C212.6 73.8 213.1 83.9 210.8 95" stroke="#6B2818" stroke-width="4.6" stroke-linecap="round" opacity="0.58"/>
+    <path d="M134.7 74.6C125.6 74.4 117 77 108.8 82.5" stroke="#6E2E1A" stroke-width="3.8" stroke-linecap="round" opacity="0.52"/>
+    <path d="M224.8 76.6C234 75.5 242.8 77.6 251.4 82.8" stroke="#6E2E1A" stroke-width="3.8" stroke-linecap="round" opacity="0.52"/>
+    <circle cx="171.8" cy="70.8" r="5.4" fill="#6B2818"/>
+    <circle cx="188.9" cy="69.2" r="4.8" fill="#6B2818" opacity="0.74"/>
+    <path d="M156 102.2C163.4 106.8 172.4 108.8 181.6 107.5C190.1 106.3 197.6 102.7 203.9 96.5" stroke="#FFDFC3" stroke-width="4.8" stroke-linecap="round" opacity="0.52"/>
+    <path d="M124.6 95.1C118 111.4 106.8 123 92.8 128.3C79.9 133.1 64.5 132.6 47.5 126.4" stroke="#5E2416" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" opacity="0.44"/>
+    <path d="M236.9 94.4C242.7 111.4 253 123.9 266.9 130.3C279.6 136.2 295.1 136.7 312.4 131.5" stroke="#5E2416" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" opacity="0.44"/>
+    <ellipse cx="179.5" cy="92" rx="118" ry="38" fill="url(#claw-glow)"/>
+  </g>
+</svg>

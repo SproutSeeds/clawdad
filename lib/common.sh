@@ -14,7 +14,7 @@ CLAWDAD_ORP_WORKSPACE="${CLAWDAD_ORP_WORKSPACE:-main}"
 
 # Defaults
 CLAWDAD_POLL_INTERVAL="${CLAWDAD_POLL_INTERVAL:-5}"
-CLAWDAD_DISPATCH_TIMEOUT="${CLAWDAD_DISPATCH_TIMEOUT:-600}"
+CLAWDAD_DISPATCH_TIMEOUT="${CLAWDAD_DISPATCH_TIMEOUT:-}"
 CLAWDAD_PERMISSION_MODE="${CLAWDAD_PERMISSION_MODE:-plan}"
 CLAWDAD_DEFAULT_PROVIDER="${CLAWDAD_DEFAULT_PROVIDER:-claude}"
 
@@ -23,17 +23,24 @@ CLAWDAD_JQ="${CLAWDAD_JQ:-jq}"
 CLAWDAD_NODE="${CLAWDAD_NODE:-node}"
 CLAWDAD_CLAUDE="${CLAWDAD_CLAUDE:-claude}"
 CLAWDAD_CODEX="${CLAWDAD_CODEX:-codex}"
+CLAWDAD_CHIMERA="${CLAWDAD_CHIMERA:-chimera}"
 CLAWDAD_TMUX="${CLAWDAD_TMUX:-/opt/homebrew/bin/tmux}"
 
 # Listener defaults
 CLAWDAD_SERVER_HOST="${CLAWDAD_SERVER_HOST:-127.0.0.1}"
 CLAWDAD_SERVER_PORT="${CLAWDAD_SERVER_PORT:-4477}"
+CLAWDAD_SERVER_CONFIG_FILE="${CLAWDAD_SERVER_CONFIG_FILE:-$CLAWDAD_HOME/server.json}"
 CLAWDAD_SERVER_TOKEN_FILE="${CLAWDAD_SERVER_TOKEN_FILE:-$CLAWDAD_HOME/server.token}"
 CLAWDAD_SERVER_DEFAULT_PROJECT="${CLAWDAD_SERVER_DEFAULT_PROJECT:-}"
 CLAWDAD_SERVER_BODY_LIMIT_BYTES="${CLAWDAD_SERVER_BODY_LIMIT_BYTES:-65536}"
+CLAWDAD_SERVER_AUTH_MODE="${CLAWDAD_SERVER_AUTH_MODE:-token}"
+CLAWDAD_SERVER_ALLOWED_USERS="${CLAWDAD_SERVER_ALLOWED_USERS:-}"
+CLAWDAD_SERVER_REQUIRED_CAPABILITY="${CLAWDAD_SERVER_REQUIRED_CAPABILITY:-}"
+CLAWDAD_SERVER_ALLOW_TAGGED_DEVICES="${CLAWDAD_SERVER_ALLOW_TAGGED_DEVICES:-false}"
+CLAWDAD_SERVER_HTTPS_PORT="${CLAWDAD_SERVER_HTTPS_PORT:-443}"
 
 # Supported providers
-CLAWDAD_PROVIDERS=("claude" "codex")
+CLAWDAD_PROVIDERS=("claude" "codex" "chimera")
 
 require_jq() {
   if ! command -v "$CLAWDAD_JQ" &>/dev/null; then
@@ -63,6 +70,7 @@ require_provider() {
   case "$provider" in
     claude) binary="$CLAWDAD_CLAUDE" ;;
     codex)  binary="$CLAWDAD_CODEX" ;;
+    chimera) binary="$CLAWDAD_CHIMERA" ;;
     *)
       echo "error: unknown provider '$provider' (supported: ${CLAWDAD_PROVIDERS[*]})" >&2
       exit 1
@@ -97,6 +105,16 @@ _orp_tabs_json() {
 resolve_project() {
   local input="$1"
   require_state
+
+  # Fast path for already-resolved absolute project directories.
+  if [[ "$input" == /* && -d "$input" ]]; then
+    local resolved_input
+    resolved_input="$(cd "$input" 2>/dev/null && pwd -P)" || true
+    if [[ -n "$resolved_input" ]]; then
+      echo "$resolved_input"
+      return 0
+    fi
+  fi
 
   local tabs_json
   tabs_json=$(_orp_tabs_json) || {

@@ -1,6 +1,6 @@
 {
   "name": "clawdad",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Multi-agent orchestration CLI for AI coding agents. Manages persistent spoke agents across projects using ORP as the canonical data store.",
   "bin": {
     "clawdad": "bin/clawdad"
@@ -33,8 +33,14 @@
   "files": [
     "bin/",
     "lib/",
+    "web/",
     "templates/",
     "assets/clawdad-mascot.jpg",
+    "assets/clawdad-mascot-app.png",
+    "assets/clawdad-mascot-cutout.png",
+    "assets/clawdad-claw.svg",
+    "assets/clawdad-wordmark.svg",
+    "assets/clawdad-header-*.jpg",
     "README.md",
     "CLAUDE.md"
   ],

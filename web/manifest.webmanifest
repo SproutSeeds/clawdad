@@ -1,0 +1,23 @@
+{
+  "name": "Clawdad",
+  "short_name": "Clawdad",
+  "description": "Secure tailnet front end for dispatching work into your local Clawdad hub.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#641516",
+  "theme_color": "#842324",
+  "icons": [
+    {
+      "src": "/assets/clawdad-mascot-app.png?v=20260406b",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/assets/clawdad-mascot.jpg?v=20260406b",
+      "sizes": "784x1168",
+      "type": "image/jpeg",
+      "purpose": "any"
+    }
+  ]
+}

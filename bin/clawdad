@@ -11,6 +11,7 @@ source "$CLAWDAD_ROOT/lib/common.sh"
 source "$CLAWDAD_ROOT/lib/log.sh"
 source "$CLAWDAD_ROOT/lib/registry.sh"
 source "$CLAWDAD_ROOT/lib/mailbox.sh"
+source "$CLAWDAD_ROOT/lib/history.sh"
 source "$CLAWDAD_ROOT/lib/dispatch.sh"
 source "$CLAWDAD_ROOT/lib/watch.sh"
 
@@ -21,32 +22,43 @@ clawdad v$CLAWDAD_VERSION — Multi-agent orchestration for AI coding agents
 Usage:
   clawdad <command> [options]
 
-Requires: orp, jq, claude and/or codex
+Requires: orp, jq, claude and/or codex and/or chimera
 
 Commands:
   init                          Initialize clawdad (~/.clawdad + verify ORP)
   register <path> [options]     Register a project (writes ORP tab)
+  add-session <project> [opts]  Add another tracked session to a project bucket
   unregister <slug|path>        Remove a project (removes ORP tab)
   dispatch <slug|path> <msg>    Send a message to a spoke agent
   status [slug|path]            Show status of one or all projects
+  sessions <slug|path>          List tracked sessions inside a project bucket
+  use-session <project> <sel>   Select the active session for a project bucket
   list                          List registered projects
   read <slug|path>              Read the latest response from a spoke
   watch [options]               Monitor mailboxes for responses
   serve [options]               Run the secure HTTP listener entrypoint
+  secure-bootstrap [options]    Write a Tailscale-first secure server setup
+  secure-doctor [options]       Verify the secure self-hosted setup
   gen-token [options]           Generate a bearer token for the listener
   print-launch-agent [opts]     Print a macOS launchd plist for clawdad serve
   install-launch-agent [opts]   Install a macOS launchd plist for clawdad serve
+  print-systemd-unit [opts]     Print a Linux systemd user unit for clawdad serve
+  install-systemd-unit [opts]   Install a Linux systemd user unit for clawdad serve
   help                          Show this help
 
 Options for register:
   --slug <name>                 Custom slug (default: directory basename)
   --description <text>          Project description
-  --provider <name>             AI provider: claude, codex (default: claude)
+  --provider <name>             AI provider: claude, codex, chimera (default: claude)
+
+Options for add-session:
+  --slug <name>                 Custom session label
+  --provider <name>             AI provider: claude, codex, chimera (default: claude)
 
 Options for dispatch:
   --file <path>                 Read message from file
   --wait                        Block until response arrives
-  --timeout <sec>               Max wait seconds (default: 600)
+  --timeout <sec>               Optional max wait seconds (default: wait indefinitely)
   --model <model>               Override model for this dispatch
   --permission-mode <mode>      Permission mode (default: plan)
 
@@ -62,19 +74,22 @@ Environment:
   CLAWDAD_POLL_INTERVAL         Default poll interval (default: 5)
   CLAWDAD_PERMISSION_MODE       Default permission mode (default: plan)
   CLAWDAD_DEFAULT_PROVIDER      Default provider (default: claude)
+  CLAWDAD_CHIMERA               Chimera CLI binary (default: chimera)
   CLAWDAD_ORP_WORKSPACE         ORP workspace name (default: main)
   CLAWDAD_SERVER_HOST           Listener host (default: 127.0.0.1)
   CLAWDAD_SERVER_PORT           Listener port (default: 4477)
+  CLAWDAD_SERVER_CONFIG_FILE    Listener config file (default: ~/.clawdad/server.json)
   CLAWDAD_SERVER_TOKEN_FILE     Listener bearer token file
   CLAWDAD_SERVER_DEFAULT_PROJECT Default project for remote dispatches
+  CLAWDAD_SERVER_AUTH_MODE      Listener auth mode: token, tailscale, hybrid
+  CLAWDAD_SERVER_ALLOWED_USERS  Comma-separated Tailscale login allowlist
+  CLAWDAD_SERVER_REQUIRED_CAPABILITY Required Tailscale app capability
 EOF
 }
 
 run_server_helper() {
   require_node
   export CLAWDAD_ROOT CLAWDAD_HOME CLAWDAD_LOG CLAWDAD_BIN_PATH="$_clawdad_self"
-  export CLAWDAD_SERVER_HOST CLAWDAD_SERVER_PORT CLAWDAD_SERVER_TOKEN_FILE
-  export CLAWDAD_SERVER_DEFAULT_PROJECT CLAWDAD_SERVER_BODY_LIMIT_BYTES
   "$CLAWDAD_NODE" "$CLAWDAD_ROOT/lib/server.mjs" "$@"
 }
 
@@ -102,7 +117,7 @@ cmd_register() {
   done
 
   if [[ -z "$project_path" ]]; then
-    clawdad_error "Usage: clawdad register <path> [--slug <name>] [--provider <claude|codex>]"
+    clawdad_error "Usage: clawdad register <path> [--slug <name>] [--provider <claude|codex|chimera>]"
     return 1
   fi
 
@@ -143,26 +158,142 @@ cmd_register() {
   clawdad_info "Registered: $slug -> $project_path (provider: $provider, session: $session_id)"
 }
 
+choose_unique_session_slug() {
+  local project_path="$1" provider="${2:-$CLAWDAD_DEFAULT_PROVIDER}" preferred="${3:-}"
+
+  if [[ -n "$preferred" ]]; then
+    echo "$preferred"
+    return 0
+  fi
+
+  local base candidate suffix
+  base="${project_path:t}"
+  candidate="$base"
+  if registry_has_slug "$candidate"; then
+    candidate="$base ($provider)"
+  fi
+
+  if ! registry_has_slug "$candidate"; then
+    echo "$candidate"
+    return 0
+  fi
+
+  suffix=2
+  while true; do
+    candidate="$base ($provider $suffix)"
+    if ! registry_has_slug "$candidate"; then
+      echo "$candidate"
+      return 0
+    fi
+    (( suffix += 1 ))
+  done
+}
+
+cmd_add_session() {
+  require_jq
+  require_orp
+
+  local input="" slug="" provider="$CLAWDAD_DEFAULT_PROVIDER"
+
+  while (( $# > 0 )); do
+    case "$1" in
+      --slug) slug="$2"; shift 2 ;;
+      --provider) provider="$2"; shift 2 ;;
+      -*) clawdad_error "Unknown option: $1"; return 1 ;;
+      *) input="$1"; shift ;;
+    esac
+  done
+
+  if [[ -z "$input" ]]; then
+    clawdad_error "Usage: clawdad add-session <project> [--slug <name>] [--provider <claude|codex|chimera>]"
+    return 1
+  fi
+
+  require_provider "$provider"
+
+  local project_path=""
+  if [[ "$input" == /* ]]; then
+    local resolved_input
+    resolved_input=$(to_absolute_path "$input")
+    if [[ -n "$resolved_input" ]] && [[ -d "$resolved_input" ]] && registry_has_path "$resolved_input"; then
+      project_path="$resolved_input"
+    fi
+  fi
+
+  if [[ -z "$project_path" ]]; then
+    project_path=$(resolve_project "$input") || {
+      clawdad_error "Project '$input' is not tracked yet. Use 'clawdad register <path>' first."
+      return 1
+    }
+  fi
+
+  if ! registry_has_path "$project_path"; then
+    clawdad_error "Project '$project_path' is not tracked yet. Use 'clawdad register <path>' first."
+    return 1
+  fi
+
+  [[ -z "$slug" ]] && slug=$(choose_unique_session_slug "$project_path" "$provider")
+
+  if registry_has_slug "$slug"; then
+    clawdad_error "Slug '$slug' already in use. Use --slug to choose a different name."
+    return 1
+  fi
+
+  local session_id
+  session_id=$(gen_uuid)
+
+  registry_add "$project_path" "$session_id" "$slug" "" "$provider"
+  mailbox_init "$project_path"
+
+  clawdad_info "Added session: $slug -> $project_path (provider: $provider, session: $session_id)"
+}
+
 cmd_unregister() {
   require_jq
 
-  local input="$1"
+  local input="${1:-}"
   local clean=false
   [[ "${2:-}" == "--clean" ]] && clean=true
 
+  if [[ -z "$input" ]]; then
+    clawdad_error "Usage: clawdad unregister <slug|path> [--clean]"
+    return 1
+  fi
+
   local project_path
   project_path=$(resolve_project "$input") || return 1
-  local slug
-  slug=$(registry_field "$project_path" "slug")
 
-  registry_remove "$project_path"
+  local session_json="" session_count
+  session_count=$(registry_session_count "$project_path")
+  if [[ "$input" != /* ]]; then
+    session_json=$(registry_session_json "$project_path" "$input" 2>/dev/null || true)
+  fi
+
+  local slug="" session_id=""
+  if [[ -n "$session_json" ]]; then
+    slug=$(echo "$session_json" | "$CLAWDAD_JQ" -r '.title // ""')
+    session_id=$(echo "$session_json" | "$CLAWDAD_JQ" -r '.resumeSessionId // ""')
+    registry_remove "$project_path" "$session_id" "$slug"
+  else
+    if [[ "$session_count" =~ ^[0-9]+$ ]] && (( session_count > 1 )); then
+      clawdad_error "Project bucket '$project_path' has multiple tracked sessions."
+      clawdad_error "Unregister by exact session title or session id instead."
+      return 1
+    fi
+    slug=$(registry_field "$project_path" "slug")
+    registry_remove "$project_path"
+  fi
 
   if $clean; then
     rm -rf "$project_path/.clawdad"
     clawdad_info "Removed .clawdad/ from $project_path"
   fi
 
-  clawdad_info "Unregistered: $slug ($project_path)"
+  if [[ -n "$session_id" ]]; then
+    clawdad_info "Unregistered session: $slug ($project_path, $session_id)"
+  else
+    clawdad_info "Unregistered: $slug ($project_path)"
+  fi
 }
 
 cmd_dispatch() {
@@ -214,6 +345,16 @@ cmd_dispatch() {
     return 1
   fi
 
+  if [[ -n "$timeout" ]]; then
+    if [[ ! "$timeout" =~ ^[0-9]+$ ]]; then
+      clawdad_error "Timeout must be a non-negative integer"
+      return 1
+    fi
+    if (( timeout == 0 )); then
+      timeout=""
+    fi
+  fi
+
   local project_path
   project_path=$(resolve_project "$input") || return 1
 
@@ -222,11 +363,15 @@ cmd_dispatch() {
   if $wait; then
     local slug
     slug=$(registry_field "$project_path" "slug")
-    clawdad_info "Waiting for response (timeout: ${timeout}s)..."
+    if [[ -n "$timeout" ]]; then
+      clawdad_info "Waiting for response (timeout: ${timeout}s)..."
+    else
+      clawdad_info "Waiting for response..."
+    fi
 
     local elapsed=0
     local poll_interval="$CLAWDAD_POLL_INTERVAL"
-    while (( elapsed < timeout )); do
+    while true; do
       local mailbox_status
       mailbox_status=$(mailbox_read_status "$project_path")
       if [[ "$mailbox_status" == "completed" ]]; then
@@ -241,10 +386,15 @@ cmd_dispatch() {
       fi
 
       local sleep_for="$poll_interval"
-      if (( elapsed + sleep_for > timeout )); then
-        sleep_for=$((timeout - elapsed))
+      if [[ -n "$timeout" ]]; then
+        if (( elapsed >= timeout )); then
+          break
+        fi
+        if (( elapsed + sleep_for > timeout )); then
+          sleep_for=$((timeout - elapsed))
+        fi
+        (( sleep_for > 0 )) || break
       fi
-      (( sleep_for > 0 )) || break
 
       sleep "$sleep_for"
       elapsed=$((elapsed + sleep_for))
@@ -265,7 +415,11 @@ cmd_dispatch() {
     fi
 
     echo ""
-    clawdad_warn "Timed out after ${timeout}s. Check with: clawdad status $slug"
+    if [[ -n "$timeout" ]]; then
+      clawdad_warn "Timed out after ${timeout}s. Check with: clawdad status $slug"
+    else
+      clawdad_warn "Waiting ended before a response arrived. Check with: clawdad status $slug"
+    fi
     return 1
   fi
 }
@@ -326,6 +480,76 @@ cmd_status() {
         done
     fi
   fi
+}
+
+cmd_sessions() {
+  require_jq
+  require_orp
+
+  local input="${1:-}" json=false
+  if [[ "$input" == "--json" ]]; then
+    json=true
+    input="${2:-}"
+  elif [[ "${2:-}" == "--json" ]]; then
+    json=true
+  fi
+
+  if [[ -z "$input" ]]; then
+    clawdad_error "Usage: clawdad sessions <slug|path> [--json]"
+    return 1
+  fi
+
+  local project_path sessions_json
+  project_path=$(resolve_project "$input") || return 1
+  sessions_json=$(registry_list_sessions_json "$project_path")
+
+  if $json; then
+    echo "$sessions_json"
+    return 0
+  fi
+
+  local session_count
+  session_count=$(echo "$sessions_json" | "$CLAWDAD_JQ" 'length')
+  if (( session_count == 0 )); then
+    echo "No tracked sessions for $project_path."
+    return 0
+  fi
+
+  printf "%-6s %-24s %-8s %-10s %-12s %s\n" "ACTIVE" "SLUG" "PROVIDER" "STATUS" "DISPATCHES" "SESSION ID"
+  echo "$sessions_json" | "$CLAWDAD_JQ" -r '.[] | [
+    (if .active then "*" else "" end),
+    .slug,
+    .provider,
+    .status,
+    (.dispatchCount | tostring),
+    .sessionId
+  ] | @tsv' | while IFS=$'\t' read -r active slug provider status dispatches session_id; do
+    printf "%-6s %-24s %-8s %-10s %-12s %s\n" \
+      "$active" "$slug" "$provider" "$status" "$dispatches" "$session_id"
+  done
+}
+
+cmd_use_session() {
+  require_jq
+  require_orp
+
+  local input="${1:-}" selector="${2:-}"
+  if [[ -z "$input" || -z "$selector" ]]; then
+    clawdad_error "Usage: clawdad use-session <project> <session-title|session-id>"
+    return 1
+  fi
+
+  local project_path
+  project_path=$(resolve_project "$input") || return 1
+
+  local session_id
+  session_id=$(registry_select_session "$project_path" "$selector") || return 1
+
+  local slug provider
+  slug=$(registry_session_field "$project_path" "$session_id" "title")
+  provider=$(registry_session_field "$project_path" "$session_id" "resumeTool")
+
+  clawdad_info "Active session: $slug (${provider:-$CLAWDAD_DEFAULT_PROVIDER}, $session_id)"
 }
 
 cmd_list() {
@@ -422,6 +646,14 @@ cmd_serve() {
   run_server_helper serve "$@"
 }
 
+cmd_secure_bootstrap() {
+  run_server_helper secure-bootstrap "$@"
+}
+
+cmd_secure_doctor() {
+  run_server_helper secure-doctor "$@"
+}
+
 cmd_gen_token() {
   run_server_helper gen-token "$@"
 }
@@ -434,6 +666,14 @@ cmd_install_launch_agent() {
   run_server_helper install-launch-agent "$@"
 }
 
+cmd_print_systemd_unit() {
+  run_server_helper print-systemd-unit "$@"
+}
+
+cmd_install_systemd_unit() {
+  run_server_helper install-systemd-unit "$@"
+}
+
 # Main dispatch
 main() {
   local cmd="${1:-help}"
@@ -442,16 +682,23 @@ main() {
   case "$cmd" in
     init)       cmd_init "$@" ;;
     register)   cmd_register "$@" ;;
+    add-session) cmd_add_session "$@" ;;
     unregister) cmd_unregister "$@" ;;
     dispatch)   cmd_dispatch "$@" ;;
     status)     cmd_status "$@" ;;
+    sessions)   cmd_sessions "$@" ;;
+    use-session) cmd_use_session "$@" ;;
     list)       cmd_list "$@" ;;
     read)       cmd_read "$@" ;;
     watch)      cmd_watch "$@" ;;
     serve)      cmd_serve "$@" ;;
+    secure-bootstrap) cmd_secure_bootstrap "$@" ;;
+    secure-doctor) cmd_secure_doctor "$@" ;;
     gen-token)  cmd_gen_token "$@" ;;
     print-launch-agent) cmd_print_launch_agent "$@" ;;
     install-launch-agent) cmd_install_launch_agent "$@" ;;
+    print-systemd-unit) cmd_print_systemd_unit "$@" ;;
+    install-systemd-unit) cmd_install_systemd_unit "$@" ;;
     help|--help|-h) usage ;;
     version|--version|-v) echo "clawdad v$CLAWDAD_VERSION" ;;
     *)
