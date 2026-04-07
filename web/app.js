@@ -3,6 +3,17 @@ const state = {
   projectRoots: [],
   selectedProject: "",
   selectedSessionId: "",
+  sessionTitleModalProject: "",
+  sessionTitleModalSessionId: "",
+  sessionTitleDraft: "",
+  sessionTitlePending: false,
+  sessionTitleError: "",
+  removeModalKind: "",
+  removeModalProject: "",
+  removeModalSessionId: "",
+  removeModalPending: false,
+  removeModalError: "",
+  pendingSessionRenames: {},
   threadEntries: [],
   modalThread: null,
   summaryModalProject: "",
@@ -35,8 +46,10 @@ const elements = {
   headerCatchphrase: document.querySelector("#headerCatchphrase"),
   projectSelect: document.querySelector("#projectSelect"),
   projectAddButton: document.querySelector("#projectAddButton"),
+  projectDeleteButton: document.querySelector("#projectDeleteButton"),
   sessionControl: document.querySelector(".session-control"),
   sessionSelect: document.querySelector("#sessionSelect"),
+  sessionDeleteButton: document.querySelector("#sessionDeleteButton"),
   sessionThreadButton: document.querySelector("#sessionThreadButton"),
   messageInput: document.querySelector("#messageInput"),
   dispatchForm: document.querySelector("#dispatchForm"),
@@ -67,6 +80,25 @@ const elements = {
   projectCreateButton: document.querySelector("#projectCreateButton"),
   projectModeExisting: document.querySelector("#projectModeExisting"),
   projectModeNew: document.querySelector("#projectModeNew"),
+  sessionRenameButton: document.querySelector("#sessionRenameButton"),
+  sessionTitleModal: document.querySelector("#sessionTitleModal"),
+  sessionTitleBackdrop: document.querySelector("#sessionTitleBackdrop"),
+  sessionTitleClose: document.querySelector("#sessionTitleClose"),
+  sessionTitleForm: document.querySelector("#sessionTitleForm"),
+  sessionTitleProject: document.querySelector("#sessionTitleProject"),
+  sessionTitleSession: document.querySelector("#sessionTitleSession"),
+  sessionTitleState: document.querySelector("#sessionTitleState"),
+  sessionTitleInput: document.querySelector("#sessionTitleInput"),
+  sessionTitleSaveButton: document.querySelector("#sessionTitleSaveButton"),
+  removeModal: document.querySelector("#removeModal"),
+  removeBackdrop: document.querySelector("#removeBackdrop"),
+  removeClose: document.querySelector("#removeClose"),
+  removeForm: document.querySelector("#removeForm"),
+  removeTitle: document.querySelector("#removeTitle"),
+  removeSubtitle: document.querySelector("#removeSubtitle"),
+  removeState: document.querySelector("#removeState"),
+  removeBody: document.querySelector("#removeBody"),
+  removeConfirmButton: document.querySelector("#removeConfirmButton"),
   summaryModal: document.querySelector("#summaryModal"),
   summaryBackdrop: document.querySelector("#summaryBackdrop"),
   summaryClose: document.querySelector("#summaryClose"),
@@ -87,6 +119,13 @@ const historyPageSize = 20;
 const headerCarouselIntervalMs = 11000;
 const headerCarouselVersion = "20260406m";
 const headerCatchphraseSwapMs = 150;
+const featuredProjectRules = Object.freeze({
+  "global-mind": {
+    displayName: "Global Mind",
+    accent: "gold",
+    role: "global-mind",
+  },
+});
 const pendingSessionPhrases = [
   "loading up a fresh beaux",
   "stirrin' a new bayou lane",
@@ -94,6 +133,58 @@ const pendingSessionPhrases = [
   "pourin' a fresh clawdad session",
   "settin' the table for a new beaux",
   "spinnin' up a new swamp-side lane",
+];
+const processingStatusPhrases = [
+  "stirrin' dat roux",
+  "workin' dat boil",
+  "shakin' de skillet",
+  "simmerin' somethin' nice",
+  "lagniappe in motion",
+  "bayou gears turnin'",
+  "mudbug math brewin'",
+  "butter gettin' warm",
+  "coaxin' de craws",
+  "lettin' de pot talk",
+  "slow rollin' dat spice",
+  "swamp steam risin'",
+  "cher, it's cookin'",
+  "stayin' on de flame",
+  "de claws are clackin'",
+  "gumbofyin' de plan",
+  "marinatin' de answer",
+  "boilin' up de next bit",
+  "runnin' de bayou lane",
+  "heatin' de cast iron",
+  "cajun gears hummin'",
+  "lettin' it steep, cher",
+  "de broth is bubblin'",
+  "seasonin' de thread",
+  "workin' dat back burner",
+  "brewin' de beignet logic",
+  "bayou sparks flyin'",
+  "mud stove hummin'",
+  "de pot got opinions",
+  "roux gettin' darker",
+  "coastin' on hot butter",
+  "fishin' for de finish",
+  "swamp smoke curlin'",
+  "de skillet's singin'",
+  "rakin' de coals",
+  "catfish current flowin'",
+  "de dock lights blinkin'",
+  "stitchin' de net tight",
+  "pinchin' de details",
+  "butter in de pan",
+  "de bayou got traction",
+  "saucin' up de answer",
+  "lettin' de craw think",
+  "de kettle got momentum",
+  "de flame's holdin'",
+  "hush now, it's brewin'",
+  "scootin' through de reeds",
+  "de spice rack's workin'",
+  "greasin' de gears, cher",
+  "cajun butter meltin'",
 ];
 const headerCatchphraseLeadIns = [
   "Pass dat",
@@ -152,7 +243,12 @@ const headerCatchphrases = {
   cursor: 0,
   swapTimerId: 0,
 };
+let detailHistoryRenderSnapshot = null;
 const pendingSessionCycle = {
+  order: [],
+  cursor: 0,
+};
+const processingPhraseCycle = {
   order: [],
   cursor: 0,
 };
@@ -255,6 +351,49 @@ function basenameFromPath(projectPath) {
   return parts[parts.length - 1] || value;
 }
 
+function featuredProjectMeta(projectPath, fallbackDisplayName = "") {
+  const slug = basenameFromPath(projectPath);
+  const rule = featuredProjectRules[slug.toLowerCase()] || null;
+  return {
+    slug,
+    displayName: rule?.displayName || fallbackDisplayName || slug,
+    featured: Boolean(rule),
+    featuredAccent: rule?.accent || "",
+    specialRole: rule?.role || "",
+  };
+}
+
+function compareProjects(left, right) {
+  const leftFeatured = Boolean(left?.featured);
+  const rightFeatured = Boolean(right?.featured);
+  if (leftFeatured !== rightFeatured) {
+    return leftFeatured ? -1 : 1;
+  }
+
+  const leftName = String(left?.displayName || left?.slug || left?.path || "");
+  const rightName = String(right?.displayName || right?.slug || right?.path || "");
+  return leftName.localeCompare(rightName);
+}
+
+function hydrateProjectVisuals(project) {
+  if (!project?.path) {
+    return project;
+  }
+
+  const visualMeta = featuredProjectMeta(
+    project.path,
+    String(project.displayName || project.slug || basenameFromPath(project.path) || ""),
+  );
+  return {
+    ...project,
+    slug: project.slug || visualMeta.slug,
+    displayName: visualMeta.displayName,
+    featured: visualMeta.featured,
+    featuredAccent: visualMeta.featuredAccent,
+    specialRole: visualMeta.specialRole,
+  };
+}
+
 function headerCatchphraseParts(phraseIndex) {
   if (!Number.isInteger(phraseIndex) || phraseIndex < 0) {
     return {
@@ -302,6 +441,82 @@ function nextPendingSessionPhrase() {
     pendingSessionPhrases[0];
   pendingSessionCycle.cursor += 1;
   return phrase;
+}
+
+function resetProcessingPhraseCycle(previousPhraseIndex = -1) {
+  const order = shuffleInPlace(
+    Array.from({ length: processingStatusPhrases.length }, (_value, index) => index),
+  );
+
+  if (
+    order.length > 1 &&
+    previousPhraseIndex >= 0 &&
+    order[0] === previousPhraseIndex
+  ) {
+    const swapIndex = 1 + randomInteger(order.length - 1);
+    [order[0], order[swapIndex]] = [order[swapIndex], order[0]];
+  }
+
+  processingPhraseCycle.order = order;
+  processingPhraseCycle.cursor = 0;
+}
+
+function currentProcessingPhrase() {
+  if (processingStatusPhrases.length === 0) {
+    return "stirrin' dat roux";
+  }
+
+  if (
+    processingPhraseCycle.order.length === 0 ||
+    processingPhraseCycle.cursor < 0 ||
+    processingPhraseCycle.cursor >= processingPhraseCycle.order.length
+  ) {
+    resetProcessingPhraseCycle();
+  }
+
+  return (
+    processingStatusPhrases[processingPhraseCycle.order[processingPhraseCycle.cursor]] ||
+    processingStatusPhrases[0]
+  );
+}
+
+function advanceProcessingPhraseCycle() {
+  if (processingStatusPhrases.length === 0) {
+    return;
+  }
+
+  const previousPhraseIndex =
+    processingPhraseCycle.order[processingPhraseCycle.cursor] ?? -1;
+  processingPhraseCycle.cursor += 1;
+
+  if (processingPhraseCycle.cursor >= processingPhraseCycle.order.length) {
+    resetProcessingPhraseCycle(previousPhraseIndex);
+  }
+}
+
+function processingCopyActive() {
+  if (state.threadEntries.some((entry) => entry.status === "queued")) {
+    return true;
+  }
+
+  if (state.projects.some((project) => projectIsBusy(project))) {
+    return true;
+  }
+
+  return currentThreadEntries().some((entry) => entry.status === "queued");
+}
+
+function renderProcessingCopy() {
+  if (!processingCopyActive()) {
+    return;
+  }
+
+  renderQueueList();
+  updateMailboxState();
+  updateSendAvailability();
+  if (currentModalThread()) {
+    renderModal();
+  }
 }
 
 function headerCatchphraseInTailScore(phraseIndex, previousPhraseIndex = -1) {
@@ -969,19 +1184,73 @@ function providerLabel(provider) {
   return value || "session";
 }
 
+function cleanSessionTitle(rawTitle, provider) {
+  const title = String(rawTitle || "").trim();
+  const normalizedProvider = providerLabel(provider);
+  if (!title) {
+    return normalizedProvider;
+  }
+
+  const providerSuffixPattern = new RegExp(`\\s*\\(${normalizedProvider}\\)$`, "i");
+  return title.replace(providerSuffixPattern, "").trim() || normalizedProvider;
+}
+
 function sessionFingerprint(sessionId) {
   const value = String(sessionId || "").trim();
   if (!value) {
     return "unknown";
   }
-  return value.length <= 8 ? value : `…${value.slice(-8)}`;
+  return value.length <= 4 ? value : `…${value.slice(-4)}`;
 }
 
-function sessionOptionLabel(session) {
+function sessionFixedSuffix(session) {
+  return `${providerLabel(session?.provider)} • ${sessionFingerprint(session?.sessionId)}`;
+}
+
+function sessionRenameKey(projectPath, sessionId) {
+  return `${String(projectPath || "").trim()}::${String(sessionId || "").trim()}`;
+}
+
+function pendingSessionRename(projectPath, sessionId) {
+  if (!projectPath || !sessionId) {
+    return null;
+  }
+
+  return state.pendingSessionRenames[sessionRenameKey(projectPath, sessionId)] || null;
+}
+
+function setPendingSessionRename(projectPath, sessionId, renameState = null) {
+  if (!projectPath || !sessionId) {
+    return;
+  }
+
+  const key = sessionRenameKey(projectPath, sessionId);
+  if (renameState) {
+    state.pendingSessionRenames[key] = {
+      ...renameState,
+    };
+    return;
+  }
+
+  delete state.pendingSessionRenames[key];
+}
+
+function sessionDisplayTitle(session, projectPath = "") {
+  const resolvedProjectPath = String(session?.path || projectPath || "").trim();
+  const pendingRename = pendingSessionRename(resolvedProjectPath, session?.sessionId);
+  return cleanSessionTitle(pendingRename?.title || session?.slug, session?.provider);
+}
+
+function sessionRenamePending(projectPath, sessionId) {
+  return Boolean(pendingSessionRename(projectPath, sessionId));
+}
+
+function sessionOptionLabel(session, projectPath = "") {
   if (session?.pendingCreation && session?.loadingLabel) {
     return session.loadingLabel;
   }
-  return `${providerLabel(session?.provider)} • ${sessionFingerprint(session?.sessionId)}`;
+  const title = sessionDisplayTitle(session, projectPath);
+  return `${title} • ${sessionFixedSuffix(session)}`;
 }
 
 function makeEntryId() {
@@ -1001,6 +1270,27 @@ function currentProject() {
 
 function currentSession() {
   return currentProject()?.sessions?.find((session) => session.sessionId === state.selectedSessionId) || null;
+}
+
+function currentSessionTitleTarget() {
+  const project = projectByPath(state.sessionTitleModalProject);
+  const session =
+    project?.sessions?.find((item) => item.sessionId === state.sessionTitleModalSessionId) || null;
+  return {
+    project: project || null,
+    session: session || null,
+  };
+}
+
+function currentRemoveTarget() {
+  const project = projectByPath(state.removeModalProject);
+  const session =
+    project?.sessions?.find((item) => item.sessionId === state.removeModalSessionId) || null;
+  return {
+    project: project || null,
+    session: session || null,
+    kind: state.removeModalKind || "",
+  };
 }
 
 function currentModalThread() {
@@ -1035,6 +1325,82 @@ function historyStateFor(projectPath, sessionId) {
   );
 }
 
+function currentModalThreadKey() {
+  const modalThread = currentModalThread();
+  if (!modalThread?.projectPath || !modalThread?.sessionId) {
+    return "";
+  }
+  return historyKey(modalThread.projectPath, modalThread.sessionId);
+}
+
+function historyRenderSignature(historyState) {
+  const itemsSignature = Array.isArray(historyState?.items)
+    ? historyState.items
+        .map((entry) =>
+          [
+            String(entry?.requestId || ""),
+            String(entry?.status || ""),
+            String(entry?.answeredAt || ""),
+            String(entry?.seenAt || ""),
+            String(entry?.message || "").length,
+            String(entry?.response || "").length,
+          ].join("~"),
+        )
+        .join("|")
+    : "";
+
+  return JSON.stringify({
+    error: String(historyState?.error || ""),
+    nextCursor: String(historyState?.nextCursor || ""),
+    initialized: Boolean(historyState?.initialized),
+    items: itemsSignature,
+  });
+}
+
+function captureDetailHistorySnapshot(threadKey, mode = "smart") {
+  if (!threadKey || !elements.detailHistoryList) {
+    return null;
+  }
+
+  const { scrollTop, scrollHeight, clientHeight } = elements.detailHistoryList;
+  return {
+    threadKey,
+    mode,
+    previousTop: scrollTop,
+    previousHeight: scrollHeight,
+    nearBottom: scrollHeight - clientHeight - scrollTop < 72,
+  };
+}
+
+function queueDetailHistorySnapshot(snapshot) {
+  detailHistoryRenderSnapshot = snapshot || null;
+}
+
+function applyDetailHistorySnapshot(snapshot) {
+  if (!snapshot || !elements.detailHistoryList) {
+    return;
+  }
+
+  window.requestAnimationFrame(() => {
+    if (currentModalThreadKey() !== snapshot.threadKey) {
+      return;
+    }
+
+    if (snapshot.mode === "prepend-older") {
+      elements.detailHistoryList.scrollTop =
+        elements.detailHistoryList.scrollHeight - snapshot.previousHeight + snapshot.previousTop;
+      return;
+    }
+
+    if (snapshot.mode === "bottom" || snapshot.nearBottom) {
+      elements.detailHistoryList.scrollTop = elements.detailHistoryList.scrollHeight;
+      return;
+    }
+
+    elements.detailHistoryList.scrollTop = snapshot.previousTop;
+  });
+}
+
 function setHistoryState(projectPath, sessionId, nextState) {
   const key = historyKey(projectPath, sessionId);
   state.historyThreads[key] = {
@@ -1048,6 +1414,7 @@ function projectSummaryStateFor(projectPath) {
     state.projectSummaries[projectPath] || {
       snapshots: [],
       latestSnapshot: null,
+      summaryStatus: null,
       loading: false,
       pending: false,
       initialized: false,
@@ -1113,7 +1480,7 @@ function entrySessionLabel(entry) {
   if (entry?.sessionLabel) {
     return entry.sessionLabel;
   }
-  return sessionOptionLabel(sessionForEntry(entry));
+  return sessionOptionLabel(sessionForEntry(entry), entry?.projectPath || "");
 }
 
 function normalizeHistoryItem(item) {
@@ -1156,6 +1523,28 @@ function normalizeProjectSummarySnapshot(snapshot) {
   };
 }
 
+function normalizeProjectSummaryStatus(status) {
+  const normalizedState = String(status?.state || "idle").trim().toLowerCase();
+  return {
+    state: ["idle", "running", "completed", "failed"].includes(normalizedState)
+      ? normalizedState
+      : "idle",
+    requestId: String(status?.requestId || "").trim() || null,
+    projectPath: String(status?.projectPath || "").trim() || null,
+    startedAt: String(status?.startedAt || "").trim() || null,
+    completedAt: String(status?.completedAt || "").trim() || null,
+    provider: String(status?.provider || "").trim() || null,
+    sessionId: String(status?.sessionId || "").trim() || null,
+    sessionLabel: String(status?.sessionLabel || "").trim() || "",
+    snapshotId: String(status?.snapshotId || "").trim() || null,
+    error: String(status?.error || "").trim(),
+  };
+}
+
+function projectSummaryIsPending(summaryState) {
+  return Boolean(summaryState?.pending) || summaryState?.summaryStatus?.state === "running";
+}
+
 function projectWithActiveSession(project, sessionId) {
   if (!project || !Array.isArray(project.sessions) || !sessionId) {
     return project;
@@ -1186,29 +1575,98 @@ function replaceProject(updatedProject) {
   if (!updatedProject?.path) {
     return;
   }
+  const hydratedProject = hydrateProjectVisuals(updatedProject);
 
   state.projects = state.projects.map((project) =>
-    project.path === updatedProject.path ? updatedProject : project,
+    project.path === hydratedProject.path ? hydratedProject : project,
   );
+  state.projects.sort(compareProjects);
 }
 
 function upsertProject(projectDetails) {
   if (!projectDetails?.path) {
     return;
   }
+  const hydratedProject = hydrateProjectVisuals(projectDetails);
 
-  const existingIndex = state.projects.findIndex((project) => project.path === projectDetails.path);
+  const existingIndex = state.projects.findIndex((project) => project.path === hydratedProject.path);
   if (existingIndex >= 0) {
-    state.projects.splice(existingIndex, 1, projectDetails);
+    state.projects.splice(existingIndex, 1, hydratedProject);
   } else {
-    state.projects = [...state.projects, projectDetails].sort((left, right) =>
-      (left.displayName || left.slug || left.path).localeCompare(right.displayName || right.slug || right.path),
-    );
+    state.projects = [...state.projects, hydratedProject];
   }
+  state.projects.sort(compareProjects);
 }
 
 function removeProject(projectPath) {
   state.projects = state.projects.filter((project) => project.path !== projectPath);
+}
+
+function pruneTrackedArtifacts(projectPath, sessionId = "") {
+  const normalizedProjectPath = String(projectPath || "").trim();
+  const normalizedSessionId = String(sessionId || "").trim();
+  if (!normalizedProjectPath) {
+    return;
+  }
+
+  if (normalizedSessionId) {
+    state.threadEntries = state.threadEntries.filter(
+      (entry) =>
+        !(
+          entry.projectPath === normalizedProjectPath &&
+          entry.sessionId === normalizedSessionId
+        ),
+    );
+    persistThreadEntries();
+
+    delete state.historyThreads[historyKey(normalizedProjectPath, normalizedSessionId)];
+    delete state.pendingSessionRenames[sessionRenameKey(normalizedProjectPath, normalizedSessionId)];
+
+    if (
+      state.modalThread?.projectPath === normalizedProjectPath &&
+      state.modalThread?.sessionId === normalizedSessionId
+    ) {
+      state.modalThread = null;
+    }
+    if (
+      state.sessionTitleModalProject === normalizedProjectPath &&
+      state.sessionTitleModalSessionId === normalizedSessionId
+    ) {
+      closeSessionTitleModal();
+      return;
+    }
+    return;
+  }
+
+  state.threadEntries = state.threadEntries.filter(
+    (entry) => entry.projectPath !== normalizedProjectPath,
+  );
+  persistThreadEntries();
+
+  for (const key of Object.keys(state.historyThreads)) {
+    if (key.startsWith(`${normalizedProjectPath}::`)) {
+      delete state.historyThreads[key];
+    }
+  }
+
+  for (const key of Object.keys(state.pendingSessionRenames)) {
+    if (key.startsWith(`${normalizedProjectPath}::`)) {
+      delete state.pendingSessionRenames[key];
+    }
+  }
+
+  delete state.projectSummaries[normalizedProjectPath];
+
+  if (state.modalThread?.projectPath === normalizedProjectPath) {
+    state.modalThread = null;
+  }
+  if (state.summaryModalProject === normalizedProjectPath) {
+    state.summaryModalProject = "";
+  }
+  if (state.sessionTitleModalProject === normalizedProjectPath) {
+    closeSessionTitleModal();
+    return;
+  }
 }
 
 function syncSelectedProject(preferredPath = "", { preferCurrent = true } = {}) {
@@ -1333,7 +1791,9 @@ function restoreCachedProjects() {
     }
 
     const payload = JSON.parse(raw);
-    const projects = Array.isArray(payload.projects) ? payload.projects : [];
+    const projects = Array.isArray(payload.projects)
+      ? payload.projects.map(hydrateProjectVisuals).sort(compareProjects)
+      : [];
     if (projects.length === 0) {
       return false;
     }
@@ -1467,6 +1927,33 @@ function updateThreadEntry(entryId, updater) {
   persistThreadEntries();
 }
 
+function updateThreadEntrySessionLabels(projectPath, sessionId, sessionLabel) {
+  if (!projectPath || !sessionId || !sessionLabel) {
+    return;
+  }
+
+  let changed = false;
+  state.threadEntries = state.threadEntries.map((entry) => {
+    if (entry.projectPath !== projectPath || entry.sessionId !== sessionId) {
+      return entry;
+    }
+
+    if (entry.sessionLabel === sessionLabel) {
+      return entry;
+    }
+
+    changed = true;
+    return {
+      ...entry,
+      sessionLabel,
+    };
+  });
+
+  if (changed) {
+    persistThreadEntries();
+  }
+}
+
 function appendThreadEntry(entry) {
   state.threadEntries = [...state.threadEntries, entry];
   persistThreadEntries();
@@ -1474,12 +1961,12 @@ function appendThreadEntry(entry) {
 
 function sessionStatusLabel(entry) {
   if (entry.status === "queued") {
-    return "processing";
+    return currentProcessingPhrase();
   }
   if (entry.status === "failed") {
     return "failed";
   }
-  return "checked off";
+  return "cajun butter";
 }
 
 function entryHasReturned(entry) {
@@ -1595,6 +2082,15 @@ function renderProjectOptions() {
   elements.projectSelect.value = state.selectedProject;
 }
 
+function updateProjectControlAppearance() {
+  const project = currentProject();
+  const isFeatured = Boolean(project?.featured);
+  const projectControl = elements.projectSelect.closest(".project-control");
+
+  elements.projectSelect.classList.toggle("is-featured", isFeatured);
+  projectControl?.classList.toggle("is-featured", isFeatured);
+}
+
 function renderSessionOptions() {
   if (controlInteractionLocked("session-select")) {
     return;
@@ -1629,11 +2125,17 @@ function renderSessionOptions() {
   for (const session of sessions) {
     const option = document.createElement("option");
     option.value = session.sessionId || "";
-    option.textContent = sessionOptionLabel(session);
+    option.textContent = sessionOptionLabel(session, project.path);
     elements.sessionSelect.append(option);
   }
 
-  elements.sessionControl?.classList.toggle("is-loading", Boolean(selectedSession?.pendingCreation));
+  elements.sessionControl?.classList.toggle(
+    "is-loading",
+    Boolean(
+      selectedSession?.pendingCreation ||
+        sessionRenamePending(project.path, selectedSession?.sessionId),
+    ),
+  );
   elements.sessionSelect.disabled =
     state.projectsLoading || state.sessionSwitchPending || state.dispatchPending;
   elements.sessionSelect.value = state.selectedSessionId;
@@ -1660,7 +2162,11 @@ function repoOptionLabel(repo) {
 function updateBodyModalState() {
   document.body.classList.toggle(
     "modal-open",
-    Boolean(currentModalThread()) || state.projectModalOpen || Boolean(state.summaryModalProject),
+    Boolean(currentModalThread()) ||
+      state.projectModalOpen ||
+      Boolean(state.summaryModalProject) ||
+      Boolean(state.sessionTitleModalProject) ||
+      Boolean(state.removeModalKind),
   );
 }
 
@@ -1766,6 +2272,68 @@ function renderProjectModal() {
   elements.projectModal.hidden = false;
 }
 
+function renderSessionTitleModal() {
+  const { project, session } = currentSessionTitleTarget();
+  if (!project || !session) {
+    elements.sessionTitleModal.hidden = true;
+    return;
+  }
+
+  elements.sessionTitleProject.textContent =
+    project.displayName || project.slug || fallbackProjectLabel(project.path);
+  elements.sessionTitleSession.textContent = sessionFixedSuffix(session);
+  elements.sessionTitleInput.value = state.sessionTitleDraft;
+  elements.sessionTitleInput.disabled = state.sessionTitlePending;
+  elements.sessionTitleSaveButton.disabled =
+    state.sessionTitlePending || !state.sessionTitleDraft.trim();
+  elements.sessionTitleSaveButton.querySelector(".button-text").textContent =
+    state.sessionTitlePending ? "Saving…" : "Save";
+
+  setText(
+    elements.sessionTitleState,
+    state.sessionTitleError || "Provider and short id stay attached automatically.",
+    { empty: false },
+  );
+
+  elements.sessionTitleModal.hidden = false;
+}
+
+function renderRemoveModal() {
+  const { project, session, kind } = currentRemoveTarget();
+  if (!project || !kind || (kind === "session" && !session?.sessionId)) {
+    elements.removeModal.hidden = true;
+    return;
+  }
+
+  const isProject = kind === "project";
+  elements.removeTitle.textContent = isProject
+    ? project.displayName || project.slug || fallbackProjectLabel(project.path)
+    : sessionDisplayTitle(session, project.path);
+  elements.removeSubtitle.textContent = isProject
+    ? `${project.sessions?.length || 0} tracked session${project.sessions?.length === 1 ? "" : "s"}`
+    : sessionFixedSuffix(session);
+  setText(
+    elements.removeState,
+    state.removeModalError || (isProject ? "Files stay put." : "Only this tracked session is removed."),
+    { empty: false },
+  );
+  elements.removeBody.textContent = isProject
+    ? "This stops tracking this repo in Clawdad and ORP. The repo files stay right where they are."
+    : "This removes only this tracked thread. The repo and other sessions stay put.";
+  elements.removeConfirmButton.disabled = state.removeModalPending;
+  const label = elements.removeConfirmButton.querySelector(".button-text");
+  if (label) {
+    label.textContent = state.removeModalPending
+      ? isProject
+        ? "Stopping…"
+        : "Removing…"
+      : isProject
+        ? "Stop tracking"
+        : "Remove session";
+  }
+  elements.removeModal.hidden = false;
+}
+
 async function refreshProjectRoots() {
   if (state.projectRootsRefreshPromise) {
     return state.projectRootsRefreshPromise;
@@ -1803,8 +2371,10 @@ function renderQueueList() {
 
   for (const entry of entries) {
     const clickable = entry.status === "answered" || entry.status === "failed";
+    const unread = entryIsUnread(entry);
     const card = document.createElement("article");
     card.className = `queue-card ${entry.status === "queued" ? "processing" : entry.status === "answered" ? "done" : "failed"}`;
+    card.classList.toggle("is-unread", unread);
     if (clickable) {
       card.classList.add("clickable");
       card.tabIndex = 0;
@@ -1831,11 +2401,22 @@ function renderQueueList() {
     project.className = "queue-project";
     project.textContent = entryProjectLabel(entry);
 
+    const headStatus = document.createElement("div");
+    headStatus.className = "queue-head-status";
+
+    if (unread) {
+      const unreadOrb = document.createElement("span");
+      unreadOrb.className = "queue-card-unread-orb";
+      unreadOrb.setAttribute("aria-hidden", "true");
+      headStatus.append(unreadOrb);
+    }
+
     const chip = document.createElement("div");
     chip.className = `queue-chip ${entry.status === "queued" ? "processing" : entry.status === "answered" ? "done" : "failed"}`;
     chip.textContent = sessionStatusLabel(entry);
+    headStatus.append(chip);
 
-    head.append(project, chip);
+    head.append(project, headStatus);
 
     const session = document.createElement("div");
     session.className = "queue-session";
@@ -1910,11 +2491,11 @@ function buildHistoryGroup(entry) {
 
   const inboundText =
     entry.status === "queued"
-      ? "Processing…"
+      ? `${currentProcessingPhrase()}…`
       : entry.response || (entry.status === "failed" ? "Failed." : "");
   const inboundMeta =
     entry.status === "queued"
-      ? "processing"
+      ? currentProcessingPhrase()
       : formatTimestamp(entry.answeredAt) || (entry.status === "failed" ? "failed" : "");
 
   group.append(
@@ -1938,6 +2519,9 @@ function renderModal() {
   if (!modalThread) {
     setText(elements.detailHistoryState, "", { empty: true });
     clearNode(elements.detailHistoryList);
+    delete elements.detailHistoryList.dataset.threadKey;
+    delete elements.detailHistoryList.dataset.renderKey;
+    detailHistoryRenderSnapshot = null;
     elements.detailModal.hidden = true;
     return;
   }
@@ -1951,10 +2535,14 @@ function renderModal() {
       provider: "session",
     });
   const historyState = historyStateFor(modalThread.projectPath, modalThread.sessionId);
+  const threadKey = historyKey(modalThread.projectPath, modalThread.sessionId);
+  const renderKey = historyRenderSignature(historyState);
+  const existingThreadKey = elements.detailHistoryList.dataset.threadKey || "";
+  const existingRenderKey = elements.detailHistoryList.dataset.renderKey || "";
 
   elements.detailProject.textContent =
     project?.displayName || fallbackProjectLabel(modalThread.projectPath);
-  elements.detailSession.textContent = sessionOptionLabel(session);
+  elements.detailSession.textContent = sessionOptionLabel(session, modalThread.projectPath);
 
   if (historyState.error) {
     setText(elements.detailHistoryState, "History unavailable", { empty: false });
@@ -1965,6 +2553,19 @@ function renderModal() {
   } else {
     setText(elements.detailHistoryState, "", { empty: true });
   }
+
+  if (existingThreadKey === threadKey && existingRenderKey === renderKey) {
+    elements.detailModal.hidden = false;
+    return;
+  }
+
+  const scrollSnapshot =
+    detailHistoryRenderSnapshot?.threadKey === threadKey
+      ? detailHistoryRenderSnapshot
+      : existingThreadKey === threadKey
+        ? captureDetailHistorySnapshot(threadKey, "smart")
+        : null;
+  detailHistoryRenderSnapshot = null;
 
   clearNode(elements.detailHistoryList);
   if (!historyState.initialized && historyState.loading) {
@@ -1983,7 +2584,10 @@ function renderModal() {
     }
   }
 
+  elements.detailHistoryList.dataset.threadKey = threadKey;
+  elements.detailHistoryList.dataset.renderKey = renderKey;
   elements.detailModal.hidden = false;
+  applyDetailHistorySnapshot(scrollSnapshot);
 }
 
 function buildSummaryCard(snapshot) {
@@ -2031,6 +2635,7 @@ function renderSummaryModal() {
   }
 
   const summaryState = projectSummaryStateFor(project.path);
+  const summaryPending = projectSummaryIsPending(summaryState);
   const summarySession =
     summaryState.summarySession ||
     currentSession() ||
@@ -2042,18 +2647,20 @@ function renderSummaryModal() {
   elements.summaryProject.textContent = project.displayName || project.slug || fallbackProjectLabel(project.path);
   elements.summarySession.textContent =
     summarySession?.sessionId
-      ? `${sessionOptionLabel(summarySession)} • snapshots`
+      ? `${sessionOptionLabel(summarySession, project.path)} • snapshots`
       : "Project snapshots";
 
   const refreshButtonLabel = elements.summaryRefreshButton.querySelector(".button-text");
   if (refreshButtonLabel) {
-    refreshButtonLabel.textContent = summaryState.pending ? "Refreshing…" : "New summary";
+    refreshButtonLabel.textContent = summaryPending ? "Refreshing…" : "New summary";
   }
   elements.summaryRefreshButton.disabled =
-    summaryState.pending || !project.path || !summarySession?.sessionId;
+    summaryPending || !project.path || !summarySession?.sessionId;
 
-  if (summaryState.pending) {
+  if (summaryPending) {
     setText(elements.summaryState, "Refreshing summary", { empty: false });
+  } else if (summaryState.summaryStatus?.state === "failed" && summaryState.summaryStatus.error) {
+    setText(elements.summaryState, summaryState.summaryStatus.error, { empty: false });
   } else if (summaryState.error) {
     setText(elements.summaryState, summaryState.error, { empty: false });
   } else if (!summaryState.initialized && summaryState.loading) {
@@ -2069,7 +2676,12 @@ function renderSummaryModal() {
   }
 
   clearNode(elements.summaryList);
-  if (!summaryState.initialized && summaryState.loading) {
+  if (summaryPending && summaryState.snapshots.length === 0) {
+    const card = document.createElement("div");
+    card.className = "history-state-card";
+    card.textContent = "Working on a fresh summary…";
+    elements.summaryList.append(card);
+  } else if (!summaryState.initialized && summaryState.loading) {
     const card = document.createElement("div");
     card.className = "history-state-card";
     card.textContent = "Loading saved summary…";
@@ -2101,7 +2713,7 @@ function projectIsBusy(project) {
 function updateMailboxState() {
   const pending = pendingEntryForSession(state.selectedProject, state.selectedSessionId);
   if (pending) {
-    setText(elements.mailboxState, "processing", { empty: false });
+    setText(elements.mailboxState, currentProcessingPhrase(), { empty: false });
     return;
   }
 
@@ -2112,7 +2724,7 @@ function updateMailboxState() {
     return;
   }
   if (projectIsBusy(project)) {
-    setText(elements.mailboxState, "processing", { empty: false });
+    setText(elements.mailboxState, currentProcessingPhrase(), { empty: false });
     return;
   }
 
@@ -2129,7 +2741,7 @@ function updateMailboxState() {
   }
 
   if (latest.status === "answered") {
-    setText(elements.mailboxState, "checked off", { empty: false });
+    setText(elements.mailboxState, "cajun butter", { empty: false });
     return;
   }
 
@@ -2163,7 +2775,7 @@ function updateSendAvailability() {
   elements.dispatchButton.querySelector(".button-text").textContent = state.dispatchPending
     ? "Sending…"
     : sessionBusy || projectBusy
-      ? "Processing…"
+      ? `${currentProcessingPhrase()}…`
       : "Send";
 }
 
@@ -2180,6 +2792,36 @@ function updateSummaryButtonAvailability() {
   elements.projectSummaryButton.disabled = state.projectsLoading || !state.selectedProject;
 }
 
+function updateProjectDeleteAvailability() {
+  elements.projectDeleteButton.disabled =
+    state.projectsLoading ||
+    state.projectModalPending ||
+    state.removeModalPending ||
+    !state.selectedProject;
+}
+
+function updateSessionRenameAvailability() {
+  const session = currentSession();
+  elements.sessionRenameButton.disabled =
+    state.projectsLoading ||
+    state.sessionSwitchPending ||
+    !state.selectedProject ||
+    !session?.sessionId ||
+    Boolean(session?.pendingCreation) ||
+    sessionRenamePending(state.selectedProject, session?.sessionId);
+}
+
+function updateSessionDeleteAvailability() {
+  const session = currentSession();
+  elements.sessionDeleteButton.disabled =
+    state.projectsLoading ||
+    state.sessionSwitchPending ||
+    state.removeModalPending ||
+    !state.selectedProject ||
+    !session?.sessionId ||
+    Boolean(session?.pendingCreation);
+}
+
 function updateQueueChrome() {
   elements.queueSection.classList.toggle("is-collapsed", state.queueCollapsed);
   elements.queueToggle.setAttribute("aria-expanded", String(!state.queueCollapsed));
@@ -2192,16 +2834,22 @@ function updateQueueChrome() {
 function renderAll() {
   pruneCopyFeedback();
   renderProjectOptions();
+  updateProjectControlAppearance();
   renderSessionOptions();
   renderQueueList();
   renderModal();
+  renderSessionTitleModal();
+  renderRemoveModal();
   renderSummaryModal();
   renderProjectModal();
   updateMailboxState();
   updateQueueUnreadOrb();
   updateSendAvailability();
   updateThreadButtonAvailability();
+  updateSessionRenameAvailability();
+  updateSessionDeleteAvailability();
   updateSummaryButtonAvailability();
+  updateProjectDeleteAvailability();
   updateQueueChrome();
   updateBodyModalState();
 }
@@ -2263,7 +2911,10 @@ async function reconcileThreadEntries() {
         updateThreadEntry(entry.id, {
           status: status === "completed" ? "answered" : "failed",
           sessionId: mailboxCompletionFallbackSession.sessionId || entry.sessionId,
-          sessionLabel: sessionOptionLabel(mailboxCompletionFallbackSession),
+          sessionLabel: sessionOptionLabel(
+            mailboxCompletionFallbackSession,
+            entry.projectPath,
+          ),
           answeredAt:
             mailboxStatus.completed_at ||
             mailboxCompletionFallbackSession.lastResponse ||
@@ -2412,7 +3063,9 @@ async function refreshProjects() {
     renderAll();
     try {
       const payload = await fetchJson("/v1/projects");
-      state.projects = Array.isArray(payload.projects) ? payload.projects : [];
+      state.projects = Array.isArray(payload.projects)
+        ? payload.projects.map(hydrateProjectVisuals).sort(compareProjects)
+        : [];
       syncSelectedProject(payload.defaultProject || state.selectedProject);
       syncSelectedSession(state.selectedSessionId);
       cacheProjects(payload);
@@ -2436,6 +3089,32 @@ async function refreshThreads() {
     state.threadRefreshPromise = null;
   });
   return state.threadRefreshPromise;
+}
+
+function summaryProjectsNeedingRefresh() {
+  const targets = new Set();
+  if (state.summaryModalProject) {
+    targets.add(state.summaryModalProject);
+  }
+
+  for (const [projectPath, summaryState] of Object.entries(state.projectSummaries)) {
+    if (projectSummaryIsPending(summaryState)) {
+      targets.add(projectPath);
+    }
+  }
+
+  return [...targets].filter(Boolean);
+}
+
+async function refreshProjectSummaries() {
+  const targets = summaryProjectsNeedingRefresh();
+  if (targets.length === 0) {
+    return;
+  }
+
+  await Promise.all(
+    targets.map((projectPath) => loadProjectSummary(projectPath, { force: true })),
+  );
 }
 
 function showError(error) {
@@ -2516,12 +3195,9 @@ async function loadSessionHistory(projectPath, sessionId, { reset = false, appen
     return existing;
   }
 
-  const shouldPreserveScroll =
-    appendOlder &&
-    currentModalThread()?.projectPath === projectPath &&
-    currentModalThread()?.sessionId === sessionId;
-  const previousHeight = shouldPreserveScroll ? elements.detailHistoryList.scrollHeight : 0;
-  const previousTop = shouldPreserveScroll ? elements.detailHistoryList.scrollTop : 0;
+  const modalThread = currentModalThread();
+  const sameOpenThread =
+    modalThread?.projectPath === projectPath && modalThread?.sessionId === sessionId;
 
   setHistoryState(projectPath, sessionId, {
     loading: true,
@@ -2555,6 +3231,15 @@ async function loadSessionHistory(projectPath, sessionId, { reset = false, appen
         ? [...pageItems, ...existing.items]
         : pageItems;
 
+    if (sameOpenThread) {
+      queueDetailHistorySnapshot(
+        captureDetailHistorySnapshot(
+          historyKey(projectPath, sessionId),
+          appendOlder ? "prepend-older" : stickToBottom ? "bottom" : "smart",
+        ),
+      );
+    }
+
     setHistoryState(projectPath, sessionId, {
       items: nextItems,
       nextCursor: payload.nextCursor || null,
@@ -2563,19 +3248,6 @@ async function loadSessionHistory(projectPath, sessionId, { reset = false, appen
       error: "",
     });
     renderAll();
-
-    if (shouldPreserveScroll) {
-      elements.detailHistoryList.scrollTop =
-        elements.detailHistoryList.scrollHeight - previousHeight + previousTop;
-    } else if (
-      stickToBottom &&
-      currentModalThread()?.projectPath === projectPath &&
-      currentModalThread()?.sessionId === sessionId
-    ) {
-      window.requestAnimationFrame(() => {
-        elements.detailHistoryList.scrollTop = elements.detailHistoryList.scrollHeight;
-      });
-    }
   } catch (error) {
     setHistoryState(projectPath, sessionId, {
       loading: false,
@@ -2623,6 +3295,8 @@ async function openSessionThread(projectPath = state.selectedProject, sessionId 
   }
 
   state.summaryModalProject = "";
+  state.sessionTitleModalProject = "";
+  state.sessionTitleModalSessionId = "";
   state.selectedProject = projectPath;
   state.selectedSessionId = sessionId;
   state.modalThread = {
@@ -2665,10 +3339,10 @@ async function loadProjectSummary(projectPath, { force = false } = {}) {
   }
 
   const existing = projectSummaryStateFor(projectPath);
-  if (existing.loading || existing.pending) {
+  if (existing.loading) {
     return existing;
   }
-  if (!force && existing.initialized) {
+  if (!force && (existing.initialized || projectSummaryIsPending(existing))) {
     return existing;
   }
 
@@ -2686,12 +3360,16 @@ async function loadProjectSummary(projectPath, { force = false } = {}) {
       loading: false,
       initialized: true,
       error: "",
+      pending: payload.summaryStatus?.state === "running",
       latestSnapshot: payload.latestSnapshot
         ? normalizeProjectSummarySnapshot(payload.latestSnapshot)
         : null,
       snapshots: Array.isArray(payload.snapshots)
         ? payload.snapshots.map(normalizeProjectSummarySnapshot)
         : [],
+      summaryStatus: payload.summaryStatus
+        ? normalizeProjectSummaryStatus(payload.summaryStatus)
+        : null,
       summarySession: payload.summarySession || null,
     });
   } catch (error) {
@@ -2713,6 +3391,8 @@ async function openProjectSummary(projectPath = state.selectedProject) {
 
   state.modalThread = null;
   state.projectModalOpen = false;
+  state.sessionTitleModalProject = "";
+  state.sessionTitleModalSessionId = "";
   state.summaryModalProject = projectPath;
   renderAll();
   await loadProjectSummary(projectPath);
@@ -2721,6 +3401,222 @@ async function openProjectSummary(projectPath = state.selectedProject) {
 function closeProjectSummary() {
   state.summaryModalProject = "";
   renderAll();
+}
+
+function closeRemoveModal() {
+  state.removeModalKind = "";
+  state.removeModalProject = "";
+  state.removeModalSessionId = "";
+  state.removeModalPending = false;
+  state.removeModalError = "";
+  renderAll();
+}
+
+function closeSessionTitleModal() {
+  state.sessionTitleModalProject = "";
+  state.sessionTitleModalSessionId = "";
+  state.sessionTitleDraft = "";
+  state.sessionTitlePending = false;
+  state.sessionTitleError = "";
+  renderAll();
+}
+
+function openSessionTitleModal(projectPath = state.selectedProject, sessionId = state.selectedSessionId) {
+  const project = projectByPath(projectPath);
+  const session =
+    project?.sessions?.find((item) => item.sessionId === sessionId) || null;
+  if (!project || !session?.sessionId || session.pendingCreation) {
+    return;
+  }
+
+  state.modalThread = null;
+  state.projectModalOpen = false;
+  state.summaryModalProject = "";
+  state.sessionTitleModalProject = project.path;
+  state.sessionTitleModalSessionId = session.sessionId;
+  state.sessionTitleDraft = sessionDisplayTitle(session, project.path);
+  state.sessionTitlePending = false;
+  state.sessionTitleError = "";
+  renderAll();
+
+  window.requestAnimationFrame(() => {
+    elements.sessionTitleInput?.focus();
+    elements.sessionTitleInput?.select();
+  });
+}
+
+function openRemoveModal(kind, projectPath = state.selectedProject, sessionId = state.selectedSessionId) {
+  const normalizedKind = kind === "project" ? "project" : "session";
+  const project = projectByPath(projectPath);
+  const session =
+    project?.sessions?.find((item) => item.sessionId === sessionId) || null;
+  if (!project || (normalizedKind === "session" && !session?.sessionId)) {
+    return;
+  }
+
+  state.modalThread = null;
+  state.projectModalOpen = false;
+  state.summaryModalProject = "";
+  state.sessionTitleModalProject = "";
+  state.sessionTitleModalSessionId = "";
+  state.removeModalKind = normalizedKind;
+  state.removeModalProject = project.path;
+  state.removeModalSessionId = normalizedKind === "session" ? session.sessionId : "";
+  state.removeModalPending = false;
+  state.removeModalError = "";
+  renderAll();
+}
+
+async function handleRemoveSubmit(event) {
+  event.preventDefault();
+
+  const { project, session, kind } = currentRemoveTarget();
+  if (!project || !kind || state.removeModalPending) {
+    return;
+  }
+
+  if (kind === "session" && !session?.sessionId) {
+    return;
+  }
+
+  state.removeModalPending = true;
+  state.removeModalError = "";
+  renderAll();
+
+  try {
+    const endpoint = kind === "project" ? "/v1/project-delete" : "/v1/session-delete";
+    const payload = await fetchJson(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(
+        kind === "project"
+          ? {
+              project: project.path,
+            }
+          : {
+              project: project.path,
+              sessionId: session.sessionId,
+            },
+      ),
+    });
+
+    if (kind === "project") {
+      pruneTrackedArtifacts(project.path);
+      if (Array.isArray(payload.projects)) {
+        state.projects = payload.projects.map(hydrateProjectVisuals).sort(compareProjects);
+      } else {
+        removeProject(project.path);
+      }
+      if (state.selectedProject === project.path) {
+        syncSelectedProject("", { preferCurrent: false });
+        syncSelectedSession("", { preferCurrent: false });
+      }
+    } else {
+      pruneTrackedArtifacts(project.path, session.sessionId);
+      if (payload.projectDetails) {
+        replaceProject(payload.projectDetails);
+      } else {
+        removeProject(project.path);
+      }
+
+      if (state.selectedProject === project.path) {
+        if (payload.projectDetails) {
+          syncSelectedProject(project.path, { preferCurrent: false });
+          syncSelectedSession("", { preferCurrent: false });
+        } else {
+          syncSelectedProject("", { preferCurrent: false });
+          syncSelectedSession("", { preferCurrent: false });
+        }
+      }
+    }
+
+    cacheProjects({
+      defaultProject: state.selectedProject || "",
+      projects: state.projects,
+    });
+    closeRemoveModal();
+    renderAll();
+    void refreshProjectRoots().catch(() => {});
+  } catch (error) {
+    state.removeModalPending = false;
+    state.removeModalError = error.message;
+    renderAll();
+  }
+}
+
+async function handleSessionTitleSubmit(event) {
+  event.preventDefault();
+
+  const { project, session } = currentSessionTitleTarget();
+  const title = state.sessionTitleDraft.trim();
+  if (!project || !session?.sessionId) {
+    return;
+  }
+
+  if (!title) {
+    state.sessionTitleError = "Choose a title.";
+    renderAll();
+    return;
+  }
+
+  const previousLabel = sessionOptionLabel(session, project.path);
+  const currentTitle = sessionDisplayTitle(session, project.path);
+  if (title === currentTitle) {
+    closeSessionTitleModal();
+    return;
+  }
+
+  setPendingSessionRename(project.path, session.sessionId, {
+    title,
+    startedAt: new Date().toISOString(),
+  });
+  const optimisticLabel = sessionOptionLabel(session, project.path);
+  updateThreadEntrySessionLabels(project.path, session.sessionId, optimisticLabel);
+  closeSessionTitleModal();
+
+  void (async () => {
+    try {
+      const payload = await fetchJson("/v1/session-title", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          project: project.path,
+          sessionId: session.sessionId,
+          title,
+        }),
+      });
+
+      setPendingSessionRename(project.path, session.sessionId, null);
+
+      if (payload.projectDetails) {
+        replaceProject(payload.projectDetails);
+        if (state.selectedProject === project.path) {
+          syncSelectedSession(session.sessionId, { preferCurrent: false });
+        }
+      } else {
+        await refreshProjects();
+      }
+
+      const refreshedSession =
+        projectByPath(project.path)?.sessions?.find((item) => item.sessionId === session.sessionId) ||
+        null;
+      updateThreadEntrySessionLabels(
+        project.path,
+        session.sessionId,
+        refreshedSession ? sessionOptionLabel(refreshedSession, project.path) : optimisticLabel,
+      );
+      renderAll();
+    } catch (error) {
+      setPendingSessionRename(project.path, session.sessionId, null);
+      updateThreadEntrySessionLabels(project.path, session.sessionId, previousLabel);
+      renderAll();
+      showError(error);
+    }
+  })();
 }
 
 async function requestNewProjectSummary() {
@@ -2753,10 +3649,18 @@ async function requestNewProjectSummary() {
     loading: false,
     initialized: true,
     error: "",
+    summaryStatus: normalizeProjectSummaryStatus({
+      state: "running",
+      projectPath: project.path,
+      sessionId: session.sessionId,
+      provider: session.provider,
+      sessionLabel: sessionOptionLabel(session, project.path),
+      startedAt: new Date().toISOString(),
+    }),
     summarySession: {
       sessionId: session.sessionId,
       provider: session.provider,
-      label: sessionOptionLabel(session),
+      label: sessionOptionLabel(session, project.path),
     },
   });
   renderAll();
@@ -2774,7 +3678,7 @@ async function requestNewProjectSummary() {
     });
 
     setProjectSummaryState(project.path, {
-      pending: false,
+      pending: payload.summaryStatus?.state === "running",
       loading: false,
       initialized: true,
       error: "",
@@ -2784,6 +3688,9 @@ async function requestNewProjectSummary() {
       snapshots: Array.isArray(payload.snapshots)
         ? payload.snapshots.map(normalizeProjectSummarySnapshot)
         : [],
+      summaryStatus: payload.summaryStatus
+        ? normalizeProjectSummaryStatus(payload.summaryStatus)
+        : null,
       summarySession: payload.summarySession || null,
     });
   } catch (error) {
@@ -2807,6 +3714,8 @@ function setProjectModalMode(mode) {
 
 async function openProjectModal() {
   state.summaryModalProject = "";
+  state.sessionTitleModalProject = "";
+  state.sessionTitleModalSessionId = "";
   state.modalThread = null;
   state.projectModalOpen = true;
   state.projectModalStatus = "";
@@ -2878,14 +3787,18 @@ function optimisticProjectForCreate({ mode, root, repoPath, projectName, provide
   }
 
   const displayName = mode === "existing" ? basenameFromPath(projectPath) : projectName;
+  const visualMeta = featuredProjectMeta(projectPath, displayName);
   return {
     projectPath,
     pendingSessionId: pendingSession.sessionId,
     rollbackProject: null,
     optimisticProject: {
-      slug: displayName,
-      displayName,
+      slug: visualMeta.slug,
+      displayName: visualMeta.displayName,
       path: projectPath,
+      featured: visualMeta.featured,
+      featuredAccent: visualMeta.featuredAccent,
+      specialRole: visualMeta.specialRole,
       provider,
       sessionId: pendingSession.sessionId,
       activeSessionId: pendingSession.sessionId,
@@ -3035,7 +3948,7 @@ async function handleDispatch(event) {
     projectPath: project,
     sessionId,
     projectLabel: projectDetails?.displayName || projectDetails?.slug || fallbackProjectLabel(project),
-    sessionLabel: sessionOptionLabel(sessionDetails),
+    sessionLabel: sessionOptionLabel(sessionDetails, project),
     message,
     requestId: "",
     status: "queued",
@@ -3116,9 +4029,33 @@ function bindEvents() {
   elements.projectAddButton.addEventListener("click", () => {
     void openProjectModal();
   });
+  elements.projectDeleteButton.addEventListener("click", () => {
+    openRemoveModal("project");
+  });
+  elements.sessionRenameButton.addEventListener("click", () => {
+    openSessionTitleModal();
+  });
+  elements.sessionDeleteButton.addEventListener("click", () => {
+    openRemoveModal("session");
+  });
   elements.dispatchForm.addEventListener("submit", handleDispatch);
   elements.detailBackdrop.addEventListener("click", closeSessionThread);
   elements.detailClose.addEventListener("click", closeSessionThread);
+  elements.sessionTitleBackdrop.addEventListener("click", closeSessionTitleModal);
+  elements.sessionTitleClose.addEventListener("click", closeSessionTitleModal);
+  elements.sessionTitleForm.addEventListener("submit", (event) => {
+    void handleSessionTitleSubmit(event);
+  });
+  elements.sessionTitleInput.addEventListener("input", (event) => {
+    state.sessionTitleDraft = event.target.value;
+    state.sessionTitleError = "";
+    renderAll();
+  });
+  elements.removeBackdrop.addEventListener("click", closeRemoveModal);
+  elements.removeClose.addEventListener("click", closeRemoveModal);
+  elements.removeForm.addEventListener("submit", (event) => {
+    void handleRemoveSubmit(event);
+  });
   elements.summaryBackdrop.addEventListener("click", closeProjectSummary);
   elements.summaryClose.addEventListener("click", closeProjectSummary);
   elements.summaryRefreshButton.addEventListener("click", () => {
@@ -3245,6 +4182,14 @@ function bindEvents() {
       closeProjectSummary();
       return;
     }
+    if (event.key === "Escape" && state.sessionTitleModalProject) {
+      closeSessionTitleModal();
+      return;
+    }
+    if (event.key === "Escape" && state.removeModalKind) {
+      closeRemoveModal();
+      return;
+    }
     if (event.key === "Escape" && state.projectModalOpen) {
       closeProjectModal();
     }
@@ -3254,6 +4199,7 @@ function bindEvents() {
 async function boot() {
   bindEvents();
   void initHeaderCarousel();
+  resetProcessingPhraseCycle();
   restoreThreadEntries();
   restoreQueueCollapsed();
   restoreCachedProjects();
@@ -3268,10 +4214,28 @@ async function boot() {
   window.setInterval(async () => {
     try {
       await refreshProjects();
+      await refreshProjectSummaries();
     } catch (_error) {
       // Keep the current view on transient failures.
     }
   }, autoRefreshMs);
+
+  window.setInterval(async () => {
+    try {
+      await refreshProjectSummaries();
+    } catch (_error) {
+      // Keep the current view on transient failures.
+    }
+  }, 4000);
+
+  window.setInterval(() => {
+    if (!processingCopyActive()) {
+      return;
+    }
+
+    advanceProcessingPhraseCycle();
+    renderProcessingCopy();
+  }, 3200);
 }
 
 boot();

@@ -436,6 +436,7 @@ registry_init() {
 
 registry_add() {
   local project_path="$1" session_id="$2" slug="$3" description="${4:-}" provider="${5:-$CLAWDAD_DEFAULT_PROVIDER}"
+  local session_seeded="${6:-}"
   require_orp
 
   # Add tab to ORP workspace
@@ -465,14 +466,49 @@ registry_add() {
 
   # Initialize local dispatch state
   state_ensure_project "$project_path"
-  local session_seeded="true"
-  if [[ "$provider" == "codex" || "$provider" == "chimera" ]]; then
-    session_seeded="false"
+  if [[ -z "$session_seeded" ]]; then
+    session_seeded="true"
+    if [[ "$provider" == "codex" || "$provider" == "chimera" ]]; then
+      session_seeded="false"
+    fi
   fi
   state_register_session "$project_path" "$session_id" "$slug" "$provider" "$session_seeded"
   state_set_active_session "$project_path" "$session_id"
 
   clawdad_log "Registered project via ORP: $slug ($project_path) provider=$provider session=$session_id mutation=$mutation"
+}
+
+registry_codex_tracked_session_ids_for_path() {
+  local project_path="$1"
+  _orp_tabs_json | "$CLAWDAD_JQ" -r \
+    --arg path "$project_path" \
+    '.tabs[]
+      | select(.path == $path and (.resumeTool // "") == "codex" and (.resumeSessionId // "") != "")
+      | .resumeSessionId'
+}
+
+registry_find_saved_codex_session_json() {
+  local project_path="$1"
+  shift || true
+
+  require_node
+  require_provider "codex"
+
+  local -a cmd
+  cmd=(
+    "$CLAWDAD_NODE"
+    "$CLAWDAD_ROOT/lib/codex-session-discovery.mjs"
+    "--cwd" "$project_path"
+    "--codex-home" "$CLAWDAD_CODEX_HOME"
+  )
+
+  local exclude
+  for exclude in "$@"; do
+    [[ -n "$exclude" ]] || continue
+    cmd+=("--exclude" "$exclude")
+  done
+
+  "${cmd[@]}"
 }
 
 registry_remove() {
@@ -497,12 +533,18 @@ registry_remove() {
       updated=$("$CLAWDAD_JQ" \
         --arg path "$project_path" \
         --arg session "$session_id" '
-          .projects[$path].sessions |= del(.[$session])
-          | if .projects[$path].active_session_id == $session then
-              .projects[$path].active_session_id = ""
-            else
-              .
-            end
+          if (.projects[$path] // null) == null then
+            .
+          else
+            .projects[$path].sessions |= del(.[$session])
+            | if ((.projects[$path].sessions // {}) | length) == 0 then
+                .projects |= del(.[$path])
+              elif .projects[$path].active_session_id == $session then
+                .projects[$path].active_session_id = ""
+              else
+                .
+              end
+          end
         ' "$CLAWDAD_STATE")
     else
       updated=$("$CLAWDAD_JQ" \
@@ -561,6 +603,104 @@ registry_set_resume_session() {
   clawdad_log "Updated ORP resume session: $slug ($project_path) provider=$provider session=$old_session_id->$new_session_id"
 }
 
+registry_rename_session() {
+  local project_path="$1" selector="$2" new_slug="$3"
+  require_orp
+
+  new_slug="${new_slug#"${new_slug%%[![:space:]]*}"}"
+  new_slug="${new_slug%"${new_slug##*[![:space:]]}"}"
+
+  if [[ -z "$new_slug" ]]; then
+    clawdad_error "Session title cannot be empty."
+    return 1
+  fi
+
+  local session_json
+  session_json=$(registry_session_json "$project_path" "$selector") || {
+    clawdad_error "No tracked session '$selector' found for $project_path"
+    return 1
+  }
+
+  local session_id old_slug provider result exit_code
+  session_id=$(echo "$session_json" | "$CLAWDAD_JQ" -r '.resumeSessionId // ""')
+  old_slug=$(echo "$session_json" | "$CLAWDAD_JQ" -r '.title // ""')
+  provider=$(echo "$session_json" | "$CLAWDAD_JQ" -r '.resumeTool // "claude"')
+
+  if [[ -z "$session_id" ]]; then
+    clawdad_error "Session '$selector' has no resumable session id"
+    return 1
+  fi
+
+  if registry_has_slug_in_project "$project_path" "$new_slug" "$session_id"; then
+    clawdad_error "A session named '$new_slug' already exists in this project."
+    return 1
+  fi
+
+  if [[ "$old_slug" == "$new_slug" ]]; then
+    state_update_session "$project_path" "$session_id" "slug" "$new_slug" >/dev/null 2>&1 || true
+    return 0
+  fi
+
+  local -a remove_cmd
+  remove_cmd=("$CLAWDAD_ORP" "workspace" "remove-tab" "$CLAWDAD_ORP_WORKSPACE"
+    "--path" "$project_path"
+    "--resume-session-id" "$session_id"
+    "--json")
+
+  if result=$("${remove_cmd[@]}" 2>&1); then
+    exit_code=0
+  else
+    exit_code=$?
+  fi
+
+  if (( exit_code != 0 )); then
+    clawdad_error "Failed to rename session in ORP (remove old tab): $result"
+    return 1
+  fi
+
+  local -a add_cmd
+  add_cmd=("$CLAWDAD_ORP" "workspace" "add-tab" "$CLAWDAD_ORP_WORKSPACE"
+    "--path" "$project_path"
+    "--title" "$new_slug"
+    "--resume-tool" "$provider"
+    "--resume-session-id" "$session_id"
+    "--append"
+    "--json")
+
+  if result=$("${add_cmd[@]}" 2>&1); then
+    exit_code=0
+  else
+    exit_code=$?
+  fi
+
+  if (( exit_code != 0 )); then
+    local restore_result restore_code
+    local -a restore_cmd
+    restore_cmd=("$CLAWDAD_ORP" "workspace" "add-tab" "$CLAWDAD_ORP_WORKSPACE"
+      "--path" "$project_path"
+      "--title" "$old_slug"
+      "--resume-tool" "$provider"
+      "--resume-session-id" "$session_id"
+      "--append"
+      "--json")
+    if restore_result=$("${restore_cmd[@]}" 2>&1); then
+      restore_code=0
+    else
+      restore_code=$?
+    fi
+
+    if (( restore_code != 0 )); then
+      clawdad_error "Failed to rename session and failed to restore original tab: $result // restore: $restore_result"
+    else
+      clawdad_error "Failed to rename session: $result"
+    fi
+    return 1
+  fi
+
+  state_update_session "$project_path" "$session_id" "slug" "$new_slug" >/dev/null 2>&1 || true
+  clawdad_log "Renamed ORP session: $old_slug -> $new_slug ($project_path, $session_id)"
+}
+
 _registry_tabs_for_path_tsv() {
   local project_path="$1"
   _orp_tabs_json | "$CLAWDAD_JQ" -r \
@@ -578,6 +718,24 @@ registry_session_exists() {
     --arg path "$project_path" \
     --arg session "$session_id" \
     '.tabs[] | select(.path == $path and (.resumeSessionId // "") == $session) | .resumeSessionId' | head -1)
+  [[ -n "$match" ]]
+}
+
+registry_has_slug_in_project() {
+  local project_path="$1" slug="$2" exclude_session_id="${3:-}"
+  local match
+  match=$(_orp_tabs_json | "$CLAWDAD_JQ" -r \
+    --arg path "$project_path" \
+    --arg title "$slug" \
+    --arg exclude "$exclude_session_id" '
+      .tabs[]
+      | select(
+          .path == $path
+          and (.title // "") == $title
+          and ($exclude == "" or (.resumeSessionId // "") != $exclude)
+        )
+      | .title
+    ' | head -1)
   [[ -n "$match" ]]
 }
 

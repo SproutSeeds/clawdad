@@ -91,6 +91,9 @@ clawdad read my-project
 |---------|-------------|
 | `clawdad init` | Initialize ~/.clawdad and verify ORP |
 | `clawdad register <path>` | Register a project (writes ORP tab) |
+| `clawdad add-session <project>` | Add another tracked session to an existing project bucket |
+| `clawdad rename-session <project> <session> <title>` | Rename one tracked session for easier organization |
+| `clawdad remove-session <project> <session>` | Remove one tracked session while keeping the project bucket |
 | `clawdad unregister <slug>` | Remove a project (removes ORP tab) |
 | `clawdad dispatch <slug> "msg"` | Send a message to a spoke agent |
 | `clawdad sessions <slug>` | List tracked sessions for a project bucket |
@@ -140,7 +143,7 @@ clawdad dispatches to the right CLI based on the active session's `resumeTool`:
 | Provider | Interactive (human) | Non-interactive (clawdad) |
 |----------|-------------------|--------------------------|
 | Claude | `claude --resume <id>` | `claude -p "msg" --resume <id> --output-format json` |
-| Codex | `codex resume <id>` | `codex exec "msg"` on first dispatch, then `codex exec resume <id> "msg"` |
+| Codex | `codex` or `codex resume <id>` | Native saved Codex thread created or adopted per repo, then Clawdad resumes that same thread programmatically |
 | Chimera | `chimera --resume <id>` | `chimera --prompt "msg" --resume <id> --json` after Clawdad seeds and maintains the session file |
 
 ## Requirements
@@ -202,13 +205,19 @@ For mobile project setup, Clawdad now supports two safe paths under allowed top-
 
 If the chosen repo is already tracked, Clawdad adds a new session to that project bucket instead of creating a duplicate project entry.
 
-For Codex-backed projects, the first `clawdad dispatch` starts with `codex exec`, captures the real Codex thread id from the CLI output, and writes that id back into the tracked ORP tab. After that, later dispatches resume the same Codex thread automatically with `codex exec resume <id>`.
+For Codex-backed projects, Clawdad now prefers native repo-attached Codex threads:
+
+- if a repo already has a native saved Codex thread, Clawdad adopts that thread id when you register or add a session
+- if a repo has no saved Codex thread yet, the first `clawdad dispatch` creates a real native Codex thread for that repo and writes that thread id back into ORP
+- after that, later Clawdad dispatches resume the same saved Codex thread automatically
+
+That means later terminal use lines up much better with normal Codex behavior: when you return to that repo and use Codex there, you are looking at the same saved thread world instead of a separate Clawdad-only exec session type.
 
 Permission modes map to Codex sandbox behavior like this:
 
-- `plan` -> `sandbox_mode="read-only"` with no network access
-- `approve` -> `sandbox_mode="workspace-write"` with network access enabled for unattended remote work
-- `full` -> `sandbox_mode="danger-full-access"`
+- `plan` -> read-only sandbox with no network access
+- `approve` -> workspace-write sandbox with network access enabled for unattended remote work
+- `full` -> danger-full-access
 
 ## Chimera Session Notes
 

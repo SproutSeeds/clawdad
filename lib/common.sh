@@ -28,6 +28,7 @@ CLAWDAD_JQ="${CLAWDAD_JQ:-jq}"
 CLAWDAD_NODE="${CLAWDAD_NODE:-node}"
 CLAWDAD_CLAUDE="${CLAWDAD_CLAUDE:-claude}"
 CLAWDAD_CODEX="${CLAWDAD_CODEX:-codex}"
+CLAWDAD_CODEX_HOME="${CLAWDAD_CODEX_HOME:-$HOME/.codex}"
 CLAWDAD_CHIMERA="${CLAWDAD_CHIMERA:-chimera}"
 CLAWDAD_TMUX="${CLAWDAD_TMUX:-/opt/homebrew/bin/tmux}"
 
@@ -203,7 +204,9 @@ gen_uuid() {
 
 to_absolute_path() {
   local path="$1"
-  if [[ "$path" == /* ]]; then
+  if [[ -d "$path" ]]; then
+    cd "$path" 2>/dev/null && pwd -P
+  elif [[ "$path" == /* ]]; then
     echo "$path"
   else
     echo "$(cd "$path" 2>/dev/null && pwd -P)"

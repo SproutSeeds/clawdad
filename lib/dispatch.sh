@@ -34,39 +34,27 @@ _claude_session_has_mailbox_history() {
 
 _build_cmd_codex() {
   local message="$1" session_id="$2" session_seeded="$3"
-  local permission_mode="$4" model="$5" output_file="$6"
+  local permission_mode="$4" model="$5" project_path="$6"
 
-  local sandbox_mode="read-only"
-  case "$permission_mode" in
-    plan)    sandbox_mode="read-only" ;;
-    approve) sandbox_mode="workspace-write" ;;
-    full)    sandbox_mode="danger-full-access" ;;
-    *)       sandbox_mode="workspace-write" ;;
-  esac
+  require_node
 
-  cmd=("$CLAWDAD_CODEX" "exec")
-  if [[ "$session_seeded" == "true" && -n "$session_id" && "$session_id" != "null" ]]; then
-    cmd+=("resume" "$session_id")
-  fi
-
-  cmd+=(
-    "--json"
-    "--output-last-message" "$output_file"
-    "--skip-git-repo-check"
-    "-c" 'approval_policy="never"'
-    "-c" "sandbox_mode=\"$sandbox_mode\""
+  cmd=(
+    "$CLAWDAD_NODE"
+    "$CLAWDAD_ROOT/lib/codex-app-server-dispatch.mjs"
+    "--project-path" "$project_path"
+    "--message" "$message"
+    "--session-id" "$session_id"
+    "--permission-mode" "$permission_mode"
+    "--codex-binary" "$CLAWDAD_CODEX"
   )
 
-  # In unattended workspace-write mode, opt Codex into networked local work.
-  if [[ "$sandbox_mode" == "workspace-write" ]]; then
-    cmd+=("-c" 'sandbox_workspace_write.network_access=true')
+  if [[ "$session_seeded" == "true" ]]; then
+    cmd+=("--session-seeded")
   fi
 
   if [[ -n "$model" ]]; then
     cmd+=("--model" "$model")
   fi
-
-  cmd+=("$message")
 }
 
 _build_cmd_chimera() {
@@ -98,15 +86,13 @@ _build_dispatch_command() {
   local provider="$5" session_seeded="$6" permission_mode="$7" model="$8"
 
   cmd=()
-  codex_output_file=""
 
   case "$provider" in
     claude)
       _build_cmd_claude "$message" "$session_id" "$dispatch_count" "$permission_mode" "$model"
       ;;
     codex)
-      codex_output_file=$(mktemp "${TMPDIR:-/tmp}/clawdad-codex-last-message.XXXXXX")
-      _build_cmd_codex "$message" "$session_id" "$session_seeded" "$permission_mode" "$model" "$codex_output_file"
+      _build_cmd_codex "$message" "$session_id" "$session_seeded" "$permission_mode" "$model" "$project_path"
       ;;
     chimera)
       _build_cmd_chimera "$project_path" "$message" "$session_id" "$session_seeded" "$permission_mode" "$model"
@@ -142,28 +128,23 @@ _extract_result_claude() {
 
 _extract_result_codex() {
   local output="$1"
-  # Codex exec writes JSONL progress to stdout; callers should prefer --output-last-message.
-  echo "$output"
-}
-
-_extract_codex_thread_id() {
-  local output="$1"
-  echo "$output" | sed -n 's/.*"type":"thread.started".*"thread_id":"\([^"]*\)".*/\1/p' | head -1
-}
-
-_read_codex_last_message() {
-  local output_file="$1" fallback="$2"
-
-  if [[ -f "$output_file" ]]; then
-    local content
-    content=$(cat "$output_file")
-    if [[ -n "$content" ]]; then
-      echo "$content"
-      return 0
-    fi
+  local result_text
+  result_text=$(echo "$output" | "$CLAWDAD_JQ" -r '.result_text // ""' 2>/dev/null || true)
+  if [[ -n "$result_text" && "$result_text" != "null" ]]; then
+    echo "$result_text"
+  else
+    echo "$output"
   fi
+}
 
-  echo "$fallback"
+_extract_codex_session_id() {
+  local output="$1"
+  echo "$output" | "$CLAWDAD_JQ" -r '.session_id // ""' 2>/dev/null
+}
+
+_extract_codex_error_text() {
+  local output="$1"
+  echo "$output" | "$CLAWDAD_JQ" -r '.error_text // ""' 2>/dev/null
 }
 
 _extract_result_chimera() {
@@ -284,7 +265,6 @@ _dispatch_background() {
   local model="${9:-}" message="${10:-}"
 
   local -a cmd
-  local codex_output_file=""
   _build_dispatch_command "$project_path" "$message" "$session_id" "$dispatch_count" "$provider" "$session_seeded" "$permission_mode" "$model" || return 1
 
   # Run from project directory
@@ -304,14 +284,14 @@ _dispatch_background() {
 
   local effective_session_id="$session_id"
   if [[ "$provider" == "codex" ]]; then
-    local codex_thread_id
-    codex_thread_id=$(_extract_codex_thread_id "$output")
-    if [[ -n "$codex_thread_id" && "$codex_thread_id" != "null" ]]; then
-      effective_session_id="$codex_thread_id"
-      if [[ "$codex_thread_id" != "$session_id" || "$session_seeded" != "true" ]]; then
-        if registry_set_resume_session "$project_path" "$slug" "$provider" "$session_id" "$codex_thread_id"; then
+    local codex_session_id
+    codex_session_id=$(_extract_codex_session_id "$output")
+    if [[ -n "$codex_session_id" && "$codex_session_id" != "null" ]]; then
+      effective_session_id="$codex_session_id"
+      if [[ "$codex_session_id" != "$session_id" || "$session_seeded" != "true" ]]; then
+        if registry_set_resume_session "$project_path" "$slug" "$provider" "$session_id" "$codex_session_id"; then
         else
-          clawdad_log "dispatch warning: failed to persist Codex session id for $slug request_id=$request_id session=$codex_thread_id"
+          clawdad_log "dispatch warning: failed to persist Codex session id for $slug request_id=$request_id session=$codex_session_id"
         fi
       fi
     fi
@@ -334,7 +314,7 @@ _dispatch_background() {
     local result_text
     case "$provider" in
       claude) result_text=$(_extract_result_claude "$output") ;;
-      codex)  result_text=$(_read_codex_last_message "$codex_output_file" "$(_extract_result_codex "$output")") ;;
+      codex)  result_text=$(_extract_result_codex "$output") ;;
       chimera) result_text=$(_extract_result_chimera "$output") ;;
       *)      result_text="$output" ;;
     esac
@@ -363,6 +343,13 @@ _dispatch_background() {
         error_msg=$(echo "$output" | tail -5)
         ;;
     esac
+    if [[ "$provider" == "codex" ]]; then
+      local codex_error_text
+      codex_error_text=$(_extract_codex_error_text "$output")
+      if [[ -n "$codex_error_text" && "$codex_error_text" != "null" ]]; then
+        error_msg="$codex_error_text"
+      fi
+    fi
 
     case "$provider" in
       chimera)
@@ -383,9 +370,5 @@ _dispatch_background() {
     state_set_active_session "$project_path" "$effective_session_id"
 
     clawdad_log "dispatch failed: slug=$slug provider=$provider request_id=$request_id exit=$exit_code error=$error_msg"
-  fi
-
-  if [[ -n "$codex_output_file" && -f "$codex_output_file" ]]; then
-    rm -f "$codex_output_file"
   fi
 }
