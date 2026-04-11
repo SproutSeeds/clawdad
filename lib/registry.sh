@@ -437,6 +437,7 @@ registry_init() {
 registry_add() {
   local project_path="$1" session_id="$2" slug="$3" description="${4:-}" provider="${5:-$CLAWDAD_DEFAULT_PROVIDER}"
   local session_seeded="${6:-}"
+  local write_mode="${7:-append}"
   require_orp
 
   # Add tab to ORP workspace
@@ -446,8 +447,10 @@ registry_add() {
     "--title" "$slug"
     "--resume-tool" "$provider"
     "--resume-session-id" "$session_id"
-    "--append"
     "--json")
+  if [[ "$write_mode" != "update" ]]; then
+    orp_cmd+=("--append")
+  fi
 
   local result exit_code
   if result=$("${orp_cmd[@]}" 2>&1); then
@@ -995,11 +998,42 @@ registry_has_path() {
   [[ -n "$match" ]]
 }
 
+registry_has_tracked_session_for_path() {
+  local project_path="$1"
+  local match
+  match=$(_orp_tabs_json | "$CLAWDAD_JQ" -r \
+    --arg path "$project_path" \
+    '.tabs[]
+      | select(
+          .path == $path
+          and (.resumeSessionId // "") != ""
+          and (((.resumeTool // "codex") == "codex") or ((.resumeTool // "codex") == "chimera"))
+        )
+      | .resumeSessionId' | head -1)
+  [[ -n "$match" ]]
+}
+
 registry_has_slug() {
   local slug="$1"
   local match
   match=$(_orp_tabs_json | "$CLAWDAD_JQ" -r \
     --arg title "$slug" \
     '.tabs[] | select(.title == $title) | .title' | head -1)
+  [[ -n "$match" ]]
+}
+
+registry_has_untracked_slug_for_path() {
+  local project_path="$1" slug="$2"
+  local match
+  match=$(_orp_tabs_json | "$CLAWDAD_JQ" -r \
+    --arg path "$project_path" \
+    --arg title "$slug" \
+    '.tabs[]
+      | select(
+          .path == $path
+          and (.title // "") == $title
+          and (.resumeSessionId // "") == ""
+        )
+      | .title' | head -1)
   [[ -n "$match" ]]
 }

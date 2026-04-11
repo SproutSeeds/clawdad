@@ -184,15 +184,22 @@ cmd_register() {
   # Default slug from basename
   [[ -z "$slug" ]] && slug="${project_path:t}"
 
-  # Check for duplicates
+  # Check for duplicates. If ORP already has this path but no Clawdad-tracked
+  # session, upgrade that placeholder tab instead of forcing a remove/re-add.
+  local upgrade_existing_tab=false
   if registry_has_path "$project_path"; then
-    clawdad_error "Project already registered: $project_path"
-    clawdad_error "Use 'clawdad unregister $slug' first to re-register"
-    return 1
+    if registry_has_tracked_session_for_path "$project_path"; then
+      clawdad_error "Project already registered: $project_path"
+      clawdad_error "Use 'clawdad add-session $slug' to add another tracked session"
+      return 1
+    fi
+    upgrade_existing_tab=true
   fi
   if registry_has_slug "$slug"; then
-    clawdad_error "Slug '$slug' already in use. Use --slug to choose a different name."
-    return 1
+    if ! $upgrade_existing_tab || ! registry_has_untracked_slug_for_path "$project_path" "$slug"; then
+      clawdad_error "Slug '$slug' already in use. Use --slug to choose a different name."
+      return 1
+    fi
   fi
 
   # Generate or adopt a provider session ID
@@ -202,7 +209,11 @@ cmd_register() {
   session_seeded="${seed_info#*$'\t'}"
 
   # Register in registry
-  registry_add "$project_path" "$session_id" "$slug" "$description" "$provider" "$session_seeded"
+  local write_mode="append"
+  if $upgrade_existing_tab; then
+    write_mode="update"
+  fi
+  registry_add "$project_path" "$session_id" "$slug" "$description" "$provider" "$session_seeded" "$write_mode"
 
   # Initialize mailbox
   mailbox_init "$project_path"
