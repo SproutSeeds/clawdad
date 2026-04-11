@@ -1,5 +1,5 @@
 #!/usr/bin/env zsh
-# clawdad — Multi-agent orchestration CLI for Claude Code sessions
+# clawdad — Multi-agent orchestration CLI for Codex-first project sessions
 set -euo pipefail
 
 # Resolve CLAWDAD_ROOT from the script's real location (follows symlinks)
@@ -22,12 +22,17 @@ clawdad v$CLAWDAD_VERSION — Multi-agent orchestration for AI coding agents
 Usage:
   clawdad <command> [options]
 
-Requires: orp, jq, claude and/or codex and/or chimera
+Requires: orp, jq, codex (Chimera optional)
 
 Commands:
   init                          Initialize clawdad (~/.clawdad + verify ORP)
   register <path> [options]     Register a project (writes ORP tab)
   add-session <project> [opts]  Add another tracked session to a project bucket
+  delegate <project> [--json]   Show the saved delegate brief/status for a project
+  delegate-set <project> ...    Update the delegate brief text for a project
+  delegate-reset <project>      Reset the delegate brief to the default template
+  track-session <project> <session-id>
+                                Track an existing native Codex session in a project bucket
   rename-session <project> <session> <title>
                                 Rename one tracked session inside a project bucket
   remove-session <project> <session>
@@ -53,11 +58,14 @@ Commands:
 Options for register:
   --slug <name>                 Custom slug (default: directory basename)
   --description <text>          Project description
-  --provider <name>             AI provider: claude, codex, chimera (default: claude)
+  --provider <name>             AI provider: codex or chimera (default: codex)
 
 Options for add-session:
   --slug <name>                 Custom session label
-  --provider <name>             AI provider: claude, codex, chimera (default: claude)
+  --provider <name>             AI provider: codex or chimera (default: codex)
+
+Options for track-session:
+  --slug <name>                 Custom session label
 
 Options for rename-session:
   <session>                     Existing session title or full session id
@@ -68,10 +76,16 @@ Options for remove-session:
 
 Options for dispatch:
   --file <path>                 Read message from file
+  --session <session>           Target a tracked session without changing the active session
   --wait                        Block until response arrives
   --timeout <sec>               Optional max wait seconds (default: wait indefinitely)
   --model <model>               Override model for this dispatch
   --permission-mode <mode>      Permission mode (default: plan)
+
+Options for delegate-set:
+  --file <path>                 Read delegate brief text from a file
+  --stdin                       Read delegate brief text from stdin
+  --json                        Emit the saved delegate payload as JSON
 
 Options for watch:
   --interval <sec>              Poll interval (default: 5)
@@ -84,7 +98,7 @@ Environment:
   CLAWDAD_LOG                   Log file (default: ~/Library/Logs/clawdad.log)
   CLAWDAD_POLL_INTERVAL         Default poll interval (default: 5)
   CLAWDAD_PERMISSION_MODE       Default permission mode (default: plan)
-  CLAWDAD_DEFAULT_PROVIDER      Default provider (default: claude)
+  CLAWDAD_DEFAULT_PROVIDER      Default provider (default: codex)
   CLAWDAD_CHIMERA               Chimera CLI binary (default: chimera)
   CLAWDAD_ORP_WORKSPACE         ORP workspace name (default: main)
   CLAWDAD_SERVER_HOST           Listener host (default: 127.0.0.1)
@@ -153,7 +167,7 @@ cmd_register() {
   done
 
   if [[ -z "$project_path" ]]; then
-    clawdad_error "Usage: clawdad register <path> [--slug <name>] [--provider <claude|codex|chimera>]"
+    clawdad_error "Usage: clawdad register <path> [--slug <name>] [--provider <codex|chimera>]"
     return 1
   fi
 
@@ -204,8 +218,25 @@ choose_unique_session_slug() {
   local project_path="$1" provider="${2:-$CLAWDAD_DEFAULT_PROVIDER}" preferred="${3:-}"
 
   if [[ -n "$preferred" ]]; then
-    echo "$preferred"
-    return 0
+    local normalized
+    normalized=$(print -r -- "$preferred" | tr '\r\n' '  ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')
+    if [[ -n "$normalized" ]]; then
+      if ! registry_has_slug "$normalized"; then
+        echo "$normalized"
+        return 0
+      fi
+
+      local preferred_suffix=2
+      local preferred_candidate
+      while true; do
+        preferred_candidate="$normalized $preferred_suffix"
+        if ! registry_has_slug "$preferred_candidate"; then
+          echo "$preferred_candidate"
+          return 0
+        fi
+        (( preferred_suffix += 1 ))
+      done
+    fi
   fi
 
   local base candidate suffix
@@ -247,7 +278,7 @@ cmd_add_session() {
   done
 
   if [[ -z "$input" ]]; then
-    clawdad_error "Usage: clawdad add-session <project> [--slug <name>] [--provider <claude|codex|chimera>]"
+    clawdad_error "Usage: clawdad add-session <project> [--slug <name>] [--provider <codex|chimera>]"
     return 1
   fi
 
@@ -302,6 +333,73 @@ cmd_add_session() {
   else
     clawdad_info "Added session: $slug -> $project_path (provider: $provider, session: $session_id)"
   fi
+}
+
+cmd_track_session() {
+  require_jq
+  require_orp
+
+  local input="" session_id="" slug=""
+
+  while (( $# > 0 )); do
+    case "$1" in
+      --slug) slug="$2"; shift 2 ;;
+      -*) clawdad_error "Unknown option: $1"; return 1 ;;
+      *)
+        if [[ -z "$input" ]]; then
+          input="$1"
+        elif [[ -z "$session_id" ]]; then
+          session_id="$1"
+        else
+          clawdad_error "Usage: clawdad track-session <project> <session-id> [--slug <name>]"
+          return 1
+        fi
+        shift
+        ;;
+    esac
+  done
+
+  if [[ -z "$input" || -z "$session_id" ]]; then
+    clawdad_error "Usage: clawdad track-session <project> <session-id> [--slug <name>]"
+    return 1
+  fi
+
+  local project_path
+  project_path=$(resolve_project "$input") || return 1
+
+  if registry_session_exists "$project_path" "$session_id"; then
+    clawdad_error "Session '$session_id' is already tracked for $project_path"
+    return 1
+  fi
+
+  local sessions_json session_json
+  sessions_json=$(registry_list_saved_codex_sessions_json "$project_path" "0") || return 1
+  session_json=$(echo "$sessions_json" | "$CLAWDAD_JQ" -c --arg session "$session_id" '
+    select(.ok == true)
+    | (.sessions // [])
+    | map(select(.sessionId == $session))
+    | .[0] // empty
+  ')
+
+  if [[ -z "$session_json" ]]; then
+    clawdad_error "No saved native Codex session '$session_id' was found for $project_path"
+    return 1
+  fi
+
+  if [[ -z "$slug" ]]; then
+    local title_hint
+    title_hint=$(echo "$session_json" | "$CLAWDAD_JQ" -r '.titleHint // .preview // ""')
+    slug=$(choose_unique_session_slug "$project_path" "codex" "$title_hint")
+  fi
+
+  if registry_has_slug "$slug"; then
+    clawdad_error "Slug '$slug' already in use. Use --slug to choose a different name."
+    return 1
+  fi
+
+  registry_add "$project_path" "$session_id" "$slug" "" "codex" "true"
+  mailbox_init "$project_path"
+  clawdad_info "Tracked native session: $slug -> $project_path (provider: codex, session: $session_id)"
 }
 
 cmd_unregister() {
@@ -400,12 +498,13 @@ cmd_dispatch() {
   require_jq
 
   local input="" message="" file="" wait=false timeout="$CLAWDAD_DISPATCH_TIMEOUT"
-  local model="" permission_mode="$CLAWDAD_PERMISSION_MODE"
+  local model="" permission_mode="$CLAWDAD_PERMISSION_MODE" session_selector=""
 
   # Parse arguments
   while (( $# > 0 )); do
     case "$1" in
       --file) file="$2"; shift 2 ;;
+      --session) session_selector="$2"; shift 2 ;;
       --wait) wait=true; shift ;;
       --timeout) timeout="$2"; shift 2 ;;
       --model) model="$2"; shift 2 ;;
@@ -458,7 +557,12 @@ cmd_dispatch() {
   local project_path
   project_path=$(resolve_project "$input") || return 1
 
-  dispatch_to_spoke "$project_path" "$message" "$permission_mode" "$model"
+  local persist_active="true"
+  if [[ -n "$session_selector" ]]; then
+    persist_active="false"
+  fi
+
+  dispatch_to_spoke "$project_path" "$message" "$permission_mode" "$model" "$session_selector" "$persist_active"
 
   if $wait; then
     local slug
@@ -546,7 +650,7 @@ cmd_status() {
       _cnt=$(registry_field "$project_path" "dispatch_count")
 
       printf "%-24s %-8s %-12s last: %-20s dispatches: %s\n" \
-        "$_slug" "${_prov:-claude}" "${_st:-idle}" "${_last:-never}" "${_cnt:-0}"
+        "$_slug" "${_prov:-codex}" "${_st:-idle}" "${_last:-never}" "${_cnt:-0}"
     fi
   else
     if $json; then
@@ -617,15 +721,15 @@ cmd_sessions() {
 
   printf "%-6s %-24s %-8s %-10s %-12s %s\n" "ACTIVE" "SLUG" "PROVIDER" "STATUS" "DISPATCHES" "SESSION ID"
   echo "$sessions_json" | "$CLAWDAD_JQ" -r '.[] | [
-    (if .active then "*" else "" end),
+    (if .active then "*" else "-" end),
     .slug,
     .provider,
     .status,
     (.dispatchCount | tostring),
     .sessionId
-  ] | @tsv' | while IFS=$'\t' read -r active slug provider status dispatches session_id; do
+  ] | @tsv' | while IFS=$'\t' read -r active slug provider session_status dispatches session_id; do
     printf "%-6s %-24s %-8s %-10s %-12s %s\n" \
-      "$active" "$slug" "$provider" "$status" "$dispatches" "$session_id"
+      "$active" "$slug" "$provider" "$session_status" "$dispatches" "$session_id"
   done
 }
 
@@ -782,6 +886,18 @@ cmd_gen_token() {
   run_server_helper gen-token "$@"
 }
 
+cmd_delegate() {
+  run_server_helper delegate "$@"
+}
+
+cmd_delegate_set() {
+  run_server_helper delegate-set "$@"
+}
+
+cmd_delegate_reset() {
+  run_server_helper delegate-reset "$@"
+}
+
 cmd_print_launch_agent() {
   run_server_helper print-launch-agent "$@"
 }
@@ -807,6 +923,10 @@ main() {
     init)       cmd_init "$@" ;;
     register)   cmd_register "$@" ;;
     add-session) cmd_add_session "$@" ;;
+    delegate)   cmd_delegate "$@" ;;
+    delegate-set) cmd_delegate_set "$@" ;;
+    delegate-reset) cmd_delegate_reset "$@" ;;
+    track-session) cmd_track_session "$@" ;;
     rename-session) cmd_rename_session "$@" ;;
     remove-session) cmd_remove_session "$@" ;;
     unregister) cmd_unregister "$@" ;;

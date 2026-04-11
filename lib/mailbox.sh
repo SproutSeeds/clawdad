@@ -6,6 +6,15 @@ mailbox_dir() {
   echo "$project_path/.clawdad/mailbox"
 }
 
+_mailbox_write_file() {
+  local target_file="$1" content="$2"
+  local tmp
+  mkdir -p "${target_file:h}"
+  tmp=$(mktemp "${target_file}.tmp.XXXXXX") || return 1
+  printf '%s\n' "$content" > "$tmp"
+  mv "$tmp" "$target_file"
+}
+
 mailbox_init() {
   local project_path="$1"
   local mbox
@@ -35,7 +44,8 @@ mailbox_write_request() {
   local ts
   ts="$(iso_timestamp)"
 
-  cat > "$mbox/request.md" <<EOF
+  local payload
+  payload=$(cat <<EOF
 # Request: $request_id
 
 Dispatched: $ts
@@ -45,6 +55,9 @@ From: hub
 
 $message
 EOF
+)
+
+  _mailbox_write_file "$mbox/request.md" "$payload" || return 1
 
   clawdad_log "Wrote request $request_id to $mbox/request.md"
 }
@@ -57,7 +70,8 @@ mailbox_write_response() {
   local ts
   ts="$(iso_timestamp)"
 
-  cat > "$mbox/response.md" <<EOF
+  local payload
+  payload=$(cat <<EOF
 # Response: $request_id
 
 Completed: $ts
@@ -68,6 +82,9 @@ Exit code: $exit_code
 
 $content
 EOF
+)
+
+  _mailbox_write_file "$mbox/response.md" "$payload" || return 1
 
   clawdad_log "Wrote response $request_id to $mbox/response.md"
 }
@@ -103,7 +120,8 @@ mailbox_update_status() {
   [[ "$request_id" != "null" ]] && request_id="\"$request_id\""
   [[ "$error" != "null" ]] && error="\"$error\""
 
-  cat > "$mbox/status.json" <<EOF
+  local payload
+  payload=$(cat <<EOF
 {
   "state": "$state",
   "request_id": $request_id,
@@ -113,6 +131,9 @@ mailbox_update_status() {
   "pid": $pid
 }
 EOF
+)
+
+  _mailbox_write_file "$mbox/status.json" "$payload" || return 1
 }
 
 mailbox_read_status() {

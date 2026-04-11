@@ -6,13 +6,13 @@
 
 Multi-agent orchestration CLI for AI coding agents. Manages persistent spoke agents across your projects from a single hub, using [ORP](https://orp.earth) as the canonical data store.
 
-Provider-agnostic — works with Claude, Codex, and Chimera.
+Codex-first orchestration for OpenAI-powered coding work, with Chimera still available as an experimental path.
 
 ## Install
 
 Before you start:
 
-- install [ORP](https://orp.earth), `jq`, and at least one agent CLI: `claude` or `codex`
+- install [ORP](https://orp.earth), `jq`, and the `codex` CLI
 - install [Tailscale](https://tailscale.com/download) on your Mac and phone if you want the private mobile app
 
 ```bash
@@ -30,7 +30,7 @@ clawdad init
 
 ```bash
 # Register a project bucket with its first tracked session
-clawdad register ~/code/my-project --provider claude
+clawdad register ~/code/my-project --provider codex
 
 # Write the secure listener config, shortcut template, and service file
 clawdad secure-bootstrap --default-project my-project --apply-serve
@@ -142,7 +142,6 @@ clawdad dispatches to the right CLI based on the active session's `resumeTool`:
 
 | Provider | Interactive (human) | Non-interactive (clawdad) |
 |----------|-------------------|--------------------------|
-| Claude | `claude --resume <id>` | `claude -p "msg" --resume <id> --output-format json` |
 | Codex | `codex` or `codex resume <id>` | Native saved Codex thread created or adopted per repo, then Clawdad resumes that same thread programmatically |
 | Chimera | `chimera --resume <id>` | `chimera --prompt "msg" --resume <id> --json` after Clawdad seeds and maintains the session file |
 
@@ -152,7 +151,8 @@ clawdad dispatches to the right CLI based on the active session's `resumeTool`:
 - node >= 18
 - jq
 - orp CLI (workspace tab management)
-- claude CLI and/or codex CLI and/or chimera CLI
+- codex CLI
+- chimera CLI (optional / experimental)
 - tmux (for watch daemon mode)
 
 ## Secure Setup Notes
@@ -192,7 +192,6 @@ If you use token auth remotely, keep the listener on `127.0.0.1` and place it be
 
 Clawdad now treats each directory as a project bucket with one active tracked session:
 
-- Claude is usually a single-session-per-directory experience.
 - Codex can expose multiple tracked sessions inside the same directory.
 - Chimera follows the same bucket/session model as it matures.
 

@@ -1,37 +1,6 @@
 #!/usr/bin/env zsh
 # clawdad/lib/dispatch.sh — Provider-agnostic dispatch to spoke agents
 
-# Build the CLI command array for a given provider.
-# Each provider function sets the `cmd` array variable in the caller's scope.
-_build_cmd_claude() {
-  local message="$1" session_id="$2" dispatch_count="$3"
-  local permission_mode="$4" model="$5"
-
-  cmd=("$CLAWDAD_CLAUDE" "-p" "$message")
-
-  if (( dispatch_count == 0 )); then
-    cmd+=("--session-id" "$session_id")
-  else
-    cmd+=("--resume" "$session_id")
-  fi
-
-  cmd+=("--output-format" "json")
-  cmd+=("--permission-mode" "$permission_mode")
-
-  if [[ -n "$model" ]]; then
-    cmd+=("--model" "$model")
-  fi
-}
-
-_claude_session_has_mailbox_history() {
-  local project_path="$1" session_id="$2"
-  local response_file
-  response_file="$(mailbox_dir "$project_path")/response.md"
-
-  [[ -f "$response_file" ]] || return 1
-  rg -q "^Session: ${session_id}\$" "$response_file" 2>/dev/null
-}
-
 _build_cmd_codex() {
   local message="$1" session_id="$2" session_seeded="$3"
   local permission_mode="$4" model="$5" project_path="$6"
@@ -88,9 +57,6 @@ _build_dispatch_command() {
   cmd=()
 
   case "$provider" in
-    claude)
-      _build_cmd_claude "$message" "$session_id" "$dispatch_count" "$permission_mode" "$model"
-      ;;
     codex)
       _build_cmd_codex "$message" "$session_id" "$session_seeded" "$permission_mode" "$model" "$project_path"
       ;;
@@ -104,72 +70,52 @@ _build_dispatch_command() {
   esac
 }
 
-# Extract the result text from provider-specific output
-_extract_result_claude() {
-  local output="$1"
-  local result_text
-  if ! result_text=$(echo "$output" | "$CLAWDAD_JQ" -r '
-    if type == "array" then
-      [.[] | select(.type == "result")] | last | .result // ""
-    else
-      .result // ""
-    end
-  ' 2>/dev/null); then
-    result_text=""
-  fi
-
-  # Fallback: if jq parsing fails, use raw output
-  if [[ -z "$result_text" || "$result_text" == "null" ]]; then
-    echo "$output"
-  else
-    echo "$result_text"
-  fi
-}
-
 _extract_result_codex() {
   local output="$1"
   local result_text
-  result_text=$(echo "$output" | "$CLAWDAD_JQ" -r '.result_text // ""' 2>/dev/null || true)
+  result_text=$(printf '%s' "$output" | "$CLAWDAD_JQ" -r '.result_text // ""' 2>/dev/null || true)
   if [[ -n "$result_text" && "$result_text" != "null" ]]; then
-    echo "$result_text"
+    printf '%s\n' "$result_text"
   else
-    echo "$output"
+    printf '%s\n' "$output"
   fi
 }
 
 _extract_codex_session_id() {
   local output="$1"
-  echo "$output" | "$CLAWDAD_JQ" -r '.session_id // ""' 2>/dev/null
+  printf '%s' "$output" | "$CLAWDAD_JQ" -r '.session_id // ""' 2>/dev/null
 }
 
 _extract_codex_error_text() {
   local output="$1"
-  echo "$output" | "$CLAWDAD_JQ" -r '.error_text // ""' 2>/dev/null
+  printf '%s' "$output" | "$CLAWDAD_JQ" -r '.error_text // ""' 2>/dev/null
 }
 
 _extract_result_chimera() {
   local output="$1"
-  echo "$output" | "$CLAWDAD_JQ" -r '.result_text // ""' 2>/dev/null
+  printf '%s' "$output" | "$CLAWDAD_JQ" -r '.result_text // ""' 2>/dev/null
 }
 
 _extract_chimera_session_id() {
   local output="$1"
-  echo "$output" | "$CLAWDAD_JQ" -r '.session_id // ""' 2>/dev/null
+  printf '%s' "$output" | "$CLAWDAD_JQ" -r '.session_id // ""' 2>/dev/null
 }
 
 _extract_chimera_error_text() {
   local output="$1"
-  echo "$output" | "$CLAWDAD_JQ" -r '.error_text // ""' 2>/dev/null
+  printf '%s' "$output" | "$CLAWDAD_JQ" -r '.error_text // ""' 2>/dev/null
 }
 
 dispatch_to_spoke() {
   local project_path="$1" message="$2"
   local permission_mode="${3:-$CLAWDAD_PERMISSION_MODE}"
   local model="${4:-}"
+  local session_selector="${5:-}"
+  local persist_active="${6:-true}"
 
   # Resolve the active tracked session for this project bucket.
   local session_json
-  session_json=$(registry_session_json "$project_path") || {
+  session_json=$(registry_session_json "$project_path" "$session_selector") || {
     clawdad_error "No tracked session found for project. Register it first: clawdad register $project_path"
     return 1
   }
@@ -203,9 +149,6 @@ dispatch_to_spoke() {
   if [[ -z "$session_seeded" || "$session_seeded" == "null" ]]; then
     session_seeded="true"
   fi
-  if [[ "$provider" == "claude" && "$dispatch_count" == "0" ]] && _claude_session_has_mailbox_history "$project_path" "$session_id"; then
-    dispatch_count=1
-  fi
 
   # Validate provider is available
   require_provider "$provider"
@@ -233,7 +176,9 @@ dispatch_to_spoke() {
   registry_update "$project_path" "last_dispatch" "$started_at"
   state_update_session "$project_path" "$session_id" "status" "running"
   state_update_session "$project_path" "$session_id" "last_dispatch" "$started_at"
-  state_set_active_session "$project_path" "$session_id"
+  if [[ "$persist_active" == "true" ]]; then
+    state_set_active_session "$project_path" "$session_id"
+  fi
 
   local -a cmd
   local codex_output_file=""
@@ -250,6 +195,7 @@ dispatch_to_spoke() {
     "$dispatch_count" \
     "$permission_mode" \
     "$model" \
+    "$persist_active" \
     "$message" >/dev/null 2>&1 </dev/null &
   local bg_pid=$!
 
@@ -262,7 +208,7 @@ dispatch_to_spoke() {
 _dispatch_background() {
   local project_path="$1" request_id="$2" session_id="$3" slug="$4" provider="$5"
   local session_seeded="${6:-}" dispatch_count="${7:-0}" permission_mode="${8:-$CLAWDAD_PERMISSION_MODE}"
-  local model="${9:-}" message="${10:-}"
+  local model="${9:-}" persist_active="${10:-true}" message="${11:-}"
 
   local -a cmd
   _build_dispatch_command "$project_path" "$message" "$session_id" "$dispatch_count" "$provider" "$session_seeded" "$permission_mode" "$model" || return 1
@@ -313,7 +259,6 @@ _dispatch_background() {
     # Extract result using provider-specific parser
     local result_text
     case "$provider" in
-      claude) result_text=$(_extract_result_claude "$output") ;;
       codex)  result_text=$(_extract_result_codex "$output") ;;
       chimera) result_text=$(_extract_result_chimera "$output") ;;
       *)      result_text="$output" ;;
@@ -329,7 +274,9 @@ _dispatch_background() {
     state_update_session "$project_path" "$effective_session_id" "status" "completed"
     state_update_session "$project_path" "$effective_session_id" "last_response" "$(iso_timestamp)"
     state_increment_session "$project_path" "$effective_session_id" "dispatch_count"
-    state_set_active_session "$project_path" "$effective_session_id"
+    if [[ "$persist_active" == "true" ]]; then
+      state_set_active_session "$project_path" "$effective_session_id"
+    fi
 
     clawdad_log "dispatch completed: slug=$slug provider=$provider request_id=$request_id exit=$exit_code"
   else
@@ -367,7 +314,9 @@ _dispatch_background() {
     state_update_session "$project_path" "$effective_session_id" "status" "failed"
     state_update_session "$project_path" "$effective_session_id" "last_response" "$(iso_timestamp)"
     state_increment_session "$project_path" "$effective_session_id" "dispatch_count"
-    state_set_active_session "$project_path" "$effective_session_id"
+    if [[ "$persist_active" == "true" ]]; then
+      state_set_active_session "$project_path" "$effective_session_id"
+    fi
 
     clawdad_log "dispatch failed: slug=$slug provider=$provider request_id=$request_id exit=$exit_code error=$error_msg"
   fi

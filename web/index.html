@@ -17,7 +17,7 @@
     <link rel="manifest" href="/manifest.webmanifest?v=20260406h">
     <link rel="apple-touch-icon" href="/assets/clawdad-mascot-app.png?v=20260406h">
     <link rel="icon" href="/assets/clawdad-mascot-app.png?v=20260406h">
-    <link rel="stylesheet" href="/app.css?v=20260407ab">
+    <link rel="stylesheet" href="/app.css?v=20260410a">
   </head>
   <body>
     <main class="app-shell">
@@ -66,6 +66,16 @@
               </svg>
             </button>
             <button
+              id="projectDelegateButton"
+              class="thread-button"
+              type="button"
+              aria-label="Open delegate"
+            >
+              <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M8 2.75 9.55 5.9l3.45.5-2.5 2.43.59 3.42L8 10.6 4.91 12.25l.59-3.42L3 6.4l3.45-.5L8 2.75Z" stroke="currentColor" stroke-width="1.15" stroke-linejoin="round"></path>
+              </svg>
+            </button>
+            <button
               id="projectAddButton"
               class="thread-button"
               type="button"
@@ -75,21 +85,22 @@
                 <path d="M8 3.25v9.5M3.25 8h9.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"></path>
               </svg>
             </button>
-            <button
-              id="projectDeleteButton"
-              class="thread-button thread-button-danger"
-              type="button"
-              aria-label="Stop tracking project"
-            >
-              <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <path d="M3.5 5.25h9M6.25 5.25v6M9.75 5.25v6M5.5 3.5h5M4.75 5.25l.35 6.05a1.2 1.2 0 0 0 1.2 1.13h3.4a1.2 1.2 0 0 0 1.2-1.13l.35-6.05" stroke="currentColor" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round"></path>
-              </svg>
-            </button>
           </div>
           <div class="session-control">
             <select id="sessionSelect" name="session" disabled>
               <option value="">Loading sessions…</option>
             </select>
+            <button
+              id="sessionImportButton"
+              class="thread-button"
+              type="button"
+              aria-label="Import local Codex session"
+            >
+              <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M8 3.2v5.6m0 0 2.5-2.5M8 8.8 5.5 6.3M3.4 11.8h9.2" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"></path>
+              </svg>
+              <span id="sessionImportOrb" class="control-orb" hidden aria-hidden="true"></span>
+            </button>
             <button
               id="sessionRenameButton"
               class="thread-button"
@@ -108,16 +119,6 @@
             >
               <svg viewBox="0 0 18 18" fill="none" aria-hidden="true">
                 <path d="M4.25 5.35c0-1.44 1.18-2.6 2.63-2.6h4.24c1.45 0 2.63 1.16 2.63 2.6v3.3c0 1.44-1.18 2.6-2.63 2.6H8.3l-3.55 2.58.44-2.58H6.88c-1.45 0-2.63-1.16-2.63-2.6z" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round"></path>
-              </svg>
-            </button>
-            <button
-              id="sessionDeleteButton"
-              class="thread-button thread-button-danger"
-              type="button"
-              aria-label="Remove session"
-            >
-              <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <path d="M3.5 5.25h9M6.25 5.25v6M9.75 5.25v6M5.5 3.5h5M4.75 5.25l.35 6.05a1.2 1.2 0 0 0 1.2 1.13h3.4a1.2 1.2 0 0 0 1.2-1.13l.35-6.05" stroke="currentColor" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round"></path>
               </svg>
             </button>
           </div>
@@ -204,7 +205,6 @@
 
           <label class="sr-only" for="projectProviderSelect">Provider</label>
           <select id="projectProviderSelect" name="provider">
-            <option value="claude">Claude</option>
             <option value="codex">Codex</option>
             <option value="chimera" disabled>Chimera (coming soon)</option>
           </select>
@@ -231,32 +231,30 @@
           <div id="sessionTitleState" class="detail-history-state is-empty"></div>
           <label class="sr-only" for="sessionTitleInput">Session title</label>
           <input id="sessionTitleInput" name="sessionTitle" type="text" placeholder="Thread title" autocomplete="off" maxlength="80">
-          <button id="sessionTitleSaveButton" class="detail-action-button" type="submit">
-            <span class="button-text">Save</span>
-          </button>
+          <div class="session-title-actions">
+            <button id="sessionTitleRemoveButton" class="detail-action-button is-quiet" type="button">
+              <span class="button-text">Remove session</span>
+            </button>
+            <button id="sessionTitleSaveButton" class="detail-action-button" type="submit">
+              <span class="button-text">Save</span>
+            </button>
+          </div>
         </form>
       </section>
     </div>
 
-    <div id="removeModal" class="detail-modal" hidden>
-      <button id="removeBackdrop" class="detail-backdrop" type="button" aria-label="Close"></button>
-      <section class="detail-panel project-modal-panel remove-modal-panel" role="dialog" aria-modal="true" aria-labelledby="removeTitle">
+    <div id="sessionImportModal" class="detail-modal" hidden>
+      <button id="sessionImportBackdrop" class="detail-backdrop" type="button" aria-label="Close"></button>
+      <section class="detail-panel project-modal-panel" role="dialog" aria-modal="true" aria-labelledby="sessionImportProject">
         <div class="detail-head">
           <div class="detail-meta">
-            <div id="removeTitle" class="detail-project"></div>
-            <div id="removeSubtitle" class="detail-session"></div>
+            <div id="sessionImportProject" class="detail-project"></div>
+            <div id="sessionImportState" class="detail-session"></div>
           </div>
-          <button id="removeClose" class="detail-close" type="button" aria-label="Close">×</button>
+          <button id="sessionImportClose" class="detail-close" type="button" aria-label="Close">×</button>
         </div>
 
-        <div id="removeState" class="detail-history-state is-empty"></div>
-
-        <form id="removeForm" class="session-title-form">
-          <p id="removeBody" class="confirm-copy"></p>
-          <button id="removeConfirmButton" class="detail-action-button detail-action-button-danger" type="submit">
-            <span class="button-text">Remove</span>
-          </button>
-        </form>
+        <div id="sessionImportList" class="detail-history-list import-session-list"></div>
       </section>
     </div>
 
@@ -281,6 +279,34 @@
       </section>
     </div>
 
-    <script type="module" src="/app.js?v=20260407ab"></script>
+    <div id="delegateModal" class="detail-modal" hidden>
+      <button id="delegateBackdrop" class="detail-backdrop" type="button" aria-label="Close"></button>
+      <section class="detail-panel project-modal-panel" role="dialog" aria-modal="true" aria-labelledby="delegateProject">
+        <div class="detail-head">
+          <div class="detail-meta">
+            <div id="delegateProject" class="detail-project"></div>
+            <div id="delegateSession" class="detail-session"></div>
+          </div>
+          <div class="detail-actions">
+            <button id="delegateSaveButton" class="detail-action-button" type="button">
+              <span class="button-text">Save</span>
+            </button>
+            <button id="delegatePlanButton" class="detail-action-button" type="button">
+              <span class="button-text">Plan</span>
+            </button>
+            <button id="delegateRunButton" class="detail-action-button" type="button">
+              <span class="button-text">Stand In</span>
+            </button>
+            <button id="delegateClose" class="detail-close" type="button" aria-label="Close">×</button>
+          </div>
+        </div>
+
+        <div id="delegateState" class="detail-history-state is-empty"></div>
+        <textarea id="delegateBriefInput" class="delegate-brief-input" rows="12" placeholder="North star, objective, gates…"></textarea>
+        <div id="delegatePlanList" class="detail-history-list summary-list delegate-plan-list"></div>
+      </section>
+    </div>
+
+    <script type="module" src="/app.js?v=20260410a"></script>
   </body>
 </html>

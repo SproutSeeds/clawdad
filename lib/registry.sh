@@ -487,9 +487,9 @@ registry_codex_tracked_session_ids_for_path() {
       | .resumeSessionId'
 }
 
-registry_find_saved_codex_session_json() {
-  local project_path="$1"
-  shift || true
+registry_list_saved_codex_sessions_json() {
+  local project_path="$1" limit="${2:-0}"
+  shift 2 || true
 
   require_node
   require_provider "codex"
@@ -500,6 +500,8 @@ registry_find_saved_codex_session_json() {
     "$CLAWDAD_ROOT/lib/codex-session-discovery.mjs"
     "--cwd" "$project_path"
     "--codex-home" "$CLAWDAD_CODEX_HOME"
+    "--list"
+    "--limit" "$limit"
   )
 
   local exclude
@@ -509,6 +511,21 @@ registry_find_saved_codex_session_json() {
   done
 
   "${cmd[@]}"
+}
+
+registry_find_saved_codex_session_json() {
+  local project_path="$1"
+  shift || true
+
+  local sessions_json
+  sessions_json=$(registry_list_saved_codex_sessions_json "$project_path" "1" "$@") || return 1
+  echo "$sessions_json" | "$CLAWDAD_JQ" -c '
+    if (.ok == true and ((.sessions // []) | length) > 0) then
+      (.sessions[0] + { ok: true })
+    else
+      { ok: false, sessionId: "", reason: "not_found" }
+    end
+  '
 }
 
 registry_remove() {
@@ -624,7 +641,7 @@ registry_rename_session() {
   local session_id old_slug provider result exit_code
   session_id=$(echo "$session_json" | "$CLAWDAD_JQ" -r '.resumeSessionId // ""')
   old_slug=$(echo "$session_json" | "$CLAWDAD_JQ" -r '.title // ""')
-  provider=$(echo "$session_json" | "$CLAWDAD_JQ" -r '.resumeTool // "claude"')
+  provider=$(echo "$session_json" | "$CLAWDAD_JQ" -r '.resumeTool // "codex"')
 
   if [[ -z "$session_id" ]]; then
     clawdad_error "Session '$selector' has no resumable session id"
@@ -706,8 +723,12 @@ _registry_tabs_for_path_tsv() {
   _orp_tabs_json | "$CLAWDAD_JQ" -r \
     --arg path "$project_path" \
     '.tabs[]
-      | select(.path == $path)
-      | [(.resumeSessionId // ""), (.title // (.path | split("/") | last)), (.resumeTool // "claude")]
+      | select(
+          .path == $path
+          and (.resumeSessionId // "") != ""
+          and (((.resumeTool // "codex") == "codex") or ((.resumeTool // "codex") == "chimera"))
+        )
+      | [(.resumeSessionId // ""), (.title // (.path | split("/") | last)), (.resumeTool // "codex")]
       | @tsv'
 }
 
@@ -717,7 +738,13 @@ registry_session_exists() {
   match=$(_orp_tabs_json | "$CLAWDAD_JQ" -r \
     --arg path "$project_path" \
     --arg session "$session_id" \
-    '.tabs[] | select(.path == $path and (.resumeSessionId // "") == $session) | .resumeSessionId' | head -1)
+    '.tabs[]
+      | select(
+          .path == $path
+          and (.resumeSessionId // "") == $session
+          and (((.resumeTool // "codex") == "codex") or ((.resumeTool // "codex") == "chimera"))
+        )
+      | .resumeSessionId' | head -1)
   [[ -n "$match" ]]
 }
 
@@ -817,7 +844,13 @@ registry_session_json() {
   _orp_tabs_json | "$CLAWDAD_JQ" -c \
     --arg path "$project_path" \
     --arg selector "$selector" '
-      [ .tabs[] | select(.path == $path) ] as $tabs
+      [
+        .tabs[]
+        | select(
+            .path == $path
+            and (((.resumeTool // "codex") == "codex") or ((.resumeTool // "codex") == "chimera"))
+          )
+      ] as $tabs
       | (
           [ $tabs[] | select((.resumeSessionId // "") == $selector or (.title // "") == $selector) ]
           | .[0]
@@ -846,12 +879,16 @@ registry_list_sessions_json() {
       ($state[0].projects[$path].sessions // {}) as $session_state
       | [
           .tabs[]
-          | select(.path == $path and (.resumeSessionId // "") != "")
+          | select(
+              .path == $path
+              and (.resumeSessionId // "") != ""
+              and (((.resumeTool // "codex") == "codex") or ((.resumeTool // "codex") == "chimera"))
+            )
           | . as $tab
           | {
               slug: ($tab.title // ($tab.path | split("/") | last)),
               path: $tab.path,
-              provider: ($tab.resumeTool // "claude"),
+              provider: ($tab.resumeTool // "codex"),
               sessionId: ($tab.resumeSessionId // null),
               active: (($tab.resumeSessionId // "") == $active),
               status: ($session_state[$tab.resumeSessionId].status // "idle"),

@@ -3,27 +3,33 @@ const state = {
   projectRoots: [],
   selectedProject: "",
   selectedSessionId: "",
+  sessionImportModalProject: "",
+  sessionImportPendingId: "",
   sessionTitleModalProject: "",
   sessionTitleModalSessionId: "",
   sessionTitleDraft: "",
+  sessionTitleConfirmRemove: false,
   sessionTitlePending: false,
   sessionTitleError: "",
-  removeModalKind: "",
-  removeModalProject: "",
-  removeModalSessionId: "",
-  removeModalPending: false,
-  removeModalError: "",
   pendingSessionRenames: {},
+  importableSessionsByProject: {},
   threadEntries: [],
   modalThread: null,
   summaryModalProject: "",
   projectSummaries: {},
+  delegateModalProject: "",
+  delegatesByProject: {},
+  delegateBriefDraft: "",
+  delegateBriefDirty: false,
+  delegateBriefPending: false,
+  delegatePlanPending: false,
+  delegateRunPending: false,
   projectModalOpen: false,
   projectModalMode: "existing",
   projectModalRoot: "",
   projectModalRepoPath: "",
   projectModalName: "",
-  projectModalProvider: "claude",
+  projectModalProvider: "codex",
   projectModalStatus: "",
   historyThreads: {},
   queueCollapsed: false,
@@ -46,10 +52,10 @@ const elements = {
   headerCatchphrase: document.querySelector("#headerCatchphrase"),
   projectSelect: document.querySelector("#projectSelect"),
   projectAddButton: document.querySelector("#projectAddButton"),
-  projectDeleteButton: document.querySelector("#projectDeleteButton"),
   sessionControl: document.querySelector(".session-control"),
   sessionSelect: document.querySelector("#sessionSelect"),
-  sessionDeleteButton: document.querySelector("#sessionDeleteButton"),
+  sessionImportButton: document.querySelector("#sessionImportButton"),
+  sessionImportOrb: document.querySelector("#sessionImportOrb"),
   sessionThreadButton: document.querySelector("#sessionThreadButton"),
   messageInput: document.querySelector("#messageInput"),
   dispatchForm: document.querySelector("#dispatchForm"),
@@ -68,6 +74,7 @@ const elements = {
   detailHistoryState: document.querySelector("#detailHistoryState"),
   detailHistoryList: document.querySelector("#detailHistoryList"),
   projectSummaryButton: document.querySelector("#projectSummaryButton"),
+  projectDelegateButton: document.querySelector("#projectDelegateButton"),
   projectModal: document.querySelector("#projectModal"),
   projectModalBackdrop: document.querySelector("#projectModalBackdrop"),
   projectModalClose: document.querySelector("#projectModalClose"),
@@ -81,6 +88,12 @@ const elements = {
   projectModeExisting: document.querySelector("#projectModeExisting"),
   projectModeNew: document.querySelector("#projectModeNew"),
   sessionRenameButton: document.querySelector("#sessionRenameButton"),
+  sessionImportModal: document.querySelector("#sessionImportModal"),
+  sessionImportBackdrop: document.querySelector("#sessionImportBackdrop"),
+  sessionImportClose: document.querySelector("#sessionImportClose"),
+  sessionImportProject: document.querySelector("#sessionImportProject"),
+  sessionImportState: document.querySelector("#sessionImportState"),
+  sessionImportList: document.querySelector("#sessionImportList"),
   sessionTitleModal: document.querySelector("#sessionTitleModal"),
   sessionTitleBackdrop: document.querySelector("#sessionTitleBackdrop"),
   sessionTitleClose: document.querySelector("#sessionTitleClose"),
@@ -89,16 +102,8 @@ const elements = {
   sessionTitleSession: document.querySelector("#sessionTitleSession"),
   sessionTitleState: document.querySelector("#sessionTitleState"),
   sessionTitleInput: document.querySelector("#sessionTitleInput"),
+  sessionTitleRemoveButton: document.querySelector("#sessionTitleRemoveButton"),
   sessionTitleSaveButton: document.querySelector("#sessionTitleSaveButton"),
-  removeModal: document.querySelector("#removeModal"),
-  removeBackdrop: document.querySelector("#removeBackdrop"),
-  removeClose: document.querySelector("#removeClose"),
-  removeForm: document.querySelector("#removeForm"),
-  removeTitle: document.querySelector("#removeTitle"),
-  removeSubtitle: document.querySelector("#removeSubtitle"),
-  removeState: document.querySelector("#removeState"),
-  removeBody: document.querySelector("#removeBody"),
-  removeConfirmButton: document.querySelector("#removeConfirmButton"),
   summaryModal: document.querySelector("#summaryModal"),
   summaryBackdrop: document.querySelector("#summaryBackdrop"),
   summaryClose: document.querySelector("#summaryClose"),
@@ -107,9 +112,21 @@ const elements = {
   summaryState: document.querySelector("#summaryState"),
   summaryList: document.querySelector("#summaryList"),
   summaryRefreshButton: document.querySelector("#summaryRefreshButton"),
+  delegateModal: document.querySelector("#delegateModal"),
+  delegateBackdrop: document.querySelector("#delegateBackdrop"),
+  delegateClose: document.querySelector("#delegateClose"),
+  delegateProject: document.querySelector("#delegateProject"),
+  delegateSession: document.querySelector("#delegateSession"),
+  delegateState: document.querySelector("#delegateState"),
+  delegateBriefInput: document.querySelector("#delegateBriefInput"),
+  delegateSaveButton: document.querySelector("#delegateSaveButton"),
+  delegatePlanButton: document.querySelector("#delegatePlanButton"),
+  delegateRunButton: document.querySelector("#delegateRunButton"),
+  delegatePlanList: document.querySelector("#delegatePlanList"),
 };
 
 const autoRefreshMs = 15000;
+const importableSessionsCacheMs = 30000;
 const projectCacheKey = "clawdad-project-catalog-v4";
 const threadCacheKey = "clawdad-thread-log-v1";
 const queueCollapsedKey = "clawdad-queue-collapsed-v1";
@@ -1253,6 +1270,11 @@ function sessionOptionLabel(session, projectPath = "") {
   return `${title} • ${sessionFixedSuffix(session)}`;
 }
 
+function importableSessionLabel(session) {
+  const title = cleanSessionTitle(session?.titleHint, "session");
+  return `${title} • ${providerLabel(session?.provider)} • ${sessionFingerprint(session?.sessionId)}`;
+}
+
 function makeEntryId() {
   if (globalThis.crypto?.randomUUID) {
     return globalThis.crypto.randomUUID();
@@ -1282,17 +1304,6 @@ function currentSessionTitleTarget() {
   };
 }
 
-function currentRemoveTarget() {
-  const project = projectByPath(state.removeModalProject);
-  const session =
-    project?.sessions?.find((item) => item.sessionId === state.removeModalSessionId) || null;
-  return {
-    project: project || null,
-    session: session || null,
-    kind: state.removeModalKind || "",
-  };
-}
-
 function currentModalThread() {
   return state.modalThread || null;
 }
@@ -1301,12 +1312,53 @@ function currentSummaryProject() {
   return projectByPath(state.summaryModalProject) || null;
 }
 
+function currentDelegateProject() {
+  return projectByPath(state.delegateModalProject) || null;
+}
+
 function currentProjectRoot() {
   return state.projectRoots.find((root) => root.path === state.projectModalRoot) || null;
 }
 
 function currentRootRepos() {
   return Array.isArray(currentProjectRoot()?.repos) ? currentProjectRoot().repos : [];
+}
+
+function currentSessionImportProject() {
+  return projectByPath(state.sessionImportModalProject) || null;
+}
+
+function importableSessionsStateFor(projectPath) {
+  return (
+    state.importableSessionsByProject[String(projectPath || "").trim()] || {
+      items: [],
+      loading: false,
+      initialized: false,
+      loadedAt: 0,
+      error: "",
+      promise: null,
+    }
+  );
+}
+
+function setImportableSessionsState(projectPath, nextState = {}) {
+  const normalizedProjectPath = String(projectPath || "").trim();
+  if (!normalizedProjectPath) {
+    return;
+  }
+
+  state.importableSessionsByProject[normalizedProjectPath] = {
+    ...importableSessionsStateFor(normalizedProjectPath),
+    ...nextState,
+  };
+}
+
+function clearImportableSessionsState(projectPath = "") {
+  const normalizedProjectPath = String(projectPath || "").trim();
+  if (!normalizedProjectPath) {
+    return;
+  }
+  delete state.importableSessionsByProject[normalizedProjectPath];
 }
 
 function historyKey(projectPath, sessionId) {
@@ -1431,6 +1483,29 @@ function setProjectSummaryState(projectPath, nextState) {
   };
 }
 
+function delegateStateFor(projectPath) {
+  return (
+    state.delegatesByProject[projectPath] || {
+      config: null,
+      brief: "",
+      status: null,
+      delegateSession: null,
+      latestPlanSnapshot: null,
+      planSnapshots: [],
+      loading: false,
+      initialized: false,
+      error: "",
+    }
+  );
+}
+
+function setDelegateState(projectPath, nextState) {
+  state.delegatesByProject[projectPath] = {
+    ...delegateStateFor(projectPath),
+    ...nextState,
+  };
+}
+
 function persistQueueCollapsed() {
   try {
     localStorage.setItem(queueCollapsedKey, JSON.stringify(state.queueCollapsed));
@@ -1541,8 +1616,57 @@ function normalizeProjectSummaryStatus(status) {
   };
 }
 
+function normalizeDelegatePlanSnapshot(snapshot) {
+  return {
+    id: String(snapshot?.id || "").trim() || makeEntryId(),
+    projectPath: String(snapshot?.projectPath || "").trim() || "",
+    createdAt: String(snapshot?.createdAt || "").trim() || null,
+    provider: String(snapshot?.provider || "").trim() || "codex",
+    sessionId: String(snapshot?.sessionId || "").trim() || null,
+    sessionLabel: String(snapshot?.sessionLabel || "").trim() || "",
+    sourceEntryCount: Number.parseInt(String(snapshot?.sourceEntryCount || "0"), 10) || 0,
+    summarySnapshotAt: String(snapshot?.summarySnapshotAt || "").trim() || null,
+    plan: String(snapshot?.plan || ""),
+  };
+}
+
+function normalizeDelegateStatus(status) {
+  const normalizedState = String(status?.state || "idle").trim().toLowerCase();
+  return {
+    state: ["idle", "planning", "running", "paused", "blocked", "completed", "failed"].includes(normalizedState)
+      ? normalizedState
+      : "idle",
+    runId: String(status?.runId || status?.requestId || "").trim() || null,
+    projectPath: String(status?.projectPath || "").trim() || null,
+    startedAt: String(status?.startedAt || "").trim() || null,
+    updatedAt: String(status?.updatedAt || "").trim() || null,
+    completedAt: String(status?.completedAt || "").trim() || null,
+    delegateSessionId: String(status?.delegateSessionId || status?.sessionId || "").trim() || null,
+    delegateSessionLabel: String(status?.delegateSessionLabel || status?.sessionLabel || "").trim() || "",
+    planSnapshotId: String(status?.planSnapshotId || "").trim() || null,
+    stepCount: Number.parseInt(String(status?.stepCount || "0"), 10) || 0,
+    maxSteps: Number.parseInt(String(status?.maxSteps || "0"), 10) || 0,
+    lastOutcomeSummary: String(status?.lastOutcomeSummary || "").trim(),
+    nextAction: String(status?.nextAction || "").trim(),
+    stopReason: String(status?.stopReason || "").trim(),
+    pauseRequested: Boolean(status?.pauseRequested),
+    error: String(status?.error || "").trim(),
+  };
+}
+
 function projectSummaryIsPending(summaryState) {
   return Boolean(summaryState?.pending) || summaryState?.summaryStatus?.state === "running";
+}
+
+function delegateStateIsPending(delegateState) {
+  const status = delegateState?.status?.state;
+  return (
+    Boolean(state.delegateBriefPending) ||
+    Boolean(state.delegatePlanPending) ||
+    Boolean(state.delegateRunPending) ||
+    status === "planning" ||
+    status === "running"
+  );
 }
 
 function projectWithActiveSession(project, sessionId) {
@@ -1562,7 +1686,7 @@ function projectWithActiveSession(project, sessionId) {
 
   return {
     ...project,
-    provider: activeSession?.provider || project.provider || "claude",
+    provider: activeSession?.provider || project.provider || "codex",
     sessionId: activeSession?.sessionId || null,
     activeSessionId: activeSession?.sessionId || null,
     activeSessionLabel: activeSession?.slug || null,
@@ -1656,12 +1780,22 @@ function pruneTrackedArtifacts(projectPath, sessionId = "") {
   }
 
   delete state.projectSummaries[normalizedProjectPath];
+  delete state.delegatesByProject[normalizedProjectPath];
+  clearImportableSessionsState(normalizedProjectPath);
 
   if (state.modalThread?.projectPath === normalizedProjectPath) {
     state.modalThread = null;
   }
+  if (state.sessionImportModalProject === normalizedProjectPath) {
+    closeSessionImportModal();
+    return;
+  }
   if (state.summaryModalProject === normalizedProjectPath) {
     state.summaryModalProject = "";
+  }
+  if (state.delegateModalProject === normalizedProjectPath) {
+    closeDelegateModal();
+    return;
   }
   if (state.sessionTitleModalProject === normalizedProjectPath) {
     closeSessionTitleModal();
@@ -2032,6 +2166,7 @@ function buildCopyButton({ copyKey, label, text }) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "copy-button copy-button-floating";
+  button.dataset.copyKey = copyKey;
   button.setAttribute("aria-label", label);
   decorateCopyButton(button, copyKey);
   button.addEventListener("click", async (event) => {
@@ -2045,6 +2180,12 @@ function buildCopyButton({ copyKey, label, text }) {
     }
   });
   return button;
+}
+
+function refreshCopyButtons(root = document) {
+  for (const button of root.querySelectorAll(".copy-button[data-copy-key]")) {
+    decorateCopyButton(button, button.dataset.copyKey || "");
+  }
 }
 
 function renderProjectOptions() {
@@ -2163,10 +2304,11 @@ function updateBodyModalState() {
   document.body.classList.toggle(
     "modal-open",
     Boolean(currentModalThread()) ||
+      Boolean(state.sessionImportModalProject) ||
       state.projectModalOpen ||
       Boolean(state.summaryModalProject) ||
-      Boolean(state.sessionTitleModalProject) ||
-      Boolean(state.removeModalKind),
+      Boolean(state.delegateModalProject) ||
+      Boolean(state.sessionTitleModalProject),
   );
 }
 
@@ -2284,6 +2426,9 @@ function renderSessionTitleModal() {
   elements.sessionTitleSession.textContent = sessionFixedSuffix(session);
   elements.sessionTitleInput.value = state.sessionTitleDraft;
   elements.sessionTitleInput.disabled = state.sessionTitlePending;
+  elements.sessionTitleRemoveButton.disabled = state.sessionTitlePending;
+  elements.sessionTitleRemoveButton.querySelector(".button-text").textContent =
+    state.sessionTitleConfirmRemove ? "Ya sure?" : "Remove session";
   elements.sessionTitleSaveButton.disabled =
     state.sessionTitlePending || !state.sessionTitleDraft.trim();
   elements.sessionTitleSaveButton.querySelector(".button-text").textContent =
@@ -2291,47 +2436,91 @@ function renderSessionTitleModal() {
 
   setText(
     elements.sessionTitleState,
-    state.sessionTitleError || "Provider and short id stay attached automatically.",
+    state.sessionTitleError ||
+      (state.sessionTitleConfirmRemove
+        ? "Ya sure? This only stops tracking the session."
+        : "Provider and short id stay attached. Remove stops tracking only."),
     { empty: false },
   );
 
   elements.sessionTitleModal.hidden = false;
 }
 
-function renderRemoveModal() {
-  const { project, session, kind } = currentRemoveTarget();
-  if (!project || !kind || (kind === "session" && !session?.sessionId)) {
-    elements.removeModal.hidden = true;
+function renderSessionImportModal() {
+  const project = currentSessionImportProject();
+  if (!project) {
+    elements.sessionImportModal.hidden = true;
     return;
   }
 
-  const isProject = kind === "project";
-  elements.removeTitle.textContent = isProject
-    ? project.displayName || project.slug || fallbackProjectLabel(project.path)
-    : sessionDisplayTitle(session, project.path);
-  elements.removeSubtitle.textContent = isProject
-    ? `${project.sessions?.length || 0} tracked session${project.sessions?.length === 1 ? "" : "s"}`
-    : sessionFixedSuffix(session);
-  setText(
-    elements.removeState,
-    state.removeModalError || (isProject ? "Files stay put." : "Only this tracked session is removed."),
-    { empty: false },
-  );
-  elements.removeBody.textContent = isProject
-    ? "This stops tracking this repo in Clawdad and ORP. The repo files stay right where they are."
-    : "This removes only this tracked thread. The repo and other sessions stay put.";
-  elements.removeConfirmButton.disabled = state.removeModalPending;
-  const label = elements.removeConfirmButton.querySelector(".button-text");
-  if (label) {
-    label.textContent = state.removeModalPending
-      ? isProject
-        ? "Stopping…"
-        : "Removing…"
-      : isProject
-        ? "Stop tracking"
-        : "Remove session";
+  const importState = importableSessionsStateFor(project.path);
+  const importingSessionId = state.sessionImportPendingId;
+  elements.sessionImportProject.textContent =
+    project.displayName || project.slug || fallbackProjectLabel(project.path);
+
+  let stateText = "";
+  if (importState.loading && !importState.initialized) {
+    stateText = "Looking for local Codex sessions";
+  } else if (importState.error) {
+    stateText = importState.error;
+  } else if (importState.items.length > 0) {
+    const count = importState.items.length;
+    stateText = `${count} local session${count === 1 ? "" : "s"} ready to import`;
+  } else {
+    stateText = "No untracked local Codex sessions";
   }
-  elements.removeModal.hidden = false;
+  setText(elements.sessionImportState, stateText, { empty: !stateText });
+
+  clearNode(elements.sessionImportList);
+
+  if (importState.loading && !importState.initialized) {
+    const empty = document.createElement("div");
+    empty.className = "import-session-empty";
+    empty.textContent = "Looking for local Codex sessions…";
+    elements.sessionImportList.append(empty);
+    elements.sessionImportModal.hidden = false;
+    return;
+  }
+
+  if (importState.items.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "import-session-empty";
+    empty.textContent = importState.error || "No local untracked Codex sessions for this project yet.";
+    elements.sessionImportList.append(empty);
+    elements.sessionImportModal.hidden = false;
+    return;
+  }
+
+  for (const session of importState.items) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "import-session-card";
+    button.disabled = Boolean(importingSessionId);
+
+    const title = document.createElement("div");
+    title.className = "import-session-title";
+    title.textContent = importingSessionId === session.sessionId ? "Importing…" : importableSessionLabel(session);
+
+    const meta = document.createElement("div");
+    meta.className = "import-session-meta";
+    meta.textContent = session.source || "cli";
+
+    const preview = document.createElement("div");
+    preview.className = "import-session-preview";
+    preview.textContent = session.preview || "Saved locally in this repo.";
+
+    const time = document.createElement("div");
+    time.className = "import-session-time";
+    time.textContent = formatTimestamp(session.lastUpdatedAt || session.timestamp) || "";
+
+    button.append(title, meta, preview, time);
+    button.addEventListener("click", () => {
+      void handleSessionImport(session.sessionId);
+    });
+    elements.sessionImportList.append(button);
+  }
+
+  elements.sessionImportModal.hidden = false;
 }
 
 async function refreshProjectRoots() {
@@ -2355,6 +2544,71 @@ async function refreshProjectRoots() {
   })();
 
   return state.projectRootsRefreshPromise;
+}
+
+async function refreshImportableSessions(projectPath, { force = false } = {}) {
+  const normalizedProjectPath = String(projectPath || "").trim();
+  if (!normalizedProjectPath) {
+    return importableSessionsStateFor("");
+  }
+
+  const existing = importableSessionsStateFor(normalizedProjectPath);
+  if (existing.promise) {
+    return existing.promise;
+  }
+  if (
+    !force &&
+    existing.initialized &&
+    Date.now() - Number(existing.loadedAt || 0) < importableSessionsCacheMs
+  ) {
+    return existing;
+  }
+
+  const shouldRender = state.sessionImportModalProject === normalizedProjectPath;
+  setImportableSessionsState(normalizedProjectPath, {
+    loading: true,
+    error: "",
+  });
+  if (shouldRender) {
+    renderAll();
+  } else {
+    updateImportButtonAvailability();
+  }
+
+  const promise = (async () => {
+    try {
+      const payload = await fetchJson(
+        `/v1/importable-sessions?project=${encodeURIComponent(normalizedProjectPath)}`,
+      );
+      setImportableSessionsState(normalizedProjectPath, {
+        items: Array.isArray(payload.sessions) ? payload.sessions : [],
+        loading: false,
+        initialized: true,
+        loadedAt: Date.now(),
+        error: "",
+        promise: null,
+      });
+    } catch (error) {
+      setImportableSessionsState(normalizedProjectPath, {
+        items: existing.items || [],
+        loading: false,
+        initialized: true,
+        loadedAt: Date.now(),
+        error: error.message,
+        promise: null,
+      });
+      throw error;
+    } finally {
+      renderAll();
+    }
+
+    return importableSessionsStateFor(normalizedProjectPath);
+  })();
+
+  setImportableSessionsState(normalizedProjectPath, {
+    promise,
+  });
+  return promise;
 }
 
 function renderQueueList() {
@@ -2625,6 +2879,57 @@ function buildSummaryCard(snapshot) {
   return card;
 }
 
+function delegateStopReasonLabel(stopReason) {
+  switch (String(stopReason || "").trim()) {
+    case "paid":
+      return "blocked on something paid";
+    case "needs_human":
+      return "blocked on another human";
+    case "auth_required":
+      return "blocked on auth";
+    case "step_limit":
+      return "paused at step limit";
+    case "unknown":
+      return "blocked";
+    default:
+      return "";
+  }
+}
+
+function buildDelegatePlanCard(snapshot) {
+  const card = document.createElement("article");
+  card.className = "summary-card";
+
+  const copyButton = buildCopyButton({
+    copyKey: `delegate-plan:${snapshot.id}`,
+    label: "Copy plan",
+    text: snapshot.plan,
+  });
+  card.append(copyButton);
+
+  const head = document.createElement("div");
+  head.className = "summary-head";
+
+  const timestamp = document.createElement("div");
+  timestamp.className = "summary-timestamp";
+  timestamp.textContent = formatTimestamp(snapshot.createdAt) || "Saved plan";
+
+  const sourceMeta = document.createElement("div");
+  sourceMeta.className = "summary-source-meta";
+  const sourceCountLabel = `${snapshot.sourceEntryCount} note${snapshot.sourceEntryCount === 1 ? "" : "s"}`;
+  const sessionLabel = snapshot.sessionLabel || providerLabel(snapshot.provider);
+  sourceMeta.textContent = `${sessionLabel} • ${sourceCountLabel}`;
+
+  head.append(timestamp, sourceMeta);
+
+  const body = document.createElement("div");
+  body.className = "thread-text";
+  renderRichText(body, snapshot.plan, { emptyText: "No saved delegate plan yet." });
+
+  card.append(head, body);
+  return card;
+}
+
 function renderSummaryModal() {
   const project = currentSummaryProject();
   if (!project) {
@@ -2703,6 +3008,138 @@ function renderSummaryModal() {
   }
 
   elements.summaryModal.hidden = false;
+}
+
+function renderDelegateModal() {
+  const project = currentDelegateProject();
+  if (!project) {
+    setText(elements.delegateState, "", { empty: true });
+    clearNode(elements.delegatePlanList);
+    elements.delegateModal.hidden = true;
+    return;
+  }
+
+  const delegateState = delegateStateFor(project.path);
+  const status = delegateState.status;
+  const latestPlan = delegateState.latestPlanSnapshot;
+  const delegateSession = delegateState.delegateSession;
+
+  elements.delegateProject.textContent =
+    project.displayName || project.slug || fallbackProjectLabel(project.path);
+  elements.delegateSession.textContent =
+    delegateSession?.label || "Delegate session will be created on first use";
+
+  const saveButtonLabel = elements.delegateSaveButton.querySelector(".button-text");
+  if (saveButtonLabel) {
+    saveButtonLabel.textContent = state.delegateBriefPending ? "Saving…" : "Save";
+  }
+
+  const planButtonLabel = elements.delegatePlanButton.querySelector(".button-text");
+  if (planButtonLabel) {
+    planButtonLabel.textContent =
+      state.delegatePlanPending || status?.state === "planning" ? "Planning…" : "Plan";
+  }
+
+  const runButtonLabel = elements.delegateRunButton.querySelector(".button-text");
+  if (runButtonLabel) {
+    if (state.delegateRunPending) {
+      runButtonLabel.textContent = "Working…";
+    } else if (status?.pauseRequested) {
+      runButtonLabel.textContent = "Pausing…";
+    } else if (status?.state === "running") {
+      runButtonLabel.textContent = "Pause";
+    } else {
+      runButtonLabel.textContent = "Stand In";
+    }
+  }
+
+  elements.delegateSaveButton.disabled = state.delegateBriefPending || !state.delegateBriefDirty;
+  elements.delegatePlanButton.disabled =
+    state.delegateBriefPending ||
+    state.delegatePlanPending ||
+    state.delegateRunPending ||
+    status?.state === "running";
+  elements.delegateRunButton.disabled =
+    state.delegatePlanPending || state.delegateRunPending || !project.path;
+
+  const desiredBrief = state.delegateBriefDirty ? state.delegateBriefDraft : delegateState.brief || "";
+  if (
+    elements.delegateBriefInput.value !== desiredBrief &&
+    (!state.delegateBriefDirty || document.activeElement !== elements.delegateBriefInput)
+  ) {
+    elements.delegateBriefInput.value = desiredBrief;
+  }
+
+  if (state.delegateBriefPending) {
+    setText(elements.delegateState, "Saving delegate brief", { empty: false });
+  } else if (state.delegatePlanPending || status?.state === "planning") {
+    setText(elements.delegateState, "Planning the delegate lane", { empty: false });
+  } else if (status?.state === "running") {
+    const stepLabel =
+      status.maxSteps > 0 ? ` • step ${status.stepCount}/${status.maxSteps}` : "";
+    setText(
+      elements.delegateState,
+      status.pauseRequested ? `Pausing after this step${stepLabel}` : `Standing in${stepLabel}`,
+      { empty: false },
+    );
+  } else if (status?.state === "blocked") {
+    setText(
+      elements.delegateState,
+      delegateStopReasonLabel(status.stopReason) || "Blocked",
+      { empty: false },
+    );
+  } else if (status?.state === "completed") {
+    setText(
+      elements.delegateState,
+      status.completedAt
+        ? `Completed • ${formatTimestamp(status.completedAt)}`
+        : "Completed",
+      { empty: false },
+    );
+  } else if (status?.state === "failed" && status.error) {
+    setText(elements.delegateState, status.error, { empty: false });
+  } else if (delegateState.error) {
+    setText(elements.delegateState, delegateState.error, { empty: false });
+  } else if (!delegateState.initialized && delegateState.loading) {
+    setText(elements.delegateState, "Loading delegate", { empty: false });
+  } else if (latestPlan?.createdAt) {
+    setText(
+      elements.delegateState,
+      `Latest plan • ${formatTimestamp(latestPlan.createdAt)}`,
+      { empty: false },
+    );
+  } else {
+    setText(elements.delegateState, "No saved delegate plan yet", { empty: false });
+  }
+
+  clearNode(elements.delegatePlanList);
+  if ((state.delegatePlanPending || status?.state === "planning") && delegateState.planSnapshots.length === 0) {
+    const card = document.createElement("div");
+    card.className = "history-state-card";
+    card.textContent = "Working on a fresh delegate plan…";
+    elements.delegatePlanList.append(card);
+  } else if (!delegateState.initialized && delegateState.loading) {
+    const card = document.createElement("div");
+    card.className = "history-state-card";
+    card.textContent = "Loading delegate…";
+    elements.delegatePlanList.append(card);
+  } else if (delegateState.error && delegateState.planSnapshots.length === 0) {
+    const card = document.createElement("div");
+    card.className = "history-state-card";
+    card.textContent = delegateState.error;
+    elements.delegatePlanList.append(card);
+  } else if (delegateState.planSnapshots.length === 0) {
+    const card = document.createElement("div");
+    card.className = "history-state-card";
+    card.textContent = "No saved delegate plan yet.";
+    elements.delegatePlanList.append(card);
+  } else {
+    for (const snapshot of delegateState.planSnapshots) {
+      elements.delegatePlanList.append(buildDelegatePlanCard(snapshot));
+    }
+  }
+
+  elements.delegateModal.hidden = false;
 }
 
 function projectIsBusy(project) {
@@ -2792,12 +3229,21 @@ function updateSummaryButtonAvailability() {
   elements.projectSummaryButton.disabled = state.projectsLoading || !state.selectedProject;
 }
 
-function updateProjectDeleteAvailability() {
-  elements.projectDeleteButton.disabled =
+function updateDelegateButtonAvailability() {
+  elements.projectDelegateButton.disabled = state.projectsLoading || !state.selectedProject;
+}
+
+function updateImportButtonAvailability() {
+  const projectPath = state.selectedProject;
+  const importState = importableSessionsStateFor(projectPath);
+  elements.sessionImportButton.disabled =
     state.projectsLoading ||
-    state.projectModalPending ||
-    state.removeModalPending ||
-    !state.selectedProject;
+    state.sessionSwitchPending ||
+    !projectPath ||
+    Boolean(currentSession()?.pendingCreation);
+  if (elements.sessionImportOrb) {
+    elements.sessionImportOrb.hidden = !(Array.isArray(importState.items) && importState.items.length > 0);
+  }
 }
 
 function updateSessionRenameAvailability() {
@@ -2809,17 +3255,6 @@ function updateSessionRenameAvailability() {
     !session?.sessionId ||
     Boolean(session?.pendingCreation) ||
     sessionRenamePending(state.selectedProject, session?.sessionId);
-}
-
-function updateSessionDeleteAvailability() {
-  const session = currentSession();
-  elements.sessionDeleteButton.disabled =
-    state.projectsLoading ||
-    state.sessionSwitchPending ||
-    state.removeModalPending ||
-    !state.selectedProject ||
-    !session?.sessionId ||
-    Boolean(session?.pendingCreation);
 }
 
 function updateQueueChrome() {
@@ -2838,20 +3273,22 @@ function renderAll() {
   renderSessionOptions();
   renderQueueList();
   renderModal();
+  renderSessionImportModal();
   renderSessionTitleModal();
-  renderRemoveModal();
   renderSummaryModal();
+  renderDelegateModal();
   renderProjectModal();
   updateMailboxState();
   updateQueueUnreadOrb();
   updateSendAvailability();
   updateThreadButtonAvailability();
+  updateImportButtonAvailability();
   updateSessionRenameAvailability();
-  updateSessionDeleteAvailability();
   updateSummaryButtonAvailability();
-  updateProjectDeleteAvailability();
+  updateDelegateButtonAvailability();
   updateQueueChrome();
   updateBodyModalState();
+  refreshCopyButtons();
 }
 
 async function reconcileThreadEntries() {
@@ -3070,6 +3507,9 @@ async function refreshProjects() {
       syncSelectedSession(state.selectedSessionId);
       cacheProjects(payload);
       await reconcileThreadEntries();
+      if (state.selectedProject) {
+        void refreshImportableSessions(state.selectedProject).catch(() => {});
+      }
     } finally {
       state.projectsLoading = false;
       renderAll();
@@ -3114,6 +3554,33 @@ async function refreshProjectSummaries() {
 
   await Promise.all(
     targets.map((projectPath) => loadProjectSummary(projectPath, { force: true })),
+  );
+}
+
+function delegateProjectsNeedingRefresh() {
+  const targets = new Set();
+  if (state.delegateModalProject) {
+    targets.add(state.delegateModalProject);
+  }
+
+  for (const [projectPath, delegateState] of Object.entries(state.delegatesByProject)) {
+    const delegateStatus = delegateState?.status?.state;
+    if (delegateStatus === "planning" || delegateStatus === "running") {
+      targets.add(projectPath);
+    }
+  }
+
+  return [...targets].filter(Boolean);
+}
+
+async function refreshDelegates() {
+  const targets = delegateProjectsNeedingRefresh();
+  if (targets.length === 0) {
+    return;
+  }
+
+  await Promise.all(
+    targets.map((projectPath) => loadDelegateProject(projectPath, { force: true })),
   );
 }
 
@@ -3294,7 +3761,9 @@ async function openSessionThread(projectPath = state.selectedProject, sessionId 
     return;
   }
 
+  state.sessionImportModalProject = "";
   state.summaryModalProject = "";
+  state.delegateModalProject = "";
   state.sessionTitleModalProject = "";
   state.sessionTitleModalSessionId = "";
   state.selectedProject = projectPath;
@@ -3391,6 +3860,8 @@ async function openProjectSummary(projectPath = state.selectedProject) {
 
   state.modalThread = null;
   state.projectModalOpen = false;
+  state.sessionImportModalProject = "";
+  state.delegateModalProject = "";
   state.sessionTitleModalProject = "";
   state.sessionTitleModalSessionId = "";
   state.summaryModalProject = projectPath;
@@ -3403,22 +3874,43 @@ function closeProjectSummary() {
   renderAll();
 }
 
-function closeRemoveModal() {
-  state.removeModalKind = "";
-  state.removeModalProject = "";
-  state.removeModalSessionId = "";
-  state.removeModalPending = false;
-  state.removeModalError = "";
-  renderAll();
-}
-
 function closeSessionTitleModal() {
   state.sessionTitleModalProject = "";
   state.sessionTitleModalSessionId = "";
   state.sessionTitleDraft = "";
+  state.sessionTitleConfirmRemove = false;
   state.sessionTitlePending = false;
   state.sessionTitleError = "";
   renderAll();
+}
+
+function closeSessionImportModal() {
+  state.sessionImportModalProject = "";
+  state.sessionImportPendingId = "";
+  renderAll();
+}
+
+async function openSessionImportModal(projectPath = state.selectedProject) {
+  const project = projectByPath(projectPath);
+  if (!project?.path) {
+    return;
+  }
+
+  state.modalThread = null;
+  state.projectModalOpen = false;
+  state.summaryModalProject = "";
+  state.delegateModalProject = "";
+  state.sessionTitleModalProject = "";
+  state.sessionTitleModalSessionId = "";
+  state.sessionImportModalProject = project.path;
+  state.sessionImportPendingId = "";
+  renderAll();
+
+  try {
+    await refreshImportableSessions(project.path, { force: true });
+  } catch (_error) {
+    renderAll();
+  }
 }
 
 function openSessionTitleModal(projectPath = state.selectedProject, sessionId = state.selectedSessionId) {
@@ -3431,10 +3923,13 @@ function openSessionTitleModal(projectPath = state.selectedProject, sessionId = 
 
   state.modalThread = null;
   state.projectModalOpen = false;
+  state.sessionImportModalProject = "";
   state.summaryModalProject = "";
+  state.delegateModalProject = "";
   state.sessionTitleModalProject = project.path;
   state.sessionTitleModalSessionId = session.sessionId;
   state.sessionTitleDraft = sessionDisplayTitle(session, project.path);
+  state.sessionTitleConfirmRemove = false;
   state.sessionTitlePending = false;
   state.sessionTitleError = "";
   renderAll();
@@ -3445,104 +3940,56 @@ function openSessionTitleModal(projectPath = state.selectedProject, sessionId = 
   });
 }
 
-function openRemoveModal(kind, projectPath = state.selectedProject, sessionId = state.selectedSessionId) {
-  const normalizedKind = kind === "project" ? "project" : "session";
-  const project = projectByPath(projectPath);
-  const session =
-    project?.sessions?.find((item) => item.sessionId === sessionId) || null;
-  if (!project || (normalizedKind === "session" && !session?.sessionId)) {
+async function handleSessionImport(sessionId) {
+  const project = currentSessionImportProject() || currentProject();
+  if (!project?.path || !sessionId || state.sessionImportPendingId) {
     return;
   }
 
-  state.modalThread = null;
-  state.projectModalOpen = false;
-  state.summaryModalProject = "";
-  state.sessionTitleModalProject = "";
-  state.sessionTitleModalSessionId = "";
-  state.removeModalKind = normalizedKind;
-  state.removeModalProject = project.path;
-  state.removeModalSessionId = normalizedKind === "session" ? session.sessionId : "";
-  state.removeModalPending = false;
-  state.removeModalError = "";
-  renderAll();
-}
-
-async function handleRemoveSubmit(event) {
-  event.preventDefault();
-
-  const { project, session, kind } = currentRemoveTarget();
-  if (!project || !kind || state.removeModalPending) {
-    return;
-  }
-
-  if (kind === "session" && !session?.sessionId) {
-    return;
-  }
-
-  state.removeModalPending = true;
-  state.removeModalError = "";
+  state.sessionImportPendingId = sessionId;
   renderAll();
 
   try {
-    const endpoint = kind === "project" ? "/v1/project-delete" : "/v1/session-delete";
-    const payload = await fetchJson(endpoint, {
+    const payload = await fetchJson("/v1/import-session", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(
-        kind === "project"
-          ? {
-              project: project.path,
-            }
-          : {
-              project: project.path,
-              sessionId: session.sessionId,
-            },
-      ),
+      body: JSON.stringify({
+        project: project.path,
+        sessionId,
+      }),
     });
 
-    if (kind === "project") {
-      pruneTrackedArtifacts(project.path);
-      if (Array.isArray(payload.projects)) {
-        state.projects = payload.projects.map(hydrateProjectVisuals).sort(compareProjects);
-      } else {
-        removeProject(project.path);
-      }
-      if (state.selectedProject === project.path) {
-        syncSelectedProject("", { preferCurrent: false });
-        syncSelectedSession("", { preferCurrent: false });
-      }
+    if (payload.projectDetails) {
+      upsertProject(payload.projectDetails);
+      state.selectedProject = payload.projectDetails.path;
+      syncSelectedSession(payload.sessionId || sessionId, { preferCurrent: false });
     } else {
-      pruneTrackedArtifacts(project.path, session.sessionId);
-      if (payload.projectDetails) {
-        replaceProject(payload.projectDetails);
-      } else {
-        removeProject(project.path);
-      }
-
-      if (state.selectedProject === project.path) {
-        if (payload.projectDetails) {
-          syncSelectedProject(project.path, { preferCurrent: false });
-          syncSelectedSession("", { preferCurrent: false });
-        } else {
-          syncSelectedProject("", { preferCurrent: false });
-          syncSelectedSession("", { preferCurrent: false });
-        }
-      }
+      await refreshProjects();
+      syncSelectedSession(sessionId, { preferCurrent: false });
     }
 
-    cacheProjects({
-      defaultProject: state.selectedProject || "",
-      projects: state.projects,
+    const importState = importableSessionsStateFor(project.path);
+    setImportableSessionsState(project.path, {
+      items: (importState.items || []).filter((item) => item.sessionId !== sessionId),
+      loading: false,
+      initialized: true,
+      loadedAt: Date.now(),
+      error: "",
+      promise: null,
     });
-    closeRemoveModal();
-    renderAll();
-    void refreshProjectRoots().catch(() => {});
+    closeSessionImportModal();
   } catch (error) {
-    state.removeModalPending = false;
-    state.removeModalError = error.message;
+    state.sessionImportPendingId = "";
+    setImportableSessionsState(project.path, {
+      error: error.message,
+      loading: false,
+      initialized: true,
+      promise: null,
+    });
     renderAll();
+    showError(error);
   }
 }
 
@@ -3614,6 +4061,62 @@ async function handleSessionTitleSubmit(event) {
       setPendingSessionRename(project.path, session.sessionId, null);
       updateThreadEntrySessionLabels(project.path, session.sessionId, previousLabel);
       renderAll();
+      showError(error);
+    }
+  })();
+}
+
+function handleSessionRemove() {
+  const { project, session } = currentSessionTitleTarget();
+  if (!project || !session?.sessionId) {
+    return;
+  }
+
+  if (!state.sessionTitleConfirmRemove) {
+    state.sessionTitleConfirmRemove = true;
+    state.sessionTitleError = "";
+    renderAll();
+    return;
+  }
+
+  const projectPath = project.path;
+  const sessionId = session.sessionId;
+  const shouldResyncCurrentProject = state.selectedProject === projectPath;
+
+  closeSessionTitleModal();
+
+  void (async () => {
+    try {
+      const payload = await fetchJson("/v1/session-delete", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          project: projectPath,
+          sessionId,
+        }),
+      });
+
+      pruneTrackedArtifacts(projectPath, sessionId);
+
+      if (payload.projectDetails) {
+        replaceProject(payload.projectDetails);
+      } else {
+        removeProject(projectPath);
+      }
+
+      if (shouldResyncCurrentProject) {
+        syncSelectedProject(projectPath, { preferCurrent: true });
+        syncSelectedSession("", { preferCurrent: true });
+      } else {
+        syncSelectedProject("", { preferCurrent: true });
+        syncSelectedSession("", { preferCurrent: true });
+      }
+
+      renderAll();
+    } catch (error) {
+      void refreshProjects().catch(showError);
       showError(error);
     }
   })();
@@ -3705,6 +4208,265 @@ async function requestNewProjectSummary() {
   renderAll();
 }
 
+async function loadDelegateProject(projectPath, { force = false } = {}) {
+  if (!projectPath) {
+    return delegateStateFor(projectPath);
+  }
+
+  const existing = delegateStateFor(projectPath);
+  if (existing.loading) {
+    return existing;
+  }
+  if (!force && existing.initialized && !delegateStateIsPending(existing)) {
+    return existing;
+  }
+
+  setDelegateState(projectPath, {
+    loading: true,
+    error: "",
+  });
+  renderAll();
+
+  try {
+    const payload = await fetchJson(`/v1/delegate?project=${encodeURIComponent(projectPath)}`);
+    setDelegateState(projectPath, {
+      loading: false,
+      initialized: true,
+      error: "",
+      config: payload.config || null,
+      brief: String(payload.brief || ""),
+      status: payload.status ? normalizeDelegateStatus(payload.status) : null,
+      delegateSession: payload.delegateSession || null,
+      latestPlanSnapshot: payload.latestPlanSnapshot
+        ? normalizeDelegatePlanSnapshot(payload.latestPlanSnapshot)
+        : null,
+      planSnapshots: Array.isArray(payload.planSnapshots)
+        ? payload.planSnapshots.map(normalizeDelegatePlanSnapshot)
+        : [],
+    });
+  } catch (error) {
+    setDelegateState(projectPath, {
+      loading: false,
+      initialized: true,
+      error: error.message,
+    });
+  }
+
+  renderAll();
+  return delegateStateFor(projectPath);
+}
+
+async function openDelegateModal(projectPath = state.selectedProject) {
+  if (!projectPath) {
+    return;
+  }
+
+  state.modalThread = null;
+  state.projectModalOpen = false;
+  state.sessionImportModalProject = "";
+  state.summaryModalProject = "";
+  state.sessionTitleModalProject = "";
+  state.sessionTitleModalSessionId = "";
+  state.delegateModalProject = projectPath;
+  state.delegateBriefPending = false;
+  state.delegatePlanPending = false;
+  state.delegateRunPending = false;
+  state.delegateBriefDirty = false;
+  state.delegateBriefDraft = "";
+  renderAll();
+  await loadDelegateProject(projectPath);
+}
+
+function closeDelegateModal() {
+  state.delegateModalProject = "";
+  state.delegateBriefDraft = "";
+  state.delegateBriefDirty = false;
+  state.delegateBriefPending = false;
+  state.delegatePlanPending = false;
+  state.delegateRunPending = false;
+  renderAll();
+}
+
+async function saveDelegateBrief({ quiet = false } = {}) {
+  const project = currentDelegateProject();
+  if (!project?.path) {
+    return null;
+  }
+
+  const brief = (state.delegateBriefDirty ? state.delegateBriefDraft : delegateStateFor(project.path).brief || "").trim();
+  state.delegateBriefPending = true;
+  renderAll();
+
+  try {
+    const payload = await fetchJson("/v1/delegate/brief", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        project: project.path,
+        brief,
+      }),
+    });
+
+    setDelegateState(project.path, {
+      loading: false,
+      initialized: true,
+      error: "",
+      config: payload.config || null,
+      brief: String(payload.brief || brief),
+      status: payload.status ? normalizeDelegateStatus(payload.status) : delegateStateFor(project.path).status,
+      delegateSession: payload.delegateSession || delegateStateFor(project.path).delegateSession,
+      latestPlanSnapshot: payload.latestPlanSnapshot
+        ? normalizeDelegatePlanSnapshot(payload.latestPlanSnapshot)
+        : delegateStateFor(project.path).latestPlanSnapshot,
+      planSnapshots: Array.isArray(payload.planSnapshots)
+        ? payload.planSnapshots.map(normalizeDelegatePlanSnapshot)
+        : delegateStateFor(project.path).planSnapshots,
+    });
+    state.delegateBriefDraft = String(payload.brief || brief);
+    state.delegateBriefDirty = false;
+    renderAll();
+    return payload;
+  } catch (error) {
+    if (!quiet) {
+      showError(error);
+    }
+    throw error;
+  } finally {
+    state.delegateBriefPending = false;
+    renderAll();
+  }
+}
+
+async function ensureDelegateBriefSaved() {
+  if (!state.delegateBriefDirty) {
+    return null;
+  }
+  return saveDelegateBrief({ quiet: false });
+}
+
+async function requestDelegatePlan() {
+  const project = currentDelegateProject();
+  if (!project?.path || state.delegatePlanPending || state.delegateRunPending) {
+    return;
+  }
+
+  await ensureDelegateBriefSaved();
+
+  state.delegatePlanPending = true;
+  const existing = delegateStateFor(project.path);
+  setDelegateState(project.path, {
+    status: normalizeDelegateStatus({
+      ...(existing.status || {}),
+      state: "planning",
+      projectPath: project.path,
+    }),
+    error: "",
+  });
+  renderAll();
+
+  try {
+    const payload = await fetchJson("/v1/delegate/plan", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        project: project.path,
+      }),
+    });
+
+    setDelegateState(project.path, {
+      loading: false,
+      initialized: true,
+      error: "",
+      config: payload.config || delegateStateFor(project.path).config,
+      brief: String(payload.brief || delegateStateFor(project.path).brief || ""),
+      status: payload.status ? normalizeDelegateStatus(payload.status) : delegateStateFor(project.path).status,
+      delegateSession: payload.delegateSession || delegateStateFor(project.path).delegateSession,
+      latestPlanSnapshot: payload.latestPlanSnapshot
+        ? normalizeDelegatePlanSnapshot(payload.latestPlanSnapshot)
+        : delegateStateFor(project.path).latestPlanSnapshot,
+      planSnapshots: Array.isArray(payload.planSnapshots)
+        ? payload.planSnapshots.map(normalizeDelegatePlanSnapshot)
+        : delegateStateFor(project.path).planSnapshots,
+    });
+  } catch (error) {
+    setDelegateState(project.path, {
+      error: error.message,
+    });
+    showError(error);
+  } finally {
+    state.delegatePlanPending = false;
+    renderAll();
+  }
+}
+
+async function toggleDelegateRun() {
+  const project = currentDelegateProject();
+  if (!project?.path || state.delegatePlanPending || state.delegateRunPending) {
+    return;
+  }
+
+  const existing = delegateStateFor(project.path);
+  const action =
+    existing.status?.state === "running" && !existing.status?.pauseRequested ? "pause" : "start";
+
+  if (action === "start") {
+    await ensureDelegateBriefSaved();
+  }
+
+  state.delegateRunPending = true;
+  if (action === "pause") {
+    setDelegateState(project.path, {
+      status: normalizeDelegateStatus({
+        ...(existing.status || {}),
+        state: existing.status?.state || "running",
+        pauseRequested: true,
+      }),
+    });
+  }
+  renderAll();
+
+  try {
+    const payload = await fetchJson("/v1/delegate/run", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        project: project.path,
+        action,
+      }),
+    });
+
+    setDelegateState(project.path, {
+      loading: false,
+      initialized: true,
+      error: "",
+      config: payload.config || delegateStateFor(project.path).config,
+      brief: String(payload.brief || delegateStateFor(project.path).brief || ""),
+      status: payload.status ? normalizeDelegateStatus(payload.status) : delegateStateFor(project.path).status,
+      delegateSession: payload.delegateSession || delegateStateFor(project.path).delegateSession,
+      latestPlanSnapshot: payload.latestPlanSnapshot
+        ? normalizeDelegatePlanSnapshot(payload.latestPlanSnapshot)
+        : delegateStateFor(project.path).latestPlanSnapshot,
+      planSnapshots: Array.isArray(payload.planSnapshots)
+        ? payload.planSnapshots.map(normalizeDelegatePlanSnapshot)
+        : delegateStateFor(project.path).planSnapshots,
+    });
+  } catch (error) {
+    setDelegateState(project.path, {
+      error: error.message,
+    });
+    showError(error);
+  } finally {
+    state.delegateRunPending = false;
+    renderAll();
+  }
+}
+
 function setProjectModalMode(mode) {
   state.projectModalMode = mode === "new" ? "new" : "existing";
   state.projectModalStatus = "";
@@ -3714,6 +4476,8 @@ function setProjectModalMode(mode) {
 
 async function openProjectModal() {
   state.summaryModalProject = "";
+  state.sessionImportModalProject = "";
+  state.delegateModalProject = "";
   state.sessionTitleModalProject = "";
   state.sessionTitleModalSessionId = "";
   state.modalThread = null;
@@ -4026,40 +4790,55 @@ function bindEvents() {
   elements.projectSummaryButton.addEventListener("click", () => {
     void openProjectSummary();
   });
+  elements.projectDelegateButton.addEventListener("click", () => {
+    void openDelegateModal();
+  });
   elements.projectAddButton.addEventListener("click", () => {
     void openProjectModal();
   });
-  elements.projectDeleteButton.addEventListener("click", () => {
-    openRemoveModal("project");
+  elements.sessionImportButton.addEventListener("click", () => {
+    void openSessionImportModal();
   });
   elements.sessionRenameButton.addEventListener("click", () => {
     openSessionTitleModal();
   });
-  elements.sessionDeleteButton.addEventListener("click", () => {
-    openRemoveModal("session");
-  });
   elements.dispatchForm.addEventListener("submit", handleDispatch);
   elements.detailBackdrop.addEventListener("click", closeSessionThread);
   elements.detailClose.addEventListener("click", closeSessionThread);
+  elements.sessionImportBackdrop.addEventListener("click", closeSessionImportModal);
+  elements.sessionImportClose.addEventListener("click", closeSessionImportModal);
   elements.sessionTitleBackdrop.addEventListener("click", closeSessionTitleModal);
   elements.sessionTitleClose.addEventListener("click", closeSessionTitleModal);
+  elements.sessionTitleRemoveButton.addEventListener("click", handleSessionRemove);
   elements.sessionTitleForm.addEventListener("submit", (event) => {
     void handleSessionTitleSubmit(event);
   });
   elements.sessionTitleInput.addEventListener("input", (event) => {
     state.sessionTitleDraft = event.target.value;
+    state.sessionTitleConfirmRemove = false;
     state.sessionTitleError = "";
     renderAll();
-  });
-  elements.removeBackdrop.addEventListener("click", closeRemoveModal);
-  elements.removeClose.addEventListener("click", closeRemoveModal);
-  elements.removeForm.addEventListener("submit", (event) => {
-    void handleRemoveSubmit(event);
   });
   elements.summaryBackdrop.addEventListener("click", closeProjectSummary);
   elements.summaryClose.addEventListener("click", closeProjectSummary);
   elements.summaryRefreshButton.addEventListener("click", () => {
     void requestNewProjectSummary();
+  });
+  elements.delegateBackdrop.addEventListener("click", closeDelegateModal);
+  elements.delegateClose.addEventListener("click", closeDelegateModal);
+  elements.delegateSaveButton.addEventListener("click", () => {
+    void saveDelegateBrief();
+  });
+  elements.delegatePlanButton.addEventListener("click", () => {
+    void requestDelegatePlan();
+  });
+  elements.delegateRunButton.addEventListener("click", () => {
+    void toggleDelegateRun();
+  });
+  elements.delegateBriefInput.addEventListener("input", (event) => {
+    state.delegateBriefDraft = event.target.value;
+    state.delegateBriefDirty = true;
+    renderAll();
   });
   elements.projectModalBackdrop.addEventListener("click", closeProjectModal);
   elements.projectModalClose.addEventListener("click", closeProjectModal);
@@ -4097,6 +4876,7 @@ function bindEvents() {
     state.selectedProject = event.target.value;
     syncSelectedSession("", { preferCurrent: false });
     renderAll();
+    void refreshImportableSessions(state.selectedProject, { force: true }).catch(() => {});
     try {
       await refreshThreads();
     } catch (error) {
@@ -4178,16 +4958,20 @@ function bindEvents() {
       closeSessionThread();
       return;
     }
+    if (event.key === "Escape" && state.sessionImportModalProject) {
+      closeSessionImportModal();
+      return;
+    }
     if (event.key === "Escape" && state.summaryModalProject) {
       closeProjectSummary();
       return;
     }
-    if (event.key === "Escape" && state.sessionTitleModalProject) {
-      closeSessionTitleModal();
+    if (event.key === "Escape" && state.delegateModalProject) {
+      closeDelegateModal();
       return;
     }
-    if (event.key === "Escape" && state.removeModalKind) {
-      closeRemoveModal();
+    if (event.key === "Escape" && state.sessionTitleModalProject) {
+      closeSessionTitleModal();
       return;
     }
     if (event.key === "Escape" && state.projectModalOpen) {
@@ -4215,6 +4999,7 @@ async function boot() {
     try {
       await refreshProjects();
       await refreshProjectSummaries();
+      await refreshDelegates();
     } catch (_error) {
       // Keep the current view on transient failures.
     }
@@ -4223,6 +5008,7 @@ async function boot() {
   window.setInterval(async () => {
     try {
       await refreshProjectSummaries();
+      await refreshDelegates();
     } catch (_error) {
       // Keep the current view on transient failures.
     }

@@ -265,7 +265,7 @@ body::-webkit-scrollbar {
   gap: 8px;
   min-width: 0;
   position: relative;
-  --session-spinner-right: 146px;
+  --session-spinner-right: 202px;
 }
 
 .project-control {
@@ -421,6 +421,7 @@ textarea:disabled {
 .thread-button {
   min-height: 48px;
   min-width: 48px;
+  position: relative;
 }
 
 .queue-toggle {
@@ -445,15 +446,17 @@ textarea:disabled {
   display: block;
 }
 
-.thread-button-danger {
-  color: rgba(255, 216, 200, 0.86);
-  border-color: rgba(233, 151, 136, 0.24);
-}
-
-.thread-button-danger:hover:not(:disabled),
-.thread-button-danger:focus-visible:not(:disabled) {
-  border-color: rgba(255, 196, 176, 0.5);
-  color: #fff1e3;
+.control-orb {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow:
+    0 0 0 1px rgba(255, 244, 227, 0.1),
+    0 0 8px rgba(255, 255, 255, 0.22);
 }
 
 @keyframes session-spinner {
@@ -905,17 +908,6 @@ textarea:disabled {
   border-color: var(--accent-soft);
 }
 
-.detail-action-button-danger {
-  background: linear-gradient(180deg, rgba(105, 18, 22, 0.94), rgba(71, 10, 13, 0.98));
-  border-color: rgba(236, 164, 144, 0.28);
-}
-
-.detail-action-button-danger:hover:not(:disabled),
-.detail-action-button-danger:focus-visible:not(:disabled) {
-  background: linear-gradient(180deg, rgba(118, 21, 24, 0.98), rgba(82, 12, 15, 1));
-  border-color: rgba(255, 204, 184, 0.52);
-}
-
 .detail-thread {
   display: grid;
   gap: 10px;
@@ -941,6 +933,65 @@ textarea:disabled {
   scrollbar-width: none;
 }
 
+.import-session-list {
+  min-height: 200px;
+  align-content: start;
+}
+
+.import-session-empty {
+  min-height: 180px;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(73, 10, 14, 0.9), rgba(57, 8, 11, 0.96));
+  color: var(--muted);
+  text-align: center;
+}
+
+.import-session-card {
+  position: relative;
+  width: 100%;
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(80, 11, 15, 0.92), rgba(59, 8, 11, 0.96));
+  color: var(--text);
+  text-align: left;
+  box-shadow: inset 0 1px 0 rgba(255, 237, 212, 0.05);
+}
+
+.import-session-card:hover:not(:disabled),
+.import-session-card:focus-visible:not(:disabled) {
+  border-color: rgba(240, 208, 109, 0.48);
+  background: linear-gradient(180deg, rgba(89, 14, 17, 0.96), rgba(68, 10, 13, 0.98));
+}
+
+.import-session-card:disabled {
+  opacity: 0.72;
+}
+
+.import-session-title {
+  font-weight: 600;
+}
+
+.import-session-meta,
+.import-session-time {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.import-session-preview {
+  color: rgba(255, 244, 227, 0.82);
+  line-height: 1.42;
+}
+
 .detail-history-list::-webkit-scrollbar {
   width: 0;
   height: 0;
@@ -951,16 +1002,6 @@ textarea:disabled {
   max-width: min(calc(100% - 20px), 520px);
 }
 
-.remove-modal-panel {
-  grid-template-rows: auto auto auto;
-}
-
-.confirm-copy {
-  margin: 0;
-  color: var(--text);
-  line-height: 1.5;
-}
-
 .project-modal-form {
   display: grid;
   gap: 10px;
@@ -969,6 +1010,46 @@ textarea:disabled {
 .session-title-form {
   display: grid;
   gap: 10px;
+}
+
+.session-title-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+  gap: 10px;
+}
+
+.detail-action-button.is-quiet {
+  background: linear-gradient(180deg, rgba(41, 9, 10, 0.84), rgba(31, 7, 8, 0.9));
+  color: rgba(255, 236, 219, 0.86);
+}
+
+.detail-action-button.is-quiet:hover:not(:disabled),
+.detail-action-button.is-quiet:focus-visible:not(:disabled) {
+  background: linear-gradient(180deg, rgba(54, 11, 13, 0.9), rgba(40, 8, 10, 0.95));
+}
+
+.delegate-brief-input {
+  min-height: 220px;
+  padding: 14px 15px;
+  border-radius: 14px;
+  border: 1px solid var(--line-strong);
+  background: linear-gradient(180deg, rgba(73, 10, 14, 0.9), rgba(57, 8, 11, 0.96));
+  color: var(--text);
+  line-height: 1.52;
+  resize: vertical;
+  box-shadow: inset 0 1px 0 rgba(255, 237, 212, 0.05);
+}
+
+.delegate-brief-input:focus-visible {
+  outline: none;
+  border-color: rgba(240, 208, 109, 0.44);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 237, 212, 0.06),
+    0 0 0 1px rgba(240, 208, 109, 0.16);
+}
+
+.delegate-plan-list {
+  min-height: 220px;
 }
 
 .session-title-form .detail-action-button {
