@@ -1630,6 +1630,29 @@ function normalizeDelegatePlanSnapshot(snapshot) {
   };
 }
 
+function normalizeDelegateComputeBudget(budget) {
+  if (!budget || typeof budget !== "object") {
+    return null;
+  }
+  const usedPercent = Number.parseFloat(String(budget?.usedPercent ?? ""));
+  const remainingPercent = Number.parseFloat(String(budget?.remainingPercent ?? ""));
+  const reservePercent = Number.parseFloat(String(budget?.reservePercent ?? ""));
+  return {
+    status: String(budget?.status || "unavailable").trim(),
+    checkedAt: String(budget?.checkedAt || "").trim() || null,
+    source: String(budget?.source || "").trim() || null,
+    limitId: String(budget?.limitId || "").trim() || null,
+    limitName: String(budget?.limitName || "").trim() || null,
+    windowMinutes: Number.parseInt(String(budget?.windowMinutes || "0"), 10) || null,
+    usedPercent: Number.isFinite(usedPercent) ? usedPercent : null,
+    remainingPercent: Number.isFinite(remainingPercent) ? remainingPercent : null,
+    reservePercent: Number.isFinite(reservePercent) ? reservePercent : null,
+    resetsAt: Number.parseInt(String(budget?.resetsAt || "0"), 10) || null,
+    unlimited: Boolean(budget?.unlimited),
+    error: String(budget?.error || "").trim(),
+  };
+}
+
 function normalizeDelegateStatus(status) {
   const normalizedState = String(status?.state || "idle").trim().toLowerCase();
   return {
@@ -1646,6 +1669,7 @@ function normalizeDelegateStatus(status) {
     planSnapshotId: String(status?.planSnapshotId || "").trim() || null,
     stepCount: Number.parseInt(String(status?.stepCount || "0"), 10) || 0,
     maxSteps: Number.parseInt(String(status?.maxSteps || "0"), 10) || 0,
+    computeBudget: normalizeDelegateComputeBudget(status?.computeBudget),
     lastOutcomeSummary: String(status?.lastOutcomeSummary || "").trim(),
     nextAction: String(status?.nextAction || "").trim(),
     stopReason: String(status?.stopReason || "").trim(),
@@ -2887,6 +2911,8 @@ function delegateStopReasonLabel(stopReason) {
       return "blocked on another human";
     case "auth_required":
       return "blocked on auth";
+    case "compute_limit":
+      return "paused near compute reserve";
     case "step_limit":
       return "paused at step limit";
     case "unknown":
@@ -2894,6 +2920,18 @@ function delegateStopReasonLabel(stopReason) {
     default:
       return "";
   }
+}
+
+function delegateComputeBudgetLabel(budget) {
+  const normalized = normalizeDelegateComputeBudget(budget);
+  if (!normalized || normalized.status !== "observed" || normalized.unlimited) {
+    return "";
+  }
+  if (!Number.isFinite(normalized.remainingPercent)) {
+    return "";
+  }
+  const remaining = Math.round(normalized.remainingPercent * 10) / 10;
+  return ` • ${remaining}% compute left`;
 }
 
 function buildDelegatePlanCard(snapshot) {
@@ -3045,7 +3083,7 @@ function renderDelegateModal() {
     if (state.delegateRunPending) {
       runButtonLabel.textContent = "Working…";
     } else if (status?.pauseRequested) {
-      runButtonLabel.textContent = "Pausing…";
+      runButtonLabel.textContent = "Keep Going";
     } else if (status?.state === "running") {
       runButtonLabel.textContent = "Pause";
     } else {
@@ -3076,10 +3114,13 @@ function renderDelegateModal() {
     setText(elements.delegateState, "Planning the delegate lane", { empty: false });
   } else if (status?.state === "running") {
     const stepLabel =
-      status.maxSteps > 0 ? ` • step ${status.stepCount}/${status.maxSteps}` : "";
+      status.maxSteps > 0 ? ` • step ${status.stepCount}/${status.maxSteps}` : ` • step ${status.stepCount}`;
+    const computeLabel = delegateComputeBudgetLabel(status.computeBudget);
     setText(
       elements.delegateState,
-      status.pauseRequested ? `Pausing after this step${stepLabel}` : `Standing in${stepLabel}`,
+      status.pauseRequested
+        ? `Pausing after this step${stepLabel}${computeLabel}`
+        : `Standing in${stepLabel}${computeLabel}`,
       { empty: false },
     );
   } else if (status?.state === "blocked") {

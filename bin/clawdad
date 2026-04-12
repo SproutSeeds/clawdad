@@ -30,6 +30,8 @@ Commands:
   add-session <project> [opts]  Add another tracked session to a project bucket
   delegate <project> [--json]   Show the saved delegate brief/status for a project
   delegate-set <project> ...    Update the delegate brief text for a project
+  delegate-run <project>        Start autonomous delegate mode for a project
+  delegate-pause <project>      Pause autonomous delegate mode for a project
   delegate-reset <project>      Reset the delegate brief to the default template
   track-session <project> <session-id>
                                 Track an existing native Codex session in a project bucket
@@ -85,6 +87,8 @@ Options for dispatch:
 Options for delegate-set:
   --file <path>                 Read delegate brief text from a file
   --stdin                       Read delegate brief text from stdin
+  --compute-reserve-percent <n> Pause delegate work when weekly Codex compute remaining is at or below n% (default: 10)
+  --max-steps-per-run <n>       Optional safety cap; omit or set 'unlimited' for indefinite semantic runs
   --json                        Emit the saved delegate payload as JSON
 
 Options for watch:
@@ -905,6 +909,14 @@ cmd_delegate_set() {
   run_server_helper delegate-set "$@"
 }
 
+cmd_delegate_run() {
+  run_server_helper delegate-run "$@"
+}
+
+cmd_delegate_pause() {
+  run_server_helper delegate-pause "$@"
+}
+
 cmd_delegate_reset() {
   run_server_helper delegate-reset "$@"
 }
@@ -936,6 +948,8 @@ main() {
     add-session) cmd_add_session "$@" ;;
     delegate)   cmd_delegate "$@" ;;
     delegate-set) cmd_delegate_set "$@" ;;
+    delegate-run|delegate-start) cmd_delegate_run "$@" ;;
+    delegate-pause|delegate-stop) cmd_delegate_pause "$@" ;;
     delegate-reset) cmd_delegate_reset "$@" ;;
     track-session) cmd_track_session "$@" ;;
     rename-session) cmd_rename_session "$@" ;;

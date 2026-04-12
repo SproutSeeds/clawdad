@@ -31,37 +31,44 @@ watch_poll_once() {
     slug=$(registry_field "$project_path" "slug")
     local active_session_id
     active_session_id=$(state_field "$project_path" "active_session_id")
+    local status_file
+    status_file="$(mailbox_dir "$project_path")/status.json"
+    local status_request_id
+    status_request_id=$("$CLAWDAD_JQ" -r '.request_id // ""' "$status_file" 2>/dev/null || echo "")
+    local status_session_id
+    status_session_id=$("$CLAWDAD_JQ" -r '.session_id // ""' "$status_file" 2>/dev/null || echo "")
+    local target_session_id="${status_session_id:-$active_session_id}"
 
     case "$mbox_status" in
       completed)
         state_update "$project_path" "status" "completed"
         state_update "$project_path" "last_response" "$(iso_timestamp)"
-        if [[ -n "$active_session_id" ]]; then
-          state_update_session "$project_path" "$active_session_id" "status" "completed"
-          state_update_session "$project_path" "$active_session_id" "last_response" "$(iso_timestamp)"
+        if [[ -n "$target_session_id" ]]; then
+          state_update_session "$project_path" "$target_session_id" "status" "completed"
+          state_update_session "$project_path" "$target_session_id" "last_response" "$(iso_timestamp)"
         fi
         clawdad_info "[$slug] completed"
         ;;
       failed)
         state_update "$project_path" "status" "failed"
-        if [[ -n "$active_session_id" ]]; then
-          state_update_session "$project_path" "$active_session_id" "status" "failed"
-          state_update_session "$project_path" "$active_session_id" "last_response" "$(iso_timestamp)"
+        if [[ -n "$target_session_id" ]]; then
+          state_update_session "$project_path" "$target_session_id" "status" "failed"
+          state_update_session "$project_path" "$target_session_id" "last_response" "$(iso_timestamp)"
         fi
         clawdad_warn "[$slug] failed"
         ;;
       running)
         # Check if the PID is still alive
         local pid
-        pid=$("$CLAWDAD_JQ" -r '.pid // 0' "$(mailbox_dir "$project_path")/status.json" 2>/dev/null || echo 0)
+        pid=$("$CLAWDAD_JQ" -r '.pid // 0' "$status_file" 2>/dev/null || echo 0)
         [[ "$pid" =~ ^[0-9]+$ ]] || pid=0
         if (( pid > 0 )) && ! kill -0 "$pid" 2>/dev/null; then
           # Process died without updating status
-          mailbox_update_status "$project_path" "failed" "" "" "Process $pid exited unexpectedly"
+          mailbox_update_status "$project_path" "failed" "$status_request_id" "" "Process $pid exited unexpectedly" "$target_session_id"
           state_update "$project_path" "status" "failed"
-          if [[ -n "$active_session_id" ]]; then
-            state_update_session "$project_path" "$active_session_id" "status" "failed"
-            state_update_session "$project_path" "$active_session_id" "last_response" "$(iso_timestamp)"
+          if [[ -n "$target_session_id" ]]; then
+            state_update_session "$project_path" "$target_session_id" "status" "failed"
+            state_update_session "$project_path" "$target_session_id" "last_response" "$(iso_timestamp)"
           fi
           clawdad_warn "[$slug] process $pid exited unexpectedly"
         fi

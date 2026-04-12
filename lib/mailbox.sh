@@ -94,6 +94,7 @@ mailbox_update_status() {
   local request_id="${3:-null}"
   local pid="${4:-null}"
   local error="${5:-null}"
+  local session_id="${6:-null}"
   local mbox
   mbox="$(mailbox_dir "$project_path")"
   mkdir -p "$mbox"
@@ -119,12 +120,14 @@ mailbox_update_status() {
 
   [[ "$request_id" != "null" ]] && request_id="\"$request_id\""
   [[ "$error" != "null" ]] && error="\"$error\""
+  [[ "$session_id" != "null" ]] && session_id="\"$session_id\""
 
   local payload
   payload=$(cat <<EOF
 {
   "state": "$state",
   "request_id": $request_id,
+  "session_id": $session_id,
   "dispatched_at": $dispatched_at,
   "completed_at": $completed_at,
   "error": $error,

@@ -24,6 +24,11 @@ _build_cmd_codex() {
   if [[ -n "$model" ]]; then
     cmd+=("--model" "$model")
   fi
+
+  local turn_timeout_ms="${CLAWDAD_CODEX_TURN_TIMEOUT_MS:-${CLAWDAD_WORKER_TIMEOUT_MS:-}}"
+  if [[ -n "$turn_timeout_ms" ]]; then
+    cmd+=("--turn-timeout-ms" "$turn_timeout_ms")
+  fi
 }
 
 _build_cmd_chimera() {
@@ -171,7 +176,7 @@ dispatch_to_spoke() {
   mailbox_write_request "$project_path" "$request_id" "$message"
   history_write_request "$project_path" "$request_id" "$session_id" "$slug" "$provider" "$message" "$started_at" || \
     clawdad_log "history warning: failed to write request record for $slug request_id=$request_id"
-  mailbox_update_status "$project_path" "dispatched" "$request_id"
+  mailbox_update_status "$project_path" "dispatched" "$request_id" "" "" "$session_id"
   registry_update "$project_path" "status" "running"
   registry_update "$project_path" "last_dispatch" "$started_at"
   state_update_session "$project_path" "$session_id" "status" "running"
@@ -199,7 +204,7 @@ dispatch_to_spoke() {
     "$message" >/dev/null 2>&1 </dev/null &
   local bg_pid=$!
 
-  mailbox_update_status "$project_path" "running" "$request_id" "$bg_pid"
+  mailbox_update_status "$project_path" "running" "$request_id" "$bg_pid" "" "$session_id"
 
   clawdad_info "Dispatched request $request_id to $slug via $provider (pid: $bg_pid)"
   clawdad_log "dispatch: slug=$slug provider=$provider request_id=$request_id pid=$bg_pid cmd=${cmd[*]}"
@@ -210,23 +215,76 @@ _dispatch_background() {
   local session_seeded="${6:-}" dispatch_count="${7:-0}" permission_mode="${8:-$CLAWDAD_PERMISSION_MODE}"
   local model="${9:-}" persist_active="${10:-true}" message="${11:-}"
 
+  _CLAWDAD_DISPATCH_FINALIZED=false
+  _CLAWDAD_DISPATCH_PROJECT_PATH="$project_path"
+  _CLAWDAD_DISPATCH_REQUEST_ID="$request_id"
+  _CLAWDAD_DISPATCH_SESSION_ID="$session_id"
+  _CLAWDAD_DISPATCH_SLUG="$slug"
+  _CLAWDAD_DISPATCH_PROVIDER="$provider"
+  _CLAWDAD_DISPATCH_ERROR=""
+  _CLAWDAD_DISPATCH_CHILD_PID=""
+
+  _dispatch_fail_unfinalized() {
+    local exit_code=$?
+    if [[ ! "$exit_code" =~ ^[0-9]+$ ]] || (( exit_code == 0 )); then
+      exit_code=1
+    fi
+    if [[ "${_CLAWDAD_DISPATCH_FINALIZED:-false}" == "true" ]]; then
+      return "$exit_code"
+    fi
+    if [[ -z "${_CLAWDAD_DISPATCH_PROJECT_PATH:-}" || -z "${_CLAWDAD_DISPATCH_REQUEST_ID:-}" ]]; then
+      return "$exit_code"
+    fi
+
+    _CLAWDAD_DISPATCH_FINALIZED=true
+    if [[ -n "${_CLAWDAD_DISPATCH_CHILD_PID:-}" ]] && kill -0 "$_CLAWDAD_DISPATCH_CHILD_PID" 2>/dev/null; then
+      kill -TERM "$_CLAWDAD_DISPATCH_CHILD_PID" 2>/dev/null || true
+    fi
+    local error_msg="${_CLAWDAD_DISPATCH_ERROR:-dispatch worker exited before completing (exit ${exit_code})}"
+    mailbox_write_response "$_CLAWDAD_DISPATCH_PROJECT_PATH" "$_CLAWDAD_DISPATCH_REQUEST_ID" "$_CLAWDAD_DISPATCH_SESSION_ID" "${exit_code:-1}" "$error_msg" || true
+    history_update_result "$_CLAWDAD_DISPATCH_PROJECT_PATH" "$_CLAWDAD_DISPATCH_REQUEST_ID" "$_CLAWDAD_DISPATCH_SESSION_ID" "$_CLAWDAD_DISPATCH_SLUG" "$_CLAWDAD_DISPATCH_PROVIDER" "failed" "${exit_code:-1}" "$(iso_timestamp)" "$error_msg" || \
+      clawdad_log "history warning: failed to write abandoned response record for $_CLAWDAD_DISPATCH_SLUG request_id=$_CLAWDAD_DISPATCH_REQUEST_ID"
+    mailbox_update_status "$_CLAWDAD_DISPATCH_PROJECT_PATH" "failed" "$_CLAWDAD_DISPATCH_REQUEST_ID" "" "$error_msg" "$_CLAWDAD_DISPATCH_SESSION_ID" || true
+    registry_update "$_CLAWDAD_DISPATCH_PROJECT_PATH" "status" "failed" || true
+    state_update_session "$_CLAWDAD_DISPATCH_PROJECT_PATH" "$_CLAWDAD_DISPATCH_SESSION_ID" "status" "failed" || true
+    state_update_session "$_CLAWDAD_DISPATCH_PROJECT_PATH" "$_CLAWDAD_DISPATCH_SESSION_ID" "last_response" "$(iso_timestamp)" || true
+    clawdad_log "dispatch abandoned: slug=$_CLAWDAD_DISPATCH_SLUG provider=$_CLAWDAD_DISPATCH_PROVIDER request_id=$_CLAWDAD_DISPATCH_REQUEST_ID exit=${exit_code:-1} error=$error_msg"
+    return "$exit_code"
+  }
+
+  trap _dispatch_fail_unfinalized EXIT
+  trap '_CLAWDAD_DISPATCH_ERROR="dispatch worker terminated"; _dispatch_fail_unfinalized; exit 143' TERM INT HUP
+
   local -a cmd
-  _build_dispatch_command "$project_path" "$message" "$session_id" "$dispatch_count" "$provider" "$session_seeded" "$permission_mode" "$model" || return 1
+  _build_dispatch_command "$project_path" "$message" "$session_id" "$dispatch_count" "$provider" "$session_seeded" "$permission_mode" "$model" || {
+    _CLAWDAD_DISPATCH_ERROR="failed to build dispatch command"
+    return 1
+  }
 
   # Run from project directory
   cd "$project_path" || {
-    clawdad_error "Cannot cd to $project_path"
-    mailbox_update_status "$project_path" "failed" "$request_id" "" "Cannot cd to project directory"
+    _CLAWDAD_DISPATCH_ERROR="Cannot cd to $project_path"
+    clawdad_error "$_CLAWDAD_DISPATCH_ERROR"
+    mailbox_update_status "$project_path" "failed" "$request_id" "" "Cannot cd to project directory" "$session_id"
     registry_update "$project_path" "status" "failed"
     return 1
   }
 
-  local output exit_code
-  if output=$("${cmd[@]}" 2>&1); then
+  local output exit_code output_file
+  output_file=$(mktemp "${TMPDIR:-/tmp}/clawdad-dispatch.${request_id}.XXXXXX") || {
+    _CLAWDAD_DISPATCH_ERROR="failed to create dispatch output file"
+    return 1
+  }
+  "${cmd[@]}" >"$output_file" 2>&1 &
+  _CLAWDAD_DISPATCH_CHILD_PID=$!
+  if wait "$_CLAWDAD_DISPATCH_CHILD_PID"; then
     exit_code=0
   else
     exit_code=$?
   fi
+  _CLAWDAD_DISPATCH_CHILD_PID=""
+  output=$(cat "$output_file" 2>/dev/null || true)
+  rm -f "$output_file" 2>/dev/null || true
 
   local effective_session_id="$session_id"
   if [[ "$provider" == "codex" ]]; then
@@ -267,7 +325,7 @@ _dispatch_background() {
     mailbox_write_response "$project_path" "$request_id" "$effective_session_id" "$exit_code" "$result_text"
     history_update_result "$project_path" "$request_id" "$effective_session_id" "$slug" "$provider" "answered" "$exit_code" "$(iso_timestamp)" "$result_text" || \
       clawdad_log "history warning: failed to write response record for $slug request_id=$request_id"
-    mailbox_update_status "$project_path" "completed" "$request_id"
+    mailbox_update_status "$project_path" "completed" "$request_id" "" "" "$effective_session_id"
     registry_update "$project_path" "status" "completed"
     registry_update "$project_path" "last_response" "$(iso_timestamp)"
     registry_increment "$project_path" "dispatch_count"
@@ -278,6 +336,7 @@ _dispatch_background() {
       state_set_active_session "$project_path" "$effective_session_id"
     fi
 
+    _CLAWDAD_DISPATCH_FINALIZED=true
     clawdad_log "dispatch completed: slug=$slug provider=$provider request_id=$request_id exit=$exit_code"
   else
     local error_msg
@@ -308,7 +367,7 @@ _dispatch_background() {
     esac
     history_update_result "$project_path" "$request_id" "$effective_session_id" "$slug" "$provider" "failed" "$exit_code" "$(iso_timestamp)" "${error_msg:-$output}" || \
       clawdad_log "history warning: failed to write failed response record for $slug request_id=$request_id"
-    mailbox_update_status "$project_path" "failed" "$request_id" "" "$error_msg"
+    mailbox_update_status "$project_path" "failed" "$request_id" "" "$error_msg" "$effective_session_id"
     registry_update "$project_path" "status" "failed"
     registry_increment "$project_path" "dispatch_count"
     state_update_session "$project_path" "$effective_session_id" "status" "failed"
@@ -318,6 +377,7 @@ _dispatch_background() {
       state_set_active_session "$project_path" "$effective_session_id"
     fi
 
+    _CLAWDAD_DISPATCH_FINALIZED=true
     clawdad_log "dispatch failed: slug=$slug provider=$provider request_id=$request_id exit=$exit_code error=$error_msg"
   fi
 }

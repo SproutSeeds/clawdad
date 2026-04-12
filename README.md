@@ -8,6 +8,10 @@ Multi-agent orchestration CLI for AI coding agents. Manages persistent spoke age
 
 Codex-first orchestration for OpenAI-powered coding work, with Chimera still available as an experimental path.
 
+<p align="center">
+  <img src="assets/clawdad-mobile-demo.gif" alt="Clawdad mobile app selecting a project and dispatching a message" width="340">
+</p>
+
 ## Install
 
 Before you start:
@@ -65,6 +69,7 @@ If you ever just want the local CLI and not the phone app yet, you can stop afte
 - per-session thread viewer with lazy-loaded history
 - cross-project queue for in-flight and completed work
 - saved project summary snapshots with manual refresh
+- Codex delegate mode with semantic hard stops and a weekly compute reserve guard
 
 Tap the summary icon beside the project picker to open the latest saved snapshot or request a fresh one.
 
@@ -101,6 +106,10 @@ clawdad read my-project
 | `clawdad status [slug]` | Show status of projects |
 | `clawdad list` | List registered projects (from ORP) |
 | `clawdad read <slug>` | Read latest response from a spoke |
+| `clawdad delegate <slug>` | Show the saved delegate brief, plan, status, and guardrails |
+| `clawdad delegate-set <slug> ...` | Update the delegate brief or guardrails such as `--compute-reserve-percent 10` |
+| `clawdad delegate-run <slug>` | Start autonomous Codex delegate mode for a project |
+| `clawdad delegate-pause <slug>` | Pause autonomous delegate mode after the current step |
 | `clawdad watch` | Monitor mailboxes for responses |
 | `clawdad serve` | Run a secure HTTP listener for remote/iPhone entrypoints |
 | `clawdad secure-bootstrap` | Write the recommended Tailscale-first self-hosted setup |
@@ -118,6 +127,13 @@ clawdad read my-project
 5. **Read** — you (or the hub agent) read the response when ready
 
 Each spoke agent accumulates context over time via session resume, so it develops deep knowledge of its project.
+
+Delegate mode is Codex-first and runs on the same machine as the Clawdad server. By default it keeps working indefinitely until the project is semantically complete, paused, blocked by a hard stop, or Codex compute reaches the saved weekly reserve. The default compute reserve is 10%, and you can change it per project:
+
+```bash
+clawdad delegate-set my-project --compute-reserve-percent 10
+clawdad delegate-run my-project
+```
 
 ## Architecture
 
