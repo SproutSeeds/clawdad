@@ -17,7 +17,7 @@
     <link rel="manifest" href="/manifest.webmanifest?v=20260406h">
     <link rel="apple-touch-icon" href="/assets/clawdad-mascot-app.png?v=20260406h">
     <link rel="icon" href="/assets/clawdad-mascot-app.png?v=20260406h">
-    <link rel="stylesheet" href="/app.css?v=20260410a">
+    <link rel="stylesheet" href="/app.css?v=20260412b">
   </head>
   <body>
     <main class="app-shell">
@@ -67,13 +67,17 @@
             </button>
             <button
               id="projectDelegateButton"
-              class="thread-button"
+              class="thread-button delegate-open-button"
               type="button"
-              aria-label="Open delegate"
+              aria-label="Open delegate stand-in"
             >
               <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <path d="M8 2.75 9.55 5.9l3.45.5-2.5 2.43.59 3.42L8 10.6 4.91 12.25l.59-3.42L3 6.4l3.45-.5L8 2.75Z" stroke="currentColor" stroke-width="1.15" stroke-linejoin="round"></path>
+                <path d="M7.7 13.15c-.65-1.55-.62-3.08.1-4.57.42-.88 1.07-1.66 1.95-2.35" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"></path>
+                <path d="M9.85 6.2c.48-2 1.58-3.28 3.3-3.82.45 1.54.1 2.96-1.04 4.25" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"></path>
+                <path d="M9.78 6.25c-1.82-.9-3.48-.95-4.95-.14.72 1.6 1.95 2.54 3.67 2.82" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"></path>
+                <path d="M10.05 6.45c.88.18 1.7.03 2.46-.45M9.65 6.35c-.58.78-.96 1.64-1.12 2.58" stroke="currentColor" stroke-width="0.85" stroke-linecap="round" opacity=".72"></path>
               </svg>
+              <span>Stand In</span>
             </button>
             <button
               id="projectAddButton"
@@ -83,6 +87,18 @@
             >
               <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
                 <path d="M8 3.25v9.5M3.25 8h9.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"></path>
+              </svg>
+            </button>
+            <button
+              id="projectArtifactsButton"
+              class="thread-button"
+              type="button"
+              aria-label="Open project files"
+              title="Files"
+            >
+              <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M5 2.75h4.25L12.5 6v7.25H5A1.5 1.5 0 0 1 3.5 11.75v-7.5A1.5 1.5 0 0 1 5 2.75Z" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"></path>
+                <path d="M9.25 2.95V6h3.05M6.25 8.75h3.5M6.25 10.9h2.6" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"></path>
               </svg>
             </button>
           </div>
@@ -170,6 +186,27 @@
 
         <div id="detailHistoryState" class="detail-history-state is-empty"></div>
         <div id="detailHistoryList" class="detail-history-list"></div>
+      </section>
+    </div>
+
+    <div id="artifactsModal" class="detail-modal" hidden>
+      <button id="artifactsBackdrop" class="detail-backdrop" type="button" aria-label="Close"></button>
+      <section class="detail-panel project-modal-panel" role="dialog" aria-modal="true" aria-labelledby="artifactsProject">
+        <div class="detail-head">
+          <div class="detail-meta">
+            <div id="artifactsProject" class="detail-project"></div>
+            <div id="artifactsRoot" class="detail-session"></div>
+          </div>
+          <div class="detail-actions">
+            <button id="artifactsRefreshButton" class="detail-action-button" type="button">
+              <span class="button-text">Refresh</span>
+            </button>
+            <button id="artifactsClose" class="detail-close" type="button" aria-label="Close">×</button>
+          </div>
+        </div>
+
+        <div id="artifactsState" class="detail-history-state is-empty"></div>
+        <div id="artifactsList" class="detail-history-list artifacts-list"></div>
       </section>
     </div>
 
@@ -297,16 +334,28 @@
             <button id="delegateRunButton" class="detail-action-button" type="button">
               <span class="button-text">Stand In</span>
             </button>
+            <button id="delegateSummaryButton" class="detail-action-button detail-action-icon" type="button" aria-label="Summarize delegate run" title="Summarize delegate run">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M5 4.5h14a1.5 1.5 0 0 1 1.5 1.5v9.4a1.5 1.5 0 0 1-1.5 1.5H9.4L5 20.5v-3.6A1.5 1.5 0 0 1 3.5 15.4V6A1.5 1.5 0 0 1 5 4.5Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+                <path d="M8 8.5h8M8 12h5.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+              </svg>
+            </button>
             <button id="delegateClose" class="detail-close" type="button" aria-label="Close">×</button>
           </div>
         </div>
 
         <div id="delegateState" class="detail-history-state is-empty"></div>
+        <div class="delegate-run-head">
+          <span>Run log</span>
+          <span id="delegateRunMeta"></span>
+        </div>
+        <div id="delegateRunList" class="detail-history-list delegate-run-list"></div>
+        <div id="delegateSummaryList" class="detail-history-list summary-list delegate-summary-list"></div>
         <textarea id="delegateBriefInput" class="delegate-brief-input" rows="12" placeholder="North star, objective, gates…"></textarea>
         <div id="delegatePlanList" class="detail-history-list summary-list delegate-plan-list"></div>
       </section>
     </div>
 
-    <script type="module" src="/app.js?v=20260410a"></script>
+    <script type="module" src="/app.js?v=20260412b"></script>
   </body>
 </html>

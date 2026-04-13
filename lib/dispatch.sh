@@ -25,9 +25,14 @@ _build_cmd_codex() {
     cmd+=("--model" "$model")
   fi
 
-  local turn_timeout_ms="${CLAWDAD_CODEX_TURN_TIMEOUT_MS:-${CLAWDAD_WORKER_TIMEOUT_MS:-}}"
+  local turn_timeout_ms="${CLAWDAD_CODEX_TURN_TIMEOUT_MS:-${CLAWDAD_WORKER_TIMEOUT_MS:-1800000}}"
   if [[ -n "$turn_timeout_ms" ]]; then
     cmd+=("--turn-timeout-ms" "$turn_timeout_ms")
+  fi
+
+  local request_timeout_ms="${CLAWDAD_CODEX_REQUEST_TIMEOUT_MS:-120000}"
+  if [[ -n "$request_timeout_ms" ]]; then
+    cmd+=("--request-timeout-ms" "$request_timeout_ms")
   fi
 }
 
@@ -73,6 +78,11 @@ _build_dispatch_command() {
       return 1
       ;;
   esac
+}
+
+_artifact_augmented_message() {
+  local project_path="$1" message="$2"
+  printf '%s\n\n%s\n' "$message" "[Clawdad artifact handoff: If you create a deliverable file the user may need to download or share, save it under '$project_path/.clawdad/artifacts' using a clear filename. Create that folder if needed. Mention the saved filename in your final reply. Clawdad will surface files from that folder in the mobile app.]"
 }
 
 _extract_result_codex() {
@@ -187,7 +197,9 @@ dispatch_to_spoke() {
 
   local -a cmd
   local codex_output_file=""
-  _build_dispatch_command "$project_path" "$message" "$session_id" "$dispatch_count" "$provider" "$session_seeded" "$permission_mode" "$model" || return 1
+  local agent_message
+  agent_message=$(_artifact_augmented_message "$project_path" "$message")
+  _build_dispatch_command "$project_path" "$agent_message" "$session_id" "$dispatch_count" "$provider" "$session_seeded" "$permission_mode" "$model" || return 1
 
   # Launch a detached worker process so the dispatch survives after this CLI exits.
   nohup "$CLAWDAD_ROOT/lib/dispatch-worker.sh" \
@@ -201,7 +213,7 @@ dispatch_to_spoke() {
     "$permission_mode" \
     "$model" \
     "$persist_active" \
-    "$message" >/dev/null 2>&1 </dev/null &
+    "$agent_message" >/dev/null 2>&1 </dev/null &
   local bg_pid=$!
 
   mailbox_update_status "$project_path" "running" "$request_id" "$bg_pid" "" "$session_id"
@@ -241,13 +253,18 @@ _dispatch_background() {
       kill -TERM "$_CLAWDAD_DISPATCH_CHILD_PID" 2>/dev/null || true
     fi
     local error_msg="${_CLAWDAD_DISPATCH_ERROR:-dispatch worker exited before completing (exit ${exit_code})}"
+    local completed_at
+    completed_at="$(iso_timestamp)"
     mailbox_write_response "$_CLAWDAD_DISPATCH_PROJECT_PATH" "$_CLAWDAD_DISPATCH_REQUEST_ID" "$_CLAWDAD_DISPATCH_SESSION_ID" "${exit_code:-1}" "$error_msg" || true
-    history_update_result "$_CLAWDAD_DISPATCH_PROJECT_PATH" "$_CLAWDAD_DISPATCH_REQUEST_ID" "$_CLAWDAD_DISPATCH_SESSION_ID" "$_CLAWDAD_DISPATCH_SLUG" "$_CLAWDAD_DISPATCH_PROVIDER" "failed" "${exit_code:-1}" "$(iso_timestamp)" "$error_msg" || \
+    history_update_result "$_CLAWDAD_DISPATCH_PROJECT_PATH" "$_CLAWDAD_DISPATCH_REQUEST_ID" "$_CLAWDAD_DISPATCH_SESSION_ID" "$_CLAWDAD_DISPATCH_SLUG" "$_CLAWDAD_DISPATCH_PROVIDER" "failed" "${exit_code:-1}" "$completed_at" "$error_msg" || \
       clawdad_log "history warning: failed to write abandoned response record for $_CLAWDAD_DISPATCH_SLUG request_id=$_CLAWDAD_DISPATCH_REQUEST_ID"
     mailbox_update_status "$_CLAWDAD_DISPATCH_PROJECT_PATH" "failed" "$_CLAWDAD_DISPATCH_REQUEST_ID" "" "$error_msg" "$_CLAWDAD_DISPATCH_SESSION_ID" || true
     registry_update "$_CLAWDAD_DISPATCH_PROJECT_PATH" "status" "failed" || true
+    registry_update "$_CLAWDAD_DISPATCH_PROJECT_PATH" "last_response" "$completed_at" || true
+    registry_increment "$_CLAWDAD_DISPATCH_PROJECT_PATH" "dispatch_count" || true
     state_update_session "$_CLAWDAD_DISPATCH_PROJECT_PATH" "$_CLAWDAD_DISPATCH_SESSION_ID" "status" "failed" || true
-    state_update_session "$_CLAWDAD_DISPATCH_PROJECT_PATH" "$_CLAWDAD_DISPATCH_SESSION_ID" "last_response" "$(iso_timestamp)" || true
+    state_update_session "$_CLAWDAD_DISPATCH_PROJECT_PATH" "$_CLAWDAD_DISPATCH_SESSION_ID" "last_response" "$completed_at" || true
+    state_increment_session "$_CLAWDAD_DISPATCH_PROJECT_PATH" "$_CLAWDAD_DISPATCH_SESSION_ID" "dispatch_count" || true
     clawdad_log "dispatch abandoned: slug=$_CLAWDAD_DISPATCH_SLUG provider=$_CLAWDAD_DISPATCH_PROVIDER request_id=$_CLAWDAD_DISPATCH_REQUEST_ID exit=${exit_code:-1} error=$error_msg"
     return "$exit_code"
   }
@@ -269,6 +286,12 @@ _dispatch_background() {
     registry_update "$project_path" "status" "failed"
     return 1
   }
+
+  # Keep Python bytecode/cache writes project-local. Delegated Codex turns often
+  # run syntax checks such as `python -m py_compile`; without this, Python may
+  # inherit a global pycache prefix outside the sandbox and fail unrelated work.
+  export PYTHONPYCACHEPREFIX="${CLAWDAD_PYTHONPYCACHEPREFIX:-$project_path/.clawdad/pycache}"
+  mkdir -p "$PYTHONPYCACHEPREFIX" 2>/dev/null || true
 
   local output exit_code output_file
   output_file=$(mktemp "${TMPDIR:-/tmp}/clawdad-dispatch.${request_id}.XXXXXX") || {

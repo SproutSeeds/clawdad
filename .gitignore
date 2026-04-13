@@ -2,3 +2,20 @@
 ._*
 *.log
 .clawdad/
+.playwright-mcp/
+
+# Local screenshot / visual-iteration scratch.
+clawdad-*.png
+collapsed-*.png
+formatted-*.png
+header-*.png
+session-thread-*.png
+wordmark-*.png
+
+# Generated mascot/contact-sheet candidates kept out of npm releases.
+assets/*-preview.png
+assets/*-sheet*.jpg
+assets/*contact-sheet*.jpg
+assets/*alpha*.png
+assets/*cutout-v*.png
+assets/[0-9a-f]*.jpg

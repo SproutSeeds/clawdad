@@ -17,6 +17,9 @@ const state = {
   modalThread: null,
   summaryModalProject: "",
   projectSummaries: {},
+  artifactModalProject: "",
+  artifactsByProject: {},
+  artifactSharePendingId: "",
   delegateModalProject: "",
   delegatesByProject: {},
   delegateBriefDraft: "",
@@ -24,6 +27,7 @@ const state = {
   delegateBriefPending: false,
   delegatePlanPending: false,
   delegateRunPending: false,
+  delegateRunSummaryPending: false,
   projectModalOpen: false,
   projectModalMode: "existing",
   projectModalRoot: "",
@@ -75,6 +79,7 @@ const elements = {
   detailHistoryList: document.querySelector("#detailHistoryList"),
   projectSummaryButton: document.querySelector("#projectSummaryButton"),
   projectDelegateButton: document.querySelector("#projectDelegateButton"),
+  projectArtifactsButton: document.querySelector("#projectArtifactsButton"),
   projectModal: document.querySelector("#projectModal"),
   projectModalBackdrop: document.querySelector("#projectModalBackdrop"),
   projectModalClose: document.querySelector("#projectModalClose"),
@@ -112,6 +117,14 @@ const elements = {
   summaryState: document.querySelector("#summaryState"),
   summaryList: document.querySelector("#summaryList"),
   summaryRefreshButton: document.querySelector("#summaryRefreshButton"),
+  artifactsModal: document.querySelector("#artifactsModal"),
+  artifactsBackdrop: document.querySelector("#artifactsBackdrop"),
+  artifactsClose: document.querySelector("#artifactsClose"),
+  artifactsProject: document.querySelector("#artifactsProject"),
+  artifactsRoot: document.querySelector("#artifactsRoot"),
+  artifactsState: document.querySelector("#artifactsState"),
+  artifactsList: document.querySelector("#artifactsList"),
+  artifactsRefreshButton: document.querySelector("#artifactsRefreshButton"),
   delegateModal: document.querySelector("#delegateModal"),
   delegateBackdrop: document.querySelector("#delegateBackdrop"),
   delegateClose: document.querySelector("#delegateClose"),
@@ -122,6 +135,10 @@ const elements = {
   delegateSaveButton: document.querySelector("#delegateSaveButton"),
   delegatePlanButton: document.querySelector("#delegatePlanButton"),
   delegateRunButton: document.querySelector("#delegateRunButton"),
+  delegateSummaryButton: document.querySelector("#delegateSummaryButton"),
+  delegateRunMeta: document.querySelector("#delegateRunMeta"),
+  delegateRunList: document.querySelector("#delegateRunList"),
+  delegateSummaryList: document.querySelector("#delegateSummaryList"),
   delegatePlanList: document.querySelector("#delegatePlanList"),
 };
 
@@ -261,6 +278,7 @@ const headerCatchphrases = {
   swapTimerId: 0,
 };
 let detailHistoryRenderSnapshot = null;
+let delegateRunRenderSnapshot = null;
 const pendingSessionCycle = {
   order: [],
   cursor: 0,
@@ -1312,6 +1330,10 @@ function currentSummaryProject() {
   return projectByPath(state.summaryModalProject) || null;
 }
 
+function currentArtifactsProject() {
+  return projectByPath(state.artifactModalProject) || null;
+}
+
 function currentDelegateProject() {
   return projectByPath(state.delegateModalProject) || null;
 }
@@ -1453,6 +1475,74 @@ function applyDetailHistorySnapshot(snapshot) {
   });
 }
 
+function delegateRunKey(projectPath, runId) {
+  return `${String(projectPath || "").trim()}::${String(runId || "").trim()}`;
+}
+
+function delegateRunRenderSignature(runLog) {
+  const eventsSignature = Array.isArray(runLog?.events)
+    ? runLog.events
+        .map((event) =>
+          [
+            String(event?.id || ""),
+            String(event?.at || ""),
+            String(event?.type || ""),
+            String(event?.step || ""),
+            String(event?.state || ""),
+            String(event?.summary || "").length,
+            String(event?.text || "").length,
+            String(event?.error || "").length,
+          ].join("~"),
+        )
+        .join("|")
+    : "";
+
+  return JSON.stringify({
+    error: String(runLog?.error || ""),
+    loading: Boolean(runLog?.loading),
+    initialized: Boolean(runLog?.initialized),
+    nextCursor: String(runLog?.nextCursor || ""),
+    total: Number(runLog?.total || 0),
+    events: eventsSignature,
+  });
+}
+
+function captureDelegateRunSnapshot(runKey, mode = "smart") {
+  if (!runKey || !elements.delegateRunList) {
+    return null;
+  }
+
+  const { scrollTop, scrollHeight, clientHeight } = elements.delegateRunList;
+  return {
+    runKey,
+    mode,
+    previousTop: scrollTop,
+    previousHeight: scrollHeight,
+    nearBottom: scrollHeight - clientHeight - scrollTop < 72,
+  };
+}
+
+function applyDelegateRunSnapshot(snapshot) {
+  if (!snapshot || !elements.delegateRunList) {
+    return;
+  }
+
+  window.requestAnimationFrame(() => {
+    const project = currentDelegateProject();
+    const runId = delegateStateFor(project?.path || "").runLog?.runId || "";
+    if (delegateRunKey(project?.path || "", runId) !== snapshot.runKey) {
+      return;
+    }
+
+    if (snapshot.mode === "bottom" || snapshot.nearBottom) {
+      elements.delegateRunList.scrollTop = elements.delegateRunList.scrollHeight;
+      return;
+    }
+
+    elements.delegateRunList.scrollTop = snapshot.previousTop;
+  });
+}
+
 function setHistoryState(projectPath, sessionId, nextState) {
   const key = historyKey(projectPath, sessionId);
   state.historyThreads[key] = {
@@ -1483,6 +1573,25 @@ function setProjectSummaryState(projectPath, nextState) {
   };
 }
 
+function artifactsStateFor(projectPath) {
+  return (
+    state.artifactsByProject[projectPath] || {
+      items: [],
+      artifactRoot: "",
+      loading: false,
+      initialized: false,
+      error: "",
+    }
+  );
+}
+
+function setArtifactsState(projectPath, nextState) {
+  state.artifactsByProject[projectPath] = {
+    ...artifactsStateFor(projectPath),
+    ...nextState,
+  };
+}
+
 function delegateStateFor(projectPath) {
   return (
     state.delegatesByProject[projectPath] || {
@@ -1492,6 +1601,17 @@ function delegateStateFor(projectPath) {
       delegateSession: null,
       latestPlanSnapshot: null,
       planSnapshots: [],
+      latestRunSummarySnapshot: null,
+      runSummarySnapshots: [],
+      runLog: {
+        runId: "",
+        events: [],
+        nextCursor: "0",
+        total: 0,
+        loading: false,
+        initialized: false,
+        error: "",
+      },
       loading: false,
       initialized: false,
       error: "",
@@ -1503,6 +1623,32 @@ function setDelegateState(projectPath, nextState) {
   state.delegatesByProject[projectPath] = {
     ...delegateStateFor(projectPath),
     ...nextState,
+  };
+}
+
+function delegatePayloadState(projectPath, payload = {}, { briefFallback = "" } = {}) {
+  const existing = delegateStateFor(projectPath);
+  const hasBrief = Object.prototype.hasOwnProperty.call(payload, "brief");
+  return {
+    loading: false,
+    initialized: true,
+    error: "",
+    config: payload.config || existing.config || null,
+    brief: hasBrief ? String(payload.brief || "") : String(briefFallback || existing.brief || ""),
+    status: payload.status ? normalizeDelegateStatus(payload.status) : existing.status,
+    delegateSession: payload.delegateSession || existing.delegateSession,
+    latestPlanSnapshot: payload.latestPlanSnapshot
+      ? normalizeDelegatePlanSnapshot(payload.latestPlanSnapshot)
+      : existing.latestPlanSnapshot,
+    planSnapshots: Array.isArray(payload.planSnapshots)
+      ? payload.planSnapshots.map(normalizeDelegatePlanSnapshot)
+      : existing.planSnapshots,
+    latestRunSummarySnapshot: payload.latestRunSummarySnapshot
+      ? normalizeDelegateRunSummarySnapshot(payload.latestRunSummarySnapshot)
+      : existing.latestRunSummarySnapshot,
+    runSummarySnapshots: Array.isArray(payload.runSummarySnapshots)
+      ? payload.runSummarySnapshots.map(normalizeDelegateRunSummarySnapshot)
+      : existing.runSummarySnapshots,
   };
 }
 
@@ -1627,6 +1773,38 @@ function normalizeDelegatePlanSnapshot(snapshot) {
     sourceEntryCount: Number.parseInt(String(snapshot?.sourceEntryCount || "0"), 10) || 0,
     summarySnapshotAt: String(snapshot?.summarySnapshotAt || "").trim() || null,
     plan: String(snapshot?.plan || ""),
+  };
+}
+
+function normalizeDelegateRunEvent(event) {
+  const step = Number.parseInt(String(event?.step || "0"), 10) || null;
+  return {
+    id: String(event?.id || "").trim() || makeEntryId(),
+    at: String(event?.at || event?.createdAt || "").trim() || null,
+    type: String(event?.type || "event").trim() || "event",
+    runId: String(event?.runId || "").trim() || null,
+    step,
+    requestId: String(event?.requestId || event?.request_id || "").trim() || null,
+    title: String(event?.title || "").trim(),
+    text: String(event?.text || "").trim(),
+    summary: String(event?.summary || "").trim(),
+    nextAction: String(event?.nextAction || event?.next_action || "").trim(),
+    state: String(event?.state || "").trim(),
+    stopReason: String(event?.stopReason || event?.stop_reason || "").trim(),
+    error: String(event?.error || "").trim(),
+    computeBudget: normalizeDelegateComputeBudget(event?.computeBudget),
+  };
+}
+
+function normalizeDelegateRunSummarySnapshot(snapshot) {
+  return {
+    id: String(snapshot?.id || "").trim() || makeEntryId(),
+    projectPath: String(snapshot?.projectPath || "").trim() || "",
+    runId: String(snapshot?.runId || "").trim() || null,
+    createdAt: String(snapshot?.createdAt || "").trim() || null,
+    provider: String(snapshot?.provider || "").trim() || "codex",
+    sourceEventCount: Number.parseInt(String(snapshot?.sourceEventCount || "0"), 10) || 0,
+    summary: String(snapshot?.summary || ""),
   };
 }
 
@@ -1804,6 +1982,7 @@ function pruneTrackedArtifacts(projectPath, sessionId = "") {
   }
 
   delete state.projectSummaries[normalizedProjectPath];
+  delete state.artifactsByProject[normalizedProjectPath];
   delete state.delegatesByProject[normalizedProjectPath];
   clearImportableSessionsState(normalizedProjectPath);
 
@@ -1816,6 +1995,10 @@ function pruneTrackedArtifacts(projectPath, sessionId = "") {
   }
   if (state.summaryModalProject === normalizedProjectPath) {
     state.summaryModalProject = "";
+  }
+  if (state.artifactModalProject === normalizedProjectPath) {
+    state.artifactModalProject = "";
+    state.artifactSharePendingId = "";
   }
   if (state.delegateModalProject === normalizedProjectPath) {
     closeDelegateModal();
@@ -2331,6 +2514,7 @@ function updateBodyModalState() {
       Boolean(state.sessionImportModalProject) ||
       state.projectModalOpen ||
       Boolean(state.summaryModalProject) ||
+      Boolean(state.artifactModalProject) ||
       Boolean(state.delegateModalProject) ||
       Boolean(state.sessionTitleModalProject),
   );
@@ -2934,6 +3118,42 @@ function delegateComputeBudgetLabel(budget) {
   return ` • ${remaining}% compute left`;
 }
 
+function delegatePercentText(value) {
+  const numeric = Number.parseFloat(String(value ?? ""));
+  if (!Number.isFinite(numeric)) {
+    return "";
+  }
+
+  const rounded = Math.round(numeric * 10) / 10;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1).replace(/\.0$/u, "");
+}
+
+function delegateComputeBudgetEventText(budget) {
+  const normalized = normalizeDelegateComputeBudget(budget);
+  if (!normalized || normalized.status !== "observed") {
+    return "";
+  }
+  if (normalized.unlimited) {
+    return "Compute appears unlimited right now, so no weekly reserve pressure is visible.";
+  }
+
+  const used = delegatePercentText(normalized.usedPercent);
+  const remaining = delegatePercentText(normalized.remainingPercent);
+  if (!used || !remaining) {
+    return "";
+  }
+
+  const reserve = delegatePercentText(normalized.reservePercent);
+  const reservePhrase = reserve
+    ? Number.isFinite(normalized.remainingPercent) &&
+      Number.isFinite(normalized.reservePercent) &&
+      normalized.remainingPercent <= normalized.reservePercent
+      ? `, with the ${reserve}% reserve now reached.`
+      : `, with the ${reserve}% reserve still protected.`
+    : ".";
+  return `Compute is at ${used}% used, ${remaining}% remaining${reservePhrase}`;
+}
+
 function buildDelegatePlanCard(snapshot) {
   const card = document.createElement("article");
   card.className = "summary-card";
@@ -2966,6 +3186,265 @@ function buildDelegatePlanCard(snapshot) {
 
   card.append(head, body);
   return card;
+}
+
+function delegateRunTypeLabel(type) {
+  const normalized = String(type || "event").trim().replace(/_/g, " ");
+  return normalized
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ") || "Event";
+}
+
+function buildDelegateRunEventCard(event) {
+  const card = document.createElement("article");
+  card.className = `delegate-event-card${event.error ? " failed" : ""}`;
+
+  const computeText = event.text ? "" : delegateComputeBudgetEventText(event.computeBudget);
+  const copyTextValue = [event.summary, event.nextAction ? `Next: ${event.nextAction}` : "", event.text || computeText, event.error]
+    .filter(Boolean)
+    .join("\n\n");
+  if (copyTextValue) {
+    const copyButton = buildCopyButton({
+      copyKey: `delegate-event:${event.id}`,
+      label: "Copy run event",
+      text: copyTextValue,
+    });
+    card.append(copyButton);
+  }
+
+  const head = document.createElement("div");
+  head.className = "delegate-event-head";
+
+  const title = document.createElement("div");
+  title.className = "delegate-event-title";
+  title.textContent = event.title || delegateRunTypeLabel(event.type);
+
+  const metaParts = [
+    formatTimestamp(event.at),
+    event.step ? `step ${event.step}` : "",
+    event.requestId ? sessionFingerprint(event.requestId) : "",
+    event.state || "",
+  ].filter(Boolean);
+  const meta = document.createElement("div");
+  meta.className = "delegate-event-meta";
+  meta.textContent = metaParts.join(" • ");
+
+  head.append(title, meta);
+
+  const body = document.createElement("div");
+  body.className = "thread-text delegate-event-body";
+  const bodyText = [
+    event.summary,
+    event.nextAction ? `**Next:** ${event.nextAction}` : "",
+    event.text || computeText,
+    event.error ? `**Error:** ${event.error}` : "",
+  ].filter(Boolean).join("\n\n");
+  renderRichText(body, bodyText, { emptyText: delegateRunTypeLabel(event.type) });
+
+  card.append(head, body);
+  return card;
+}
+
+function buildDelegateRunSummaryCard(snapshot) {
+  const card = document.createElement("article");
+  card.className = "summary-card delegate-run-summary-card";
+
+  const copyButton = buildCopyButton({
+    copyKey: `delegate-run-summary:${snapshot.id}`,
+    label: "Copy run summary",
+    text: snapshot.summary,
+  });
+  card.append(copyButton);
+
+  const head = document.createElement("div");
+  head.className = "summary-head";
+
+  const timestamp = document.createElement("div");
+  timestamp.className = "summary-timestamp";
+  timestamp.textContent = formatTimestamp(snapshot.createdAt) || "Saved run summary";
+
+  const sourceMeta = document.createElement("div");
+  sourceMeta.className = "summary-source-meta";
+  const sourceCountLabel = `${snapshot.sourceEventCount} event${snapshot.sourceEventCount === 1 ? "" : "s"}`;
+  sourceMeta.textContent = `${providerLabel(snapshot.provider)} • ${sourceCountLabel}`;
+
+  head.append(timestamp, sourceMeta);
+
+  const body = document.createElement("div");
+  body.className = "thread-text";
+  renderRichText(body, snapshot.summary, { emptyText: "No saved run summary yet." });
+
+  card.append(head, body);
+  return card;
+}
+
+function normalizeArtifact(item) {
+  return {
+    id: String(item?.id || "").trim() || makeEntryId(),
+    projectPath: String(item?.projectPath || "").trim(),
+    relativePath: String(item?.relativePath || "").trim(),
+    fileName: String(item?.fileName || item?.relativePath || "file").trim(),
+    size: Number.parseInt(String(item?.size || "0"), 10) || 0,
+    modifiedAt: String(item?.modifiedAt || "").trim() || null,
+    mimeType: String(item?.mimeType || "").trim() || "application/octet-stream",
+    downloadUrl: String(item?.downloadUrl || "").trim(),
+    share: item?.share && typeof item.share === "object"
+      ? {
+          token: String(item.share.token || "").trim(),
+          url: String(item.share.url || "").trim(),
+          createdAt: String(item.share.createdAt || "").trim() || null,
+          expiresAt: String(item.share.expiresAt || "").trim() || null,
+        }
+      : null,
+  };
+}
+
+function formatFileSize(bytes) {
+  const value = Number(bytes || 0);
+  if (!Number.isFinite(value) || value <= 0) {
+    return "0 B";
+  }
+  const units = ["B", "KB", "MB", "GB"];
+  let size = value;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+  return `${size >= 10 || unitIndex === 0 ? Math.round(size) : size.toFixed(1)} ${units[unitIndex]}`;
+}
+
+function buildArtifactCard(artifact) {
+  const card = document.createElement("article");
+  card.className = "artifact-card";
+
+  const head = document.createElement("div");
+  head.className = "artifact-head";
+
+  const name = document.createElement("div");
+  name.className = "artifact-name";
+  name.textContent = artifact.fileName;
+
+  const meta = document.createElement("div");
+  meta.className = "artifact-meta";
+  meta.textContent = [
+    formatFileSize(artifact.size),
+    formatTimestamp(artifact.modifiedAt),
+    artifact.share?.expiresAt ? `shared until ${formatTimestamp(artifact.share.expiresAt)}` : "",
+  ].filter(Boolean).join(" • ");
+
+  head.append(name, meta);
+
+  const pathLabel = document.createElement("div");
+  pathLabel.className = "artifact-path";
+  pathLabel.textContent = artifact.relativePath;
+
+  const actions = document.createElement("div");
+  actions.className = "artifact-actions";
+
+  const download = document.createElement("a");
+  download.className = "artifact-action";
+  download.href = artifact.downloadUrl;
+  download.download = artifact.fileName;
+  download.textContent = "Download";
+
+  const shareKey = `artifact-share:${artifact.id}`;
+  const shareButton = document.createElement("button");
+  shareButton.className = "artifact-action-button";
+  shareButton.type = "button";
+  shareButton.disabled = state.artifactSharePendingId === artifact.id;
+  shareButton.textContent =
+    state.artifactSharePendingId === artifact.id
+      ? "Sharing…"
+      : copyFeedbackActive(shareKey)
+        ? "Copied"
+        : artifact.share?.url
+          ? "Copy public link"
+          : "Create public link";
+  shareButton.addEventListener("click", () => {
+    if (artifact.share?.url) {
+      void copyText(artifact.share.url)
+        .then(() => {
+          markCopied(shareKey);
+        })
+        .catch(showError);
+      return;
+    }
+    void shareArtifact(artifact);
+  });
+
+  actions.append(download, shareButton);
+
+  if (artifact.share?.token) {
+    const revokeButton = document.createElement("button");
+    revokeButton.className = "artifact-action-button is-quiet";
+    revokeButton.type = "button";
+    revokeButton.disabled = state.artifactSharePendingId === artifact.id;
+    revokeButton.textContent = "Revoke";
+    revokeButton.addEventListener("click", () => {
+      void revokeArtifactShare(artifact);
+    });
+    actions.append(revokeButton);
+  }
+
+  card.append(head, pathLabel, actions);
+  return card;
+}
+
+function renderArtifactsModal() {
+  const project = currentArtifactsProject();
+  if (!project) {
+    setText(elements.artifactsState, "", { empty: true });
+    clearNode(elements.artifactsList);
+    elements.artifactsModal.hidden = true;
+    return;
+  }
+
+  const artifactState = artifactsStateFor(project.path);
+  elements.artifactsProject.textContent = project.displayName || project.slug || fallbackProjectLabel(project.path);
+  elements.artifactsRoot.textContent =
+    artifactState.artifactRoot || `${project.path}/.clawdad/artifacts`;
+  const refreshLabel = elements.artifactsRefreshButton.querySelector(".button-text");
+  if (refreshLabel) {
+    refreshLabel.textContent = artifactState.loading ? "Loading…" : "Refresh";
+  }
+  elements.artifactsRefreshButton.disabled = artifactState.loading;
+
+  if (artifactState.loading && !artifactState.initialized) {
+    setText(elements.artifactsState, "Loading files", { empty: false });
+  } else if (artifactState.error) {
+    setText(elements.artifactsState, artifactState.error, { empty: false });
+  } else if (artifactState.items.length > 0) {
+    setText(elements.artifactsState, `${artifactState.items.length} file${artifactState.items.length === 1 ? "" : "s"}`, { empty: false });
+  } else {
+    setText(elements.artifactsState, "No files yet", { empty: false });
+  }
+
+  clearNode(elements.artifactsList);
+  if (artifactState.loading && !artifactState.initialized) {
+    const card = document.createElement("div");
+    card.className = "history-state-card";
+    card.textContent = "Looking for files…";
+    elements.artifactsList.append(card);
+  } else if (artifactState.error) {
+    const card = document.createElement("div");
+    card.className = "history-state-card";
+    card.textContent = artifactState.error;
+    elements.artifactsList.append(card);
+  } else if (artifactState.items.length === 0) {
+    const card = document.createElement("div");
+    card.className = "history-state-card";
+    card.textContent = "Files agents save into .clawdad/artifacts will show up here.";
+    elements.artifactsList.append(card);
+  } else {
+    for (const artifact of artifactState.items) {
+      elements.artifactsList.append(buildArtifactCard(artifact));
+    }
+  }
+
+  elements.artifactsModal.hidden = false;
 }
 
 function renderSummaryModal() {
@@ -3052,7 +3531,12 @@ function renderDelegateModal() {
   const project = currentDelegateProject();
   if (!project) {
     setText(elements.delegateState, "", { empty: true });
+    clearNode(elements.delegateRunList);
+    clearNode(elements.delegateSummaryList);
     clearNode(elements.delegatePlanList);
+    if (elements.delegateRunMeta) {
+      elements.delegateRunMeta.textContent = "";
+    }
     elements.delegateModal.hidden = true;
     return;
   }
@@ -3061,6 +3545,11 @@ function renderDelegateModal() {
   const status = delegateState.status;
   const latestPlan = delegateState.latestPlanSnapshot;
   const delegateSession = delegateState.delegateSession;
+  const runLog = delegateState.runLog || {};
+  const runId = runLog.runId || status?.runId || "";
+  const runSummarySnapshots = Array.isArray(delegateState.runSummarySnapshots)
+    ? delegateState.runSummarySnapshots
+    : [];
 
   elements.delegateProject.textContent =
     project.displayName || project.slug || fallbackProjectLabel(project.path);
@@ -3099,6 +3588,9 @@ function renderDelegateModal() {
     status?.state === "running";
   elements.delegateRunButton.disabled =
     state.delegatePlanPending || state.delegateRunPending || !project.path;
+  elements.delegateSummaryButton.disabled =
+    state.delegateRunSummaryPending || !runId || (runLog.events || []).length === 0;
+  elements.delegateSummaryButton.classList.toggle("is-loading", state.delegateRunSummaryPending);
 
   const desiredBrief = state.delegateBriefDirty ? state.delegateBriefDraft : delegateState.brief || "";
   if (
@@ -3151,6 +3643,71 @@ function renderDelegateModal() {
     );
   } else {
     setText(elements.delegateState, "No saved delegate plan yet", { empty: false });
+  }
+
+  const eventCount = Array.isArray(runLog.events) ? runLog.events.length : 0;
+  if (elements.delegateRunMeta) {
+    const runMetaParts = [
+      runId ? `run ${sessionFingerprint(runId)}` : "",
+      eventCount > 0 ? `${eventCount}/${runLog.total || eventCount}` : "",
+    ].filter(Boolean);
+    elements.delegateRunMeta.textContent = runMetaParts.join(" • ");
+  }
+
+  const runKey = delegateRunKey(project.path, runId);
+  const renderKey = delegateRunRenderSignature(runLog);
+  const existingRunKey = elements.delegateRunList.dataset.runKey || "";
+  const existingRenderKey = elements.delegateRunList.dataset.renderKey || "";
+  if (existingRunKey !== runKey || existingRenderKey !== renderKey) {
+    const scrollSnapshot =
+      delegateRunRenderSnapshot?.runKey === runKey
+        ? delegateRunRenderSnapshot
+        : existingRunKey === runKey
+          ? captureDelegateRunSnapshot(runKey, "smart")
+          : null;
+    delegateRunRenderSnapshot = null;
+
+    clearNode(elements.delegateRunList);
+    if (!runLog.initialized && runLog.loading) {
+      const card = document.createElement("div");
+      card.className = "history-state-card";
+      card.textContent = "Loading run log…";
+      elements.delegateRunList.append(card);
+    } else if (runLog.error) {
+      const card = document.createElement("div");
+      card.className = "history-state-card";
+      card.textContent = runLog.error;
+      elements.delegateRunList.append(card);
+    } else if (!runId) {
+      const card = document.createElement("div");
+      card.className = "history-state-card";
+      card.textContent = "No delegate run yet.";
+      elements.delegateRunList.append(card);
+    } else if (eventCount === 0) {
+      const card = document.createElement("div");
+      card.className = "history-state-card";
+      card.textContent = runLog.loading ? "Waiting for run events…" : "No run events yet.";
+      elements.delegateRunList.append(card);
+    } else {
+      for (const event of runLog.events) {
+        elements.delegateRunList.append(buildDelegateRunEventCard(event));
+      }
+    }
+    elements.delegateRunList.dataset.runKey = runKey;
+    elements.delegateRunList.dataset.renderKey = renderKey;
+    applyDelegateRunSnapshot(scrollSnapshot);
+  }
+
+  clearNode(elements.delegateSummaryList);
+  if (state.delegateRunSummaryPending && runSummarySnapshots.length === 0) {
+    const card = document.createElement("div");
+    card.className = "history-state-card";
+    card.textContent = "Writing run summary…";
+    elements.delegateSummaryList.append(card);
+  } else {
+    for (const snapshot of runSummarySnapshots.slice(0, 3)) {
+      elements.delegateSummaryList.append(buildDelegateRunSummaryCard(snapshot));
+    }
   }
 
   clearNode(elements.delegatePlanList);
@@ -3274,6 +3831,10 @@ function updateDelegateButtonAvailability() {
   elements.projectDelegateButton.disabled = state.projectsLoading || !state.selectedProject;
 }
 
+function updateArtifactsButtonAvailability() {
+  elements.projectArtifactsButton.disabled = state.projectsLoading || !state.selectedProject;
+}
+
 function updateImportButtonAvailability() {
   const projectPath = state.selectedProject;
   const importState = importableSessionsStateFor(projectPath);
@@ -3317,6 +3878,7 @@ function renderAll() {
   renderSessionImportModal();
   renderSessionTitleModal();
   renderSummaryModal();
+  renderArtifactsModal();
   renderDelegateModal();
   renderProjectModal();
   updateMailboxState();
@@ -3326,6 +3888,7 @@ function renderAll() {
   updateImportButtonAvailability();
   updateSessionRenameAvailability();
   updateSummaryButtonAvailability();
+  updateArtifactsButtonAvailability();
   updateDelegateButtonAvailability();
   updateQueueChrome();
   updateBodyModalState();
@@ -3804,6 +4367,7 @@ async function openSessionThread(projectPath = state.selectedProject, sessionId 
 
   state.sessionImportModalProject = "";
   state.summaryModalProject = "";
+  state.artifactModalProject = "";
   state.delegateModalProject = "";
   state.sessionTitleModalProject = "";
   state.sessionTitleModalSessionId = "";
@@ -3902,6 +4466,7 @@ async function openProjectSummary(projectPath = state.selectedProject) {
   state.modalThread = null;
   state.projectModalOpen = false;
   state.sessionImportModalProject = "";
+  state.artifactModalProject = "";
   state.delegateModalProject = "";
   state.sessionTitleModalProject = "";
   state.sessionTitleModalSessionId = "";
@@ -3913,6 +4478,150 @@ async function openProjectSummary(projectPath = state.selectedProject) {
 function closeProjectSummary() {
   state.summaryModalProject = "";
   renderAll();
+}
+
+async function loadProjectArtifacts(projectPath, { force = false } = {}) {
+  if (!projectPath) {
+    return artifactsStateFor(projectPath);
+  }
+
+  const existing = artifactsStateFor(projectPath);
+  if (existing.loading) {
+    return existing;
+  }
+  if (!force && existing.initialized) {
+    return existing;
+  }
+
+  setArtifactsState(projectPath, {
+    loading: true,
+    error: "",
+  });
+  renderAll();
+
+  try {
+    const payload = await fetchJson(`/v1/artifacts?project=${encodeURIComponent(projectPath)}`);
+    setArtifactsState(projectPath, {
+      loading: false,
+      initialized: true,
+      error: "",
+      artifactRoot: String(payload.artifactRoot || ""),
+      items: Array.isArray(payload.artifacts) ? payload.artifacts.map(normalizeArtifact) : [],
+    });
+  } catch (error) {
+    setArtifactsState(projectPath, {
+      loading: false,
+      initialized: true,
+      error: error.message,
+    });
+  }
+
+  renderAll();
+  return artifactsStateFor(projectPath);
+}
+
+async function openArtifactsModal(projectPath = state.selectedProject) {
+  if (!projectPath) {
+    return;
+  }
+
+  state.modalThread = null;
+  state.projectModalOpen = false;
+  state.sessionImportModalProject = "";
+  state.summaryModalProject = "";
+  state.delegateModalProject = "";
+  state.sessionTitleModalProject = "";
+  state.sessionTitleModalSessionId = "";
+  state.artifactModalProject = projectPath;
+  state.artifactSharePendingId = "";
+  renderAll();
+  await loadProjectArtifacts(projectPath, { force: true });
+}
+
+function closeArtifactsModal() {
+  state.artifactModalProject = "";
+  state.artifactSharePendingId = "";
+  renderAll();
+}
+
+async function shareArtifact(artifact) {
+  const project = currentArtifactsProject();
+  if (!project?.path || !artifact?.relativePath || state.artifactSharePendingId) {
+    return;
+  }
+
+  state.artifactSharePendingId = artifact.id;
+  renderAll();
+
+  try {
+    const payload = await fetchJson("/v1/artifacts/share", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        project: project.path,
+        file: artifact.relativePath,
+      }),
+    });
+    const items = Array.isArray(payload.artifacts) ? payload.artifacts.map(normalizeArtifact) : [];
+    setArtifactsState(project.path, {
+      loading: false,
+      initialized: true,
+      error: "",
+      items,
+    });
+    if (payload.share?.url) {
+      await copyText(payload.share.url);
+      markCopied(`artifact-share:${artifact.id}`);
+    }
+  } catch (error) {
+    setArtifactsState(project.path, {
+      error: error.message,
+    });
+    showError(error);
+  } finally {
+    state.artifactSharePendingId = "";
+    renderAll();
+  }
+}
+
+async function revokeArtifactShare(artifact) {
+  const project = currentArtifactsProject();
+  if (!project?.path || !artifact?.relativePath || state.artifactSharePendingId) {
+    return;
+  }
+
+  state.artifactSharePendingId = artifact.id;
+  renderAll();
+
+  try {
+    const payload = await fetchJson("/v1/artifacts/revoke", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        project: project.path,
+        token: artifact.share?.token,
+        file: artifact.relativePath,
+      }),
+    });
+    setArtifactsState(project.path, {
+      loading: false,
+      initialized: true,
+      error: "",
+      items: Array.isArray(payload.artifacts) ? payload.artifacts.map(normalizeArtifact) : [],
+    });
+  } catch (error) {
+    setArtifactsState(project.path, {
+      error: error.message,
+    });
+    showError(error);
+  } finally {
+    state.artifactSharePendingId = "";
+    renderAll();
+  }
 }
 
 function closeSessionTitleModal() {
@@ -3940,6 +4649,7 @@ async function openSessionImportModal(projectPath = state.selectedProject) {
   state.modalThread = null;
   state.projectModalOpen = false;
   state.summaryModalProject = "";
+  state.artifactModalProject = "";
   state.delegateModalProject = "";
   state.sessionTitleModalProject = "";
   state.sessionTitleModalSessionId = "";
@@ -3966,6 +4676,7 @@ function openSessionTitleModal(projectPath = state.selectedProject, sessionId = 
   state.projectModalOpen = false;
   state.sessionImportModalProject = "";
   state.summaryModalProject = "";
+  state.artifactModalProject = "";
   state.delegateModalProject = "";
   state.sessionTitleModalProject = project.path;
   state.sessionTitleModalSessionId = session.sessionId;
@@ -4249,6 +4960,111 @@ async function requestNewProjectSummary() {
   renderAll();
 }
 
+function mergeDelegateRunEvents(existingEvents = [], incomingEvents = []) {
+  const eventsById = new Map();
+  for (const event of [...existingEvents, ...incomingEvents]) {
+    if (!event?.id) {
+      continue;
+    }
+    eventsById.set(event.id, event);
+  }
+  return [...eventsById.values()].sort((left, right) => {
+    const leftMs = Date.parse(left.at || "");
+    const rightMs = Date.parse(right.at || "");
+    return (Number.isFinite(leftMs) ? leftMs : 0) - (Number.isFinite(rightMs) ? rightMs : 0);
+  });
+}
+
+async function loadDelegateRunLog(projectPath, { force = false, reset = false } = {}) {
+  if (!projectPath) {
+    return delegateStateFor(projectPath).runLog;
+  }
+
+  const existing = delegateStateFor(projectPath);
+  const statusRunId = existing.status?.runId || "";
+  const existingRunId = existing.runLog?.runId || "";
+  const runId = statusRunId || existingRunId;
+  if (!runId) {
+    setDelegateState(projectPath, {
+      runLog: {
+        runId: "",
+        events: [],
+        nextCursor: "0",
+        total: 0,
+        loading: false,
+        initialized: true,
+        error: "",
+      },
+    });
+    return delegateStateFor(projectPath).runLog;
+  }
+
+  if (existing.runLog?.loading) {
+    return existing.runLog;
+  }
+  const runChanged = Boolean(existingRunId && existingRunId !== runId);
+  const shouldReset = reset || runChanged;
+  if (
+    !force &&
+    existing.runLog?.initialized &&
+    !runChanged &&
+    String(existing.runLog?.nextCursor || "0") === String(existing.runLog?.total || 0)
+  ) {
+    return existing.runLog;
+  }
+
+  setDelegateState(projectPath, {
+    runLog: {
+      ...(existing.runLog || {}),
+      runId,
+      loading: true,
+      error: "",
+    },
+  });
+  renderAll();
+
+  try {
+    const cursor = shouldReset ? "0" : String(existing.runLog?.nextCursor || "0");
+    const payload = await fetchJson(
+      `/v1/delegate/run-log?project=${encodeURIComponent(projectPath)}&runId=${encodeURIComponent(runId)}&cursor=${encodeURIComponent(cursor)}`,
+    );
+    const incomingEvents = Array.isArray(payload.events)
+      ? payload.events.map(normalizeDelegateRunEvent)
+      : [];
+    const keptEvents = shouldReset ? [] : existing.runLog?.events || [];
+    setDelegateState(projectPath, {
+      latestRunSummarySnapshot: payload.latestRunSummarySnapshot
+        ? normalizeDelegateRunSummarySnapshot(payload.latestRunSummarySnapshot)
+        : delegateStateFor(projectPath).latestRunSummarySnapshot,
+      runSummarySnapshots: Array.isArray(payload.runSummarySnapshots)
+        ? payload.runSummarySnapshots.map(normalizeDelegateRunSummarySnapshot)
+        : delegateStateFor(projectPath).runSummarySnapshots,
+      runLog: {
+        runId: String(payload.runId || runId),
+        events: mergeDelegateRunEvents(keptEvents, incomingEvents),
+        nextCursor: String(payload.nextCursor || "0"),
+        total: Number.parseInt(String(payload.total || "0"), 10) || 0,
+        loading: false,
+        initialized: true,
+        error: "",
+      },
+    });
+  } catch (error) {
+    setDelegateState(projectPath, {
+      runLog: {
+        ...(delegateStateFor(projectPath).runLog || {}),
+        runId,
+        loading: false,
+        initialized: true,
+        error: error.message,
+      },
+    });
+  }
+
+  renderAll();
+  return delegateStateFor(projectPath).runLog;
+}
+
 async function loadDelegateProject(projectPath, { force = false } = {}) {
   if (!projectPath) {
     return delegateStateFor(projectPath);
@@ -4270,20 +5086,15 @@ async function loadDelegateProject(projectPath, { force = false } = {}) {
 
   try {
     const payload = await fetchJson(`/v1/delegate?project=${encodeURIComponent(projectPath)}`);
+    const previousRunId = delegateStateFor(projectPath).runLog?.runId || "";
+    const nextStatus = payload.status ? normalizeDelegateStatus(payload.status) : null;
     setDelegateState(projectPath, {
-      loading: false,
-      initialized: true,
-      error: "",
-      config: payload.config || null,
-      brief: String(payload.brief || ""),
-      status: payload.status ? normalizeDelegateStatus(payload.status) : null,
-      delegateSession: payload.delegateSession || null,
-      latestPlanSnapshot: payload.latestPlanSnapshot
-        ? normalizeDelegatePlanSnapshot(payload.latestPlanSnapshot)
-        : null,
-      planSnapshots: Array.isArray(payload.planSnapshots)
-        ? payload.planSnapshots.map(normalizeDelegatePlanSnapshot)
-        : [],
+      ...delegatePayloadState(projectPath, payload),
+      status: nextStatus,
+    });
+    await loadDelegateRunLog(projectPath, {
+      force: true,
+      reset: Boolean(nextStatus?.runId && nextStatus.runId !== previousRunId),
     });
   } catch (error) {
     setDelegateState(projectPath, {
@@ -4306,12 +5117,14 @@ async function openDelegateModal(projectPath = state.selectedProject) {
   state.projectModalOpen = false;
   state.sessionImportModalProject = "";
   state.summaryModalProject = "";
+  state.artifactModalProject = "";
   state.sessionTitleModalProject = "";
   state.sessionTitleModalSessionId = "";
   state.delegateModalProject = projectPath;
   state.delegateBriefPending = false;
   state.delegatePlanPending = false;
   state.delegateRunPending = false;
+  state.delegateRunSummaryPending = false;
   state.delegateBriefDirty = false;
   state.delegateBriefDraft = "";
   renderAll();
@@ -4325,6 +5138,8 @@ function closeDelegateModal() {
   state.delegateBriefPending = false;
   state.delegatePlanPending = false;
   state.delegateRunPending = false;
+  state.delegateRunSummaryPending = false;
+  delegateRunRenderSnapshot = null;
   renderAll();
 }
 
@@ -4350,21 +5165,7 @@ async function saveDelegateBrief({ quiet = false } = {}) {
       }),
     });
 
-    setDelegateState(project.path, {
-      loading: false,
-      initialized: true,
-      error: "",
-      config: payload.config || null,
-      brief: String(payload.brief || brief),
-      status: payload.status ? normalizeDelegateStatus(payload.status) : delegateStateFor(project.path).status,
-      delegateSession: payload.delegateSession || delegateStateFor(project.path).delegateSession,
-      latestPlanSnapshot: payload.latestPlanSnapshot
-        ? normalizeDelegatePlanSnapshot(payload.latestPlanSnapshot)
-        : delegateStateFor(project.path).latestPlanSnapshot,
-      planSnapshots: Array.isArray(payload.planSnapshots)
-        ? payload.planSnapshots.map(normalizeDelegatePlanSnapshot)
-        : delegateStateFor(project.path).planSnapshots,
-    });
+    setDelegateState(project.path, delegatePayloadState(project.path, payload, { briefFallback: brief }));
     state.delegateBriefDraft = String(payload.brief || brief);
     state.delegateBriefDirty = false;
     renderAll();
@@ -4418,21 +5219,7 @@ async function requestDelegatePlan() {
       }),
     });
 
-    setDelegateState(project.path, {
-      loading: false,
-      initialized: true,
-      error: "",
-      config: payload.config || delegateStateFor(project.path).config,
-      brief: String(payload.brief || delegateStateFor(project.path).brief || ""),
-      status: payload.status ? normalizeDelegateStatus(payload.status) : delegateStateFor(project.path).status,
-      delegateSession: payload.delegateSession || delegateStateFor(project.path).delegateSession,
-      latestPlanSnapshot: payload.latestPlanSnapshot
-        ? normalizeDelegatePlanSnapshot(payload.latestPlanSnapshot)
-        : delegateStateFor(project.path).latestPlanSnapshot,
-      planSnapshots: Array.isArray(payload.planSnapshots)
-        ? payload.planSnapshots.map(normalizeDelegatePlanSnapshot)
-        : delegateStateFor(project.path).planSnapshots,
-    });
+    setDelegateState(project.path, delegatePayloadState(project.path, payload));
   } catch (error) {
     setDelegateState(project.path, {
       error: error.message,
@@ -4482,20 +5269,10 @@ async function toggleDelegateRun() {
       }),
     });
 
-    setDelegateState(project.path, {
-      loading: false,
-      initialized: true,
-      error: "",
-      config: payload.config || delegateStateFor(project.path).config,
-      brief: String(payload.brief || delegateStateFor(project.path).brief || ""),
-      status: payload.status ? normalizeDelegateStatus(payload.status) : delegateStateFor(project.path).status,
-      delegateSession: payload.delegateSession || delegateStateFor(project.path).delegateSession,
-      latestPlanSnapshot: payload.latestPlanSnapshot
-        ? normalizeDelegatePlanSnapshot(payload.latestPlanSnapshot)
-        : delegateStateFor(project.path).latestPlanSnapshot,
-      planSnapshots: Array.isArray(payload.planSnapshots)
-        ? payload.planSnapshots.map(normalizeDelegatePlanSnapshot)
-        : delegateStateFor(project.path).planSnapshots,
+    setDelegateState(project.path, delegatePayloadState(project.path, payload));
+    await loadDelegateRunLog(project.path, {
+      force: true,
+      reset: action === "start",
     });
   } catch (error) {
     setDelegateState(project.path, {
@@ -4504,6 +5281,52 @@ async function toggleDelegateRun() {
     showError(error);
   } finally {
     state.delegateRunPending = false;
+    renderAll();
+  }
+}
+
+async function requestDelegateRunSummary() {
+  const project = currentDelegateProject();
+  if (!project?.path || state.delegateRunSummaryPending) {
+    return;
+  }
+
+  const delegateState = delegateStateFor(project.path);
+  const runId = delegateState.runLog?.runId || delegateState.status?.runId || "";
+  if (!runId) {
+    return;
+  }
+
+  state.delegateRunSummaryPending = true;
+  renderAll();
+
+  try {
+    const payload = await fetchJson("/v1/delegate/run-summary", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        project: project.path,
+        runId,
+      }),
+    });
+
+    setDelegateState(project.path, {
+      latestRunSummarySnapshot: payload.latestRunSummarySnapshot
+        ? normalizeDelegateRunSummarySnapshot(payload.latestRunSummarySnapshot)
+        : delegateStateFor(project.path).latestRunSummarySnapshot,
+      runSummarySnapshots: Array.isArray(payload.runSummarySnapshots)
+        ? payload.runSummarySnapshots.map(normalizeDelegateRunSummarySnapshot)
+        : delegateStateFor(project.path).runSummarySnapshots,
+    });
+  } catch (error) {
+    setDelegateState(project.path, {
+      error: error.message,
+    });
+    showError(error);
+  } finally {
+    state.delegateRunSummaryPending = false;
     renderAll();
   }
 }
@@ -4518,6 +5341,7 @@ function setProjectModalMode(mode) {
 async function openProjectModal() {
   state.summaryModalProject = "";
   state.sessionImportModalProject = "";
+  state.artifactModalProject = "";
   state.delegateModalProject = "";
   state.sessionTitleModalProject = "";
   state.sessionTitleModalSessionId = "";
@@ -4837,6 +5661,9 @@ function bindEvents() {
   elements.projectAddButton.addEventListener("click", () => {
     void openProjectModal();
   });
+  elements.projectArtifactsButton.addEventListener("click", () => {
+    void openArtifactsModal();
+  });
   elements.sessionImportButton.addEventListener("click", () => {
     void openSessionImportModal();
   });
@@ -4865,6 +5692,14 @@ function bindEvents() {
   elements.summaryRefreshButton.addEventListener("click", () => {
     void requestNewProjectSummary();
   });
+  elements.artifactsBackdrop.addEventListener("click", closeArtifactsModal);
+  elements.artifactsClose.addEventListener("click", closeArtifactsModal);
+  elements.artifactsRefreshButton.addEventListener("click", () => {
+    const project = currentArtifactsProject();
+    if (project?.path) {
+      void loadProjectArtifacts(project.path, { force: true });
+    }
+  });
   elements.delegateBackdrop.addEventListener("click", closeDelegateModal);
   elements.delegateClose.addEventListener("click", closeDelegateModal);
   elements.delegateSaveButton.addEventListener("click", () => {
@@ -4875,6 +5710,9 @@ function bindEvents() {
   });
   elements.delegateRunButton.addEventListener("click", () => {
     void toggleDelegateRun();
+  });
+  elements.delegateSummaryButton.addEventListener("click", () => {
+    void requestDelegateRunSummary();
   });
   elements.delegateBriefInput.addEventListener("input", (event) => {
     state.delegateBriefDraft = event.target.value;
@@ -5005,6 +5843,10 @@ function bindEvents() {
     }
     if (event.key === "Escape" && state.summaryModalProject) {
       closeProjectSummary();
+      return;
+    }
+    if (event.key === "Escape" && state.artifactModalProject) {
+      closeArtifactsModal();
       return;
     }
     if (event.key === "Escape" && state.delegateModalProject) {

@@ -87,8 +87,9 @@ Options for dispatch:
 Options for delegate-set:
   --file <path>                 Read delegate brief text from a file
   --stdin                       Read delegate brief text from stdin
+  --session <session>           Pin autonomous delegate work to a tracked Codex session by title or id
   --compute-reserve-percent <n> Pause delegate work when weekly Codex compute remaining is at or below n% (default: 10)
-  --max-steps-per-run <n>       Optional safety cap; omit or set 'unlimited' for indefinite semantic runs
+  --max-steps-per-run <n>       Deprecated; ignored unless CLAWDAD_ENABLE_DELEGATE_STEP_CAPS=1
   --json                        Emit the saved delegate payload as JSON
 
 Options for watch:

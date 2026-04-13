@@ -15,6 +15,29 @@ _mailbox_write_file() {
   mv "$tmp" "$target_file"
 }
 
+_mailbox_json_string_or_null() {
+  local value="${1:-null}"
+  if [[ -z "$value" || "$value" == "null" ]]; then
+    printf 'null'
+    return 0
+  fi
+
+  printf '%s' "$value" | "$CLAWDAD_JQ" -Rs .
+}
+
+_mailbox_json_pid_or_null() {
+  local value="${1:-null}"
+  if [[ -z "$value" || "$value" == "null" ]]; then
+    printf 'null'
+    return 0
+  fi
+  if [[ "$value" == <-> ]]; then
+    printf '%s' "$value"
+    return 0
+  fi
+  printf 'null'
+}
+
 mailbox_init() {
   local project_path="$1"
   local mbox
@@ -101,40 +124,49 @@ mailbox_update_status() {
   local ts
   ts="$(iso_timestamp)"
 
-  local dispatched_at="null"
-  local completed_at="null"
+  local dispatched_at=""
+  local completed_at=""
 
   case "$state" in
     dispatched|running)
-      dispatched_at="\"$ts\""
+      dispatched_at="$ts"
       ;;
     completed|failed)
-      completed_at="\"$ts\""
+      completed_at="$ts"
       # Preserve dispatched_at from existing status
       if [[ -f "$mbox/status.json" ]]; then
-        dispatched_at=$("$CLAWDAD_JQ" -r '.dispatched_at // "null"' "$mbox/status.json")
-        [[ "$dispatched_at" != "null" ]] && dispatched_at="\"$dispatched_at\""
+        dispatched_at=$("$CLAWDAD_JQ" -r '.dispatched_at // ""' "$mbox/status.json" 2>/dev/null || printf '')
+        [[ "$dispatched_at" == "null" ]] && dispatched_at=""
       fi
       ;;
   esac
 
-  [[ "$request_id" != "null" ]] && request_id="\"$request_id\""
-  [[ "$error" != "null" ]] && error="\"$error\""
-  [[ "$session_id" != "null" ]] && session_id="\"$session_id\""
+  local request_id_json error_json session_id_json pid_json
+  request_id_json=$(_mailbox_json_string_or_null "$request_id") || return 1
+  error_json=$(_mailbox_json_string_or_null "$error") || return 1
+  session_id_json=$(_mailbox_json_string_or_null "$session_id") || return 1
+  pid_json=$(_mailbox_json_pid_or_null "$pid") || return 1
 
   local payload
-  payload=$(cat <<EOF
-{
-  "state": "$state",
-  "request_id": $request_id,
-  "session_id": $session_id,
-  "dispatched_at": $dispatched_at,
-  "completed_at": $completed_at,
-  "error": $error,
-  "pid": $pid
-}
-EOF
-)
+  payload=$(
+    "$CLAWDAD_JQ" -n \
+      --arg state "$state" \
+      --arg dispatched_at "$dispatched_at" \
+      --arg completed_at "$completed_at" \
+      --argjson request_id "$request_id_json" \
+      --argjson session_id "$session_id_json" \
+      --argjson error "$error_json" \
+      --argjson pid "$pid_json" \
+      '{
+        state: $state,
+        request_id: $request_id,
+        session_id: $session_id,
+        dispatched_at: (if $dispatched_at == "" then null else $dispatched_at end),
+        completed_at: (if $completed_at == "" then null else $completed_at end),
+        error: $error,
+        pid: $pid
+      }'
+  ) || return 1
 
   _mailbox_write_file "$mbox/status.json" "$payload" || return 1
 }
