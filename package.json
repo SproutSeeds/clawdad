@@ -1,6 +1,6 @@
 {
   "name": "clawdad",
-  "version": "0.6.7",
+  "version": "0.6.8",
   "description": "Multi-agent orchestration CLI for AI coding agents. Manages persistent spoke agents across projects using ORP as the canonical data store.",
   "scripts": {
     "test": "node --test test/*.test.mjs"
@@ -42,6 +42,7 @@
     "assets/clawdad-mascot.jpg",
     "assets/clawdad-mascot-app.png",
     "assets/clawdad-app-icon.svg",
+    "assets/clawdad-app-icon-source.txt",
     "assets/clawdad-app-icon-*.png",
     "assets/clawdad-apple-touch-icon.png",
     "assets/clawdad-mascot-cutout.png",
