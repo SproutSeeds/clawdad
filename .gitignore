@@ -12,6 +12,10 @@ header-*.png
 session-thread-*.png
 wordmark-*.png
 
+# Project app icons are checked in even though scratch screenshots use clawdad-*.png names.
+!assets/clawdad-app-icon-*.png
+!assets/clawdad-apple-touch-icon.png
+
 # Generated mascot/contact-sheet candidates kept out of npm releases.
 assets/*-preview.png
 assets/*-sheet*.jpg

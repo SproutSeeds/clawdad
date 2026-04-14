@@ -1,0 +1,70 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="icon-bg" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(512 490) rotate(90) scale(590)">
+      <stop offset="0" stop-color="#21040B"/>
+      <stop offset="0.58" stop-color="#050204"/>
+      <stop offset="1" stop-color="#000000"/>
+    </radialGradient>
+    <radialGradient id="neon-halo" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(560 510) rotate(90) scale(390 420)">
+      <stop offset="0" stop-color="#FF2E6E" stop-opacity="0.7"/>
+      <stop offset="0.5" stop-color="#FF174D" stop-opacity="0.2"/>
+      <stop offset="1" stop-color="#FF174D" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="shell-hot" x1="278" y1="744" x2="824" y2="214" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#680516"/>
+      <stop offset="0.17" stop-color="#B80C2C"/>
+      <stop offset="0.45" stop-color="#FF2C60"/>
+      <stop offset="0.72" stop-color="#FF6B8B"/>
+      <stop offset="1" stop-color="#FF133C"/>
+    </linearGradient>
+    <linearGradient id="shell-deep" x1="386" y1="818" x2="752" y2="328" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#34010B"/>
+      <stop offset="0.42" stop-color="#8E071F"/>
+      <stop offset="1" stop-color="#FF2B5F"/>
+    </linearGradient>
+    <linearGradient id="edge-glow" x1="244" y1="824" x2="880" y2="192" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FF1B52"/>
+      <stop offset="0.48" stop-color="#FF7A9A"/>
+      <stop offset="1" stop-color="#FF1748"/>
+    </linearGradient>
+    <filter id="pink-neon" x="-30%" y="-30%" width="160%" height="160%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="0" stdDeviation="18" flood-color="#FF174F" flood-opacity="0.95"/>
+      <feDropShadow dx="0" dy="0" stdDeviation="46" flood-color="#FF1A58" flood-opacity="0.48"/>
+      <feDropShadow dx="0" dy="20" stdDeviation="22" flood-color="#110004" flood-opacity="0.8"/>
+    </filter>
+  </defs>
+
+  <g>
+    <rect width="1024" height="1024" fill="url(#icon-bg)"/>
+    <circle cx="548" cy="508" r="430" fill="url(#neon-halo)"/>
+    <circle cx="298" cy="822" r="190" fill="#FF174F" opacity="0.12"/>
+
+    <g filter="url(#pink-neon)">
+      <path d="M341.6 842.1C293.3 786.5 277.8 709.4 301 638.4C324.1 567.8 380.7 502.7 457.8 457.4C510.6 426.3 568.3 411.8 625.2 416.9C586.8 465 567.8 518.7 572 576.9C578.9 672.9 642.7 747.1 724.4 808.4C609.6 878.5 442.8 899.9 341.6 842.1Z" fill="url(#shell-deep)"/>
+      <path d="M341.6 842.1C293.3 786.5 277.8 709.4 301 638.4C324.1 567.8 380.7 502.7 457.8 457.4C510.6 426.3 568.3 411.8 625.2 416.9C586.8 465 567.8 518.7 572 576.9C578.9 672.9 642.7 747.1 724.4 808.4C609.6 878.5 442.8 899.9 341.6 842.1Z" stroke="url(#edge-glow)" stroke-width="19" stroke-linejoin="round"/>
+
+      <path d="M489 459.2C534.4 327.9 675 205.7 874.5 159C830 266.4 756.8 347.3 664.4 400.4C603.4 435.4 558.9 482.3 531.6 540.9C521.9 508.8 507.8 481.6 489 459.2Z" fill="url(#shell-hot)"/>
+      <path d="M489 459.2C534.4 327.9 675 205.7 874.5 159C830 266.4 756.8 347.3 664.4 400.4C603.4 435.4 558.9 482.3 531.6 540.9C521.9 508.8 507.8 481.6 489 459.2Z" stroke="url(#edge-glow)" stroke-width="20" stroke-linejoin="round"/>
+
+      <path d="M559.9 551.4C691.1 504.1 832 552.9 924.1 672.7C792.4 708.1 672.6 684.4 574.4 604.5C568.5 587.6 563.6 570 559.9 551.4Z" fill="url(#shell-hot)"/>
+      <path d="M559.9 551.4C691.1 504.1 832 552.9 924.1 672.7C792.4 708.1 672.6 684.4 574.4 604.5C568.5 587.6 563.6 570 559.9 551.4Z" stroke="url(#edge-glow)" stroke-width="20" stroke-linejoin="round"/>
+
+      <path d="M318.9 802.5C370.4 841.8 463.2 845.9 554.3 808.2C471.8 805.3 400.6 770.9 351 707.3" stroke="#FF9CAF" stroke-width="22" stroke-linecap="round" opacity="0.38"/>
+      <path d="M555.6 444.2C617.9 332.1 719.2 246.7 833.5 202.8" stroke="#FFB0BD" stroke-width="23" stroke-linecap="round" opacity="0.42"/>
+      <path d="M632 559.9C727.9 548.7 816.2 580.6 881.7 650.7" stroke="#FFB0BD" stroke-width="22" stroke-linecap="round" opacity="0.38"/>
+      <path d="M418.4 515.3C378.7 557.5 351.8 607.3 340.6 661.8" stroke="#260007" stroke-width="19" stroke-linecap="round" opacity="0.42"/>
+      <path d="M653.8 405.8C703.3 371.7 745.6 330.4 780.6 282.2" stroke="#650015" stroke-width="18" stroke-linecap="round" opacity="0.5"/>
+      <path d="M679.8 609.2C734.5 629.4 789.9 635.4 846.1 627.3" stroke="#620014" stroke-width="18" stroke-linecap="round" opacity="0.48"/>
+    </g>
+
+    <g opacity="0.9">
+      <path d="M376 620C413.6 587.3 449.5 562 491.6 540.3" stroke="#FFCBD3" stroke-width="6" stroke-linecap="round" opacity="0.32"/>
+      <path d="M454.6 766.5C504.7 781.9 552.8 776.4 600.4 750" stroke="#FFCBD3" stroke-width="7" stroke-linecap="round" opacity="0.26"/>
+      <path d="M619.3 371.8C669.3 317.6 725.9 276.4 789.2 248.1" stroke="#FFD7DE" stroke-width="7" stroke-linecap="round" opacity="0.35"/>
+      <path d="M660.8 581.5C723.8 579.8 781.3 594.8 833.4 626.5" stroke="#FFD7DE" stroke-width="7" stroke-linecap="round" opacity="0.32"/>
+    </g>
+
+    <path d="M504.7 517.8C535.3 573.5 548.6 627.1 544.7 678.5" stroke="#0B0002" stroke-width="31" stroke-linecap="round" opacity="0.78"/>
+    <path d="M512 523.6C540.7 582.4 552 637.2 545.9 687.8" stroke="#FF6C8D" stroke-width="9" stroke-linecap="round" opacity="0.54"/>
+  </g>
+</svg>

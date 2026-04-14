@@ -4,20 +4,26 @@
   "description": "Secure tailnet front end for dispatching work into your local Clawdad hub.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#641516",
-  "theme_color": "#842324",
+  "background_color": "#050204",
+  "theme_color": "#050204",
   "icons": [
     {
-      "src": "/assets/clawdad-mascot-app.png?v=20260406b",
-      "sizes": "1024x1024",
+      "src": "/assets/clawdad-app-icon-192.png?v=20260414b",
+      "sizes": "192x192",
       "type": "image/png",
       "purpose": "any maskable"
     },
     {
-      "src": "/assets/clawdad-mascot.jpg?v=20260406b",
-      "sizes": "784x1168",
-      "type": "image/jpeg",
-      "purpose": "any"
+      "src": "/assets/clawdad-app-icon-512.png?v=20260414b",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/assets/clawdad-app-icon-1024.png?v=20260414b",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any maskable"
     }
   ]
 }
