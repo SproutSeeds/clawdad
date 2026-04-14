@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -350,6 +350,149 @@ sleep 10
     assert.equal(state.projects[projectPath].sessions[importSessionId].provider, "codex");
     assert.equal(state.projects[projectPath].sessions[importSessionId].local_only, "true");
 
+    await assert.rejects(readFile(invokedPath, "utf8"), { code: "ENOENT" });
+  } finally {
+    await stopServer(child);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("existing README-only directories can be selected and registered locally", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-local-create-"));
+  const home = path.join(root, "home");
+  const projectRoot = path.join(root, "code");
+  const trackedProjectPath = path.join(projectRoot, "tracked-project");
+  const localProjectPath = path.join(projectRoot, "go-to-market");
+  const configPath = path.join(root, "server.json");
+  const mockBinPath = path.join(root, "clawdad-mock");
+  const invokedPath = path.join(root, "clawdad-invoked");
+
+  await mkdir(path.join(trackedProjectPath, ".clawdad", "mailbox"), { recursive: true });
+  await mkdir(localProjectPath, { recursive: true });
+  await mkdir(home, { recursive: true });
+  await writeFile(path.join(localProjectPath, "README.md"), "# Go to Market\n", "utf8");
+  const canonicalProjectRoot = await realpath(projectRoot);
+  const canonicalLocalProjectPath = await realpath(localProjectPath);
+  await writeFile(
+    path.join(home, "state.json"),
+    JSON.stringify(
+      {
+        version: 3,
+        orp_workspace: "main",
+        projects: {
+          [trackedProjectPath]: {
+            status: "idle",
+            last_dispatch: null,
+            last_response: null,
+            dispatch_count: 0,
+            registered_at: "2026-04-14T00:00:00Z",
+            active_session_id: "tracked-session",
+            sessions: {
+              "tracked-session": {
+                slug: "tracked-project",
+                provider: "codex",
+                provider_session_seeded: "false",
+                tracked_at: "2026-04-14T00:00:00Z",
+                last_selected_at: null,
+                dispatch_count: 0,
+                last_dispatch: null,
+                last_response: null,
+                status: "idle",
+                local_only: "true",
+                orp_error: "ORP notes limit",
+              },
+            },
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    mockBinPath,
+    `#!/bin/sh
+printf invoked > ${JSON.stringify(invokedPath)}
+sleep 10
+`,
+    "utf8",
+  );
+  await chmod(mockBinPath, 0o755);
+
+  const port = await freePort();
+  await writeFile(
+    configPath,
+    JSON.stringify(
+      {
+        host: "127.0.0.1",
+        port,
+        defaultProject: trackedProjectPath,
+        authMode: "tailscale",
+        allowedUsers: ["tester@example.com"],
+        projectRoots: [projectRoot],
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  const child = spawn(process.execPath, [serverScript, "serve", "--config", configPath], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      CLAWDAD_HOME: home,
+      CLAWDAD_BIN_PATH: mockBinPath,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const stderr = [];
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => stderr.push(chunk));
+
+  try {
+    const baseUrl = `http://127.0.0.1:${port}`;
+    await waitForHealth(baseUrl, child);
+
+    const rootsResponse = await fetch(`${baseUrl}/v1/project-roots`, {
+      headers: {
+        "tailscale-user-login": "tester@example.com",
+      },
+    });
+    assert.equal(rootsResponse.status, 200, stderr.join(""));
+    const rootsPayload = await rootsResponse.json();
+    const rootEntry = rootsPayload.roots.find((entry) => entry.path === canonicalProjectRoot);
+    assert.ok(rootEntry, "expected configured project root");
+    assert.ok(
+      rootEntry.repos.some((repo) => repo.path === canonicalLocalProjectPath && repo.name === "go-to-market"),
+      "expected README-only go-to-market directory in repo picker",
+    );
+
+    const createResponse = await fetch(`${baseUrl}/v1/projects`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "tailscale-user-login": "tester@example.com",
+      },
+      body: JSON.stringify({
+        mode: "existing",
+        root: projectRoot,
+        repoPath: localProjectPath,
+        provider: "codex",
+      }),
+    });
+    assert.equal(createResponse.status, 201, stderr.join(""));
+    const createPayload = await createResponse.json();
+    assert.equal(createPayload.ok, true);
+    assert.equal(createPayload.projectPath, canonicalLocalProjectPath);
+    assert.equal(createPayload.projectDetails.activeSession.localOnly, true);
+    assert.equal(createPayload.projectDetails.activeSession.providerSessionSeeded, false);
+
+    const state = JSON.parse(await readFile(path.join(home, "state.json"), "utf8"));
+    assert.equal(state.projects[canonicalLocalProjectPath].active_session_id, createPayload.sessionId);
+    assert.equal(state.projects[canonicalLocalProjectPath].sessions[createPayload.sessionId].provider, "codex");
+    assert.equal(state.projects[canonicalLocalProjectPath].sessions[createPayload.sessionId].local_only, "true");
     await assert.rejects(readFile(invokedPath, "utf8"), { code: "ENOENT" });
   } finally {
     await stopServer(child);
