@@ -1,7 +1,5 @@
-App icon claw outline reference:
+App icon source:
 
-"Crawfish claws.jpg" by Jon Sullivan, Wikimedia Commons, public domain.
-https://commons.wikimedia.org/wiki/File:Crawfish_claws.jpg
+The app icon is a square close-up crop of the existing Clawdad crawfish face asset:
 
-The app icon uses a hand-traced outline inspired by the source photo, with original neon
-coloring, shading, and icon composition created for Clawdad.
+assets/clawdad-header-27.jpg
