@@ -202,3 +202,157 @@ sleep 10
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("import-session registers a local Codex session without invoking the ORP-backed CLI", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-import-"));
+  const home = path.join(root, "home");
+  const codexHome = path.join(root, "codex-home");
+  const projectPath = path.join(root, "AI-summer-camp");
+  const configPath = path.join(root, "server.json");
+  const mockBinPath = path.join(root, "clawdad-mock");
+  const invokedPath = path.join(root, "clawdad-invoked");
+  const importSessionId = "019d8d26-7d4e-75e3-8da3-3c35053079a5";
+
+  await mkdir(path.join(projectPath, ".clawdad", "mailbox"), { recursive: true });
+  await mkdir(path.join(codexHome, "sessions", "2026", "04", "14"), { recursive: true });
+  await mkdir(home, { recursive: true });
+  await writeFile(
+    path.join(home, "state.json"),
+    JSON.stringify(
+      {
+        version: 3,
+        orp_workspace: "main",
+        projects: {
+          [projectPath]: {
+            status: "idle",
+            last_dispatch: null,
+            last_response: null,
+            dispatch_count: 0,
+            registered_at: "2026-04-14T00:00:00Z",
+            active_session_id: "placeholder-session",
+            sessions: {
+              "placeholder-session": {
+                slug: "AI-summer-camp",
+                provider: "codex",
+                provider_session_seeded: "false",
+                tracked_at: "2026-04-14T00:00:00Z",
+                last_selected_at: null,
+                dispatch_count: 0,
+                last_dispatch: null,
+                last_response: null,
+                status: "idle",
+                local_only: "true",
+                orp_error: "ORP notes limit",
+              },
+            },
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    path.join(codexHome, "sessions", "2026", "04", "14", `${importSessionId}.jsonl`),
+    [
+      JSON.stringify({
+        type: "session_meta",
+        timestamp: "2026-04-14T18:00:00.000Z",
+        payload: {
+          id: importSessionId,
+          timestamp: "2026-04-14T18:00:00.000Z",
+          cwd: projectPath,
+          source: "cli",
+        },
+      }),
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Build the AI summer camp signup plan." }],
+        },
+      }),
+    ].join("\n"),
+    "utf8",
+  );
+  await writeFile(
+    mockBinPath,
+    `#!/bin/sh
+printf invoked > ${JSON.stringify(invokedPath)}
+sleep 10
+`,
+    "utf8",
+  );
+  await chmod(mockBinPath, 0o755);
+
+  const port = await freePort();
+  await writeFile(
+    configPath,
+    JSON.stringify(
+      {
+        host: "127.0.0.1",
+        port,
+        defaultProject: projectPath,
+        authMode: "tailscale",
+        allowedUsers: ["tester@example.com"],
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  const child = spawn(process.execPath, [serverScript, "serve", "--config", configPath], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      CLAWDAD_HOME: home,
+      CLAWDAD_CODEX_HOME: codexHome,
+      CLAWDAD_BIN_PATH: mockBinPath,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const stderr = [];
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => stderr.push(chunk));
+
+  try {
+    const baseUrl = `http://127.0.0.1:${port}`;
+    await waitForHealth(baseUrl, child);
+
+    const startedAt = Date.now();
+    const response = await fetch(`${baseUrl}/v1/import-session`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "tailscale-user-login": "tester@example.com",
+      },
+      body: JSON.stringify({
+        project: projectPath,
+        sessionId: importSessionId,
+      }),
+    });
+    const elapsedMs = Date.now() - startedAt;
+    assert.equal(response.status, 201, stderr.join(""));
+    assert.ok(elapsedMs < 1_000, `expected local import response under 1s, got ${elapsedMs}ms`);
+
+    const payload = await response.json();
+    assert.equal(payload.ok, true);
+    assert.equal(payload.sessionId, importSessionId);
+    assert.equal(payload.projectDetails.activeSessionId, importSessionId);
+    assert.equal(payload.projectDetails.activeSession.localOnly, true);
+    assert.equal(payload.projectDetails.activeSession.providerSessionSeeded, true);
+
+    const state = JSON.parse(await readFile(path.join(home, "state.json"), "utf8"));
+    assert.equal(state.projects[projectPath].active_session_id, importSessionId);
+    assert.equal(state.projects[projectPath].sessions[importSessionId].provider, "codex");
+    assert.equal(state.projects[projectPath].sessions[importSessionId].local_only, "true");
+
+    await assert.rejects(readFile(invokedPath, "utf8"), { code: "ENOENT" });
+  } finally {
+    await stopServer(child);
+    await rm(root, { recursive: true, force: true });
+  }
+});
