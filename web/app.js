@@ -2492,7 +2492,8 @@ function renderProjectOptions() {
     elements.projectSelect.append(option);
   }
 
-  elements.projectSelect.disabled = state.projectsLoading || state.dispatchPending;
+  elements.projectSelect.disabled =
+    state.dispatchPending || (state.projectsLoading && state.projects.length === 0);
   elements.projectSelect.value = state.selectedProject;
 }
 
