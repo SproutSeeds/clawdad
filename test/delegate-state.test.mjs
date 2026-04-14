@@ -5,6 +5,7 @@ import {
   analyzeDelegatePhaseHandoff,
   chooseDelegateSession,
   delegatePlanRefreshDecision,
+  delegateRunListState,
   shouldClearPendingDelegatePause,
 } from "../lib/delegate-state.mjs";
 
@@ -108,6 +109,28 @@ test("shouldClearPendingDelegatePause leaves ordinary active runs alone", () => 
       currentConfig: { enabled: true },
     }),
     false,
+  );
+});
+
+test("delegateRunListState keeps current failed status over stale running log event", () => {
+  assert.equal(
+    delegateRunListState({
+      existingState: "failed",
+      eventState: "running",
+      statusMatchesRun: true,
+    }),
+    "failed",
+  );
+});
+
+test("delegateRunListState uses log event state for non-current historical runs", () => {
+  assert.equal(
+    delegateRunListState({
+      existingState: "summary",
+      eventState: "failed",
+      statusMatchesRun: false,
+    }),
+    "failed",
   );
 });
 

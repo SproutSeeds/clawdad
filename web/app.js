@@ -22,6 +22,8 @@ const state = {
   artifactSharePendingId: "",
   delegateModalProject: "",
   delegatesByProject: {},
+  delegateSelectedRunIds: {},
+  delegateCarouselSlide: "runs",
   delegateBriefDraft: "",
   delegateBriefDirty: false,
   delegateBriefPending: false,
@@ -131,12 +133,23 @@ const elements = {
   delegateProject: document.querySelector("#delegateProject"),
   delegateSession: document.querySelector("#delegateSession"),
   delegateState: document.querySelector("#delegateState"),
+  delegateOverview: document.querySelector("#delegateOverview"),
   delegateBriefInput: document.querySelector("#delegateBriefInput"),
   delegateSaveButton: document.querySelector("#delegateSaveButton"),
   delegatePlanButton: document.querySelector("#delegatePlanButton"),
   delegateRunButton: document.querySelector("#delegateRunButton"),
   delegateSummaryButton: document.querySelector("#delegateSummaryButton"),
-  delegateRunMeta: document.querySelector("#delegateRunMeta"),
+  delegateCarouselPrev: document.querySelector("#delegateCarouselPrev"),
+  delegateCarouselNext: document.querySelector("#delegateCarouselNext"),
+  delegateCarouselTitle: document.querySelector("#delegateCarouselTitle"),
+  delegateCarouselMeta: document.querySelector("#delegateCarouselMeta"),
+  delegateCarouselTabs: document.querySelector("#delegateCarouselTabs"),
+  delegateRunsPanel: document.querySelector("#delegateRunsPanel"),
+  delegateRunLogPanel: document.querySelector("#delegateRunLogPanel"),
+  delegateBriefPanel: document.querySelector("#delegateBriefPanel"),
+  delegatePlanPanel: document.querySelector("#delegatePlanPanel"),
+  delegateSummaryPanel: document.querySelector("#delegateSummaryPanel"),
+  delegateRunCardList: document.querySelector("#delegateRunCardList"),
   delegateRunList: document.querySelector("#delegateRunList"),
   delegateSummaryList: document.querySelector("#delegateSummaryList"),
   delegatePlanList: document.querySelector("#delegatePlanList"),
@@ -220,6 +233,12 @@ const processingStatusPhrases = [
   "greasin' de gears, cher",
   "cajun butter meltin'",
 ];
+const delegateCarouselSlides = Object.freeze([
+  { id: "runs", label: "History" },
+  { id: "log", label: "Log" },
+  { id: "brief", label: "Brief" },
+]);
+const delegateAutoIcon = "\u221e";
 const headerCatchphraseLeadIns = [
   "Pass dat",
   "Keep dat",
@@ -1479,6 +1498,34 @@ function delegateRunKey(projectPath, runId) {
   return `${String(projectPath || "").trim()}::${String(runId || "").trim()}`;
 }
 
+function delegateCarouselSlideIndex(slideId = state.delegateCarouselSlide) {
+  const index = delegateCarouselSlides.findIndex((slide) => slide.id === slideId);
+  return index >= 0 ? index : 0;
+}
+
+function setDelegateCarouselSlide(slideId) {
+  const nextSlide = delegateCarouselSlides.find((slide) => slide.id === slideId)?.id || "runs";
+  state.delegateCarouselSlide = nextSlide;
+  renderAll();
+}
+
+function advanceDelegateCarousel(direction) {
+  const currentIndex = delegateCarouselSlideIndex();
+  const nextIndex =
+    (currentIndex + direction + delegateCarouselSlides.length) % delegateCarouselSlides.length;
+  setDelegateCarouselSlide(delegateCarouselSlides[nextIndex].id);
+}
+
+function selectedDelegateRunId(projectPath, delegateState = delegateStateFor(projectPath)) {
+  return (
+    String(state.delegateSelectedRunIds[projectPath] || "").trim() ||
+    String(delegateState?.status?.runId || "").trim() ||
+    String(delegateState?.runLog?.runId || "").trim() ||
+    String(delegateState?.latestRunSummarySnapshot?.runId || "").trim() ||
+    String(delegateState?.runSummarySnapshots?.find((snapshot) => snapshot?.runId)?.runId || "").trim()
+  );
+}
+
 function delegateRunRenderSignature(runLog) {
   const eventsSignature = Array.isArray(runLog?.events)
     ? runLog.events
@@ -1601,6 +1648,7 @@ function delegateStateFor(projectPath) {
       delegateSession: null,
       latestPlanSnapshot: null,
       planSnapshots: [],
+      runList: [],
       latestRunSummarySnapshot: null,
       runSummarySnapshots: [],
       runLog: {
@@ -1643,6 +1691,9 @@ function delegatePayloadState(projectPath, payload = {}, { briefFallback = "" } 
     planSnapshots: Array.isArray(payload.planSnapshots)
       ? payload.planSnapshots.map(normalizeDelegatePlanSnapshot)
       : existing.planSnapshots,
+    runList: Array.isArray(payload.delegateRuns)
+      ? payload.delegateRuns.map(normalizeDelegateRunInfo)
+      : existing.runList,
     latestRunSummarySnapshot: payload.latestRunSummarySnapshot
       ? normalizeDelegateRunSummarySnapshot(payload.latestRunSummarySnapshot)
       : existing.latestRunSummarySnapshot,
@@ -1805,6 +1856,21 @@ function normalizeDelegateRunSummarySnapshot(snapshot) {
     provider: String(snapshot?.provider || "").trim() || "codex",
     sourceEventCount: Number.parseInt(String(snapshot?.sourceEventCount || "0"), 10) || 0,
     summary: String(snapshot?.summary || ""),
+  };
+}
+
+function normalizeDelegateRunInfo(run) {
+  return {
+    runId: String(run?.runId || "").trim() || null,
+    state: String(run?.state || "").trim(),
+    startedAt: String(run?.startedAt || "").trim() || null,
+    updatedAt: String(run?.updatedAt || "").trim() || null,
+    completedAt: String(run?.completedAt || "").trim() || null,
+    lastEventAt: String(run?.lastEventAt || "").trim() || null,
+    eventCount: Number.parseInt(String(run?.eventCount || "0"), 10) || 0,
+    summary: String(run?.summary || "").trim(),
+    error: String(run?.error || "").trim(),
+    lastTitle: String(run?.lastTitle || "").trim(),
   };
 }
 
@@ -3118,6 +3184,214 @@ function delegateComputeBudgetLabel(budget) {
   return ` • ${remaining}% compute left`;
 }
 
+function delegateComputeBudgetCompactLabel(budget) {
+  const label = delegateComputeBudgetLabel(budget).replace(/^ •\s*/u, "").trim();
+  return label || "guard ready";
+}
+
+function delegateStatusOverviewLabel(status, delegateState) {
+  if (state.delegateBriefPending) {
+    return "saving";
+  }
+  if (state.delegatePlanPending || status?.state === "planning") {
+    return "planning";
+  }
+  if (state.delegateRunPending) {
+    return "starting";
+  }
+  if (status?.state === "running") {
+    return status.pauseRequested ? "pausing" : "running";
+  }
+  if (status?.state === "blocked") {
+    return delegateStopReasonLabel(status.stopReason) || "blocked";
+  }
+  if (status?.state === "completed") {
+    return "completed";
+  }
+  if (status?.state === "failed") {
+    return "failed";
+  }
+  if (delegateState?.loading && !delegateState.initialized) {
+    return "loading";
+  }
+  return "idle";
+}
+
+function appendDelegateOverviewItem(root, label, value, tone = "") {
+  const item = document.createElement("div");
+  item.className = `delegate-overview-item${tone ? ` ${tone}` : ""}`;
+
+  const labelNode = document.createElement("span");
+  labelNode.className = "delegate-overview-label";
+  labelNode.textContent = label;
+
+  const valueNode = document.createElement("span");
+  valueNode.className = "delegate-overview-value";
+  valueNode.textContent = value || "none";
+
+  item.append(labelNode, valueNode);
+  root.append(item);
+}
+
+function shortDelegateRunText(text, fallback = "") {
+  const value = String(text || "").replace(/\s+/gu, " ").trim();
+  if (!value) {
+    return fallback;
+  }
+  return value.length > 90 ? `${value.slice(0, 87).trim()}...` : value;
+}
+
+function delegateRunCardData(delegateState, runLog) {
+  const runs = new Map();
+  for (const run of delegateState?.runList || []) {
+    if (!run?.runId) {
+      continue;
+    }
+    runs.set(run.runId, {
+      runId: run.runId,
+      state: run.state || "run",
+      at: run.completedAt || run.updatedAt || run.lastEventAt || run.startedAt || "",
+      eventCount: run.eventCount || 0,
+      summary: run.error || run.summary || run.lastTitle || "",
+    });
+  }
+
+  const status = delegateState?.status || null;
+  if (status?.runId) {
+    const existing = runs.get(status.runId) || {};
+    runs.set(status.runId, {
+      runId: status.runId,
+      state: status.state || "run",
+      at: status.completedAt || status.updatedAt || status.startedAt || "",
+      eventCount: runLog?.runId === status.runId ? Number(runLog.total || runLog.events?.length || 0) : existing.eventCount || 0,
+      summary: status.error || status.lastOutcomeSummary || status.nextAction || existing.summary || "",
+    });
+  }
+
+  for (const snapshot of delegateState?.runSummarySnapshots || []) {
+    if (!snapshot?.runId) {
+      continue;
+    }
+    const existing = runs.get(snapshot.runId) || {};
+    runs.set(snapshot.runId, {
+      runId: snapshot.runId,
+      state: existing.state || "summary",
+      at: existing.at || snapshot.createdAt || "",
+      eventCount: existing.eventCount || snapshot.sourceEventCount || 0,
+      summary: existing.summary || snapshot.summary || "",
+    });
+  }
+
+  if (runLog?.runId && !runs.has(runLog.runId)) {
+    runs.set(runLog.runId, {
+      runId: runLog.runId,
+      state: "run",
+      at: "",
+      eventCount: Number(runLog.total || runLog.events?.length || 0),
+      summary: "",
+    });
+  }
+
+  return [...runs.values()].sort((left, right) => {
+    const leftMs = Date.parse(left.at || "");
+    const rightMs = Date.parse(right.at || "");
+    return (Number.isFinite(rightMs) ? rightMs : 0) - (Number.isFinite(leftMs) ? leftMs : 0);
+  });
+}
+
+function buildDelegateRunCard(run, { selected = false } = {}) {
+  const button = document.createElement("button");
+  button.className = `delegate-run-card${selected ? " is-selected" : ""}`;
+  button.type = "button";
+  button.dataset.delegateRunId = run.runId;
+
+  const head = document.createElement("div");
+  head.className = "delegate-run-card-head";
+
+  const title = document.createElement("span");
+  title.className = "delegate-run-card-title";
+  title.textContent = delegateRunStateLabel(run.state);
+
+  head.append(title);
+  button.append(head);
+  return button;
+}
+
+function delegateRunStateLabel(state) {
+  const value = String(state || "").trim().toLowerCase();
+  switch (value) {
+    case "running":
+      return "Auto running";
+    case "paused":
+      return "Auto paused";
+    case "blocked":
+      return "Auto blocked";
+    case "completed":
+      return "Auto completed";
+    case "failed":
+      return "Auto failed";
+    case "planning":
+      return "Auto planning";
+    case "idle":
+      return "Auto idle";
+    case "summary":
+      return "Auto summary";
+    default:
+      return "Auto session";
+  }
+}
+
+function renderDelegateCarouselChrome() {
+  const activeSlideId = delegateCarouselSlides[delegateCarouselSlideIndex()]?.id || "runs";
+  const activeSlide = delegateCarouselSlides.find((slide) => slide.id === activeSlideId) || delegateCarouselSlides[0];
+  const panelBySlide = {
+    runs: elements.delegateRunsPanel,
+    log: elements.delegateRunLogPanel,
+    brief: elements.delegateBriefPanel,
+  };
+
+  for (const slide of delegateCarouselSlides) {
+    const panel = panelBySlide[slide.id];
+    if (panel) {
+      panel.hidden = slide.id !== activeSlideId;
+      panel.classList.toggle("is-active", slide.id === activeSlideId);
+    }
+  }
+
+  if (elements.delegateCarouselTitle) {
+    elements.delegateCarouselTitle.textContent = activeSlide.label;
+  }
+  if (elements.delegateCarouselMeta) {
+    elements.delegateCarouselMeta.textContent = "";
+  }
+  if (elements.delegateCarouselPrev) {
+    const previousIndex = (delegateCarouselSlideIndex() - 1 + delegateCarouselSlides.length) % delegateCarouselSlides.length;
+    elements.delegateCarouselPrev.textContent = delegateCarouselSlides[previousIndex].label;
+  }
+  if (elements.delegateCarouselNext) {
+    const nextIndex = (delegateCarouselSlideIndex() + 1) % delegateCarouselSlides.length;
+    elements.delegateCarouselNext.textContent = delegateCarouselSlides[nextIndex].label;
+  }
+
+  clearNode(elements.delegateCarouselTabs);
+  for (const slide of delegateCarouselSlides) {
+    const button = document.createElement("button");
+    const briefNeedsSave = slide.id === "brief" && state.delegateBriefDirty;
+    button.className = [
+      "delegate-carousel-tab",
+      slide.id === activeSlideId ? "is-active" : "",
+      briefNeedsSave ? "has-unsaved" : "",
+    ].filter(Boolean).join(" ");
+    button.type = "button";
+    button.role = "tab";
+    button.ariaSelected = slide.id === activeSlideId ? "true" : "false";
+    button.ariaLabel = briefNeedsSave ? "Brief has unsaved changes" : slide.label;
+    button.dataset.delegateSlide = slide.id;
+    button.textContent = slide.label;
+    elements.delegateCarouselTabs.append(button);
+  }
+}
+
 function delegatePercentText(value) {
   const numeric = Number.parseFloat(String(value ?? ""));
   if (!Number.isFinite(numeric)) {
@@ -3202,18 +3476,6 @@ function buildDelegateRunEventCard(event) {
   card.className = `delegate-event-card${event.error ? " failed" : ""}`;
 
   const computeText = event.text ? "" : delegateComputeBudgetEventText(event.computeBudget);
-  const copyTextValue = [event.summary, event.nextAction ? `Next: ${event.nextAction}` : "", event.text || computeText, event.error]
-    .filter(Boolean)
-    .join("\n\n");
-  if (copyTextValue) {
-    const copyButton = buildCopyButton({
-      copyKey: `delegate-event:${event.id}`,
-      label: "Copy run event",
-      text: copyTextValue,
-    });
-    card.append(copyButton);
-  }
-
   const head = document.createElement("div");
   head.className = "delegate-event-head";
 
@@ -3221,26 +3483,14 @@ function buildDelegateRunEventCard(event) {
   title.className = "delegate-event-title";
   title.textContent = event.title || delegateRunTypeLabel(event.type);
 
-  const metaParts = [
-    formatTimestamp(event.at),
-    event.step ? `step ${event.step}` : "",
-    event.requestId ? sessionFingerprint(event.requestId) : "",
-    event.state || "",
-  ].filter(Boolean);
-  const meta = document.createElement("div");
-  meta.className = "delegate-event-meta";
-  meta.textContent = metaParts.join(" • ");
-
-  head.append(title, meta);
+  head.append(title);
 
   const body = document.createElement("div");
   body.className = "thread-text delegate-event-body";
-  const bodyText = [
-    event.summary,
-    event.nextAction ? `**Next:** ${event.nextAction}` : "",
-    event.text || computeText,
-    event.error ? `**Error:** ${event.error}` : "",
-  ].filter(Boolean).join("\n\n");
+  const bodyText = shortDelegateRunText(
+    event.error || event.summary || event.text || computeText,
+    delegateRunTypeLabel(event.type),
+  );
   renderRichText(body, bodyText, { emptyText: delegateRunTypeLabel(event.type) });
 
   card.append(head, body);
@@ -3531,11 +3781,23 @@ function renderDelegateModal() {
   const project = currentDelegateProject();
   if (!project) {
     setText(elements.delegateState, "", { empty: true });
+    if (elements.delegateOverview) {
+      clearNode(elements.delegateOverview);
+    }
+    clearNode(elements.delegateRunCardList);
     clearNode(elements.delegateRunList);
-    clearNode(elements.delegateSummaryList);
-    clearNode(elements.delegatePlanList);
-    if (elements.delegateRunMeta) {
-      elements.delegateRunMeta.textContent = "";
+    if (elements.delegateSummaryList) {
+      clearNode(elements.delegateSummaryList);
+    }
+    if (elements.delegatePlanList) {
+      clearNode(elements.delegatePlanList);
+    }
+    clearNode(elements.delegateCarouselTabs);
+    if (elements.delegateCarouselTitle) {
+      elements.delegateCarouselTitle.textContent = "";
+    }
+    if (elements.delegateCarouselMeta) {
+      elements.delegateCarouselMeta.textContent = "";
     }
     elements.delegateModal.hidden = true;
     return;
@@ -3546,10 +3808,11 @@ function renderDelegateModal() {
   const latestPlan = delegateState.latestPlanSnapshot;
   const delegateSession = delegateState.delegateSession;
   const runLog = delegateState.runLog || {};
-  const runId = runLog.runId || status?.runId || "";
   const runSummarySnapshots = Array.isArray(delegateState.runSummarySnapshots)
     ? delegateState.runSummarySnapshots
     : [];
+  const runCards = delegateRunCardData(delegateState, runLog);
+  const runId = selectedDelegateRunId(project.path, delegateState);
 
   elements.delegateProject.textContent =
     project.displayName || project.slug || fallbackProjectLabel(project.path);
@@ -3561,10 +3824,12 @@ function renderDelegateModal() {
     saveButtonLabel.textContent = state.delegateBriefPending ? "Saving…" : "Save";
   }
 
-  const planButtonLabel = elements.delegatePlanButton.querySelector(".button-text");
-  if (planButtonLabel) {
-    planButtonLabel.textContent =
-      state.delegatePlanPending || status?.state === "planning" ? "Planning…" : "Plan";
+  if (elements.delegatePlanButton) {
+    const planButtonLabel = elements.delegatePlanButton.querySelector(".button-text");
+    if (planButtonLabel) {
+      planButtonLabel.textContent =
+        state.delegatePlanPending || status?.state === "planning" ? "Planning…" : "Plan";
+    }
   }
 
   const runButtonLabel = elements.delegateRunButton.querySelector(".button-text");
@@ -3576,21 +3841,31 @@ function renderDelegateModal() {
     } else if (status?.state === "running") {
       runButtonLabel.textContent = "Pause";
     } else {
-      runButtonLabel.textContent = "Stand In";
+      runButtonLabel.textContent = "Auto";
     }
+  }
+  const runButtonIcon = elements.delegateRunButton.querySelector(".auto-icon");
+  if (runButtonIcon) {
+    runButtonIcon.textContent =
+      state.delegateRunPending || status?.state === "running" ? "" : delegateAutoIcon;
+    runButtonIcon.hidden = !runButtonIcon.textContent;
   }
 
   elements.delegateSaveButton.disabled = state.delegateBriefPending || !state.delegateBriefDirty;
-  elements.delegatePlanButton.disabled =
-    state.delegateBriefPending ||
-    state.delegatePlanPending ||
-    state.delegateRunPending ||
-    status?.state === "running";
+  if (elements.delegatePlanButton) {
+    elements.delegatePlanButton.disabled =
+      state.delegateBriefPending ||
+      state.delegatePlanPending ||
+      state.delegateRunPending ||
+      status?.state === "running";
+  }
   elements.delegateRunButton.disabled =
     state.delegatePlanPending || state.delegateRunPending || !project.path;
-  elements.delegateSummaryButton.disabled =
-    state.delegateRunSummaryPending || !runId || (runLog.events || []).length === 0;
-  elements.delegateSummaryButton.classList.toggle("is-loading", state.delegateRunSummaryPending);
+  if (elements.delegateSummaryButton) {
+    elements.delegateSummaryButton.disabled =
+      state.delegateRunSummaryPending || !runId || (runLog.events || []).length === 0;
+    elements.delegateSummaryButton.classList.toggle("is-loading", state.delegateRunSummaryPending);
+  }
 
   const desiredBrief = state.delegateBriefDirty ? state.delegateBriefDraft : delegateState.brief || "";
   if (
@@ -3601,18 +3876,14 @@ function renderDelegateModal() {
   }
 
   if (state.delegateBriefPending) {
-    setText(elements.delegateState, "Saving delegate brief", { empty: false });
+    setText(elements.delegateState, "Saving", { empty: false });
   } else if (state.delegatePlanPending || status?.state === "planning") {
-    setText(elements.delegateState, "Planning the delegate lane", { empty: false });
+    setText(elements.delegateState, "Planning", { empty: false });
   } else if (status?.state === "running") {
-    const stepLabel =
-      status.maxSteps > 0 ? ` • step ${status.stepCount}/${status.maxSteps}` : ` • step ${status.stepCount}`;
-    const computeLabel = delegateComputeBudgetLabel(status.computeBudget);
+    const stepLabel = status.maxSteps > 0 ? `${status.stepCount}/${status.maxSteps}` : status.stepCount;
     setText(
       elements.delegateState,
-      status.pauseRequested
-        ? `Pausing after this step${stepLabel}${computeLabel}`
-        : `Standing in${stepLabel}${computeLabel}`,
+      status.pauseRequested ? `Pausing • ${stepLabel}` : `Running • ${stepLabel}`,
       { empty: false },
     );
   } else if (status?.state === "blocked") {
@@ -3622,37 +3893,43 @@ function renderDelegateModal() {
       { empty: false },
     );
   } else if (status?.state === "completed") {
-    setText(
-      elements.delegateState,
-      status.completedAt
-        ? `Completed • ${formatTimestamp(status.completedAt)}`
-        : "Completed",
-      { empty: false },
-    );
+    setText(elements.delegateState, "Done", { empty: false });
   } else if (status?.state === "failed" && status.error) {
-    setText(elements.delegateState, status.error, { empty: false });
+    setText(elements.delegateState, "Failed", { empty: false });
   } else if (delegateState.error) {
-    setText(elements.delegateState, delegateState.error, { empty: false });
+    setText(elements.delegateState, "Error", { empty: false });
   } else if (!delegateState.initialized && delegateState.loading) {
-    setText(elements.delegateState, "Loading delegate", { empty: false });
+    setText(elements.delegateState, "Loading", { empty: false });
   } else if (latestPlan?.createdAt) {
-    setText(
-      elements.delegateState,
-      `Latest plan • ${formatTimestamp(latestPlan.createdAt)}`,
-      { empty: false },
-    );
+    setText(elements.delegateState, "Ready", { empty: false });
   } else {
-    setText(elements.delegateState, "No saved delegate plan yet", { empty: false });
+    setText(elements.delegateState, "No plan", { empty: false });
   }
 
-  const eventCount = Array.isArray(runLog.events) ? runLog.events.length : 0;
-  if (elements.delegateRunMeta) {
-    const runMetaParts = [
-      runId ? `run ${sessionFingerprint(runId)}` : "",
-      eventCount > 0 ? `${eventCount}/${runLog.total || eventCount}` : "",
-    ].filter(Boolean);
-    elements.delegateRunMeta.textContent = runMetaParts.join(" • ");
+  const logMatchesSelection = !runId || runLog.runId === runId;
+  const eventCount = logMatchesSelection && Array.isArray(runLog.events) ? runLog.events.length : 0;
+  if (elements.delegateOverview) {
+    clearNode(elements.delegateOverview);
   }
+
+  clearNode(elements.delegateRunCardList);
+  if (!delegateState.initialized && delegateState.loading) {
+    const card = document.createElement("div");
+    card.className = "history-state-card";
+    card.textContent = "Loading auto history...";
+    elements.delegateRunCardList.append(card);
+  } else if (runCards.length === 0) {
+    const card = document.createElement("div");
+    card.className = "history-state-card";
+    card.textContent = "No auto history yet.";
+    elements.delegateRunCardList.append(card);
+  } else {
+    for (const run of runCards) {
+      elements.delegateRunCardList.append(buildDelegateRunCard(run, { selected: run.runId === runId }));
+    }
+  }
+
+  renderDelegateCarouselChrome();
 
   const runKey = delegateRunKey(project.path, runId);
   const renderKey = delegateRunRenderSignature(runLog);
@@ -3681,7 +3958,12 @@ function renderDelegateModal() {
     } else if (!runId) {
       const card = document.createElement("div");
       card.className = "history-state-card";
-      card.textContent = "No delegate run yet.";
+      card.textContent = "Choose an auto session to see its log.";
+      elements.delegateRunList.append(card);
+    } else if (!logMatchesSelection || runLog.loading) {
+      const card = document.createElement("div");
+      card.className = "history-state-card";
+      card.textContent = "Loading run log...";
       elements.delegateRunList.append(card);
     } else if (eventCount === 0) {
       const card = document.createElement("div");
@@ -3689,7 +3971,7 @@ function renderDelegateModal() {
       card.textContent = runLog.loading ? "Waiting for run events…" : "No run events yet.";
       elements.delegateRunList.append(card);
     } else {
-      for (const event of runLog.events) {
+      for (const event of runLog.events.slice(-3)) {
         elements.delegateRunList.append(buildDelegateRunEventCard(event));
       }
     }
@@ -3698,43 +3980,11 @@ function renderDelegateModal() {
     applyDelegateRunSnapshot(scrollSnapshot);
   }
 
-  clearNode(elements.delegateSummaryList);
-  if (state.delegateRunSummaryPending && runSummarySnapshots.length === 0) {
-    const card = document.createElement("div");
-    card.className = "history-state-card";
-    card.textContent = "Writing run summary…";
-    elements.delegateSummaryList.append(card);
-  } else {
-    for (const snapshot of runSummarySnapshots.slice(0, 3)) {
-      elements.delegateSummaryList.append(buildDelegateRunSummaryCard(snapshot));
-    }
+  if (elements.delegateSummaryList) {
+    clearNode(elements.delegateSummaryList);
   }
-
-  clearNode(elements.delegatePlanList);
-  if ((state.delegatePlanPending || status?.state === "planning") && delegateState.planSnapshots.length === 0) {
-    const card = document.createElement("div");
-    card.className = "history-state-card";
-    card.textContent = "Working on a fresh delegate plan…";
-    elements.delegatePlanList.append(card);
-  } else if (!delegateState.initialized && delegateState.loading) {
-    const card = document.createElement("div");
-    card.className = "history-state-card";
-    card.textContent = "Loading delegate…";
-    elements.delegatePlanList.append(card);
-  } else if (delegateState.error && delegateState.planSnapshots.length === 0) {
-    const card = document.createElement("div");
-    card.className = "history-state-card";
-    card.textContent = delegateState.error;
-    elements.delegatePlanList.append(card);
-  } else if (delegateState.planSnapshots.length === 0) {
-    const card = document.createElement("div");
-    card.className = "history-state-card";
-    card.textContent = "No saved delegate plan yet.";
-    elements.delegatePlanList.append(card);
-  } else {
-    for (const snapshot of delegateState.planSnapshots) {
-      elements.delegatePlanList.append(buildDelegatePlanCard(snapshot));
-    }
+  if (elements.delegatePlanList) {
+    clearNode(elements.delegatePlanList);
   }
 
   elements.delegateModal.hidden = false;
@@ -4975,7 +5225,7 @@ function mergeDelegateRunEvents(existingEvents = [], incomingEvents = []) {
   });
 }
 
-async function loadDelegateRunLog(projectPath, { force = false, reset = false } = {}) {
+async function loadDelegateRunLog(projectPath, { force = false, reset = false, runId: requestedRunId = "" } = {}) {
   if (!projectPath) {
     return delegateStateFor(projectPath).runLog;
   }
@@ -4983,7 +5233,8 @@ async function loadDelegateRunLog(projectPath, { force = false, reset = false } 
   const existing = delegateStateFor(projectPath);
   const statusRunId = existing.status?.runId || "";
   const existingRunId = existing.runLog?.runId || "";
-  const runId = statusRunId || existingRunId;
+  const selectedRunIdValue = state.delegateSelectedRunIds[projectPath] || "";
+  const runId = String(requestedRunId || selectedRunIdValue || statusRunId || existingRunId).trim();
   if (!runId) {
     setDelegateState(projectPath, {
       runLog: {
@@ -5002,6 +5253,7 @@ async function loadDelegateRunLog(projectPath, { force = false, reset = false } 
   if (existing.runLog?.loading) {
     return existing.runLog;
   }
+  state.delegateSelectedRunIds[projectPath] = runId;
   const runChanged = Boolean(existingRunId && existingRunId !== runId);
   const shouldReset = reset || runChanged;
   if (
@@ -5024,7 +5276,9 @@ async function loadDelegateRunLog(projectPath, { force = false, reset = false } 
   renderAll();
 
   try {
-    const cursor = shouldReset ? "0" : String(existing.runLog?.nextCursor || "0");
+    const cursor = shouldReset || !existing.runLog?.initialized
+      ? "tail"
+      : String(existing.runLog?.nextCursor || "0");
     const payload = await fetchJson(
       `/v1/delegate/run-log?project=${encodeURIComponent(projectPath)}&runId=${encodeURIComponent(runId)}&cursor=${encodeURIComponent(cursor)}`,
     );
@@ -5033,6 +5287,9 @@ async function loadDelegateRunLog(projectPath, { force = false, reset = false } 
       : [];
     const keptEvents = shouldReset ? [] : existing.runLog?.events || [];
     setDelegateState(projectPath, {
+      runList: Array.isArray(payload.delegateRuns)
+        ? payload.delegateRuns.map(normalizeDelegateRunInfo)
+        : delegateStateFor(projectPath).runList,
       latestRunSummarySnapshot: payload.latestRunSummarySnapshot
         ? normalizeDelegateRunSummarySnapshot(payload.latestRunSummarySnapshot)
         : delegateStateFor(projectPath).latestRunSummarySnapshot,
@@ -5086,15 +5343,21 @@ async function loadDelegateProject(projectPath, { force = false } = {}) {
 
   try {
     const payload = await fetchJson(`/v1/delegate?project=${encodeURIComponent(projectPath)}`);
-    const previousRunId = delegateStateFor(projectPath).runLog?.runId || "";
+    const previousRunId = selectedDelegateRunId(projectPath);
     const nextStatus = payload.status ? normalizeDelegateStatus(payload.status) : null;
     setDelegateState(projectPath, {
       ...delegatePayloadState(projectPath, payload),
       status: nextStatus,
     });
+    const nextDelegateState = delegateStateFor(projectPath);
+    const nextRunId = selectedDelegateRunId(projectPath, nextDelegateState);
+    if (nextRunId) {
+      state.delegateSelectedRunIds[projectPath] = nextRunId;
+    }
     await loadDelegateRunLog(projectPath, {
       force: true,
-      reset: Boolean(nextStatus?.runId && nextStatus.runId !== previousRunId),
+      reset: Boolean(nextRunId && nextRunId !== previousRunId),
+      runId: nextRunId,
     });
   } catch (error) {
     setDelegateState(projectPath, {
@@ -5127,6 +5390,7 @@ async function openDelegateModal(projectPath = state.selectedProject) {
   state.delegateRunSummaryPending = false;
   state.delegateBriefDirty = false;
   state.delegateBriefDraft = "";
+  state.delegateCarouselSlide = "runs";
   renderAll();
   await loadDelegateProject(projectPath);
 }
@@ -5141,6 +5405,26 @@ function closeDelegateModal() {
   state.delegateRunSummaryPending = false;
   delegateRunRenderSnapshot = null;
   renderAll();
+}
+
+async function selectDelegateRun(runId) {
+  const project = currentDelegateProject();
+  const selectedRunIdValue = String(runId || "").trim();
+  if (!project?.path || !selectedRunIdValue) {
+    return;
+  }
+
+  const previousRunId = state.delegateSelectedRunIds[project.path] || "";
+  state.delegateSelectedRunIds[project.path] = selectedRunIdValue;
+  state.delegateCarouselSlide = "log";
+  delegateRunRenderSnapshot = null;
+  renderAll();
+
+  await loadDelegateRunLog(project.path, {
+    force: true,
+    reset: previousRunId !== selectedRunIdValue,
+    runId: selectedRunIdValue,
+  });
 }
 
 async function saveDelegateBrief({ quiet = false } = {}) {
@@ -5246,6 +5530,7 @@ async function toggleDelegateRun() {
   }
 
   state.delegateRunPending = true;
+  state.delegateCarouselSlide = action === "pause" ? "log" : "runs";
   if (action === "pause") {
     setDelegateState(project.path, {
       status: normalizeDelegateStatus({
@@ -5292,7 +5577,7 @@ async function requestDelegateRunSummary() {
   }
 
   const delegateState = delegateStateFor(project.path);
-  const runId = delegateState.runLog?.runId || delegateState.status?.runId || "";
+  const runId = selectedDelegateRunId(project.path, delegateState);
   if (!runId) {
     return;
   }
@@ -5705,14 +5990,40 @@ function bindEvents() {
   elements.delegateSaveButton.addEventListener("click", () => {
     void saveDelegateBrief();
   });
-  elements.delegatePlanButton.addEventListener("click", () => {
+  elements.delegatePlanButton?.addEventListener("click", () => {
     void requestDelegatePlan();
   });
   elements.delegateRunButton.addEventListener("click", () => {
     void toggleDelegateRun();
   });
-  elements.delegateSummaryButton.addEventListener("click", () => {
+  elements.delegateSummaryButton?.addEventListener("click", () => {
     void requestDelegateRunSummary();
+  });
+  elements.delegateCarouselPrev?.addEventListener("click", () => {
+    advanceDelegateCarousel(-1);
+  });
+  elements.delegateCarouselNext?.addEventListener("click", () => {
+    advanceDelegateCarousel(1);
+  });
+  elements.delegateCarouselTabs.addEventListener("click", (event) => {
+    const button =
+      event.target instanceof Element
+        ? event.target.closest("[data-delegate-slide]")
+        : null;
+    if (!button) {
+      return;
+    }
+    setDelegateCarouselSlide(button.dataset.delegateSlide);
+  });
+  elements.delegateRunCardList.addEventListener("click", (event) => {
+    const button =
+      event.target instanceof Element
+        ? event.target.closest("[data-delegate-run-id]")
+        : null;
+    if (!button) {
+      return;
+    }
+    void selectDelegateRun(button.dataset.delegateRunId);
   });
   elements.delegateBriefInput.addEventListener("input", (event) => {
     state.delegateBriefDraft = event.target.value;

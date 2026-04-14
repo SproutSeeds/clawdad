@@ -460,6 +460,30 @@ textarea:disabled {
   white-space: nowrap;
 }
 
+.delegate-auto-glyph,
+.delegate-auto-button .auto-icon {
+  display: inline-grid;
+  place-items: center;
+  font-family: var(--mono);
+  font-weight: 900;
+  line-height: 1;
+}
+
+.delegate-auto-glyph {
+  font-size: 1rem;
+}
+
+.delegate-auto-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.delegate-auto-button .auto-icon {
+  min-width: 1em;
+  font-size: 1rem;
+}
+
 .control-orb {
   position: absolute;
   top: 9px;
@@ -1141,9 +1165,10 @@ textarea:disabled {
 }
 
 .delegate-brief-input {
-  min-height: 220px;
-  padding: 14px 15px;
-  border-radius: 14px;
+  width: 100%;
+  min-height: min(52vh, 430px);
+  padding: 12px;
+  border-radius: 8px;
   border: 1px solid var(--line-strong);
   background: linear-gradient(180deg, rgba(73, 10, 14, 0.9), rgba(57, 8, 11, 0.96));
   color: var(--text);
@@ -1160,38 +1185,178 @@ textarea:disabled {
     0 0 0 1px rgba(240, 208, 109, 0.16);
 }
 
-.delegate-run-head {
+.delegate-overview {
+  min-width: 0;
   display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: baseline;
-  font-family: var(--mono);
-  font-size: 0.68rem;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: rgba(255, 236, 219, 0.86);
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  padding: 9px 10px;
+  border: 1px solid rgba(255, 236, 219, 0.12);
+  border-radius: 8px;
+  background: rgba(45, 7, 9, 0.34);
 }
 
-#delegateRunMeta {
-  letter-spacing: 0.06em;
+.delegate-overview-item {
+  min-width: 0;
+  display: inline-flex;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.delegate-overview-item.is-live .delegate-overview-value {
+  color: rgba(255, 224, 126, 0.96);
+}
+
+.delegate-overview-item.is-danger .delegate-overview-value {
+  color: rgba(255, 158, 158, 0.96);
+}
+
+.delegate-overview-label {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   color: var(--muted);
-  text-align: right;
+}
+
+.delegate-overview-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: rgba(255, 248, 238, 0.94);
+  font-size: 0.88rem;
+  font-weight: 700;
+  line-height: 1.22;
+}
+
+.delegate-carousel {
+  min-height: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.delegate-carousel-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.delegate-carousel-tab {
+  min-width: 0;
+  min-height: 38px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 236, 219, 0.12);
+  border-radius: 8px;
+  background: rgba(45, 7, 9, 0.28);
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.delegate-carousel-tab.has-unsaved {
+  position: relative;
+  border-color: rgba(240, 208, 109, 0.5);
+  color: rgba(255, 248, 238, 0.96);
+}
+
+.delegate-carousel-tab.has-unsaved::after {
+  content: "";
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: rgba(240, 208, 109, 0.96);
+  box-shadow: 0 0 0 2px rgba(45, 7, 9, 0.9);
+}
+
+.delegate-carousel-tab.is-active {
+  border-color: rgba(240, 208, 109, 0.4);
+  background: rgba(65, 9, 12, 0.78);
+  color: rgba(255, 248, 238, 0.96);
+}
+
+.delegate-slide {
+  min-height: min(52vh, 420px);
+  max-height: min(52vh, 520px);
+  overflow: auto;
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.delegate-slide::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+.delegate-slide[hidden] {
+  display: none;
+}
+
+.delegate-slide .history-state-card {
+  min-height: min(42vh, 280px);
+}
+
+#delegateModal .detail-action-button,
+#delegateModal .detail-close {
+  border-radius: 8px;
+}
+
+.delegate-run-card-list {
+  display: grid;
+  gap: 8px;
+}
+
+.delegate-run-card {
+  width: 100%;
+  display: grid;
+  gap: 4px;
+  padding: 11px 12px;
+  border: 1px solid rgba(255, 236, 219, 0.12);
+  border-radius: 8px;
+  background: rgba(45, 7, 9, 0.36);
+  color: var(--text);
+  text-align: left;
+}
+
+.delegate-run-card:hover,
+.delegate-run-card:focus-visible,
+.delegate-run-card.is-selected {
+  border-color: rgba(240, 208, 109, 0.38);
+  background: rgba(65, 9, 12, 0.72);
+}
+
+.delegate-run-card-head {
+  min-width: 0;
+  display: block;
+}
+
+.delegate-run-card-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 800;
+  color: rgba(255, 248, 238, 0.94);
 }
 
 .delegate-run-list {
-  max-height: 360px;
-  min-height: 180px;
+  max-height: none;
+  min-height: min(44vh, 320px);
+  overflow: visible;
   padding: 2px;
-  border-radius: 16px;
+  border-radius: 8px;
 }
 
 .delegate-event-card {
   position: relative;
   display: grid;
-  gap: 9px;
-  padding: 12px 48px 12px 14px;
+  gap: 7px;
+  padding: 10px 12px;
   border: 1px solid rgba(95, 140, 146, 0.24);
-  border-radius: 12px;
+  border-radius: 8px;
   background: linear-gradient(180deg, rgba(71, 10, 14, 0.9), rgba(48, 7, 10, 0.96));
 }
 
@@ -1209,21 +1374,14 @@ textarea:disabled {
   color: rgba(255, 248, 238, 0.94);
 }
 
-.delegate-event-meta {
-  font-family: var(--mono);
-  font-size: 0.66rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-
 .delegate-event-body {
   color: rgba(255, 244, 227, 0.88);
 }
 
 .delegate-summary-list {
   min-height: 0;
-  max-height: 280px;
+  max-height: none;
+  overflow: visible;
 }
 
 .delegate-summary-list:empty {
@@ -1231,7 +1389,53 @@ textarea:disabled {
 }
 
 .delegate-plan-list {
-  min-height: 220px;
+  min-height: min(44vh, 320px);
+  max-height: none;
+  overflow: visible;
+}
+
+#delegateModal .project-modal-panel {
+  max-width: min(calc(100% - 20px), 680px);
+  max-height: min(calc(100dvh - 24px), 820px);
+  bottom: max(10px, env(safe-area-inset-bottom));
+  grid-template-rows: none;
+  align-content: start;
+  overflow: auto;
+}
+
+@media (max-width: 640px) {
+  #delegateModal .detail-head {
+    display: grid;
+    gap: 10px;
+  }
+
+  #delegateModal .detail-actions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) 40px;
+    gap: 8px;
+  }
+
+  #delegateModal .detail-action-button {
+    min-height: 38px;
+    padding: 0 8px;
+    font-size: 0.82rem;
+  }
+
+  #delegateModal .detail-close {
+    width: 40px;
+    min-width: 40px;
+    min-height: 38px;
+  }
+
+  .delegate-overview-value {
+    font-size: 0.82rem;
+  }
+
+  .delegate-slide {
+    min-height: min(50vh, 380px);
+    max-height: min(50vh, 440px);
+  }
 }
 
 .session-title-form .detail-action-button {
@@ -1382,7 +1586,7 @@ textarea:disabled {
     padding: 0;
   }
 
-  .delegate-open-button span {
+  .delegate-open-button span:not(.delegate-auto-glyph) {
     display: none;
   }
 

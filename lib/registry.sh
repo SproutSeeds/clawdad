@@ -140,6 +140,8 @@ _state_upgrade_schema() {
                 .slug = (.slug // "")
                 | .provider = (.provider // "")
                 | .provider_session_seeded = (.provider_session_seeded // "true")
+                | .local_only = (.local_only // "false")
+                | .orp_error = (.orp_error // "")
                 | .tracked_at = (.tracked_at // null)
                 | .last_selected_at = (.last_selected_at // null)
                 | .dispatch_count = (.dispatch_count // 0)
@@ -269,7 +271,9 @@ state_register_session() {
               dispatch_count: ((.projects[$path].sessions[$session].dispatch_count // 0) | tonumber? // 0),
               last_dispatch: (.projects[$path].sessions[$session].last_dispatch // null),
               last_response: (.projects[$path].sessions[$session].last_response // null),
-              status: (.projects[$path].sessions[$session].status // "idle")
+              status: (.projects[$path].sessions[$session].status // "idle"),
+              local_only: (.projects[$path].sessions[$session].local_only // "false"),
+              orp_error: (.projects[$path].sessions[$session].orp_error // "")
             }
         )
     ' "$CLAWDAD_STATE")
@@ -397,21 +401,28 @@ state_rekey_session() {
     --arg seeded "$session_seeded" \
     --arg ts "$ts" '
       .projects[$path].sessions = (.projects[$path].sessions // {})
+      | (.projects[$path].sessions[$old] // .projects[$path].sessions[$new] // {}) as $prior
       | .projects[$path].sessions[$new] = (
-          (.projects[$path].sessions[$old] // .projects[$path].sessions[$new] // {})
+          $prior
           + {
               slug: $slug,
               provider: $provider,
               provider_session_seeded: $seeded,
-              tracked_at: ((.projects[$path].sessions[$old].tracked_at // .projects[$path].sessions[$new].tracked_at // $ts)),
-              last_selected_at: (.projects[$path].sessions[$old].last_selected_at // .projects[$path].sessions[$new].last_selected_at // null),
-              dispatch_count: ((.projects[$path].sessions[$old].dispatch_count // .projects[$path].sessions[$new].dispatch_count // 0) | tonumber? // 0),
-              last_dispatch: (.projects[$path].sessions[$old].last_dispatch // .projects[$path].sessions[$new].last_dispatch // null),
-              last_response: (.projects[$path].sessions[$old].last_response // .projects[$path].sessions[$new].last_response // null),
-              status: (.projects[$path].sessions[$old].status // .projects[$path].sessions[$new].status // "idle")
+              tracked_at: ($prior.tracked_at // $ts),
+              last_selected_at: ($prior.last_selected_at // null),
+              dispatch_count: (($prior.dispatch_count // 0) | tonumber? // 0),
+              last_dispatch: ($prior.last_dispatch // null),
+              last_response: ($prior.last_response // null),
+              status: ($prior.status // "idle"),
+              local_only: ($prior.local_only // "false"),
+              orp_error: ($prior.orp_error // "")
             }
         )
-      | .projects[$path].sessions |= del(.[$old])
+      | if $old != $new then
+          .projects[$path].sessions |= del(.[$old])
+        else
+          .
+        end
       | if .projects[$path].active_session_id == $old then
           .projects[$path].active_session_id = $new
         else
@@ -434,11 +445,54 @@ registry_init() {
   clawdad_info "Initialized clawdad at $CLAWDAD_HOME (ORP workspace: $CLAWDAD_ORP_WORKSPACE)"
 }
 
+_registry_error_is_notes_limit() {
+  local result="$1"
+  [[ "$result" == *"Notes must"* && "$result" == *"10000"* ]]
+}
+
+_registry_default_session_seeded() {
+  local provider="$1" session_seeded="${2:-}"
+  if [[ -n "$session_seeded" ]]; then
+    echo "$session_seeded"
+    return 0
+  fi
+
+  if [[ "$provider" == "codex" || "$provider" == "chimera" ]]; then
+    echo "false"
+  else
+    echo "true"
+  fi
+}
+
+_registry_record_local_session() {
+  local project_path="$1" session_id="$2" slug="$3" provider="$4" session_seeded="$5" orp_error="${6:-}"
+
+  state_ensure_project "$project_path"
+  state_register_session "$project_path" "$session_id" "$slug" "$provider" "$session_seeded"
+  state_update_session "$project_path" "$session_id" "local_only" "true" >/dev/null 2>&1 || true
+  if [[ -n "$orp_error" ]]; then
+    state_update_session "$project_path" "$session_id" "orp_error" "$orp_error" >/dev/null 2>&1 || true
+  fi
+  state_set_active_session "$project_path" "$session_id"
+}
+
+_registry_rekey_local_session() {
+  local project_path="$1" old_session_id="$2" new_session_id="$3" slug="$4" provider="$5" orp_error="${6:-}"
+
+  state_rekey_session "$project_path" "$old_session_id" "$new_session_id" "$slug" "$provider" "true"
+  state_update_session "$project_path" "$new_session_id" "local_only" "true" >/dev/null 2>&1 || true
+  if [[ -n "$orp_error" ]]; then
+    state_update_session "$project_path" "$new_session_id" "orp_error" "$orp_error" >/dev/null 2>&1 || true
+  fi
+  state_set_active_session "$project_path" "$new_session_id"
+}
+
 registry_add() {
   local project_path="$1" session_id="$2" slug="$3" description="${4:-}" provider="${5:-$CLAWDAD_DEFAULT_PROVIDER}"
   local session_seeded="${6:-}"
   local write_mode="${7:-append}"
   require_orp
+  session_seeded=$(_registry_default_session_seeded "$provider" "$session_seeded")
 
   # Add tab to ORP workspace
   local -a orp_cmd
@@ -460,6 +514,11 @@ registry_add() {
   fi
 
   if (( exit_code != 0 )); then
+    if _registry_error_is_notes_limit "$result"; then
+      _registry_record_local_session "$project_path" "$session_id" "$slug" "$provider" "$session_seeded" "$result"
+      clawdad_warn "ORP workspace notes are at the 10000 character limit; registered local-only session '$slug' for $project_path"
+      return 0
+    fi
     clawdad_error "Failed to add tab to ORP: $result"
     return 1
   fi
@@ -469,13 +528,9 @@ registry_add() {
 
   # Initialize local dispatch state
   state_ensure_project "$project_path"
-  if [[ -z "$session_seeded" ]]; then
-    session_seeded="true"
-    if [[ "$provider" == "codex" || "$provider" == "chimera" ]]; then
-      session_seeded="false"
-    fi
-  fi
   state_register_session "$project_path" "$session_id" "$slug" "$provider" "$session_seeded"
+  state_update_session "$project_path" "$session_id" "local_only" "false" >/dev/null 2>&1 || true
+  state_update_session "$project_path" "$session_id" "orp_error" "" >/dev/null 2>&1 || true
   state_set_active_session "$project_path" "$session_id"
 
   clawdad_log "Registered project via ORP: $slug ($project_path) provider=$provider session=$session_id mutation=$mutation"
@@ -488,6 +543,15 @@ registry_codex_tracked_session_ids_for_path() {
     '.tabs[]
       | select(.path == $path and (.resumeTool // "") == "codex" and (.resumeSessionId // "") != "")
       | .resumeSessionId'
+  if [[ -f "$CLAWDAD_STATE" ]]; then
+    "$CLAWDAD_JQ" -r \
+      --arg path "$project_path" '
+        (.projects[$path].sessions // {})
+        | to_entries[]?
+        | select((.value.provider // "codex") == "codex")
+        | .key
+      ' "$CLAWDAD_STATE" 2>/dev/null
+  fi
 }
 
 registry_list_saved_codex_sessions_json() {
@@ -580,6 +644,8 @@ registry_remove() {
 registry_set_resume_session() {
   local project_path="$1" slug="$2" provider="$3" old_session_id="$4" new_session_id="$5"
   require_orp
+  local old_local_only
+  old_local_only=$(state_session_field "$project_path" "$old_session_id" "local_only")
 
   local -a remove_cmd
   remove_cmd=("$CLAWDAD_ORP" "workspace" "remove-tab" "$CLAWDAD_ORP_WORKSPACE"
@@ -595,6 +661,11 @@ registry_set_resume_session() {
   fi
 
   if (( exit_code != 0 )); then
+    if [[ "$old_local_only" == "true" ]] || _registry_error_is_notes_limit "$result"; then
+      _registry_rekey_local_session "$project_path" "$old_session_id" "$new_session_id" "$slug" "$provider" "$result"
+      clawdad_log "Updated local-only resume session: $slug ($project_path) provider=$provider session=$old_session_id->$new_session_id"
+      return 0
+    fi
     clawdad_error "Failed to replace ORP resume session (remove old tab): $result"
     return 1
   fi
@@ -615,11 +686,18 @@ registry_set_resume_session() {
   fi
 
   if (( exit_code != 0 )); then
+    if [[ "$old_local_only" == "true" ]] || _registry_error_is_notes_limit "$result"; then
+      _registry_rekey_local_session "$project_path" "$old_session_id" "$new_session_id" "$slug" "$provider" "$result"
+      clawdad_log "Converted resume session to local-only after ORP update failed: $slug ($project_path) provider=$provider session=$old_session_id->$new_session_id"
+      return 0
+    fi
     clawdad_error "Failed to update ORP resume session: $result"
     return 1
   fi
 
   state_rekey_session "$project_path" "$old_session_id" "$new_session_id" "$slug" "$provider" "true"
+  state_update_session "$project_path" "$new_session_id" "local_only" "false" >/dev/null 2>&1 || true
+  state_update_session "$project_path" "$new_session_id" "orp_error" "" >/dev/null 2>&1 || true
   clawdad_log "Updated ORP resume session: $slug ($project_path) provider=$provider session=$old_session_id->$new_session_id"
 }
 
@@ -645,6 +723,8 @@ registry_rename_session() {
   session_id=$(echo "$session_json" | "$CLAWDAD_JQ" -r '.resumeSessionId // ""')
   old_slug=$(echo "$session_json" | "$CLAWDAD_JQ" -r '.title // ""')
   provider=$(echo "$session_json" | "$CLAWDAD_JQ" -r '.resumeTool // "codex"')
+  local local_only
+  local_only=$(echo "$session_json" | "$CLAWDAD_JQ" -r 'if (.localOnly // false) then "true" else "false" end')
 
   if [[ -z "$session_id" ]]; then
     clawdad_error "Session '$selector' has no resumable session id"
@@ -661,6 +741,12 @@ registry_rename_session() {
     return 0
   fi
 
+  if [[ "$local_only" == "true" ]]; then
+    state_update_session "$project_path" "$session_id" "slug" "$new_slug" >/dev/null 2>&1 || true
+    clawdad_log "Renamed local-only session: $old_slug -> $new_slug ($project_path, $session_id)"
+    return 0
+  fi
+
   local -a remove_cmd
   remove_cmd=("$CLAWDAD_ORP" "workspace" "remove-tab" "$CLAWDAD_ORP_WORKSPACE"
     "--path" "$project_path"
@@ -674,6 +760,13 @@ registry_rename_session() {
   fi
 
   if (( exit_code != 0 )); then
+    if _registry_error_is_notes_limit "$result"; then
+      state_update_session "$project_path" "$session_id" "slug" "$new_slug" >/dev/null 2>&1 || true
+      state_update_session "$project_path" "$session_id" "local_only" "true" >/dev/null 2>&1 || true
+      state_update_session "$project_path" "$session_id" "orp_error" "$result" >/dev/null 2>&1 || true
+      clawdad_log "Renamed session locally after ORP remove failed: $old_slug -> $new_slug ($project_path, $session_id)"
+      return 0
+    fi
     clawdad_error "Failed to rename session in ORP (remove old tab): $result"
     return 1
   fi
@@ -710,6 +803,13 @@ registry_rename_session() {
     fi
 
     if (( restore_code != 0 )); then
+      if _registry_error_is_notes_limit "$result"; then
+        state_update_session "$project_path" "$session_id" "slug" "$new_slug" >/dev/null 2>&1 || true
+        state_update_session "$project_path" "$session_id" "local_only" "true" >/dev/null 2>&1 || true
+        state_update_session "$project_path" "$session_id" "orp_error" "$result" >/dev/null 2>&1 || true
+        clawdad_log "Renamed session locally after ORP add/restore failed: $old_slug -> $new_slug ($project_path, $session_id)"
+        return 0
+      fi
       clawdad_error "Failed to rename session and failed to restore original tab: $result // restore: $restore_result"
     else
       clawdad_error "Failed to rename session: $result"
@@ -748,7 +848,19 @@ registry_session_exists() {
           and (((.resumeTool // "codex") == "codex") or ((.resumeTool // "codex") == "chimera"))
         )
       | .resumeSessionId' | head -1)
-  [[ -n "$match" ]]
+  if [[ -n "$match" ]]; then
+    return 0
+  fi
+
+  if [[ -f "$CLAWDAD_STATE" ]]; then
+    match=$("$CLAWDAD_JQ" -r \
+      --arg path "$project_path" \
+      --arg session "$session_id" \
+      'if ((.projects[$path].sessions[$session] // null) != null) then $session else empty end' \
+      "$CLAWDAD_STATE" 2>/dev/null | head -1)
+    [[ -n "$match" ]] && return 0
+  fi
+  return 1
 }
 
 registry_has_slug_in_project() {
@@ -766,7 +878,26 @@ registry_has_slug_in_project() {
         )
       | .title
     ' | head -1)
-  [[ -n "$match" ]]
+  if [[ -n "$match" ]]; then
+    return 0
+  fi
+
+  if [[ -f "$CLAWDAD_STATE" ]]; then
+    match=$("$CLAWDAD_JQ" -r \
+      --arg path "$project_path" \
+      --arg title "$slug" \
+      --arg exclude "$exclude_session_id" '
+        (.projects[$path].sessions // {})
+        | to_entries[]?
+        | select(
+            (.value.slug // "") == $title
+            and ($exclude == "" or .key != $exclude)
+          )
+        | .value.slug
+      ' "$CLAWDAD_STATE" 2>/dev/null | head -1)
+    [[ -n "$match" ]] && return 0
+  fi
+  return 1
 }
 
 _registry_default_session_id() {
@@ -791,6 +922,67 @@ _registry_default_session_id() {
     '
 }
 
+_registry_default_local_session_id() {
+  local project_path="$1"
+  [[ -f "$CLAWDAD_STATE" ]] || return 0
+
+  "$CLAWDAD_JQ" -r \
+    --arg path "$project_path" '
+      (.projects[$path].active_session_id // "") as $active
+      | if $active != "" and ((.projects[$path].sessions[$active] // null) != null) then
+          $active
+        else
+          ((.projects[$path].sessions // {}) | to_entries | .[0].key // "")
+        end
+    ' "$CLAWDAD_STATE" 2>/dev/null
+}
+
+registry_local_session_json() {
+  local project_path="$1" selector="${2:-}"
+  [[ -f "$CLAWDAD_STATE" ]] || return 1
+
+  local session_json
+  session_json=$("$CLAWDAD_JQ" -c \
+    --arg path "$project_path" \
+    --arg selector "$selector" \
+    --arg defaultProvider "$CLAWDAD_DEFAULT_PROVIDER" '
+      (.projects[$path] // {}) as $project
+      | ($project.sessions // {}) as $sessions
+      | (if $selector != "" then $selector else ($project.active_session_id // "") end) as $target
+      | (
+          [
+            $sessions
+            | to_entries[]?
+            | select(
+                ($target != "" and (.key == $target or (.value.slug // "") == $target))
+                or ($target == "" and .key == ($project.active_session_id // ""))
+              )
+          ][0]
+        ) as $entry
+      | if $entry == null then
+          empty
+        else
+          (if ($entry.value.provider // "") == "" then $defaultProvider else $entry.value.provider end) as $provider
+          | {
+              title: ($entry.value.slug // ""),
+              path: $path,
+              resumeTool: $provider,
+              resumeSessionId: $entry.key,
+              localOnly: (($entry.value.local_only // "false") == "true"),
+              providerSessionSeeded: (($entry.value.provider_session_seeded // "true") == "true")
+            }
+            + (if $provider == "codex" then { codexSessionId: $entry.key } else {} end)
+            + (if $provider == "chimera" then { chimeraSessionId: $entry.key } else {} end)
+        end
+    ' "$CLAWDAD_STATE" 2>/dev/null || true)
+
+  if [[ -n "$session_json" ]]; then
+    echo "$session_json"
+    return 0
+  fi
+  return 1
+}
+
 registry_sync_sessions_for_project() {
   local project_path="$1"
   state_ensure_project "$project_path"
@@ -806,6 +998,8 @@ registry_sync_sessions_for_project() {
         seeded="true"
       fi
       state_register_session "$project_path" "$session_id" "$slug" "$provider" "$seeded"
+      state_update_session "$project_path" "$session_id" "local_only" "false" >/dev/null 2>&1 || true
+      state_update_session "$project_path" "$session_id" "orp_error" "" >/dev/null 2>&1 || true
     done <<< "$lines"
   fi
 
@@ -814,6 +1008,9 @@ registry_sync_sessions_for_project() {
   if [[ -z "$active_session" || "$active_session" == "null" ]] || ! registry_session_exists "$project_path" "$active_session"; then
     local fallback
     fallback=$(_registry_default_session_id "$project_path")
+    if [[ -z "$fallback" ]]; then
+      fallback=$(_registry_default_local_session_id "$project_path")
+    fi
     if [[ -n "$fallback" ]]; then
       state_set_active_session "$project_path" "$fallback"
     fi
@@ -829,7 +1026,12 @@ registry_active_session_id() {
     echo "$active_session"
     return 0
   fi
-  _registry_default_session_id "$project_path"
+  local fallback
+  fallback=$(_registry_default_session_id "$project_path")
+  if [[ -z "$fallback" ]]; then
+    fallback=$(_registry_default_local_session_id "$project_path")
+  fi
+  echo "$fallback"
 }
 
 registry_session_json() {
@@ -844,7 +1046,8 @@ registry_session_json() {
     return 1
   fi
 
-  _orp_tabs_json | "$CLAWDAD_JQ" -c \
+  local session_json
+  session_json=$(_orp_tabs_json | "$CLAWDAD_JQ" -c \
     --arg path "$project_path" \
     --arg selector "$selector" '
       [
@@ -858,7 +1061,14 @@ registry_session_json() {
           [ $tabs[] | select((.resumeSessionId // "") == $selector or (.title // "") == $selector) ]
           | .[0]
         ) // empty
-    '
+    ' 2>/dev/null || true)
+
+  if [[ -n "$session_json" ]]; then
+    echo "$session_json"
+    return 0
+  fi
+
+  registry_local_session_json "$project_path" "$selector"
 }
 
 registry_session_field() {
@@ -878,29 +1088,57 @@ registry_list_sessions_json() {
   _orp_tabs_json | "$CLAWDAD_JQ" \
     --arg path "$project_path" \
     --arg active "$active_session" \
+    --arg defaultProvider "$CLAWDAD_DEFAULT_PROVIDER" \
     --slurpfile state "$CLAWDAD_STATE" '
       ($state[0].projects[$path].sessions // {}) as $session_state
-      | [
-          .tabs[]
-          | select(
-              .path == $path
-              and (.resumeSessionId // "") != ""
-              and (((.resumeTool // "codex") == "codex") or ((.resumeTool // "codex") == "chimera"))
-            )
-          | . as $tab
-          | {
-              slug: ($tab.title // ($tab.path | split("/") | last)),
-              path: $tab.path,
-              provider: ($tab.resumeTool // "codex"),
-              sessionId: ($tab.resumeSessionId // null),
-              active: (($tab.resumeSessionId // "") == $active),
-              status: ($session_state[$tab.resumeSessionId].status // "idle"),
-              dispatchCount: (($session_state[$tab.resumeSessionId].dispatch_count // 0) | tonumber? // 0),
-              lastDispatch: ($session_state[$tab.resumeSessionId].last_dispatch // null),
-              lastResponse: ($session_state[$tab.resumeSessionId].last_response // null),
-              providerSessionSeeded: (($session_state[$tab.resumeSessionId].provider_session_seeded // "true") == "true")
-            }
-        ]
+      | (
+          [
+            .tabs[]
+            | select(
+                .path == $path
+                and (.resumeSessionId // "") != ""
+                and (((.resumeTool // "codex") == "codex") or ((.resumeTool // "codex") == "chimera"))
+              )
+            | . as $tab
+            | {
+                slug: ($tab.title // ($tab.path | split("/") | last)),
+                path: $tab.path,
+                provider: ($tab.resumeTool // "codex"),
+                sessionId: ($tab.resumeSessionId // null),
+                active: (($tab.resumeSessionId // "") == $active),
+                status: ($session_state[$tab.resumeSessionId].status // "idle"),
+                dispatchCount: (($session_state[$tab.resumeSessionId].dispatch_count // 0) | tonumber? // 0),
+                lastDispatch: ($session_state[$tab.resumeSessionId].last_dispatch // null),
+                lastResponse: ($session_state[$tab.resumeSessionId].last_response // null),
+                providerSessionSeeded: (($session_state[$tab.resumeSessionId].provider_session_seeded // "true") == "true"),
+                localOnly: false
+              }
+          ]
+        ) as $orp_sessions
+      | ($orp_sessions | map(.sessionId)) as $orp_session_ids
+      | (
+          [
+            $session_state
+            | to_entries[]?
+            | . as $entry
+            | select(($orp_session_ids | index($entry.key)) == null)
+            | (if ($entry.value.provider // "") == "" then $defaultProvider else $entry.value.provider end) as $provider
+            | {
+                slug: ($entry.value.slug // ""),
+                path: $path,
+                provider: $provider,
+                sessionId: $entry.key,
+                active: ($entry.key == $active),
+                status: ($entry.value.status // "idle"),
+                dispatchCount: (($entry.value.dispatch_count // 0) | tonumber? // 0),
+                lastDispatch: ($entry.value.last_dispatch // null),
+                lastResponse: ($entry.value.last_response // null),
+                providerSessionSeeded: (($entry.value.provider_session_seeded // "true") == "true"),
+                localOnly: (($entry.value.local_only // "false") == "true")
+              }
+          ]
+        ) as $local_sessions
+      | $orp_sessions + $local_sessions
     '
 }
 
@@ -1010,7 +1248,21 @@ registry_has_tracked_session_for_path() {
           and (((.resumeTool // "codex") == "codex") or ((.resumeTool // "codex") == "chimera"))
         )
       | .resumeSessionId' | head -1)
-  [[ -n "$match" ]]
+  if [[ -n "$match" ]]; then
+    return 0
+  fi
+
+  if [[ -f "$CLAWDAD_STATE" ]]; then
+    match=$("$CLAWDAD_JQ" -r \
+      --arg path "$project_path" '
+        (.projects[$path].sessions // {})
+        | to_entries[]?
+        | select((.value.provider // "") == "codex" or (.value.provider // "") == "chimera")
+        | .key
+      ' "$CLAWDAD_STATE" 2>/dev/null | head -1)
+    [[ -n "$match" ]] && return 0
+  fi
+  return 1
 }
 
 registry_has_slug() {
@@ -1019,7 +1271,23 @@ registry_has_slug() {
   match=$(_orp_tabs_json | "$CLAWDAD_JQ" -r \
     --arg title "$slug" \
     '.tabs[] | select(.title == $title) | .title' | head -1)
-  [[ -n "$match" ]]
+  if [[ -n "$match" ]]; then
+    return 0
+  fi
+
+  if [[ -f "$CLAWDAD_STATE" ]]; then
+    match=$("$CLAWDAD_JQ" -r \
+      --arg title "$slug" '
+        (.projects // {})
+        | to_entries[]?
+        | (.value.sessions // {})
+        | to_entries[]?
+        | select((.value.slug // "") == $title)
+        | .value.slug
+      ' "$CLAWDAD_STATE" 2>/dev/null | head -1)
+    [[ -n "$match" ]] && return 0
+  fi
+  return 1
 }
 
 registry_has_untracked_slug_for_path() {
