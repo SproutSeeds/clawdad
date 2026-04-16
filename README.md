@@ -141,6 +141,14 @@ clawdad delegate-set my-project --compute-reserve-percent 10
 clawdad delegate-run my-project
 ```
 
+If a project uses ORP Frontier additional items, Clawdad checks that queue whenever a delegate marks a run complete. A queued item is activated and becomes the next delegate action instead of ending the run:
+
+```bash
+orp frontier additional add-list --id additional-1 --label "Follow-up work"
+orp frontier additional add-item --list additional-1 --id item-1 --label "Polish reports"
+clawdad delegate-run my-project
+```
+
 ## Architecture
 
 ```

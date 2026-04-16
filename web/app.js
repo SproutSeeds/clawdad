@@ -23,6 +23,7 @@ const state = {
   delegateModalProject: "",
   delegatesByProject: {},
   delegateSelectedRunIds: {},
+  delegateLogModes: {},
   delegateCarouselSlide: "runs",
   delegateBriefDraft: "",
   delegateBriefDirty: false,
@@ -1531,7 +1532,22 @@ function selectedDelegateRunId(projectPath, delegateState = delegateStateFor(pro
   );
 }
 
-function delegateRunRenderSignature(runLog) {
+function delegateLogModeFor(projectPath) {
+  const mode = String(state.delegateLogModes[projectPath] || "").trim();
+  return mode === "steps" ? "steps" : "live";
+}
+
+function setDelegateLogMode(projectPath, mode) {
+  const nextMode = mode === "steps" ? "steps" : "live";
+  if (!projectPath || delegateLogModeFor(projectPath) === nextMode) {
+    return;
+  }
+  state.delegateLogModes[projectPath] = nextMode;
+  delegateRunRenderSnapshot = null;
+  renderAll();
+}
+
+function delegateRunRenderSignature(runLog, { logMode = "live" } = {}) {
   const eventsSignature = Array.isArray(runLog?.events)
     ? runLog.events
         .map((event) =>
@@ -1550,6 +1566,7 @@ function delegateRunRenderSignature(runLog) {
     : "";
 
   return JSON.stringify({
+    logMode,
     error: String(runLog?.error || ""),
     loading: Boolean(runLog?.loading),
     initialized: Boolean(runLog?.initialized),
@@ -3417,12 +3434,13 @@ function appendDelegateOverviewItem(root, label, value, tone = "") {
   root.append(item);
 }
 
-function shortDelegateRunText(text, fallback = "") {
+function shortDelegateRunText(text, fallback = "", maxLength = 90) {
   const value = String(text || "").replace(/\s+/gu, " ").trim();
   if (!value) {
     return fallback;
   }
-  return value.length > 90 ? `${value.slice(0, 87).trim()}...` : value;
+  const limit = Math.max(24, Number.parseInt(String(maxLength || 90), 10) || 90);
+  return value.length > limit ? `${value.slice(0, limit - 3).trim()}...` : value;
 }
 
 function delegateRunCardData(delegateState, runLog) {
@@ -3655,11 +3673,45 @@ function delegateRunTypeLabel(type) {
     .join(" ") || "Event";
 }
 
-function buildDelegateRunEventCard(event) {
-  const card = document.createElement("article");
-  card.className = `delegate-event-card${event.error ? " failed" : ""}`;
+function delegateEventMetaText(event) {
+  const pieces = [];
+  const timestamp = formatTimestamp(event.at);
+  if (timestamp) {
+    pieces.push(timestamp);
+  }
+  if (event.step) {
+    pieces.push(`step ${event.step}`);
+  }
+  const typeLabel = delegateRunTypeLabel(event.type);
+  if (typeLabel && typeLabel !== event.title) {
+    pieces.push(typeLabel);
+  }
+  if (event.state) {
+    pieces.push(event.state);
+  }
+  return pieces.join(" • ");
+}
 
+function delegateEventBodyText(event, { compact = false } = {}) {
   const computeText = event.text ? "" : delegateComputeBudgetEventText(event.computeBudget);
+  const value =
+    event.error ||
+    event.summary ||
+    event.text ||
+    event.nextAction ||
+    computeText ||
+    delegateRunTypeLabel(event.type);
+  return compact ? shortDelegateRunText(value, delegateRunTypeLabel(event.type), 320) : value;
+}
+
+function buildDelegateRunEventCard(event, { compact = false, live = false } = {}) {
+  const card = document.createElement("article");
+  card.className = [
+    "delegate-event-card",
+    event.error ? "failed" : "",
+    live ? "is-live" : "",
+  ].filter(Boolean).join(" ");
+
   const head = document.createElement("div");
   head.className = "delegate-event-head";
 
@@ -3667,18 +3719,226 @@ function buildDelegateRunEventCard(event) {
   title.className = "delegate-event-title";
   title.textContent = event.title || delegateRunTypeLabel(event.type);
 
-  head.append(title);
+  const meta = document.createElement("div");
+  meta.className = "delegate-event-meta";
+  meta.textContent = delegateEventMetaText(event);
+
+  head.append(title, meta);
 
   const body = document.createElement("div");
   body.className = "thread-text delegate-event-body";
-  const bodyText = shortDelegateRunText(
-    event.error || event.summary || event.text || computeText,
-    delegateRunTypeLabel(event.type),
-  );
+  const bodyText = delegateEventBodyText(event, { compact });
   renderRichText(body, bodyText, { emptyText: delegateRunTypeLabel(event.type) });
 
   card.append(head, body);
   return card;
+}
+
+function latestDelegateEvent(events, predicate = () => true) {
+  return [...(Array.isArray(events) ? events : [])]
+    .reverse()
+    .find((event) => event && predicate(event)) || null;
+}
+
+function delegateRunCurrentText(delegateState, runLog, events) {
+  const status = delegateState?.status || {};
+  const latestLive = latestDelegateEvent(events, (event) => event.type === "agent_live" && event.text);
+  if (latestLive) {
+    return {
+      title: "Live stream",
+      meta: delegateEventMetaText(latestLive),
+      text: latestLive.text,
+    };
+  }
+
+  const latestStarted = latestDelegateEvent(events, (event) => event.type === "step_started");
+  if (status?.state === "running") {
+    return {
+      title: "Live stream",
+      meta: latestStarted ? delegateEventMetaText(latestStarted) : "waiting on agent",
+      text:
+        latestStarted?.text ||
+        status.nextAction ||
+        "The delegate is working on the current step. Live text appears here as the agent writes.",
+    };
+  }
+
+  const latestEvent = latestDelegateEvent(events);
+  return {
+    title: "Latest activity",
+    meta: latestEvent ? delegateEventMetaText(latestEvent) : "",
+    text:
+      latestEvent?.error ||
+      latestEvent?.summary ||
+      latestEvent?.text ||
+      status?.lastOutcomeSummary ||
+      runLog?.error ||
+      "No live activity captured yet.",
+  };
+}
+
+function buildDelegateLiveCurrentCard(delegateState, runLog, events) {
+  const current = delegateRunCurrentText(delegateState, runLog, events);
+  const card = document.createElement("article");
+  card.className = "delegate-live-current";
+
+  const kicker = document.createElement("div");
+  kicker.className = "delegate-current-kicker";
+  kicker.textContent = current.meta || "live";
+
+  const title = document.createElement("div");
+  title.className = "delegate-current-title";
+  title.textContent = current.title;
+
+  const body = document.createElement("div");
+  body.className = "thread-text delegate-current-body";
+  renderRichText(body, current.text, { emptyText: "Waiting for live agent output." });
+
+  card.append(kicker, title, body);
+  return card;
+}
+
+function delegateStepSnapshots(events = []) {
+  const steps = new Map();
+  for (const event of events) {
+    if (!event?.step) {
+      continue;
+    }
+
+    const existing = steps.get(event.step) || {
+      step: event.step,
+      startedAt: "",
+      completedAt: "",
+      latestAt: "",
+      title: "",
+      summary: "",
+      nextAction: "",
+      state: "",
+      stopReason: "",
+      error: "",
+      liveText: "",
+      responseText: "",
+      events: [],
+    };
+
+    existing.events.push(event);
+    existing.latestAt = event.at || existing.latestAt;
+    if (event.type === "step_started") {
+      existing.startedAt = event.at || existing.startedAt;
+      existing.title = event.text || existing.title;
+    }
+    if (event.type === "agent_live") {
+      existing.liveText = event.text || existing.liveText;
+    }
+    if (event.type === "agent_response") {
+      existing.responseText = event.text || existing.responseText;
+    }
+    if (event.type === "step_completed") {
+      existing.completedAt = event.at || existing.completedAt;
+      existing.summary = event.summary || event.text || existing.summary;
+      existing.nextAction = event.nextAction || existing.nextAction;
+      existing.state = event.state || existing.state;
+      existing.stopReason = event.stopReason || existing.stopReason;
+    }
+    if (event.error) {
+      existing.error = event.error;
+    }
+    if (event.summary && !existing.summary) {
+      existing.summary = event.summary;
+    }
+    if (event.nextAction && !existing.nextAction) {
+      existing.nextAction = event.nextAction;
+    }
+    if (event.state && !existing.state) {
+      existing.state = event.state;
+    }
+
+    steps.set(event.step, existing);
+  }
+
+  return [...steps.values()].sort((left, right) => left.step - right.step);
+}
+
+function appendDelegateStepField(root, label, value, { emptyText = "" } = {}) {
+  const clean = String(value || "").trim();
+  if (!clean && !emptyText) {
+    return;
+  }
+
+  const field = document.createElement("div");
+  field.className = "delegate-step-field";
+
+  const labelNode = document.createElement("div");
+  labelNode.className = "delegate-step-label";
+  labelNode.textContent = label;
+
+  const valueNode = document.createElement("div");
+  valueNode.className = "thread-text delegate-step-value";
+  renderRichText(valueNode, clean, { emptyText });
+
+  field.append(labelNode, valueNode);
+  root.append(field);
+}
+
+function buildDelegateStepSnapshotCard(snapshot) {
+  const card = document.createElement("article");
+  card.className = `delegate-step-card${snapshot.error ? " failed" : ""}`;
+
+  const head = document.createElement("div");
+  head.className = "delegate-event-head";
+
+  const title = document.createElement("div");
+  title.className = "delegate-event-title";
+  title.textContent = `Step ${snapshot.step}`;
+
+  const meta = document.createElement("div");
+  meta.className = "delegate-event-meta";
+  const finished = formatTimestamp(snapshot.completedAt);
+  const started = formatTimestamp(snapshot.startedAt);
+  meta.textContent = [
+    finished ? `finished ${finished}` : started ? `started ${started}` : "",
+    snapshot.state || "in progress",
+    `${snapshot.events.length} event${snapshot.events.length === 1 ? "" : "s"}`,
+  ].filter(Boolean).join(" • ");
+
+  head.append(title, meta);
+
+  const fields = document.createElement("div");
+  fields.className = "delegate-step-fields";
+  appendDelegateStepField(fields, "Completed", snapshot.summary || snapshot.responseText, {
+    emptyText: "This step is still running, so the completed snapshot has not landed yet.",
+  });
+  appendDelegateStepField(fields, "Next", snapshot.nextAction || snapshot.title);
+  appendDelegateStepField(
+    fields,
+    snapshot.error ? "Blocker" : "Signal",
+    snapshot.error || delegateStopReasonLabel(snapshot.stopReason) || snapshot.state,
+  );
+  if (!snapshot.summary && snapshot.liveText) {
+    appendDelegateStepField(fields, "Live note", snapshot.liveText);
+  }
+
+  card.append(head, fields);
+  return card;
+}
+
+function buildDelegateLogModeSwitch(activeMode) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "delegate-log-mode-switch";
+
+  for (const [mode, label] of [
+    ["live", "Live"],
+    ["steps", "Steps"],
+  ]) {
+    const button = document.createElement("button");
+    button.className = `delegate-log-mode-button${activeMode === mode ? " is-active" : ""}`;
+    button.type = "button";
+    button.dataset.delegateLogMode = mode;
+    button.textContent = label;
+    wrapper.append(button);
+  }
+
+  return wrapper;
 }
 
 function buildDelegateRunSummaryCard(snapshot) {
@@ -3997,6 +4257,7 @@ function renderDelegateModal() {
     : [];
   const runCards = delegateRunCardData(delegateState, runLog);
   const runId = selectedDelegateRunId(project.path, delegateState);
+  const delegateLogMode = delegateLogModeFor(project.path);
 
   elements.delegateProject.textContent =
     project.displayName || project.slug || fallbackProjectLabel(project.path);
@@ -4116,7 +4377,7 @@ function renderDelegateModal() {
   renderDelegateCarouselChrome();
 
   const runKey = delegateRunKey(project.path, runId);
-  const renderKey = delegateRunRenderSignature(runLog);
+  const renderKey = delegateRunRenderSignature(runLog, { logMode: delegateLogMode });
   const existingRunKey = elements.delegateRunList.dataset.runKey || "";
   const existingRenderKey = elements.delegateRunList.dataset.renderKey || "";
   if (existingRunKey !== runKey || existingRenderKey !== renderKey) {
@@ -4129,6 +4390,7 @@ function renderDelegateModal() {
     delegateRunRenderSnapshot = null;
 
     clearNode(elements.delegateRunList);
+    elements.delegateRunList.append(buildDelegateLogModeSwitch(delegateLogMode));
     if (!runLog.initialized && runLog.loading) {
       const card = document.createElement("div");
       card.className = "history-state-card";
@@ -4154,9 +4416,25 @@ function renderDelegateModal() {
       card.className = "history-state-card";
       card.textContent = runLog.loading ? "Waiting for run events…" : "No run events yet.";
       elements.delegateRunList.append(card);
+    } else if (delegateLogMode === "steps") {
+      const snapshots = delegateStepSnapshots(runLog.events);
+      if (snapshots.length === 0) {
+        const card = document.createElement("div");
+        card.className = "history-state-card";
+        card.textContent = "No step snapshots captured yet.";
+        elements.delegateRunList.append(card);
+      } else {
+        for (const snapshot of snapshots) {
+          elements.delegateRunList.append(buildDelegateStepSnapshotCard(snapshot));
+        }
+      }
     } else {
-      for (const event of runLog.events.slice(-3)) {
-        elements.delegateRunList.append(buildDelegateRunEventCard(event));
+      elements.delegateRunList.append(buildDelegateLiveCurrentCard(delegateState, runLog, runLog.events));
+      for (const event of runLog.events.slice(-40)) {
+        elements.delegateRunList.append(buildDelegateRunEventCard(event, {
+          compact: event.type !== "agent_live" && event.type !== "agent_response",
+          live: event.type === "agent_live",
+        }));
       }
     }
     elements.delegateRunList.dataset.runKey = runKey;
@@ -6271,6 +6549,19 @@ function bindEvents() {
       return;
     }
     void selectDelegateRun(button.dataset.delegateRunId);
+  });
+  elements.delegateRunList.addEventListener("click", (event) => {
+    const button =
+      event.target instanceof Element
+        ? event.target.closest("[data-delegate-log-mode]")
+        : null;
+    if (!button) {
+      return;
+    }
+    const project = currentDelegateProject();
+    if (project?.path) {
+      setDelegateLogMode(project.path, button.dataset.delegateLogMode);
+    }
   });
   elements.delegateBriefInput.addEventListener("input", (event) => {
     state.delegateBriefDraft = event.target.value;

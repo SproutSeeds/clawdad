@@ -1350,6 +1350,35 @@ textarea:disabled {
   border-radius: 8px;
 }
 
+.delegate-log-mode-switch {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 0 0 8px;
+  background: linear-gradient(180deg, rgba(125, 19, 24, 0.98), rgba(125, 19, 24, 0.72));
+}
+
+.delegate-log-mode-button {
+  min-width: 0;
+  min-height: 36px;
+  border: 1px solid rgba(255, 236, 219, 0.14);
+  border-radius: 8px;
+  background: rgba(45, 7, 9, 0.38);
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 900;
+}
+
+.delegate-log-mode-button.is-active {
+  border-color: rgba(240, 208, 109, 0.42);
+  background: rgba(65, 9, 12, 0.88);
+  color: rgba(255, 248, 238, 0.96);
+}
+
+.delegate-live-current,
 .delegate-event-card {
   position: relative;
   display: grid;
@@ -1360,8 +1389,17 @@ textarea:disabled {
   background: linear-gradient(180deg, rgba(71, 10, 14, 0.9), rgba(48, 7, 10, 0.96));
 }
 
+.delegate-live-current {
+  border-color: rgba(240, 208, 109, 0.34);
+  background: linear-gradient(180deg, rgba(88, 16, 19, 0.95), rgba(48, 7, 10, 0.98));
+}
+
 .delegate-event-card.failed {
   border-color: rgba(225, 113, 113, 0.38);
+}
+
+.delegate-event-card.is-live {
+  border-color: rgba(240, 208, 109, 0.28);
 }
 
 .delegate-event-head {
@@ -1374,8 +1412,57 @@ textarea:disabled {
   color: rgba(255, 248, 238, 0.94);
 }
 
+.delegate-event-meta,
+.delegate-current-kicker,
+.delegate-step-label {
+  color: rgba(255, 226, 179, 0.64);
+  font-family: var(--mono);
+  font-size: 0.63rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  line-height: 1.35;
+  text-transform: uppercase;
+}
+
 .delegate-event-body {
   color: rgba(255, 244, 227, 0.88);
+}
+
+.delegate-current-title {
+  font-size: 0.98rem;
+  font-weight: 900;
+  color: rgba(255, 248, 238, 0.98);
+}
+
+.delegate-current-body {
+  color: rgba(255, 244, 227, 0.92);
+}
+
+.delegate-step-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(255, 236, 219, 0.12);
+  border-radius: 8px;
+  background: rgba(45, 7, 9, 0.42);
+}
+
+.delegate-step-card.failed {
+  border-color: rgba(225, 113, 113, 0.38);
+}
+
+.delegate-step-fields {
+  display: grid;
+  gap: 10px;
+}
+
+.delegate-step-field {
+  display: grid;
+  gap: 4px;
+}
+
+.delegate-step-value {
+  color: rgba(255, 244, 227, 0.9);
 }
 
 .delegate-summary-list {

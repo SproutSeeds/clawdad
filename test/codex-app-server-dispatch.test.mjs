@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -61,14 +61,25 @@ function handle(message) {
   }
   if (message.method === "turn/start") {
     send({ id: message.id, result: { turn: { id: "turn-test" } } });
-    if (behavior === "complete") {
+    if (behavior === "complete" || behavior === "delta") {
       setTimeout(() => {
+        if (behavior === "delta") {
+          send({
+            method: "item/agentMessage/delta",
+            params: {
+              threadId: "thread-test",
+              turnId: "turn-test",
+              itemId: "agent-live",
+              delta: "working live",
+            },
+          });
+        }
         send({
           method: "item/completed",
           params: {
             threadId: "thread-test",
             turnId: "turn-test",
-            item: { type: "agentMessage", phase: "final_answer", text: "fake response" },
+            item: { type: "agentMessage", phase: "final_answer", text: behavior === "delta" ? "live final response" : "fake response" },
           },
         });
         send({
@@ -91,7 +102,7 @@ function handle(message) {
             {
               id: "turn-test",
               items: [
-                { type: "agentMessage", phase: "final_answer", text: "fake response" },
+                { type: "agentMessage", phase: "final_answer", text: behavior === "delta" ? "live final response" : "fake response" },
               ],
             },
           ],
@@ -196,5 +207,51 @@ test("codex app-server dispatch keeps fast RPC responses attached to pending req
     const payload = JSON.parse(result.stdout.trim());
     assert.equal(payload.ok, true);
     assert.equal(payload.result_text, "fake response");
+  });
+});
+
+test("codex app-server dispatch writes throttled live delegate events", async () => {
+  await withTempDir(async (root) => {
+    const fakeCodex = await writeFakeCodexBinary(root, "delta");
+    const eventFile = path.join(root, "events.jsonl");
+    const result = await execFileCapture(process.execPath, [
+      dispatchScript,
+      "--project-path",
+      root,
+      "--message",
+      "hello",
+      "--session-id",
+      "thread-test",
+      "--session-seeded",
+      "--codex-binary",
+      fakeCodex,
+      "--turn-timeout-ms",
+      "1000",
+      "--request-timeout-ms",
+      "2000",
+    ], {
+      env: {
+        ...process.env,
+        CLAWDAD_CODEX_LIVE_EVENT_FILE: eventFile,
+        CLAWDAD_CODEX_LIVE_RUN_ID: "run-live",
+        CLAWDAD_CODEX_LIVE_STEP: "2",
+      },
+      timeout: 5000,
+    });
+
+    assert.equal(result.stderr, "");
+    assert.equal(result.exitCode, 0);
+    const payload = JSON.parse(result.stdout.trim());
+    assert.equal(payload.ok, true);
+    assert.equal(payload.result_text, "live final response");
+
+    const lines = (await readFile(eventFile, "utf8")).trim().split(/\r?\n/u);
+    assert.ok(lines.length >= 1);
+    const latest = JSON.parse(lines.at(-1));
+    assert.equal(latest.id, "live-run-live-2");
+    assert.equal(latest.type, "agent_live");
+    assert.equal(latest.runId, "run-live");
+    assert.equal(latest.step, 2);
+    assert.equal(latest.text, "live final response");
   });
 });
