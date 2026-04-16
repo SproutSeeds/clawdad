@@ -1548,6 +1548,7 @@ function setDelegateLogMode(projectPath, mode) {
 }
 
 function delegateRunRenderSignature(runLog, { logMode = "live" } = {}) {
+  const loadingStateChangesLayout = Boolean(runLog?.loading && !runLog?.initialized);
   const eventsSignature = Array.isArray(runLog?.events)
     ? runLog.events
         .map((event) =>
@@ -1568,7 +1569,7 @@ function delegateRunRenderSignature(runLog, { logMode = "live" } = {}) {
   return JSON.stringify({
     logMode,
     error: String(runLog?.error || ""),
-    loading: Boolean(runLog?.loading),
+    loading: loadingStateChangesLayout,
     initialized: Boolean(runLog?.initialized),
     nextCursor: String(runLog?.nextCursor || ""),
     total: Number(runLog?.total || 0),
@@ -1581,13 +1582,24 @@ function captureDelegateRunSnapshot(runKey, mode = "smart") {
     return null;
   }
 
-  const { scrollTop, scrollHeight, clientHeight } = elements.delegateRunList;
+  const container = elements.delegateRunList;
+  const { scrollTop, scrollHeight, clientHeight } = container;
+  const containerRect = container.getBoundingClientRect();
+  const anchor = Array.from(container.querySelectorAll("[data-delegate-log-anchor]"))
+    .find((node) => {
+      const rect = node.getBoundingClientRect();
+      return rect.bottom > containerRect.top + 8 && rect.top < containerRect.bottom - 8;
+    });
+  const anchorRect = anchor?.getBoundingClientRect();
+
   return {
     runKey,
     mode,
     previousTop: scrollTop,
     previousHeight: scrollHeight,
     nearBottom: scrollHeight - clientHeight - scrollTop < 72,
+    anchorKey: anchor?.dataset?.delegateLogAnchor || "",
+    anchorOffset: anchorRect ? anchorRect.top - containerRect.top : 0,
   };
 }
 
@@ -1606,6 +1618,18 @@ function applyDelegateRunSnapshot(snapshot) {
     if (snapshot.mode === "bottom" || snapshot.nearBottom) {
       elements.delegateRunList.scrollTop = elements.delegateRunList.scrollHeight;
       return;
+    }
+
+    if (snapshot.anchorKey) {
+      const anchoredNode = Array.from(
+        elements.delegateRunList.querySelectorAll("[data-delegate-log-anchor]"),
+      ).find((node) => node.dataset?.delegateLogAnchor === snapshot.anchorKey);
+      if (anchoredNode) {
+        const containerRect = elements.delegateRunList.getBoundingClientRect();
+        const anchorRect = anchoredNode.getBoundingClientRect();
+        elements.delegateRunList.scrollTop += anchorRect.top - containerRect.top - snapshot.anchorOffset;
+        return;
+      }
     }
 
     elements.delegateRunList.scrollTop = snapshot.previousTop;
@@ -3711,6 +3735,7 @@ function buildDelegateRunEventCard(event, { compact = false, live = false } = {}
     event.error ? "failed" : "",
     live ? "is-live" : "",
   ].filter(Boolean).join(" ");
+  card.dataset.delegateLogAnchor = `event:${event.id || event.at || event.type || ""}`;
 
   const head = document.createElement("div");
   head.className = "delegate-event-head";
@@ -3781,6 +3806,7 @@ function buildDelegateLiveCurrentCard(delegateState, runLog, events) {
   const current = delegateRunCurrentText(delegateState, runLog, events);
   const card = document.createElement("article");
   card.className = "delegate-live-current";
+  card.dataset.delegateLogAnchor = "live-current";
 
   const kicker = document.createElement("div");
   kicker.className = "delegate-current-kicker";
@@ -3883,6 +3909,7 @@ function appendDelegateStepField(root, label, value, { emptyText = "" } = {}) {
 function buildDelegateStepSnapshotCard(snapshot) {
   const card = document.createElement("article");
   card.className = `delegate-step-card${snapshot.error ? " failed" : ""}`;
+  card.dataset.delegateLogAnchor = `step:${snapshot.step}`;
 
   const head = document.createElement("div");
   head.className = "delegate-event-head";
@@ -4406,7 +4433,7 @@ function renderDelegateModal() {
       card.className = "history-state-card";
       card.textContent = "Choose an auto session to see its log.";
       elements.delegateRunList.append(card);
-    } else if (!logMatchesSelection || runLog.loading) {
+    } else if (!logMatchesSelection || (runLog.loading && !runLog.initialized)) {
       const card = document.createElement("div");
       card.className = "history-state-card";
       card.textContent = "Loading run log...";
@@ -5789,6 +5816,7 @@ async function loadDelegateRunLog(projectPath, { force = false, reset = false, r
     return existing.runLog;
   }
 
+  const showLoadingState = shouldReset || !existing.runLog?.initialized;
   setDelegateState(projectPath, {
     runLog: {
       ...(existing.runLog || {}),
@@ -5797,7 +5825,9 @@ async function loadDelegateRunLog(projectPath, { force = false, reset = false, r
       error: "",
     },
   });
-  renderAll();
+  if (showLoadingState) {
+    renderAll();
+  }
 
   try {
     const cursor = shouldReset || !existing.runLog?.initialized
