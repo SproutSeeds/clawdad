@@ -72,6 +72,25 @@ test("computeBudgetFromRateLimit ignores expired reset windows", () => {
   assert.equal(budget, null);
 });
 
+test("computeBudgetFromRateLimit ignores stale observations when a freshness window is required", () => {
+  const budget = computeBudgetFromRateLimit(
+    {
+      secondary: {
+        used_percent: 100,
+        window_minutes: 10080,
+        resets_at: futureReset,
+      },
+    },
+    {
+      checkedAt: "2026-04-11T10:59:00.000Z",
+      maxObservationAgeMs: 30 * 60 * 1000,
+      nowMs,
+    },
+  );
+
+  assert.equal(budget, null);
+});
+
 test("extractComputeBudgetsFromSessionTail parses current token_count rate limits", () => {
   const budgets = extractComputeBudgetsFromSessionTail(
     [
@@ -90,13 +109,37 @@ test("extractComputeBudgetsFromSessionTail parses current token_count rate limit
 
 test("selectMostConstrainedComputeBudget chooses lowest remaining current budget", () => {
   const selected = selectMostConstrainedComputeBudget([
-    { status: "observed", remainingPercent: 77, usedPercent: 23, reservePercent: 10 },
-    { status: "observed", remainingPercent: 9, usedPercent: 91, reservePercent: 10 },
+    { status: "observed", remainingPercent: 77, usedPercent: 23, reservePercent: 10, limitId: "codex" },
+    { status: "observed", remainingPercent: 9, usedPercent: 91, reservePercent: 10, limitId: "codex_spark" },
     { status: "observed", remainingPercent: 100, usedPercent: 0, reservePercent: 10, unlimited: true },
   ]);
 
   assert.equal(selected.remainingPercent, 9);
   assert.equal(computeBudgetIsBelowReserve(selected), true);
+});
+
+test("selectMostConstrainedComputeBudget ignores older telemetry for the same limit", () => {
+  const selected = selectMostConstrainedComputeBudget([
+    {
+      status: "observed",
+      checkedAt: "2026-04-16T07:40:56.965Z",
+      remainingPercent: 0,
+      usedPercent: 100,
+      reservePercent: 0,
+      limitId: "codex",
+    },
+    {
+      status: "observed",
+      checkedAt: "2026-04-16T13:45:38.332Z",
+      remainingPercent: 100,
+      usedPercent: 0,
+      reservePercent: 0,
+      limitId: "codex",
+    },
+  ]);
+
+  assert.equal(selected.remainingPercent, 100);
+  assert.equal(computeBudgetIsBelowReserve(selected), false);
 });
 
 test("computeBudgetIsBelowReserve pauses at the exact reserve boundary", () => {
@@ -130,6 +173,26 @@ test("readLatestCodexComputeBudget scans multiple recent files and returns the t
   assert.equal(budget.usedPercent, 92);
   assert.equal(budget.remainingPercent, 8);
   assert.equal(computeBudgetIsBelowReserve(budget), true);
+});
+
+test("readLatestCodexComputeBudget does not hard-block on stale-only telemetry", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-compute-guard-stale-"));
+  const sessionsDir = path.join(root, "sessions", "2026", "04", "11");
+  await mkdir(sessionsDir, { recursive: true });
+  await writeFile(
+    path.join(sessionsDir, "stale.jsonl"),
+    `${tokenCountLine({ timestamp: "2026-04-11T10:59:00.000Z", used: 100 })}\n`,
+    "utf8",
+  );
+
+  const budget = await readLatestCodexComputeBudget(
+    { computeGuardEnabled: true, computeReservePercent: 0 },
+    { codexHome: root, nowMs, fileLimit: 10, maxObservationAgeMs: 30 * 60 * 1000 },
+  );
+
+  assert.equal(budget.status, "unavailable");
+  assert.equal(computeBudgetIsBelowReserve(budget), false);
+  assert.match(budget.error, /No fresh Codex token_count/u);
 });
 
 test("readLatestCodexComputeBudget reports disabled guard without scanning", async () => {
