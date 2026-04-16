@@ -4229,19 +4229,43 @@ function artifactDownloadUrl(artifact) {
   return url || "";
 }
 
-function triggerBrowserFileDownload(blob, fileName) {
-  const objectUrl = URL.createObjectURL(blob);
+function canAttemptNativeArtifactShare() {
+  return Boolean(
+    window.isSecureContext &&
+      typeof File === "function" &&
+      navigator.share &&
+      navigator.canShare,
+  );
+}
+
+function shouldUseNativeArtifactShare() {
+  const coarsePointer =
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(pointer: coarse)").matches;
+  const standaloneDisplay =
+    navigator.standalone === true ||
+    (typeof window.matchMedia === "function" &&
+      window.matchMedia("(display-mode: standalone)").matches);
+  return canAttemptNativeArtifactShare() && (coarsePointer || standaloneDisplay);
+}
+
+function triggerDirectArtifactDownload(url, fileName) {
   const link = document.createElement("a");
-  link.href = objectUrl;
+  link.href = url;
   link.download = fileName;
   link.rel = "noopener";
   link.style.display = "none";
   document.body.append(link);
   link.click();
-  window.setTimeout(() => {
-    URL.revokeObjectURL(objectUrl);
-    link.remove();
-  }, 4000);
+  link.remove();
+}
+
+function fallbackArtifactDownload(url, fileName) {
+  try {
+    triggerDirectArtifactDownload(url, fileName);
+  } catch (_error) {
+    window.location.assign(url);
+  }
 }
 
 async function downloadArtifact(artifact) {
@@ -4252,6 +4276,13 @@ async function downloadArtifact(artifact) {
 
   const fileName = artifactFileName(artifact);
   const feedbackKey = `artifact-download:${artifact.id}`;
+
+  if (!shouldUseNativeArtifactShare()) {
+    fallbackArtifactDownload(url, fileName);
+    markCopied(feedbackKey);
+    return;
+  }
+
   state.artifactDownloadPendingId = artifact.id;
   renderAll();
 
@@ -4278,16 +4309,23 @@ async function downloadArtifact(artifact) {
         canShareFile = false;
       }
       if (canShareFile) {
-        await navigator.share({
-          files: [file],
-          title: fileName,
-        });
+        try {
+          await navigator.share({
+            files: [file],
+            title: fileName,
+          });
+        } catch (error) {
+          if (error?.name === "AbortError") {
+            return;
+          }
+          fallbackArtifactDownload(url, fileName);
+        }
         markCopied(feedbackKey);
         return;
       }
     }
 
-    triggerBrowserFileDownload(blob, fileName);
+    fallbackArtifactDownload(url, fileName);
     markCopied(feedbackKey);
   } catch (error) {
     if (error?.name !== "AbortError") {
