@@ -8,6 +8,12 @@ Multi-agent orchestration CLI for AI coding agents. Manages persistent spoke age
 
 Codex-first orchestration for OpenAI-powered coding work, with Chimera still available as an experimental path.
 
+Clawdad's product line is one front door for agent-operated work. Hermes Agent,
+OpenClaw, and other always-on agent runtimes are useful systems to study, but
+Clawdad should borrow their gateway, skills, notification, and backend ideas
+without letting them become parallel sources of truth. See
+[Borrowing From Agent Runtimes](docs/BORROWING_FROM_AGENT_RUNTIMES.md).
+
 <p align="center">
   <img src="assets/clawdad-mobile-demo.gif" alt="Clawdad mobile app selecting a project and dispatching a message" width="340">
 </p>

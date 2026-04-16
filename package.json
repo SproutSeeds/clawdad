@@ -39,6 +39,7 @@
     "test/",
     "web/",
     "templates/",
+    "docs/BORROWING_FROM_AGENT_RUNTIMES.md",
     "assets/clawdad-mascot.jpg",
     "assets/clawdad-mascot-app.png",
     "assets/clawdad-app-icon-source.txt",

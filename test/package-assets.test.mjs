@@ -51,6 +51,28 @@ test("README inline assets are included in the npm package files whitelist", asy
   }
 });
 
+test("README docs links are included in the npm package files whitelist", async () => {
+  const [readme, packageJsonText] = await Promise.all([
+    readFile(path.join(rootDir, "README.md"), "utf8"),
+    readFile(path.join(rootDir, "package.json"), "utf8"),
+  ]);
+  const packageJson = JSON.parse(packageJsonText);
+  const packageFiles = Array.isArray(packageJson.files) ? packageJson.files : [];
+  const readmeDocPaths = [
+    ...readme.matchAll(/\]\((docs\/[^)#?]+)(?:[#?][^)]+)?\)/gu),
+  ].map((match) => match[1]);
+
+  assert.ok(readmeDocPaths.length > 0, "expected README to reference at least one docs page");
+  for (const docPath of readmeDocPaths) {
+    await stat(path.join(rootDir, docPath));
+    assert.equal(
+      packageFilesInclude(packageFiles, docPath),
+      true,
+      `${docPath} is referenced by README.md but is not included in package.json files`,
+    );
+  }
+});
+
 test("web app icon assets exist and are included in the npm package files whitelist", async () => {
   const [manifestText, indexHtml, packageJsonText] = await Promise.all([
     readFile(path.join(rootDir, "web", "manifest.webmanifest"), "utf8"),
