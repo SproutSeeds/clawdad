@@ -20,7 +20,9 @@ const state = {
   artifactModalProject: "",
   artifactsByProject: {},
   artifactSharePendingId: "",
+  artifactDownloadPendingId: "",
   artifactRefreshPromises: {},
+  artifactShelfCollapsed: false,
   delegateModalProject: "",
   delegatesByProject: {},
   delegateSelectedRunIds: {},
@@ -94,6 +96,8 @@ const elements = {
   artifactShelfTitle: document.querySelector("#artifactShelfTitle"),
   artifactShelfMeta: document.querySelector("#artifactShelfMeta"),
   artifactShelfOpenButton: document.querySelector("#artifactShelfOpenButton"),
+  artifactShelfToggle: document.querySelector("#artifactShelfToggle"),
+  artifactShelfBody: document.querySelector("#artifactShelfBody"),
   artifactShelfList: document.querySelector("#artifactShelfList"),
   projectModal: document.querySelector("#projectModal"),
   projectModalBackdrop: document.querySelector("#projectModalBackdrop"),
@@ -174,6 +178,7 @@ const importableSessionsCacheMs = 30000;
 const projectCacheKey = "clawdad-project-catalog-v4";
 const threadCacheKey = "clawdad-thread-log-v1";
 const queueCollapsedKey = "clawdad-queue-collapsed-v1";
+const artifactShelfCollapsedKey = "clawdad-artifact-shelf-collapsed-v1";
 const queuedDispatchGraceMs = 15000;
 // Dispatch startup can lag behind refreshes; do not mark optimistic queue cards failed too early.
 const queuedDispatchAttachGraceMs = 2 * 60 * 1000;
@@ -1804,6 +1809,22 @@ function restoreQueueCollapsed() {
     state.queueCollapsed = JSON.parse(localStorage.getItem(queueCollapsedKey) || "false") === true;
   } catch (_error) {
     state.queueCollapsed = false;
+  }
+}
+
+function persistArtifactShelfCollapsed() {
+  try {
+    localStorage.setItem(artifactShelfCollapsedKey, JSON.stringify(state.artifactShelfCollapsed));
+  } catch (_error) {
+    // Ignore storage failures.
+  }
+}
+
+function restoreArtifactShelfCollapsed() {
+  try {
+    state.artifactShelfCollapsed = JSON.parse(localStorage.getItem(artifactShelfCollapsedKey) || "false") === true;
+  } catch (_error) {
+    state.artifactShelfCollapsed = false;
   }
 }
 
@@ -4199,6 +4220,85 @@ function formatFileSize(bytes) {
   return `${size >= 10 || unitIndex === 0 ? Math.round(size) : size.toFixed(1)} ${units[unitIndex]}`;
 }
 
+function artifactFileName(artifact) {
+  return String(artifact?.fileName || artifact?.relativePath || "download").split(/[\\/]/u).pop() || "download";
+}
+
+function artifactDownloadUrl(artifact) {
+  const url = String(artifact?.downloadUrl || "").trim();
+  return url || "";
+}
+
+function triggerBrowserFileDownload(blob, fileName) {
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = fileName;
+  link.rel = "noopener";
+  link.style.display = "none";
+  document.body.append(link);
+  link.click();
+  window.setTimeout(() => {
+    URL.revokeObjectURL(objectUrl);
+    link.remove();
+  }, 4000);
+}
+
+async function downloadArtifact(artifact) {
+  const url = artifactDownloadUrl(artifact);
+  if (!url || state.artifactDownloadPendingId) {
+    return;
+  }
+
+  const fileName = artifactFileName(artifact);
+  const feedbackKey = `artifact-download:${artifact.id}`;
+  state.artifactDownloadPendingId = artifact.id;
+  renderAll();
+
+  try {
+    const response = await fetch(url, { credentials: "same-origin" });
+    if (!response.ok) {
+      throw new Error(response.statusText || "Download failed");
+    }
+
+    const responseType = String(response.headers.get("content-type") || "").trim();
+    const artifactType = String(artifact?.mimeType || "").trim();
+    const blob = await response.blob();
+    const fileType = responseType || artifactType || blob.type || "application/octet-stream";
+
+    if (typeof File === "function" && navigator.share && navigator.canShare) {
+      const file = new File([blob], fileName, {
+        type: fileType,
+        lastModified: Date.parse(artifact?.modifiedAt || "") || Date.now(),
+      });
+      let canShareFile = false;
+      try {
+        canShareFile = navigator.canShare({ files: [file] });
+      } catch (_error) {
+        canShareFile = false;
+      }
+      if (canShareFile) {
+        await navigator.share({
+          files: [file],
+          title: fileName,
+        });
+        markCopied(feedbackKey);
+        return;
+      }
+    }
+
+    triggerBrowserFileDownload(blob, fileName);
+    markCopied(feedbackKey);
+  } catch (error) {
+    if (error?.name !== "AbortError") {
+      showError(error);
+    }
+  } finally {
+    state.artifactDownloadPendingId = "";
+    renderAll();
+  }
+}
+
 function buildArtifactCard(artifact, { compact = false } = {}) {
   const card = document.createElement("article");
   card.className = `artifact-card${compact ? " is-compact" : ""}`;
@@ -4227,11 +4327,21 @@ function buildArtifactCard(artifact, { compact = false } = {}) {
   const actions = document.createElement("div");
   actions.className = "artifact-actions";
 
-  const download = document.createElement("a");
-  download.className = "artifact-action";
-  download.href = artifact.downloadUrl;
-  download.download = artifact.fileName;
-  download.textContent = "Download";
+  const downloadKey = `artifact-download:${artifact.id}`;
+  const downloadPending = Boolean(state.artifactDownloadPendingId);
+  const download = document.createElement("button");
+  download.className = "artifact-action-button";
+  download.type = "button";
+  download.disabled = downloadPending;
+  download.textContent =
+    state.artifactDownloadPendingId === artifact.id
+      ? "Preparing…"
+      : copyFeedbackActive(downloadKey)
+        ? "Opened"
+        : "Download";
+  download.addEventListener("click", () => {
+    void downloadArtifact(artifact);
+  });
 
   const shareKey = `artifact-share:${artifact.id}`;
   const shareButton = document.createElement("button");
@@ -4301,6 +4411,7 @@ function renderArtifactShelf() {
   }
 
   elements.artifactShelf.hidden = false;
+  elements.artifactShelf.classList.toggle("is-collapsed", state.artifactShelfCollapsed);
   if (elements.artifactShelfTitle) {
     elements.artifactShelfTitle.textContent = "Agent files";
   }
@@ -4313,11 +4424,20 @@ function renderArtifactShelf() {
   if (elements.artifactShelfOpenButton) {
     elements.artifactShelfOpenButton.disabled = !project.path;
   }
+  if (elements.artifactShelfToggle) {
+    elements.artifactShelfToggle.setAttribute("aria-expanded", String(!state.artifactShelfCollapsed));
+    elements.artifactShelfToggle.setAttribute(
+      "aria-label",
+      state.artifactShelfCollapsed ? "Expand files" : "Collapse files",
+    );
+  }
 
   const renderKey = JSON.stringify({
     projectPath: project.path,
+    collapsed: state.artifactShelfCollapsed,
     loading: Boolean(artifactState.loading && !artifactState.initialized),
     sharePendingId: state.artifactSharePendingId,
+    downloadPendingId: state.artifactDownloadPendingId,
     items: items.slice(0, 3).map((artifact) => [
       artifact.id,
       artifact.relativePath,
@@ -4326,6 +4446,7 @@ function renderArtifactShelf() {
       artifact.share?.token || "",
       artifact.share?.url || "",
       copyFeedbackActive(`artifact-share:${artifact.id}`),
+      copyFeedbackActive(`artifact-download:${artifact.id}`),
     ]),
   });
   if (elements.artifactShelfList.dataset.renderKey === renderKey) {
@@ -6832,6 +6953,11 @@ function bindEvents() {
   elements.artifactShelfOpenButton?.addEventListener("click", () => {
     void openArtifactsModal();
   });
+  elements.artifactShelfToggle?.addEventListener("click", () => {
+    state.artifactShelfCollapsed = !state.artifactShelfCollapsed;
+    persistArtifactShelfCollapsed();
+    renderAll();
+  });
   elements.sessionImportButton.addEventListener("click", () => {
     void openSessionImportModal();
   });
@@ -7092,6 +7218,7 @@ async function boot() {
   restoreThreadEntries();
   hydrateReturnedThreadEntries();
   restoreQueueCollapsed();
+  restoreArtifactShelfCollapsed();
   restoreCachedProjects();
   renderAll();
 

@@ -1059,6 +1059,14 @@ textarea:disabled {
   display: none;
 }
 
+.artifact-shelf.is-collapsed .artifact-shelf-body {
+  display: none;
+}
+
+.artifact-shelf.is-collapsed .artifact-shelf-toggle svg {
+  transform: rotate(-90deg);
+}
+
 .artifact-shelf-head {
   display: flex;
   align-items: center;
@@ -1079,6 +1087,12 @@ textarea:disabled {
   text-transform: uppercase;
 }
 
+.artifact-shelf-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .artifact-shelf-open {
   width: auto;
   min-height: 36px;
@@ -1089,6 +1103,12 @@ textarea:disabled {
   color: rgba(255, 244, 227, 0.94);
   font-size: 0.78rem;
   font-weight: 800;
+}
+
+.artifact-shelf-toggle {
+  width: 36px;
+  min-width: 36px;
+  min-height: 36px;
 }
 
 .artifact-shelf-list {
@@ -1189,6 +1209,12 @@ textarea:disabled {
 .artifact-action-button.is-quiet {
   background: linear-gradient(180deg, rgba(41, 9, 10, 0.84), rgba(31, 7, 8, 0.9));
   color: rgba(255, 236, 219, 0.82);
+}
+
+.artifact-action-button:disabled {
+  cursor: wait;
+  opacity: 0.72;
+  transform: none;
 }
 
 .detail-history-list::-webkit-scrollbar {

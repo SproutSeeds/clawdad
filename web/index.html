@@ -150,9 +150,25 @@
             <div id="artifactShelfTitle" class="artifact-shelf-title">Agent files</div>
             <div id="artifactShelfMeta" class="artifact-shelf-meta"></div>
           </div>
-          <button id="artifactShelfOpenButton" class="artifact-shelf-open" type="button">View all</button>
+          <div class="artifact-shelf-actions">
+            <button id="artifactShelfOpenButton" class="artifact-shelf-open" type="button">View all</button>
+            <button
+              id="artifactShelfToggle"
+              class="queue-toggle artifact-shelf-toggle"
+              type="button"
+              aria-expanded="true"
+              aria-controls="artifactShelfBody"
+              aria-label="Collapse files"
+            >
+              <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M3.5 6 8 10l4.5-4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"></path>
+              </svg>
+            </button>
+          </div>
         </div>
-        <div id="artifactShelfList" class="artifact-shelf-list"></div>
+        <div id="artifactShelfBody" class="artifact-shelf-body">
+          <div id="artifactShelfList" class="artifact-shelf-list"></div>
+        </div>
       </section>
 
       <section class="queue" aria-live="polite">
