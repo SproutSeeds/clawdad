@@ -20,6 +20,7 @@ const state = {
   artifactModalProject: "",
   artifactsByProject: {},
   artifactSharePendingId: "",
+  artifactRefreshPromises: {},
   delegateModalProject: "",
   delegatesByProject: {},
   delegateSelectedRunIds: {},
@@ -88,6 +89,12 @@ const elements = {
   projectSummaryButton: document.querySelector("#projectSummaryButton"),
   projectDelegateButton: document.querySelector("#projectDelegateButton"),
   projectArtifactsButton: document.querySelector("#projectArtifactsButton"),
+  projectArtifactsOrb: document.querySelector("#projectArtifactsOrb"),
+  artifactShelf: document.querySelector("#artifactShelf"),
+  artifactShelfTitle: document.querySelector("#artifactShelfTitle"),
+  artifactShelfMeta: document.querySelector("#artifactShelfMeta"),
+  artifactShelfOpenButton: document.querySelector("#artifactShelfOpenButton"),
+  artifactShelfList: document.querySelector("#artifactShelfList"),
   projectModal: document.querySelector("#projectModal"),
   projectModalBackdrop: document.querySelector("#projectModalBackdrop"),
   projectModalClose: document.querySelector("#projectModalClose"),
@@ -4151,9 +4158,9 @@ function formatFileSize(bytes) {
   return `${size >= 10 || unitIndex === 0 ? Math.round(size) : size.toFixed(1)} ${units[unitIndex]}`;
 }
 
-function buildArtifactCard(artifact) {
+function buildArtifactCard(artifact, { compact = false } = {}) {
   const card = document.createElement("article");
-  card.className = "artifact-card";
+  card.className = `artifact-card${compact ? " is-compact" : ""}`;
 
   const head = document.createElement("div");
   head.className = "artifact-head";
@@ -4226,6 +4233,76 @@ function buildArtifactCard(artifact) {
 
   card.append(head, pathLabel, actions);
   return card;
+}
+
+function renderArtifactShelf() {
+  const project = currentProject();
+  const artifactState = artifactsStateFor(project?.path || "");
+  const items = Array.isArray(artifactState.items) ? artifactState.items : [];
+  const itemCount = items.length;
+
+  if (elements.projectArtifactsOrb) {
+    elements.projectArtifactsOrb.hidden = itemCount === 0;
+  }
+  if (elements.projectArtifactsButton) {
+    elements.projectArtifactsButton.title =
+      itemCount > 0 ? `${itemCount} agent file${itemCount === 1 ? "" : "s"}` : "Files";
+  }
+
+  if (!elements.artifactShelf || !project?.path || (itemCount === 0 && !artifactState.loading)) {
+    if (elements.artifactShelf) {
+      elements.artifactShelf.hidden = true;
+    }
+    if (elements.artifactShelfList) {
+      clearNode(elements.artifactShelfList);
+    }
+    return;
+  }
+
+  elements.artifactShelf.hidden = false;
+  if (elements.artifactShelfTitle) {
+    elements.artifactShelfTitle.textContent = "Agent files";
+  }
+  if (elements.artifactShelfMeta) {
+    elements.artifactShelfMeta.textContent =
+      artifactState.loading && !artifactState.initialized
+        ? "Checking for downloads"
+        : `${itemCount} file${itemCount === 1 ? "" : "s"} ready`;
+  }
+  if (elements.artifactShelfOpenButton) {
+    elements.artifactShelfOpenButton.disabled = !project.path;
+  }
+
+  const renderKey = JSON.stringify({
+    projectPath: project.path,
+    loading: Boolean(artifactState.loading && !artifactState.initialized),
+    sharePendingId: state.artifactSharePendingId,
+    items: items.slice(0, 3).map((artifact) => [
+      artifact.id,
+      artifact.relativePath,
+      artifact.modifiedAt,
+      artifact.size,
+      artifact.share?.token || "",
+      artifact.share?.url || "",
+      copyFeedbackActive(`artifact-share:${artifact.id}`),
+    ]),
+  });
+  if (elements.artifactShelfList.dataset.renderKey === renderKey) {
+    return;
+  }
+
+  clearNode(elements.artifactShelfList);
+  if (artifactState.loading && !artifactState.initialized) {
+    const card = document.createElement("div");
+    card.className = "history-state-card artifact-shelf-empty";
+    card.textContent = "Checking for files…";
+    elements.artifactShelfList.append(card);
+  } else {
+    for (const artifact of items.slice(0, 3)) {
+      elements.artifactShelfList.append(buildArtifactCard(artifact, { compact: true }));
+    }
+  }
+  elements.artifactShelfList.dataset.renderKey = renderKey;
 }
 
 function renderArtifactsModal() {
@@ -4742,6 +4819,7 @@ function renderAll() {
   updateProjectControlAppearance();
   renderSessionOptions();
   renderQueueList();
+  renderArtifactShelf();
   renderModal();
   renderSessionImportModal();
   renderSessionTitleModal();
@@ -4947,6 +5025,7 @@ async function reconcileThreadEntries() {
   }
 
   renderAll();
+  void refreshArtifacts().catch(() => {});
 
   const modalThread = currentModalThread();
   if (modalThread) {
@@ -4982,6 +5061,7 @@ async function refreshProjects() {
       hydrateReturnedThreadEntries({ prefetch: true });
       if (state.selectedProject) {
         void refreshImportableSessions(state.selectedProject).catch(() => {});
+        void loadProjectArtifacts(state.selectedProject, { quiet: true }).catch(() => {});
       }
     } finally {
       state.projectsLoading = false;
@@ -5071,6 +5151,45 @@ async function refreshDelegates() {
   });
 
   return state.delegateRefreshPromise;
+}
+
+function artifactProjectsNeedingRefresh() {
+  const targets = new Set();
+  if (state.selectedProject) {
+    targets.add(state.selectedProject);
+  }
+  if (state.artifactModalProject) {
+    targets.add(state.artifactModalProject);
+  }
+  if (state.delegateModalProject) {
+    targets.add(state.delegateModalProject);
+  }
+
+  for (const [projectPath, delegateState] of Object.entries(state.delegatesByProject)) {
+    const delegateStatus = delegateState?.status?.state;
+    if (delegateStatus === "planning" || delegateStatus === "running") {
+      targets.add(projectPath);
+    }
+  }
+
+  for (const entry of state.threadEntries) {
+    if (entry.status === "queued" || entry.status === "answered") {
+      targets.add(entry.projectPath);
+    }
+  }
+
+  return [...targets].filter(Boolean);
+}
+
+async function refreshArtifacts({ force = true } = {}) {
+  const targets = artifactProjectsNeedingRefresh();
+  if (targets.length === 0) {
+    return;
+  }
+
+  await Promise.all(
+    targets.map((projectPath) => loadProjectArtifacts(projectPath, { force, quiet: true })),
+  );
 }
 
 function showError(error) {
@@ -5266,6 +5385,7 @@ async function refreshForegroundState() {
 
     await refreshProjectSummaries();
     await refreshDelegates();
+    await refreshArtifacts();
   })()
     .catch((error) => {
       console.warn("[clawdad] foreground refresh failed", error);
@@ -5426,9 +5546,13 @@ function closeProjectSummary() {
   renderAll();
 }
 
-async function loadProjectArtifacts(projectPath, { force = false } = {}) {
+async function loadProjectArtifacts(projectPath, { force = false, quiet = false } = {}) {
   if (!projectPath) {
     return artifactsStateFor(projectPath);
+  }
+
+  if (state.artifactRefreshPromises[projectPath]) {
+    return state.artifactRefreshPromises[projectPath];
   }
 
   const existing = artifactsStateFor(projectPath);
@@ -5439,13 +5563,21 @@ async function loadProjectArtifacts(projectPath, { force = false } = {}) {
     return existing;
   }
 
-  setArtifactsState(projectPath, {
-    loading: true,
-    error: "",
-  });
-  renderAll();
+  const showLoading = !quiet || !existing.initialized;
+  if (showLoading) {
+    setArtifactsState(projectPath, {
+      loading: true,
+      error: "",
+    });
+    renderAll();
+  } else {
+    setArtifactsState(projectPath, {
+      loading: true,
+      error: "",
+    });
+  }
 
-  try {
+  state.artifactRefreshPromises[projectPath] = (async () => {
     const payload = await fetchJson(`/v1/artifacts?project=${encodeURIComponent(projectPath)}`);
     setArtifactsState(projectPath, {
       loading: false,
@@ -5454,16 +5586,22 @@ async function loadProjectArtifacts(projectPath, { force = false } = {}) {
       artifactRoot: String(payload.artifactRoot || ""),
       items: Array.isArray(payload.artifacts) ? payload.artifacts.map(normalizeArtifact) : [],
     });
-  } catch (error) {
-    setArtifactsState(projectPath, {
-      loading: false,
-      initialized: true,
-      error: error.message,
+    return artifactsStateFor(projectPath);
+  })()
+    .catch((error) => {
+      setArtifactsState(projectPath, {
+        loading: false,
+        initialized: true,
+        error: error.message,
+      });
+      return artifactsStateFor(projectPath);
+    })
+    .finally(() => {
+      delete state.artifactRefreshPromises[projectPath];
+      renderAll();
     });
-  }
 
-  renderAll();
-  return artifactsStateFor(projectPath);
+  return state.artifactRefreshPromises[projectPath];
 }
 
 async function openArtifactsModal(projectPath = state.selectedProject) {
@@ -5491,8 +5629,8 @@ function closeArtifactsModal() {
 }
 
 async function shareArtifact(artifact) {
-  const project = currentArtifactsProject();
-  if (!project?.path || !artifact?.relativePath || state.artifactSharePendingId) {
+  const projectPath = artifact?.projectPath || currentArtifactsProject()?.path || state.selectedProject;
+  if (!projectPath || !artifact?.relativePath || state.artifactSharePendingId) {
     return;
   }
 
@@ -5506,12 +5644,12 @@ async function shareArtifact(artifact) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        project: project.path,
+        project: projectPath,
         file: artifact.relativePath,
       }),
     });
     const items = Array.isArray(payload.artifacts) ? payload.artifacts.map(normalizeArtifact) : [];
-    setArtifactsState(project.path, {
+    setArtifactsState(projectPath, {
       loading: false,
       initialized: true,
       error: "",
@@ -5522,7 +5660,7 @@ async function shareArtifact(artifact) {
       markCopied(`artifact-share:${artifact.id}`);
     }
   } catch (error) {
-    setArtifactsState(project.path, {
+    setArtifactsState(projectPath, {
       error: error.message,
     });
     showError(error);
@@ -5533,8 +5671,8 @@ async function shareArtifact(artifact) {
 }
 
 async function revokeArtifactShare(artifact) {
-  const project = currentArtifactsProject();
-  if (!project?.path || !artifact?.relativePath || state.artifactSharePendingId) {
+  const projectPath = artifact?.projectPath || currentArtifactsProject()?.path || state.selectedProject;
+  if (!projectPath || !artifact?.relativePath || state.artifactSharePendingId) {
     return;
   }
 
@@ -5548,19 +5686,19 @@ async function revokeArtifactShare(artifact) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        project: project.path,
+        project: projectPath,
         token: artifact.share?.token,
         file: artifact.relativePath,
       }),
     });
-    setArtifactsState(project.path, {
+    setArtifactsState(projectPath, {
       loading: false,
       initialized: true,
       error: "",
       items: Array.isArray(payload.artifacts) ? payload.artifacts.map(normalizeArtifact) : [],
     });
   } catch (error) {
-    setArtifactsState(project.path, {
+    setArtifactsState(projectPath, {
       error: error.message,
     });
     showError(error);
@@ -6617,6 +6755,7 @@ async function handleDispatch(event) {
       });
     }
     void refreshProjects().catch(showError);
+    void loadProjectArtifacts(project, { force: true, quiet: true }).catch(() => {});
   } catch (error) {
     completeThreadEntry(entry, {
       status: "failed",
@@ -6647,6 +6786,9 @@ function bindEvents() {
     void openProjectModal();
   });
   elements.projectArtifactsButton.addEventListener("click", () => {
+    void openArtifactsModal();
+  });
+  elements.artifactShelfOpenButton?.addEventListener("click", () => {
     void openArtifactsModal();
   });
   elements.sessionImportButton.addEventListener("click", () => {
@@ -6923,6 +7065,7 @@ async function boot() {
       await refreshProjects();
       await refreshProjectSummaries();
       await refreshDelegates();
+      await refreshArtifacts();
     } catch (_error) {
       // Keep the current view on transient failures.
     }
@@ -6932,6 +7075,7 @@ async function boot() {
     try {
       await refreshProjectSummaries();
       await refreshDelegates();
+      await refreshArtifacts();
     } catch (_error) {
       // Keep the current view on transient failures.
     }
