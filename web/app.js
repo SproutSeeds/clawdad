@@ -49,8 +49,11 @@ const state = {
   projectsRefreshPromise: null,
   projectRootsRefreshPromise: null,
   threadRefreshPromise: null,
+  summaryRefreshPromise: null,
+  delegateRefreshPromise: null,
   historyPrefetchPromises: {},
   foregroundRefreshPromise: null,
+  lastForegroundRefreshAt: 0,
   controlLockTarget: "",
   controlLockUntil: 0,
 };
@@ -159,6 +162,7 @@ const elements = {
 };
 
 const autoRefreshMs = 15000;
+const foregroundRefreshDebounceMs = 1500;
 const importableSessionsCacheMs = 30000;
 const projectCacheKey = "clawdad-project-catalog-v4";
 const threadCacheKey = "clawdad-thread-log-v1";
@@ -1461,13 +1465,24 @@ function captureDetailHistorySnapshot(threadKey, mode = "smart") {
     return null;
   }
 
-  const { scrollTop, scrollHeight, clientHeight } = elements.detailHistoryList;
+  const container = elements.detailHistoryList;
+  const { scrollTop, scrollHeight, clientHeight } = container;
+  const containerRect = container.getBoundingClientRect();
+  const anchor = Array.from(container.querySelectorAll("[data-history-anchor]"))
+    .find((node) => {
+      const rect = node.getBoundingClientRect();
+      return rect.bottom > containerRect.top + 8 && rect.top < containerRect.bottom - 8;
+    });
+  const anchorRect = anchor?.getBoundingClientRect();
+
   return {
     threadKey,
     mode,
     previousTop: scrollTop,
     previousHeight: scrollHeight,
     nearBottom: scrollHeight - clientHeight - scrollTop < 72,
+    anchorKey: anchor?.dataset?.historyAnchor || "",
+    anchorOffset: anchorRect ? anchorRect.top - containerRect.top : 0,
   };
 }
 
@@ -1494,6 +1509,18 @@ function applyDetailHistorySnapshot(snapshot) {
     if (snapshot.mode === "bottom" || snapshot.nearBottom) {
       elements.detailHistoryList.scrollTop = elements.detailHistoryList.scrollHeight;
       return;
+    }
+
+    if (snapshot.anchorKey) {
+      const anchoredNode = Array.from(
+        elements.detailHistoryList.querySelectorAll("[data-history-anchor]"),
+      ).find((node) => node.dataset?.historyAnchor === snapshot.anchorKey);
+      if (anchoredNode) {
+        const containerRect = elements.detailHistoryList.getBoundingClientRect();
+        const anchorRect = anchoredNode.getBoundingClientRect();
+        elements.detailHistoryList.scrollTop += anchorRect.top - containerRect.top - snapshot.anchorOffset;
+        return;
+      }
     }
 
     elements.detailHistoryList.scrollTop = snapshot.previousTop;
@@ -1577,12 +1604,16 @@ function delegateRunRenderSignature(runLog, { logMode = "live" } = {}) {
   });
 }
 
+function delegateRunScrollContainer() {
+  return elements.delegateRunLogPanel || elements.delegateRunList;
+}
+
 function captureDelegateRunSnapshot(runKey, mode = "smart") {
   if (!runKey || !elements.delegateRunList) {
     return null;
   }
 
-  const container = elements.delegateRunList;
+  const container = delegateRunScrollContainer();
   const { scrollTop, scrollHeight, clientHeight } = container;
   const containerRect = container.getBoundingClientRect();
   const anchor = Array.from(container.querySelectorAll("[data-delegate-log-anchor]"))
@@ -1609,6 +1640,7 @@ function applyDelegateRunSnapshot(snapshot) {
   }
 
   window.requestAnimationFrame(() => {
+    const container = delegateRunScrollContainer();
     const project = currentDelegateProject();
     const runId = delegateStateFor(project?.path || "").runLog?.runId || "";
     if (delegateRunKey(project?.path || "", runId) !== snapshot.runKey) {
@@ -1616,23 +1648,23 @@ function applyDelegateRunSnapshot(snapshot) {
     }
 
     if (snapshot.mode === "bottom" || snapshot.nearBottom) {
-      elements.delegateRunList.scrollTop = elements.delegateRunList.scrollHeight;
+      container.scrollTop = container.scrollHeight;
       return;
     }
 
     if (snapshot.anchorKey) {
       const anchoredNode = Array.from(
-        elements.delegateRunList.querySelectorAll("[data-delegate-log-anchor]"),
+        container.querySelectorAll("[data-delegate-log-anchor]"),
       ).find((node) => node.dataset?.delegateLogAnchor === snapshot.anchorKey);
       if (anchoredNode) {
-        const containerRect = elements.delegateRunList.getBoundingClientRect();
+        const containerRect = container.getBoundingClientRect();
         const anchorRect = anchoredNode.getBoundingClientRect();
-        elements.delegateRunList.scrollTop += anchorRect.top - containerRect.top - snapshot.anchorOffset;
+        container.scrollTop += anchorRect.top - containerRect.top - snapshot.anchorOffset;
         return;
       }
     }
 
-    elements.delegateRunList.scrollTop = snapshot.previousTop;
+    container.scrollTop = snapshot.previousTop;
   });
 }
 
@@ -2689,6 +2721,19 @@ function renderProjectOptions() {
   if (controlInteractionLocked("project-select")) {
     return;
   }
+  const disabled = state.dispatchPending || (state.projectsLoading && state.projects.length === 0);
+  const renderKey = JSON.stringify({
+    disabled,
+    loading: Boolean(state.projectsLoading && state.projects.length === 0),
+    selectedProject: state.selectedProject,
+    projects: state.projects.map((project) => [
+      project.path,
+      project.displayName || project.slug || project.path,
+    ]),
+  });
+  if (elements.projectSelect.dataset.renderKey === renderKey) {
+    return;
+  }
   elements.projectSelect.innerHTML = "";
 
   if (state.projectsLoading && state.projects.length === 0) {
@@ -2697,6 +2742,7 @@ function renderProjectOptions() {
     option.textContent = "Loading projects…";
     elements.projectSelect.append(option);
     elements.projectSelect.disabled = true;
+    elements.projectSelect.dataset.renderKey = renderKey;
     return;
   }
 
@@ -2706,6 +2752,7 @@ function renderProjectOptions() {
     option.textContent = "No projects";
     elements.projectSelect.append(option);
     elements.projectSelect.disabled = true;
+    elements.projectSelect.dataset.renderKey = renderKey;
     return;
   }
 
@@ -2716,9 +2763,9 @@ function renderProjectOptions() {
     elements.projectSelect.append(option);
   }
 
-  elements.projectSelect.disabled =
-    state.dispatchPending || (state.projectsLoading && state.projects.length === 0);
+  elements.projectSelect.disabled = disabled;
   elements.projectSelect.value = state.selectedProject;
+  elements.projectSelect.dataset.renderKey = renderKey;
 }
 
 function updateProjectControlAppearance() {
@@ -2734,12 +2781,38 @@ function renderSessionOptions() {
   if (controlInteractionLocked("session-select")) {
     return;
   }
-  elements.sessionSelect.innerHTML = "";
-
   const project = currentProject();
   const sessions = Array.isArray(project?.sessions) ? project.sessions : [];
   const selectedSession =
     sessions.find((session) => session.sessionId === state.selectedSessionId) || null;
+  const sessionBusy = Boolean(
+    selectedSession?.pendingCreation ||
+      sessionRenamePending(project?.path, selectedSession?.sessionId),
+  );
+  const disabled =
+    !project ||
+    sessions.length === 0 ||
+    state.sessionSwitchPending ||
+    state.dispatchPending;
+  const renderKey = JSON.stringify({
+    projectPath: project?.path || "",
+    disabled,
+    sessionBusy,
+    selectedSessionId: state.selectedSessionId,
+    sessions: sessions.map((session) => [
+      session.sessionId || "",
+      sessionOptionLabel(session, project?.path),
+      session.status || "",
+      session.lastDispatch || "",
+      session.lastResponse || "",
+      Boolean(session.pendingCreation),
+      sessionRenamePending(project?.path, session.sessionId),
+    ]),
+  });
+  if (elements.sessionSelect.dataset.renderKey === renderKey) {
+    return;
+  }
+  elements.sessionSelect.innerHTML = "";
 
   if (!project) {
     const option = document.createElement("option");
@@ -2748,6 +2821,7 @@ function renderSessionOptions() {
     elements.sessionSelect.append(option);
     elements.sessionSelect.disabled = true;
     elements.sessionControl?.classList.remove("is-loading");
+    elements.sessionSelect.dataset.renderKey = renderKey;
     return;
   }
 
@@ -2758,6 +2832,7 @@ function renderSessionOptions() {
     elements.sessionSelect.append(option);
     elements.sessionSelect.disabled = true;
     elements.sessionControl?.classList.remove("is-loading");
+    elements.sessionSelect.dataset.renderKey = renderKey;
     return;
   }
 
@@ -2770,14 +2845,11 @@ function renderSessionOptions() {
 
   elements.sessionControl?.classList.toggle(
     "is-loading",
-    Boolean(
-      selectedSession?.pendingCreation ||
-        sessionRenamePending(project.path, selectedSession?.sessionId),
-    ),
+    sessionBusy,
   );
-  elements.sessionSelect.disabled =
-    state.projectsLoading || state.sessionSwitchPending || state.dispatchPending;
+  elements.sessionSelect.disabled = disabled;
   elements.sessionSelect.value = state.selectedSessionId;
+  elements.sessionSelect.dataset.renderKey = renderKey;
 }
 
 function repoOptionLabel(repo) {
@@ -3229,6 +3301,7 @@ function buildHistoryGroup(entry) {
   const group = document.createElement("div");
   group.className = "history-group";
   group.dataset.requestId = entry.requestId || "";
+  group.dataset.historyAnchor = entry.requestId || entry.sentAt || entry.answeredAt || entry.message || "";
 
   group.append(
     buildThreadCard({
@@ -4173,6 +4246,7 @@ function renderSummaryModal() {
   if (!project) {
     setText(elements.summaryState, "", { empty: true });
     clearNode(elements.summaryList);
+    delete elements.summaryList.dataset.renderKey;
     elements.summaryModal.hidden = true;
     return;
   }
@@ -4218,31 +4292,45 @@ function renderSummaryModal() {
     setText(elements.summaryState, "No saved summary yet", { empty: false });
   }
 
-  clearNode(elements.summaryList);
-  if (summaryPending && summaryState.snapshots.length === 0) {
-    const card = document.createElement("div");
-    card.className = "history-state-card";
-    card.textContent = "Working on a fresh summary…";
-    elements.summaryList.append(card);
-  } else if (!summaryState.initialized && summaryState.loading) {
-    const card = document.createElement("div");
-    card.className = "history-state-card";
-    card.textContent = "Loading saved summary…";
-    elements.summaryList.append(card);
-  } else if (summaryState.error && summaryState.snapshots.length === 0) {
-    const card = document.createElement("div");
-    card.className = "history-state-card";
-    card.textContent = summaryState.error;
-    elements.summaryList.append(card);
-  } else if (summaryState.snapshots.length === 0) {
-    const card = document.createElement("div");
-    card.className = "history-state-card";
-    card.textContent = "No saved summary yet.";
-    elements.summaryList.append(card);
-  } else {
-    for (const snapshot of summaryState.snapshots) {
-      elements.summaryList.append(buildSummaryCard(snapshot));
+  const summaryListRenderKey = JSON.stringify({
+    projectPath: project.path,
+    pending: summaryPending,
+    loading: Boolean(summaryState.loading && !summaryState.initialized),
+    error: summaryState.error || "",
+    snapshots: summaryState.snapshots.map((snapshot) => [
+      snapshot.id,
+      snapshot.createdAt,
+      String(snapshot.summary || "").length,
+    ]),
+  });
+  if (elements.summaryList.dataset.renderKey !== summaryListRenderKey) {
+    clearNode(elements.summaryList);
+    if (summaryPending && summaryState.snapshots.length === 0) {
+      const card = document.createElement("div");
+      card.className = "history-state-card";
+      card.textContent = "Working on a fresh summary…";
+      elements.summaryList.append(card);
+    } else if (!summaryState.initialized && summaryState.loading) {
+      const card = document.createElement("div");
+      card.className = "history-state-card";
+      card.textContent = "Loading saved summary…";
+      elements.summaryList.append(card);
+    } else if (summaryState.error && summaryState.snapshots.length === 0) {
+      const card = document.createElement("div");
+      card.className = "history-state-card";
+      card.textContent = summaryState.error;
+      elements.summaryList.append(card);
+    } else if (summaryState.snapshots.length === 0) {
+      const card = document.createElement("div");
+      card.className = "history-state-card";
+      card.textContent = "No saved summary yet.";
+      elements.summaryList.append(card);
+    } else {
+      for (const snapshot of summaryState.snapshots) {
+        elements.summaryList.append(buildSummaryCard(snapshot));
+      }
     }
+    elements.summaryList.dataset.renderKey = summaryListRenderKey;
   }
 
   elements.summaryModal.hidden = false;
@@ -4891,14 +4979,22 @@ function summaryProjectsNeedingRefresh() {
 }
 
 async function refreshProjectSummaries() {
+  if (state.summaryRefreshPromise) {
+    return state.summaryRefreshPromise;
+  }
+
   const targets = summaryProjectsNeedingRefresh();
   if (targets.length === 0) {
     return;
   }
 
-  await Promise.all(
+  state.summaryRefreshPromise = Promise.all(
     targets.map((projectPath) => loadProjectSummary(projectPath, { force: true })),
-  );
+  ).finally(() => {
+    state.summaryRefreshPromise = null;
+  });
+
+  return state.summaryRefreshPromise;
 }
 
 function delegateProjectsNeedingRefresh() {
@@ -4918,14 +5014,22 @@ function delegateProjectsNeedingRefresh() {
 }
 
 async function refreshDelegates() {
+  if (state.delegateRefreshPromise) {
+    return state.delegateRefreshPromise;
+  }
+
   const targets = delegateProjectsNeedingRefresh();
   if (targets.length === 0) {
     return;
   }
 
-  await Promise.all(
+  state.delegateRefreshPromise = Promise.all(
     targets.map((projectPath) => loadDelegateProject(projectPath, { force: true })),
-  );
+  ).finally(() => {
+    state.delegateRefreshPromise = null;
+  });
+
+  return state.delegateRefreshPromise;
 }
 
 function showError(error) {
@@ -6715,6 +6819,11 @@ function bindEvents() {
     if (document.visibilityState === "hidden") {
       return;
     }
+    const now = Date.now();
+    if (now - state.lastForegroundRefreshAt < foregroundRefreshDebounceMs) {
+      return;
+    }
+    state.lastForegroundRefreshAt = now;
     void refreshForegroundState();
   };
   window.addEventListener("focus", refreshAfterForeground);
