@@ -2072,6 +2072,12 @@ function normalizeDelegatePlanSnapshot(snapshot) {
 
 function normalizeDelegateRunEvent(event) {
   const step = Number.parseInt(String(event?.step || "0"), 10) || null;
+  const rawCheckpoint =
+    event?.checkpoint && typeof event.checkpoint === "object" && !Array.isArray(event.checkpoint)
+      ? event.checkpoint
+      : event?.payload?.checkpoint && typeof event.payload.checkpoint === "object" && !Array.isArray(event.payload.checkpoint)
+        ? event.payload.checkpoint
+        : null;
   return {
     id: String(event?.id || "").trim() || makeEntryId(),
     at: String(event?.at || event?.createdAt || "").trim() || null,
@@ -2086,8 +2092,26 @@ function normalizeDelegateRunEvent(event) {
     state: String(event?.state || "").trim(),
     stopReason: String(event?.stopReason || event?.stop_reason || "").trim(),
     error: String(event?.error || "").trim(),
+    checkpoint: normalizeDelegateCheckpoint(rawCheckpoint),
     computeBudget: normalizeDelegateComputeBudget(event?.computeBudget),
   };
+}
+
+function normalizeDelegateCheckpoint(checkpoint) {
+  if (!checkpoint || typeof checkpoint !== "object" || Array.isArray(checkpoint)) {
+    return null;
+  }
+
+  const confidence = String(checkpoint.confidence || "").trim().toLowerCase();
+  const normalized = {
+    progressSignal: String(checkpoint.progressSignal || checkpoint.progress_signal || "").trim(),
+    breakthroughs: String(checkpoint.breakthroughs || checkpoint.breakthrough || "").trim(),
+    blockers: String(checkpoint.blockers || checkpoint.blocker || "").trim(),
+    nextProbe: String(checkpoint.nextProbe || checkpoint.next_probe || "").trim(),
+    confidence: ["low", "medium", "high"].includes(confidence) ? confidence : "",
+  };
+
+  return Object.values(normalized).some(Boolean) ? normalized : null;
 }
 
 function normalizeDelegateRunSummarySnapshot(snapshot) {
@@ -3915,6 +3939,7 @@ function delegateStepSnapshots(events = []) {
       state: "",
       stopReason: "",
       error: "",
+      checkpoint: null,
       liveText: "",
       responseText: "",
       events: [],
@@ -3938,9 +3963,13 @@ function delegateStepSnapshots(events = []) {
       existing.nextAction = event.nextAction || existing.nextAction;
       existing.state = event.state || existing.state;
       existing.stopReason = event.stopReason || existing.stopReason;
+      existing.checkpoint = event.checkpoint || existing.checkpoint;
     }
     if (event.error) {
       existing.error = event.error;
+    }
+    if (event.checkpoint && !existing.checkpoint) {
+      existing.checkpoint = event.checkpoint;
     }
     if (event.summary && !existing.summary) {
       existing.summary = event.summary;
@@ -3979,6 +4008,14 @@ function appendDelegateStepField(root, label, value, { emptyText = "" } = {}) {
   root.append(field);
 }
 
+function usefulDelegateCheckpointText(value) {
+  const clean = String(value || "").trim();
+  if (!clean || /^(none|n\/a|na|not applicable|no)$/iu.test(clean)) {
+    return "";
+  }
+  return clean;
+}
+
 function buildDelegateStepSnapshotCard(snapshot) {
   const card = document.createElement("article");
   card.className = `delegate-step-card${snapshot.error ? " failed" : ""}`;
@@ -4005,15 +4042,19 @@ function buildDelegateStepSnapshotCard(snapshot) {
 
   const fields = document.createElement("div");
   fields.className = "delegate-step-fields";
+  const checkpoint = snapshot.checkpoint || {};
+  const breakthroughText = usefulDelegateCheckpointText(checkpoint.breakthroughs);
+  const blockerText = usefulDelegateCheckpointText(checkpoint.blockers);
+  const progressText = usefulDelegateCheckpointText(checkpoint.progressSignal);
+  const nextProbeText = usefulDelegateCheckpointText(checkpoint.nextProbe);
   appendDelegateStepField(fields, "Completed", snapshot.summary || snapshot.responseText, {
     emptyText: "This step is still running, so the completed snapshot has not landed yet.",
   });
-  appendDelegateStepField(fields, "Next", snapshot.nextAction || snapshot.title);
-  appendDelegateStepField(
-    fields,
-    snapshot.error ? "Blocker" : "Signal",
-    snapshot.error || delegateStopReasonLabel(snapshot.stopReason) || snapshot.state,
-  );
+  appendDelegateStepField(fields, "Progress", progressText || delegateStopReasonLabel(snapshot.stopReason) || snapshot.state);
+  appendDelegateStepField(fields, "Breakthroughs", breakthroughText);
+  appendDelegateStepField(fields, "Blockers", snapshot.error || blockerText);
+  appendDelegateStepField(fields, "Next", nextProbeText || snapshot.nextAction || snapshot.title);
+  appendDelegateStepField(fields, "Confidence", checkpoint.confidence);
   if (!snapshot.summary && snapshot.liveText) {
     appendDelegateStepField(fields, "Live note", snapshot.liveText);
   }
