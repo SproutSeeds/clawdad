@@ -203,6 +203,170 @@ sleep 10
   }
 });
 
+test("history endpoint merges mirrored requests with provider transcript handoff copies", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-history-"));
+  const home = path.join(root, "home");
+  const projectPath = path.join(root, "clawdad");
+  const configPath = path.join(root, "server.json");
+  const mockBinPath = path.join(root, "clawdad-mock");
+  const sessionId = "019d564e-ec8d-7d80-8303-ed4f17090c35";
+  const requestId = "ab126c08-6f1b-4da7-9162-6ec5ddb6f034";
+  const message = "Please fix the duplicate card.";
+  const providerMessage = `${message}\n\n[Clawdad artifact handoff: If you create a deliverable file the user may need to download or share, save it under '${projectPath}/.clawdad/artifacts' using a clear filename.]`;
+
+  await mkdir(path.join(projectPath, ".clawdad", "mailbox"), { recursive: true });
+  await mkdir(path.join(projectPath, ".clawdad", "history", "sessions", sessionId), { recursive: true });
+  await mkdir(path.join(home, ".codex", "sessions", "2026", "04", "16"), { recursive: true });
+  await writeFile(
+    path.join(home, "state.json"),
+    JSON.stringify(
+      {
+        version: 3,
+        projects: {
+          [projectPath]: {
+            status: "completed",
+            last_dispatch: "2026-04-16T21:54:32Z",
+            last_response: "2026-04-16T21:58:11Z",
+            dispatch_count: 1,
+            registered_at: "2026-04-16T00:00:00Z",
+            active_session_id: sessionId,
+            sessions: {
+              [sessionId]: {
+                slug: "Main-claw",
+                provider: "codex",
+                provider_session_seeded: "true",
+                tracked_at: "2026-04-16T00:00:00Z",
+                dispatch_count: 1,
+                last_dispatch: "2026-04-16T21:54:32Z",
+                last_response: "2026-04-16T21:58:11Z",
+                status: "completed",
+                local_only: "false",
+              },
+            },
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    path.join(projectPath, ".clawdad", "mailbox", "status.json"),
+    JSON.stringify({ state: "completed", request_id: requestId, session_id: sessionId }, null, 2),
+    "utf8",
+  );
+  await writeFile(
+    path.join(
+      projectPath,
+      ".clawdad",
+      "history",
+      "sessions",
+      sessionId,
+      `20260416T215432Z--${requestId}.json`,
+    ),
+    JSON.stringify(
+      {
+        requestId,
+        projectPath,
+        sessionId,
+        sessionSlug: "Main-claw",
+        provider: "codex",
+        message,
+        sentAt: "2026-04-16T21:54:32Z",
+        answeredAt: "2026-04-16T21:58:11Z",
+        status: "answered",
+        exitCode: 0,
+        response: "Final answer.",
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    path.join(home, ".codex", "sessions", "2026", "04", "16", `rollout-${sessionId}.jsonl`),
+    [
+      JSON.stringify({
+        type: "response_item",
+        timestamp: "2026-04-16T21:54:50.724Z",
+        payload: {
+          type: "message",
+          role: "user",
+          content: providerMessage,
+        },
+      }),
+      JSON.stringify({
+        type: "response_item",
+        timestamp: "2026-04-16T21:58:09.187Z",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: "Working notes.\n\nFinal answer.",
+        },
+      }),
+    ].join("\n") + "\n",
+    "utf8",
+  );
+  await writeFile(mockBinPath, "#!/bin/sh\nexit 1\n", "utf8");
+  await chmod(mockBinPath, 0o755);
+
+  const port = await freePort();
+  await writeFile(
+    configPath,
+    JSON.stringify(
+      {
+        host: "127.0.0.1",
+        port,
+        defaultProject: projectPath,
+        authMode: "tailscale",
+        allowedUsers: ["tester@example.com"],
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  const child = spawn(process.execPath, [serverScript, "serve", "--config", configPath], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      HOME: home,
+      CLAWDAD_HOME: home,
+      CLAWDAD_BIN_PATH: mockBinPath,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const stderr = [];
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => stderr.push(chunk));
+
+  try {
+    const baseUrl = `http://127.0.0.1:${port}`;
+    await waitForHealth(baseUrl, child);
+    const response = await fetch(
+      `${baseUrl}/v1/history?project=${encodeURIComponent(projectPath)}&sessionId=${encodeURIComponent(sessionId)}&cursor=0&limit=10`,
+      {
+        headers: {
+          "tailscale-user-login": "tester@example.com",
+        },
+      },
+    );
+    assert.equal(response.status, 200, stderr.join(""));
+    const payload = await response.json();
+    assert.equal(payload.ok, true);
+    assert.equal(payload.total, 1);
+    assert.equal(payload.items.length, 1);
+    assert.equal(payload.items[0].requestId, requestId);
+    assert.equal(payload.items[0].message, message);
+    assert.match(payload.items[0].response, /Final answer/u);
+  } finally {
+    await stopServer(child);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("import-session registers a local Codex session without invoking the ORP-backed CLI", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-import-"));
   const home = path.join(root, "home");

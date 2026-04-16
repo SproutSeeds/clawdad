@@ -175,6 +175,9 @@ const projectCacheKey = "clawdad-project-catalog-v4";
 const threadCacheKey = "clawdad-thread-log-v1";
 const queueCollapsedKey = "clawdad-queue-collapsed-v1";
 const queuedDispatchGraceMs = 15000;
+// Dispatch startup can lag behind refreshes; do not mark optimistic queue cards failed too early.
+const queuedDispatchAttachGraceMs = 2 * 60 * 1000;
+const historyDuplicateWindowMs = queuedDispatchAttachGraceMs;
 const copiedFeedbackMs = 1400;
 const historyPageSize = 20;
 const historyPrefetchFreshMs = 5 * 60 * 1000;
@@ -1871,11 +1874,44 @@ function historyItemStatusRank(status) {
   return { queued: 1, failed: 2, answered: 3 }[normalized] || 0;
 }
 
+function isSyntheticHistoryRequestId(value) {
+  const requestId = String(value || "").trim();
+  return requestId.startsWith("codex:") || requestId.startsWith("chimera:");
+}
+
+function stripClawdadHistoryHandoff(value) {
+  return String(value || "")
+    .replace(/\s*\[Clawdad artifact handoff:[\s\S]*?\]\s*$/u, "")
+    .trim();
+}
+
+function comparableHistoryMessage(value) {
+  return stripClawdadHistoryHandoff(value).replace(/\s+/g, " ").trim();
+}
+
+function isUnattachedLocalHistoryItem(item) {
+  return (
+    String(item?.status || "").trim().toLowerCase() === "queued" &&
+    !String(item?.response || "").trim()
+  );
+}
+
 function historyItemsLikelySame(left, right) {
   const leftRequestId = String(left?.requestId || "").trim();
   const rightRequestId = String(right?.requestId || "").trim();
   if (leftRequestId && rightRequestId && leftRequestId === rightRequestId) {
     return true;
+  }
+
+  if (
+    leftRequestId &&
+    rightRequestId &&
+    !isSyntheticHistoryRequestId(leftRequestId) &&
+    !isSyntheticHistoryRequestId(rightRequestId) &&
+    !isUnattachedLocalHistoryItem(left) &&
+    !isUnattachedLocalHistoryItem(right)
+  ) {
+    return false;
   }
 
   const leftSessionId = String(left?.sessionId || "").trim();
@@ -1884,8 +1920,8 @@ function historyItemsLikelySame(left, right) {
     return false;
   }
 
-  const leftMessage = String(left?.message || "").trim();
-  const rightMessage = String(right?.message || "").trim();
+  const leftMessage = comparableHistoryMessage(left?.message);
+  const rightMessage = comparableHistoryMessage(right?.message);
   if (!leftMessage || leftMessage !== rightMessage) {
     return false;
   }
@@ -1896,7 +1932,7 @@ function historyItemsLikelySame(left, right) {
     return false;
   }
 
-  return Math.abs(leftSentAt - rightSentAt) <= 5000;
+  return Math.abs(leftSentAt - rightSentAt) <= historyDuplicateWindowMs;
 }
 
 function mergeHistoryItem(existing, incoming) {
@@ -2545,6 +2581,11 @@ function entrySentAtMs(entry) {
 function entryAgePastGraceWindow(entry) {
   const sentAtMs = entrySentAtMs(entry);
   return sentAtMs > 0 && Date.now() - sentAtMs > queuedDispatchGraceMs;
+}
+
+function entryAgePastAttachGraceWindow(entry) {
+  const sentAtMs = entrySentAtMs(entry);
+  return sentAtMs > 0 && Date.now() - sentAtMs > queuedDispatchAttachGraceMs;
 }
 
 function sessionCompletionTimestampMs(project, session) {
@@ -4949,7 +4990,7 @@ async function reconcileThreadEntries() {
       if (canUseMailboxFallback) {
         // Fall through and bind this stale local queue card to the completed mailbox result.
       } else {
-        if (entryAgePastGraceWindow(entry) && status !== "running" && status !== "dispatched") {
+        if (entryAgePastAttachGraceWindow(entry) && status !== "running" && status !== "dispatched") {
           completeThreadEntry(entry, {
             status: "failed",
             answeredAt: new Date().toISOString(),
@@ -4970,7 +5011,7 @@ async function reconcileThreadEntries() {
       if (
         status === "idle" &&
         Number.isFinite(sentAtMs) &&
-        Date.now() - sentAtMs > queuedDispatchGraceMs &&
+        Date.now() - sentAtMs > queuedDispatchAttachGraceMs &&
         (!Number.isFinite(lastDispatchMs) || lastDispatchMs < sentAtMs)
       ) {
         completeThreadEntry(entry, {
@@ -4991,7 +5032,7 @@ async function reconcileThreadEntries() {
       if (canUseMailboxFallback) {
         // Fall through and reconcile from the completed mailbox/session state.
       } else {
-        if (entryAgePastGraceWindow(entry)) {
+        if (entryAgePastAttachGraceWindow(entry)) {
           completeThreadEntry(entry, {
             status: "failed",
             answeredAt: new Date().toISOString(),
