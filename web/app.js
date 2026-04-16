@@ -4205,6 +4205,10 @@ function normalizeArtifact(item) {
   };
 }
 
+function artifactShareUrl(artifact) {
+  return String(artifact?.share?.url || "").trim();
+}
+
 function formatFileSize(bytes) {
   const value = Number(bytes || 0);
   if (!Number.isFinite(value) || value <= 0) {
@@ -4362,6 +4366,23 @@ function buildArtifactCard(artifact, { compact = false } = {}) {
   pathLabel.className = "artifact-path";
   pathLabel.textContent = artifact.relativePath;
 
+  const publicLinkUrl = artifactShareUrl(artifact);
+  const publicLinkRow = document.createElement("div");
+  publicLinkRow.className = "artifact-public-link-row";
+
+  const publicLink = document.createElement("a");
+  publicLink.className = "artifact-public-link";
+  publicLink.href = publicLinkUrl;
+  publicLink.target = "_blank";
+  publicLink.rel = "noopener";
+  publicLink.textContent = "Open share link";
+
+  const publicLinkScope = document.createElement("div");
+  publicLinkScope.className = "artifact-share-scope";
+  publicLinkScope.textContent = "Works for anyone who can reach this Clawdad address.";
+
+  publicLinkRow.append(publicLink, publicLinkScope);
+
   const actions = document.createElement("div");
   actions.className = "artifact-actions";
 
@@ -4391,12 +4412,12 @@ function buildArtifactCard(artifact, { compact = false } = {}) {
       ? "Sharing…"
       : copyFeedbackActive(shareKey)
         ? "Copied"
-        : artifact.share?.url
-          ? "Copy public link"
-          : "Create public link";
+        : publicLinkUrl
+          ? "Copy link"
+          : "Create share link";
   shareButton.addEventListener("click", () => {
-    if (artifact.share?.url) {
-      void copyText(artifact.share.url)
+    if (publicLinkUrl) {
+      void copyText(publicLinkUrl)
         .then(() => {
           markCopied(shareKey);
         })
@@ -4420,7 +4441,11 @@ function buildArtifactCard(artifact, { compact = false } = {}) {
     actions.append(revokeButton);
   }
 
-  card.append(head, pathLabel, actions);
+  card.append(head, pathLabel);
+  if (publicLinkUrl) {
+    card.append(publicLinkRow);
+  }
+  card.append(actions);
   return card;
 }
 
@@ -5855,9 +5880,15 @@ async function shareArtifact(artifact) {
       error: "",
       items,
     });
-    if (payload.share?.url) {
-      await copyText(payload.share.url);
-      markCopied(`artifact-share:${artifact.id}`);
+    const shareUrl = String(payload.share?.url || "").trim();
+    if (shareUrl) {
+      copyText(shareUrl)
+        .then(() => {
+          markCopied(`artifact-share:${artifact.id}`);
+        })
+        .catch((error) => {
+          console.warn("Share link created, but clipboard copy failed.", error);
+        });
     }
   } catch (error) {
     setArtifactsState(projectPath, {
