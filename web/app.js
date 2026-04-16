@@ -19,7 +19,6 @@ const state = {
   projectSummaries: {},
   artifactModalProject: "",
   artifactsByProject: {},
-  artifactSharePendingId: "",
   artifactDownloadPendingId: "",
   artifactRefreshPromises: {},
   artifactShelfCollapsed: false,
@@ -2395,7 +2394,6 @@ function pruneTrackedArtifacts(projectPath, sessionId = "") {
   }
   if (state.artifactModalProject === normalizedProjectPath) {
     state.artifactModalProject = "";
-    state.artifactSharePendingId = "";
   }
   if (state.delegateModalProject === normalizedProjectPath) {
     closeDelegateModal();
@@ -4194,19 +4192,7 @@ function normalizeArtifact(item) {
     modifiedAt: String(item?.modifiedAt || "").trim() || null,
     mimeType: String(item?.mimeType || "").trim() || "application/octet-stream",
     downloadUrl: String(item?.downloadUrl || "").trim(),
-    share: item?.share && typeof item.share === "object"
-      ? {
-          token: String(item.share.token || "").trim(),
-          url: String(item.share.url || "").trim(),
-          createdAt: String(item.share.createdAt || "").trim() || null,
-          expiresAt: String(item.share.expiresAt || "").trim() || null,
-        }
-      : null,
   };
-}
-
-function artifactShareUrl(artifact) {
-  return String(artifact?.share?.url || "").trim();
 }
 
 function formatFileSize(bytes) {
@@ -4357,7 +4343,6 @@ function buildArtifactCard(artifact, { compact = false } = {}) {
   meta.textContent = [
     formatFileSize(artifact.size),
     formatTimestamp(artifact.modifiedAt),
-    artifact.share?.expiresAt ? `shared until ${formatTimestamp(artifact.share.expiresAt)}` : "",
   ].filter(Boolean).join(" • ");
 
   head.append(name, meta);
@@ -4365,23 +4350,6 @@ function buildArtifactCard(artifact, { compact = false } = {}) {
   const pathLabel = document.createElement("div");
   pathLabel.className = "artifact-path";
   pathLabel.textContent = artifact.relativePath;
-
-  const publicLinkUrl = artifactShareUrl(artifact);
-  const publicLinkRow = document.createElement("div");
-  publicLinkRow.className = "artifact-public-link-row";
-
-  const publicLink = document.createElement("a");
-  publicLink.className = "artifact-public-link";
-  publicLink.href = publicLinkUrl;
-  publicLink.target = "_blank";
-  publicLink.rel = "noopener";
-  publicLink.textContent = "Open share link";
-
-  const publicLinkScope = document.createElement("div");
-  publicLinkScope.className = "artifact-share-scope";
-  publicLinkScope.textContent = "Works for anyone who can reach this Clawdad address.";
-
-  publicLinkRow.append(publicLink, publicLinkScope);
 
   const actions = document.createElement("div");
   actions.className = "artifact-actions";
@@ -4402,49 +4370,9 @@ function buildArtifactCard(artifact, { compact = false } = {}) {
     void downloadArtifact(artifact);
   });
 
-  const shareKey = `artifact-share:${artifact.id}`;
-  const shareButton = document.createElement("button");
-  shareButton.className = "artifact-action-button";
-  shareButton.type = "button";
-  shareButton.disabled = state.artifactSharePendingId === artifact.id;
-  shareButton.textContent =
-    state.artifactSharePendingId === artifact.id
-      ? "Sharing…"
-      : copyFeedbackActive(shareKey)
-        ? "Copied"
-        : publicLinkUrl
-          ? "Copy link"
-          : "Create share link";
-  shareButton.addEventListener("click", () => {
-    if (publicLinkUrl) {
-      void copyText(publicLinkUrl)
-        .then(() => {
-          markCopied(shareKey);
-        })
-        .catch(showError);
-      return;
-    }
-    void shareArtifact(artifact);
-  });
-
-  actions.append(download, shareButton);
-
-  if (artifact.share?.token) {
-    const revokeButton = document.createElement("button");
-    revokeButton.className = "artifact-action-button is-quiet";
-    revokeButton.type = "button";
-    revokeButton.disabled = state.artifactSharePendingId === artifact.id;
-    revokeButton.textContent = "Revoke";
-    revokeButton.addEventListener("click", () => {
-      void revokeArtifactShare(artifact);
-    });
-    actions.append(revokeButton);
-  }
+  actions.append(download);
 
   card.append(head, pathLabel);
-  if (publicLinkUrl) {
-    card.append(publicLinkRow);
-  }
   card.append(actions);
   return card;
 }
@@ -4499,16 +4427,12 @@ function renderArtifactShelf() {
     projectPath: project.path,
     collapsed: state.artifactShelfCollapsed,
     loading: Boolean(artifactState.loading && !artifactState.initialized),
-    sharePendingId: state.artifactSharePendingId,
     downloadPendingId: state.artifactDownloadPendingId,
     items: items.slice(0, 3).map((artifact) => [
       artifact.id,
       artifact.relativePath,
       artifact.modifiedAt,
       artifact.size,
-      artifact.share?.token || "",
-      artifact.share?.url || "",
-      copyFeedbackActive(`artifact-share:${artifact.id}`),
       copyFeedbackActive(`artifact-download:${artifact.id}`),
     ]),
   });
@@ -5842,101 +5766,13 @@ async function openArtifactsModal(projectPath = state.selectedProject) {
   state.sessionTitleModalProject = "";
   state.sessionTitleModalSessionId = "";
   state.artifactModalProject = projectPath;
-  state.artifactSharePendingId = "";
   renderAll();
   await loadProjectArtifacts(projectPath, { force: true });
 }
 
 function closeArtifactsModal() {
   state.artifactModalProject = "";
-  state.artifactSharePendingId = "";
   renderAll();
-}
-
-async function shareArtifact(artifact) {
-  const projectPath = artifact?.projectPath || currentArtifactsProject()?.path || state.selectedProject;
-  if (!projectPath || !artifact?.relativePath || state.artifactSharePendingId) {
-    return;
-  }
-
-  state.artifactSharePendingId = artifact.id;
-  renderAll();
-
-  try {
-    const payload = await fetchJson("/v1/artifacts/share", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        project: projectPath,
-        file: artifact.relativePath,
-      }),
-    });
-    const items = Array.isArray(payload.artifacts) ? payload.artifacts.map(normalizeArtifact) : [];
-    setArtifactsState(projectPath, {
-      loading: false,
-      initialized: true,
-      error: "",
-      items,
-    });
-    const shareUrl = String(payload.share?.url || "").trim();
-    if (shareUrl) {
-      copyText(shareUrl)
-        .then(() => {
-          markCopied(`artifact-share:${artifact.id}`);
-        })
-        .catch((error) => {
-          console.warn("Share link created, but clipboard copy failed.", error);
-        });
-    }
-  } catch (error) {
-    setArtifactsState(projectPath, {
-      error: error.message,
-    });
-    showError(error);
-  } finally {
-    state.artifactSharePendingId = "";
-    renderAll();
-  }
-}
-
-async function revokeArtifactShare(artifact) {
-  const projectPath = artifact?.projectPath || currentArtifactsProject()?.path || state.selectedProject;
-  if (!projectPath || !artifact?.relativePath || state.artifactSharePendingId) {
-    return;
-  }
-
-  state.artifactSharePendingId = artifact.id;
-  renderAll();
-
-  try {
-    const payload = await fetchJson("/v1/artifacts/revoke", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        project: projectPath,
-        token: artifact.share?.token,
-        file: artifact.relativePath,
-      }),
-    });
-    setArtifactsState(projectPath, {
-      loading: false,
-      initialized: true,
-      error: "",
-      items: Array.isArray(payload.artifacts) ? payload.artifacts.map(normalizeArtifact) : [],
-    });
-  } catch (error) {
-    setArtifactsState(projectPath, {
-      error: error.message,
-    });
-    showError(error);
-  } finally {
-    state.artifactSharePendingId = "";
-    renderAll();
-  }
 }
 
 function closeSessionTitleModal() {

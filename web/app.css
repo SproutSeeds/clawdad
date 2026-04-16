@@ -1172,36 +1172,6 @@ textarea:disabled {
   overflow-wrap: anywhere;
 }
 
-.artifact-public-link-row {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-
-.artifact-public-link {
-  width: fit-content;
-  max-width: 100%;
-  overflow-wrap: anywhere;
-  color: rgba(240, 208, 109, 0.94);
-  font-family: var(--mono);
-  font-size: 0.74rem;
-  font-weight: 800;
-  text-decoration: none;
-}
-
-.artifact-public-link:hover,
-.artifact-public-link:focus-visible {
-  color: #fff8ee;
-  text-decoration: underline;
-}
-
-.artifact-share-scope {
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: 0.66rem;
-  line-height: 1.35;
-}
-
 .artifact-actions {
   display: flex;
   flex-wrap: wrap;
