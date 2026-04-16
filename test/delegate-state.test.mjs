@@ -4,8 +4,10 @@ import test from "node:test";
 import {
   analyzeDelegatePhaseHandoff,
   chooseDelegateSession,
+  delegatePauseDecision,
   delegatePlanRefreshDecision,
   delegateRunListState,
+  recoverableCodexStreamDisconnect,
   shouldClearPendingDelegatePause,
 } from "../lib/delegate-state.mjs";
 
@@ -107,6 +109,84 @@ test("shouldClearPendingDelegatePause leaves ordinary active runs alone", () => 
       runningJob: { pauseRequested: false },
       currentStatus: { pauseRequested: false },
       currentConfig: { enabled: true },
+    }),
+    false,
+  );
+});
+
+test("delegatePauseDecision requests a safe-point pause for live running delegates", () => {
+  assert.deepEqual(
+    delegatePauseDecision({
+      status: { state: "running" },
+      hasActiveRunJob: false,
+      supervisorLive: true,
+    }),
+    {
+      state: "running",
+      pauseRequested: true,
+      waitForSafePoint: true,
+    },
+  );
+});
+
+test("delegatePauseDecision pauses stale running delegates immediately", () => {
+  assert.deepEqual(
+    delegatePauseDecision({
+      status: { state: "running" },
+      hasActiveRunJob: false,
+      supervisorLive: false,
+    }),
+    {
+      state: "paused",
+      pauseRequested: false,
+      waitForSafePoint: false,
+    },
+  );
+});
+
+test("delegatePauseDecision requests a safe-point pause for active planning jobs", () => {
+  assert.deepEqual(
+    delegatePauseDecision({
+      status: { state: "planning" },
+      hasActivePlanJob: true,
+    }),
+    {
+      state: "planning",
+      pauseRequested: true,
+      waitForSafePoint: true,
+    },
+  );
+});
+
+test("recoverableCodexStreamDisconnect detects retryable websocket drops", () => {
+  assert.equal(
+    recoverableCodexStreamDisconnect({
+      mailboxStatus: {
+        error: JSON.stringify({
+          error: {
+            message: "Reconnecting... 2/5",
+            codexErrorInfo: {
+              responseStreamDisconnected: {
+                httpStatusCode: null,
+              },
+            },
+            additionalDetails:
+              "stream disconnected before completion: websocket closed by server before response.completed",
+          },
+          willRetry: true,
+        }),
+      },
+    }),
+    true,
+  );
+});
+
+test("recoverableCodexStreamDisconnect ignores ordinary delegate failures", () => {
+  assert.equal(
+    recoverableCodexStreamDisconnect({
+      mailboxStatus: {
+        error: "delegate response did not include the required JSON decision block",
+      },
     }),
     false,
   );
