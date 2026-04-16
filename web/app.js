@@ -48,6 +48,8 @@ const state = {
   projectsRefreshPromise: null,
   projectRootsRefreshPromise: null,
   threadRefreshPromise: null,
+  historyPrefetchPromises: {},
+  foregroundRefreshPromise: null,
   controlLockTarget: "",
   controlLockUntil: 0,
 };
@@ -163,6 +165,8 @@ const queueCollapsedKey = "clawdad-queue-collapsed-v1";
 const queuedDispatchGraceMs = 15000;
 const copiedFeedbackMs = 1400;
 const historyPageSize = 20;
+const historyPrefetchFreshMs = 5 * 60 * 1000;
+const historyPrefetchEntryLimit = 8;
 const headerCarouselIntervalMs = 11000;
 const headerCarouselVersion = "20260406m";
 const headerCatchphraseSwapMs = 150;
@@ -1413,6 +1417,7 @@ function historyStateFor(projectPath, sessionId) {
       nextCursor: "0",
       loading: false,
       initialized: false,
+      prefetchedAt: 0,
       error: "",
     }
   );
@@ -1779,6 +1784,171 @@ function normalizeHistoryItem(item) {
       String(item?.seenAt || "").trim() ||
       (normalizedStatus === "queued" ? null : answeredAt || String(item?.sentAt || "").trim() || new Date().toISOString()),
   };
+}
+
+function historyItemStatusRank(status) {
+  const normalized = String(status || "").trim().toLowerCase();
+  return { queued: 1, failed: 2, answered: 3 }[normalized] || 0;
+}
+
+function historyItemsLikelySame(left, right) {
+  const leftRequestId = String(left?.requestId || "").trim();
+  const rightRequestId = String(right?.requestId || "").trim();
+  if (leftRequestId && rightRequestId && leftRequestId === rightRequestId) {
+    return true;
+  }
+
+  const leftSessionId = String(left?.sessionId || "").trim();
+  const rightSessionId = String(right?.sessionId || "").trim();
+  if (leftSessionId && rightSessionId && leftSessionId !== rightSessionId) {
+    return false;
+  }
+
+  const leftMessage = String(left?.message || "").trim();
+  const rightMessage = String(right?.message || "").trim();
+  if (!leftMessage || leftMessage !== rightMessage) {
+    return false;
+  }
+
+  const leftSentAt = new Date(left?.sentAt || 0).getTime();
+  const rightSentAt = new Date(right?.sentAt || 0).getTime();
+  if (!Number.isFinite(leftSentAt) || !Number.isFinite(rightSentAt)) {
+    return false;
+  }
+
+  return Math.abs(leftSentAt - rightSentAt) <= 5000;
+}
+
+function mergeHistoryItem(existing, incoming) {
+  const existingRank = historyItemStatusRank(existing?.status);
+  const incomingRank = historyItemStatusRank(incoming?.status);
+  const status = incomingRank >= existingRank ? incoming?.status : existing?.status;
+  const firstNonEmpty = (...values) => {
+    for (const value of values) {
+      const normalized = String(value || "").trim();
+      if (normalized) {
+        return normalized;
+      }
+    }
+    return "";
+  };
+  const response =
+    String(incoming?.response || "").trim() ||
+    String(existing?.response || "");
+  const requestId =
+    String(incoming?.requestId || "").trim() ||
+    String(existing?.requestId || "").trim();
+  const projectPath = firstNonEmpty(incoming?.projectPath, existing?.projectPath);
+  const sessionId = firstNonEmpty(incoming?.sessionId, existing?.sessionId);
+  const sentAt = firstNonEmpty(existing?.sentAt, incoming?.sentAt);
+  const answeredAt = firstNonEmpty(incoming?.answeredAt, existing?.answeredAt);
+  const incomingMessage = String(incoming?.message || "");
+  const existingMessage = String(existing?.message || "");
+
+  return {
+    ...existing,
+    ...incoming,
+    requestId: requestId || makeEntryId(),
+    projectPath,
+    sessionId,
+    projectLabel:
+      firstNonEmpty(incoming?.projectLabel, existing?.projectLabel) ||
+      fallbackProjectLabel(projectPath),
+    sessionLabel: firstNonEmpty(incoming?.sessionLabel, existing?.sessionLabel),
+    provider: firstNonEmpty(incoming?.provider, existing?.provider) || "session",
+    message: incomingMessage.trim() ? incomingMessage : existingMessage,
+    sentAt: sentAt || new Date().toISOString(),
+    answeredAt: answeredAt || null,
+    status: status || incoming?.status || existing?.status || "queued",
+    response,
+    exitCode:
+      typeof incoming?.exitCode === "number"
+        ? incoming.exitCode
+        : typeof existing?.exitCode === "number"
+          ? existing.exitCode
+          : null,
+    seenAt:
+      String(existing?.seenAt || "").trim() ||
+      String(incoming?.seenAt || "").trim() ||
+      null,
+  };
+}
+
+function mergeHistoryItems(existingItems = [], incomingItems = []) {
+  const merged = [];
+
+  for (const rawItem of [...existingItems, ...incomingItems]) {
+    const item = normalizeHistoryItem(rawItem);
+    const matchIndex = merged.findIndex((candidate) => historyItemsLikelySame(candidate, item));
+    if (matchIndex >= 0) {
+      merged[matchIndex] = mergeHistoryItem(merged[matchIndex], item);
+    } else {
+      merged.push(item);
+    }
+  }
+
+  return merged.sort((left, right) => {
+    const leftMs = new Date(left.sentAt || 0).getTime();
+    const rightMs = new Date(right.sentAt || 0).getTime();
+    return (Number.isFinite(leftMs) ? leftMs : 0) - (Number.isFinite(rightMs) ? rightMs : 0);
+  });
+}
+
+function historyItemFromThreadEntry(entry) {
+  if (!entry?.projectPath || !entry?.sessionId) {
+    return null;
+  }
+
+  const item = normalizeHistoryItem({
+    ...entry,
+    projectPath: entry.projectPath,
+    sessionId: entry.sessionId,
+    sessionLabel: entry.sessionLabel || entrySessionLabel(entry),
+  });
+
+  return {
+    ...item,
+    requestId: String(entry.requestId || item.requestId || "").trim() || item.requestId,
+    seenAt: String(entry.seenAt || "").trim() || null,
+  };
+}
+
+function hydrateHistoryFromThreadEntry(entry) {
+  const item = historyItemFromThreadEntry(entry);
+  if (!item) {
+    return;
+  }
+
+  const existing = historyStateFor(item.projectPath, item.sessionId);
+  setHistoryState(item.projectPath, item.sessionId, {
+    items: mergeHistoryItems(existing.items, [item]),
+    nextCursor: existing.nextCursor || "0",
+    initialized: true,
+    error: existing.error || "",
+  });
+}
+
+function hydrateReturnedThreadEntries({ prefetch = false } = {}) {
+  const returnedEntries = state.threadEntries.filter(entryHasReturned);
+  for (const entry of returnedEntries) {
+    hydrateHistoryFromThreadEntry(entry);
+  }
+
+  if (!prefetch) {
+    return;
+  }
+
+  const recentEntries = returnedEntries
+    .sort((left, right) => {
+      const leftMs = new Date(left.answeredAt || left.sentAt || 0).getTime();
+      const rightMs = new Date(right.answeredAt || right.sentAt || 0).getTime();
+      return (Number.isFinite(rightMs) ? rightMs : 0) - (Number.isFinite(leftMs) ? leftMs : 0);
+    })
+    .slice(0, historyPrefetchEntryLimit);
+
+  for (const entry of recentEntries) {
+    void prefetchSessionHistory(entry.projectPath, entry.sessionId, { force: false });
+  }
 }
 
 function normalizeProjectSummarySnapshot(snapshot) {
@@ -2364,6 +2534,19 @@ function updateThreadEntrySessionLabels(projectPath, sessionId, sessionLabel) {
 function appendThreadEntry(entry) {
   state.threadEntries = [...state.threadEntries, entry];
   persistThreadEntries();
+  hydrateHistoryFromThreadEntry(entry);
+}
+
+function completeThreadEntry(entry, patch) {
+  updateThreadEntry(entry.id, patch);
+  const completedEntry = entryById(entry.id) || {
+    ...entry,
+    ...(typeof patch === "function" ? patch(entry) : patch),
+  };
+  hydrateHistoryFromThreadEntry(completedEntry);
+  if (entryHasReturned(completedEntry)) {
+    void prefetchSessionHistory(completedEntry.projectPath, completedEntry.sessionId, { force: true });
+  }
 }
 
 function sessionStatusLabel(entry) {
@@ -4200,7 +4383,7 @@ async function reconcileThreadEntries() {
           }
         }
 
-        updateThreadEntry(entry.id, {
+        completeThreadEntry(entry, {
           status: status === "completed" ? "answered" : "failed",
           sessionId: mailboxCompletionFallbackSession.sessionId || entry.sessionId,
           sessionLabel: sessionOptionLabel(
@@ -4217,7 +4400,7 @@ async function reconcileThreadEntries() {
           seenAt: null,
         });
       } else if (entryAgePastGraceWindow(entry)) {
-        updateThreadEntry(entry.id, {
+        completeThreadEntry(entry, {
           status: "failed",
           answeredAt: new Date().toISOString(),
           response: "This queued item no longer matches a tracked session. Please retry.",
@@ -4255,7 +4438,7 @@ async function reconcileThreadEntries() {
         // Fall through and bind this stale local queue card to the completed mailbox result.
       } else {
         if (entryAgePastGraceWindow(entry) && status !== "running" && status !== "dispatched") {
-          updateThreadEntry(entry.id, {
+          completeThreadEntry(entry, {
             status: "failed",
             answeredAt: new Date().toISOString(),
             response: "This queued item never matched the live mailbox request. Please retry.",
@@ -4278,7 +4461,7 @@ async function reconcileThreadEntries() {
         Date.now() - sentAtMs > queuedDispatchGraceMs &&
         (!Number.isFinite(lastDispatchMs) || lastDispatchMs < sentAtMs)
       ) {
-        updateThreadEntry(entry.id, {
+        completeThreadEntry(entry, {
           status: "failed",
           answeredAt: new Date().toISOString(),
           response: "Dispatch did not start. Please retry.",
@@ -4297,7 +4480,7 @@ async function reconcileThreadEntries() {
         // Fall through and reconcile from the completed mailbox/session state.
       } else {
         if (entryAgePastGraceWindow(entry)) {
-          updateThreadEntry(entry.id, {
+          completeThreadEntry(entry, {
             status: "failed",
             answeredAt: new Date().toISOString(),
             response: "This queued item never attached to a live request. Please retry.",
@@ -4320,7 +4503,7 @@ async function reconcileThreadEntries() {
       }
     }
 
-    updateThreadEntry(entry.id, {
+    completeThreadEntry(entry, {
       status: status === "completed" ? "answered" : "failed",
       answeredAt: session?.lastResponse || project?.lastResponse || new Date().toISOString(),
       requestId: effectiveRequestId || liveRequestId || trackedRequestId,
@@ -4362,6 +4545,7 @@ async function refreshProjects() {
       syncSelectedSession(state.selectedSessionId);
       cacheProjects(payload);
       await reconcileThreadEntries();
+      hydrateReturnedThreadEntries({ prefetch: true });
       if (state.selectedProject) {
         void refreshImportableSessions(state.selectedProject).catch(() => {});
       }
@@ -4524,7 +4708,7 @@ async function loadSessionHistory(projectPath, sessionId, { reset = false, appen
   setHistoryState(projectPath, sessionId, {
     loading: true,
     error: "",
-    initialized: existing.initialized && !reset,
+    initialized: existing.initialized,
   });
   renderAll();
 
@@ -4535,23 +4719,19 @@ async function loadSessionHistory(projectPath, sessionId, { reset = false, appen
     const pageItems = (Array.isArray(payload.items) ? payload.items : [])
       .map(normalizeHistoryItem)
       .reverse();
-    const fallbackLocal =
-      pageItems.length === 0
-        ? state.threadEntries
-            .filter(
-              (entry) =>
-                entry.projectPath === projectPath && entry.sessionId === sessionId,
-            )
-            .map(normalizeHistoryItem)
-        : [];
+    const localItems = state.threadEntries
+      .filter(
+        (entry) =>
+          entry.projectPath === projectPath && entry.sessionId === sessionId,
+      )
+      .map(historyItemFromThreadEntry)
+      .filter(Boolean);
 
     const nextItems = reset
-      ? pageItems.length > 0
-        ? pageItems
-        : fallbackLocal
+      ? mergeHistoryItems(pageItems, localItems)
       : appendOlder
-        ? [...pageItems, ...existing.items]
-        : pageItems;
+        ? mergeHistoryItems(pageItems, existing.items)
+        : mergeHistoryItems(pageItems, localItems);
 
     if (sameOpenThread) {
       queueDetailHistorySnapshot(
@@ -4567,6 +4747,7 @@ async function loadSessionHistory(projectPath, sessionId, { reset = false, appen
       nextCursor: payload.nextCursor || null,
       loading: false,
       initialized: true,
+      prefetchedAt: Date.now(),
       error: "",
     });
     renderAll();
@@ -4580,6 +4761,70 @@ async function loadSessionHistory(projectPath, sessionId, { reset = false, appen
   }
 
   return historyStateFor(projectPath, sessionId);
+}
+
+async function prefetchSessionHistory(projectPath, sessionId, { force = false } = {}) {
+  if (!projectPath || !sessionId) {
+    return historyStateFor(projectPath, sessionId);
+  }
+
+  const key = historyKey(projectPath, sessionId);
+  if (state.historyPrefetchPromises[key]) {
+    return state.historyPrefetchPromises[key];
+  }
+
+  const existing = historyStateFor(projectPath, sessionId);
+  const prefetchedAt = Number(existing.prefetchedAt || 0);
+  if (
+    !force &&
+    prefetchedAt > 0 &&
+    Date.now() - prefetchedAt < historyPrefetchFreshMs &&
+    !existing.loading
+  ) {
+    return existing;
+  }
+
+  state.historyPrefetchPromises[key] = loadSessionHistory(projectPath, sessionId, {
+    reset: true,
+  })
+    .catch(() => historyStateFor(projectPath, sessionId))
+    .finally(() => {
+      delete state.historyPrefetchPromises[key];
+    });
+
+  return state.historyPrefetchPromises[key];
+}
+
+async function refreshForegroundState() {
+  if (document.visibilityState === "hidden") {
+    return;
+  }
+  if (state.foregroundRefreshPromise) {
+    return state.foregroundRefreshPromise;
+  }
+
+  state.foregroundRefreshPromise = (async () => {
+    await refreshProjects();
+
+    const modalThread = currentModalThread();
+    if (modalThread?.projectPath && modalThread?.sessionId) {
+      await loadSessionHistory(modalThread.projectPath, modalThread.sessionId, {
+        reset: true,
+        stickToBottom: !modalThread.focusRequestId,
+      });
+    }
+
+    await refreshProjectSummaries();
+    await refreshDelegates();
+  })()
+    .catch((error) => {
+      console.warn("[clawdad] foreground refresh failed", error);
+    })
+    .finally(() => {
+      state.foregroundRefreshPromise = null;
+    });
+
+  return state.foregroundRefreshPromise;
 }
 
 async function ensureHistoryContainsRequest(projectPath, sessionId, requestId) {
@@ -5906,6 +6151,7 @@ async function handleDispatch(event) {
     updateThreadEntry(entry.id, {
       requestId: String(payload.requestId || "").trim(),
     });
+    hydrateHistoryFromThreadEntry(entryById(entry.id) || entry);
 
     elements.messageInput.value = "";
     if (
@@ -5919,7 +6165,7 @@ async function handleDispatch(event) {
     }
     void refreshProjects().catch(showError);
   } catch (error) {
-    updateThreadEntry(entry.id, {
+    completeThreadEntry(entry, {
       status: "failed",
       answeredAt: new Date().toISOString(),
       response: error.message,
@@ -6144,6 +6390,16 @@ function bindEvents() {
     });
   });
 
+  const refreshAfterForeground = () => {
+    if (document.visibilityState === "hidden") {
+      return;
+    }
+    void refreshForegroundState();
+  };
+  window.addEventListener("focus", refreshAfterForeground);
+  window.addEventListener("pageshow", refreshAfterForeground);
+  document.addEventListener("visibilitychange", refreshAfterForeground);
+
   window.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && currentModalThread()) {
       closeSessionThread();
@@ -6180,6 +6436,7 @@ async function boot() {
   void initHeaderCarousel();
   resetProcessingPhraseCycle();
   restoreThreadEntries();
+  hydrateReturnedThreadEntries();
   restoreQueueCollapsed();
   restoreCachedProjects();
   renderAll();
