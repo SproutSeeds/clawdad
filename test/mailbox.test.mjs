@@ -93,6 +93,7 @@ test("mailbox_update_status preserves dispatched_at from valid prior status", as
     assert.equal(running.state, "running");
     assert.equal(running.pid, 12345);
     assert.match(running.dispatched_at, /^20\d\d-\d\d-\d\dT/u);
+    assert.match(running.heartbeat_at, /^20\d\d-\d\d-\d\dT/u);
 
     await runMailboxScript({
       projectPath,
@@ -104,7 +105,49 @@ test("mailbox_update_status preserves dispatched_at from valid prior status", as
     const failed = await readMailboxStatus(projectPath);
     assert.equal(failed.state, "failed");
     assert.equal(failed.dispatched_at, running.dispatched_at);
+    assert.equal(failed.heartbeat_at, running.heartbeat_at);
     assert.equal(failed.error, "later failure");
+  });
+});
+
+test("mailbox_update_heartbeat refreshes live dispatches without resetting dispatched_at", async () => {
+  await withTempProject(async ({ projectPath, homePath }) => {
+    await runMailboxScript({
+      projectPath,
+      homePath,
+      script: [
+        'mailbox_update_status "$PROJECT_PATH" running "req-heartbeat" "12345" "" "sess-heartbeat"',
+        "sleep 1",
+        'mailbox_update_heartbeat "$PROJECT_PATH" "req-heartbeat" "12346" "sess-heartbeat"',
+      ].join("\n"),
+    });
+
+    const status = await readMailboxStatus(projectPath);
+    assert.equal(status.state, "running");
+    assert.equal(status.request_id, "req-heartbeat");
+    assert.equal(status.session_id, "sess-heartbeat");
+    assert.equal(status.pid, 12346);
+    assert.match(status.dispatched_at, /^20\d\d-\d\d-\d\dT/u);
+    assert.match(status.heartbeat_at, /^20\d\d-\d\d-\d\dT/u);
+    assert.notEqual(status.heartbeat_at, status.dispatched_at);
+  });
+});
+
+test("mailbox_update_heartbeat ignores stale request ids", async () => {
+  await withTempProject(async ({ projectPath, homePath }) => {
+    await runMailboxScript({
+      projectPath,
+      homePath,
+      script: [
+        'mailbox_update_status "$PROJECT_PATH" running "req-current" "12345" "" "sess-current"',
+        'mailbox_update_heartbeat "$PROJECT_PATH" "req-old" "99999" "sess-old"',
+      ].join("\n"),
+    });
+
+    const status = await readMailboxStatus(projectPath);
+    assert.equal(status.request_id, "req-current");
+    assert.equal(status.session_id, "sess-current");
+    assert.equal(status.pid, 12345);
   });
 });
 

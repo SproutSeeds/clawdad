@@ -126,10 +126,12 @@ mailbox_update_status() {
 
   local dispatched_at=""
   local completed_at=""
+  local heartbeat_at=""
 
   case "$state" in
     dispatched|running)
       dispatched_at="$ts"
+      heartbeat_at="$ts"
       ;;
     completed|failed)
       completed_at="$ts"
@@ -137,6 +139,8 @@ mailbox_update_status() {
       if [[ -f "$mbox/status.json" ]]; then
         dispatched_at=$("$CLAWDAD_JQ" -r '.dispatched_at // ""' "$mbox/status.json" 2>/dev/null || printf '')
         [[ "$dispatched_at" == "null" ]] && dispatched_at=""
+        heartbeat_at=$("$CLAWDAD_JQ" -r '.heartbeat_at // ""' "$mbox/status.json" 2>/dev/null || printf '')
+        [[ "$heartbeat_at" == "null" ]] && heartbeat_at=""
       fi
       ;;
   esac
@@ -153,6 +157,7 @@ mailbox_update_status() {
       --arg state "$state" \
       --arg dispatched_at "$dispatched_at" \
       --arg completed_at "$completed_at" \
+      --arg heartbeat_at "$heartbeat_at" \
       --argjson request_id "$request_id_json" \
       --argjson session_id "$session_id_json" \
       --argjson error "$error_json" \
@@ -163,12 +168,49 @@ mailbox_update_status() {
         session_id: $session_id,
         dispatched_at: (if $dispatched_at == "" then null else $dispatched_at end),
         completed_at: (if $completed_at == "" then null else $completed_at end),
+        heartbeat_at: (if $heartbeat_at == "" then null else $heartbeat_at end),
         error: $error,
         pid: $pid
       }'
   ) || return 1
 
   _mailbox_write_file "$mbox/status.json" "$payload" || return 1
+}
+
+mailbox_update_heartbeat() {
+  local project_path="$1" request_id="$2" pid="${3:-null}" session_id="${4:-null}"
+  local mbox
+  mbox="$(mailbox_dir "$project_path")"
+  local status_file="$mbox/status.json"
+  [[ -f "$status_file" ]] || return 0
+
+  local ts
+  ts="$(iso_timestamp)"
+
+  local request_id_json session_id_json pid_json
+  request_id_json=$(_mailbox_json_string_or_null "$request_id") || return 1
+  session_id_json=$(_mailbox_json_string_or_null "$session_id") || return 1
+  pid_json=$(_mailbox_json_pid_or_null "$pid") || return 1
+
+  local payload
+  payload=$(
+    "$CLAWDAD_JQ" \
+      --arg heartbeat_at "$ts" \
+      --argjson request_id "$request_id_json" \
+      --argjson session_id "$session_id_json" \
+      --argjson pid "$pid_json" \
+      'if (.request_id == $request_id and ((.state // "") == "running" or (.state // "") == "dispatched")) then
+        . + {
+          heartbeat_at: $heartbeat_at,
+          session_id: (if $session_id == null then .session_id else $session_id end),
+          pid: (if $pid == null then .pid else $pid end)
+        }
+      else
+        .
+      end' "$status_file"
+  ) || return 1
+
+  _mailbox_write_file "$status_file" "$payload" || return 1
 }
 
 mailbox_read_status() {

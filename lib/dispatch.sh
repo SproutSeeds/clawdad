@@ -235,6 +235,7 @@ _dispatch_background() {
   _CLAWDAD_DISPATCH_PROVIDER="$provider"
   _CLAWDAD_DISPATCH_ERROR=""
   _CLAWDAD_DISPATCH_CHILD_PID=""
+  _CLAWDAD_DISPATCH_HEARTBEAT_PID=""
 
   _dispatch_fail_unfinalized() {
     local exit_code=$?
@@ -251,6 +252,9 @@ _dispatch_background() {
     _CLAWDAD_DISPATCH_FINALIZED=true
     if [[ -n "${_CLAWDAD_DISPATCH_CHILD_PID:-}" ]] && kill -0 "$_CLAWDAD_DISPATCH_CHILD_PID" 2>/dev/null; then
       kill -TERM "$_CLAWDAD_DISPATCH_CHILD_PID" 2>/dev/null || true
+    fi
+    if [[ -n "${_CLAWDAD_DISPATCH_HEARTBEAT_PID:-}" ]] && kill -0 "$_CLAWDAD_DISPATCH_HEARTBEAT_PID" 2>/dev/null; then
+      kill -TERM "$_CLAWDAD_DISPATCH_HEARTBEAT_PID" 2>/dev/null || true
     fi
     local error_msg="${_CLAWDAD_DISPATCH_ERROR:-dispatch worker exited before completing (exit ${exit_code})}"
     local completed_at
@@ -300,12 +304,29 @@ _dispatch_background() {
   }
   "${cmd[@]}" >"$output_file" 2>&1 &
   _CLAWDAD_DISPATCH_CHILD_PID=$!
+  (
+    heartbeat_child_pid="$_CLAWDAD_DISPATCH_CHILD_PID"
+    heartbeat_interval="${CLAWDAD_DISPATCH_HEARTBEAT_INTERVAL_SECONDS:-30}"
+    if [[ ! "$heartbeat_interval" == <-> ]] || (( heartbeat_interval < 5 )); then
+      heartbeat_interval=30
+    fi
+    while kill -0 "$heartbeat_child_pid" 2>/dev/null; do
+      mailbox_update_heartbeat "$project_path" "$request_id" "$heartbeat_child_pid" "$session_id" >/dev/null 2>&1 || true
+      sleep "$heartbeat_interval"
+    done
+  ) &
+  _CLAWDAD_DISPATCH_HEARTBEAT_PID=$!
   if wait "$_CLAWDAD_DISPATCH_CHILD_PID"; then
     exit_code=0
   else
     exit_code=$?
   fi
   _CLAWDAD_DISPATCH_CHILD_PID=""
+  if [[ -n "${_CLAWDAD_DISPATCH_HEARTBEAT_PID:-}" ]] && kill -0 "$_CLAWDAD_DISPATCH_HEARTBEAT_PID" 2>/dev/null; then
+    kill -TERM "$_CLAWDAD_DISPATCH_HEARTBEAT_PID" 2>/dev/null || true
+    wait "$_CLAWDAD_DISPATCH_HEARTBEAT_PID" 2>/dev/null || true
+  fi
+  _CLAWDAD_DISPATCH_HEARTBEAT_PID=""
   output=$(cat "$output_file" 2>/dev/null || true)
   rm -f "$output_file" 2>/dev/null || true
 
