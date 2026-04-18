@@ -70,6 +70,7 @@ test("projects endpoint reads local state without invoking the ORP-backed CLI", 
   const mockBinPath = path.join(root, "clawdad-mock");
   const invokedPath = path.join(root, "clawdad-invoked");
   await mkdir(path.join(projectPath, ".clawdad", "mailbox"), { recursive: true });
+  await mkdir(path.join(projectPath, ".clawdad", "delegate"), { recursive: true });
   await mkdir(home, { recursive: true });
   await writeFile(
     path.join(home, "state.json"),
@@ -137,6 +138,21 @@ test("projects endpoint reads local state without invoking the ORP-backed CLI", 
     "utf8",
   );
   await writeFile(
+    path.join(projectPath, ".clawdad", "delegate", "delegate-status.json"),
+    JSON.stringify(
+      {
+        state: "running",
+        runId: "delegate-run-1",
+        activeStep: 2,
+        stepCount: 1,
+        updatedAt: "2026-04-14T00:02:00Z",
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
     mockBinPath,
     `#!/bin/sh
 printf invoked > ${JSON.stringify(invokedPath)}
@@ -195,6 +211,10 @@ sleep 10
     assert.equal(payload.projects.length, 1);
     assert.equal(payload.projects[0].path, projectPath);
     assert.equal(payload.projects[0].activeSession.localOnly, true);
+    assert.equal(payload.projects[0].delegateStatus.state, "running");
+    assert.equal(payload.projects[0].delegateStatus.live, true);
+    assert.equal(payload.projects[0].delegateStatus.runId, "delegate-run-1");
+    assert.equal(payload.projects[0].delegateStatus.activeStep, 2);
 
     await assert.rejects(readFile(invokedPath, "utf8"), { code: "ENOENT" });
   } finally {

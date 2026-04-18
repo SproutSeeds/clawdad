@@ -39,8 +39,13 @@ async function withTempDir(work) {
 
 async function writeFakeCodexBinary(root, behavior) {
   const fakePath = path.join(root, `fake-codex-${behavior}.mjs`);
+  const jsonDecisionResponse = `${"long ".repeat(700)}
+\`\`\`json
+{"state":"continue","stop_reason":"none","next_action":"keep going","summary":"ok","checkpoint":{"progress_signal":"high","breakthroughs":"decision payload","blockers":"none","next_probe":"next","confidence":"high"}}
+\`\`\``;
   const source = `#!/usr/bin/env node
 const behavior = ${JSON.stringify(behavior)};
+const jsonDecisionResponse = ${JSON.stringify(jsonDecisionResponse)};
 process.stdin.setEncoding("utf8");
 process.on("SIGTERM", () => process.exit(0));
 let buffer = "";
@@ -61,9 +66,9 @@ function handle(message) {
   }
   if (message.method === "turn/start") {
     send({ id: message.id, result: { turn: { id: "turn-test" } } });
-    if (behavior === "complete" || behavior === "delta") {
+    if (behavior === "complete" || behavior === "delta" || behavior === "delta-json") {
       setTimeout(() => {
-        if (behavior === "delta") {
+        if (behavior === "delta" || behavior === "delta-json") {
           send({
             method: "item/agentMessage/delta",
             params: {
@@ -79,7 +84,7 @@ function handle(message) {
           params: {
             threadId: "thread-test",
             turnId: "turn-test",
-            item: { type: "agentMessage", phase: "final_answer", text: behavior === "delta" ? "live final response" : "fake response" },
+            item: { type: "agentMessage", phase: "final_answer", text: behavior === "delta-json" ? jsonDecisionResponse : behavior === "delta" ? "live final response" : "fake response" },
           },
         });
         send({
@@ -102,7 +107,7 @@ function handle(message) {
             {
               id: "turn-test",
               items: [
-                { type: "agentMessage", phase: "final_answer", text: behavior === "delta" ? "live final response" : "fake response" },
+                { type: "agentMessage", phase: "final_answer", text: behavior === "delta-json" ? jsonDecisionResponse : behavior === "delta" ? "live final response" : "fake response" },
               ],
             },
           ],
@@ -253,5 +258,47 @@ test("codex app-server dispatch writes throttled live delegate events", async ()
     assert.equal(latest.runId, "run-live");
     assert.equal(latest.step, 2);
     assert.equal(latest.text, "live final response");
+  });
+});
+
+test("codex app-server dispatch stores recoverable decision payload on truncated live checkpoints", async () => {
+  await withTempDir(async (root) => {
+    const fakeCodex = await writeFakeCodexBinary(root, "delta-json");
+    const eventFile = path.join(root, "events.jsonl");
+    const result = await execFileCapture(process.execPath, [
+      dispatchScript,
+      "--project-path",
+      root,
+      "--message",
+      "hello",
+      "--session-id",
+      "thread-test",
+      "--session-seeded",
+      "--codex-binary",
+      fakeCodex,
+      "--turn-timeout-ms",
+      "1000",
+      "--request-timeout-ms",
+      "2000",
+    ], {
+      env: {
+        ...process.env,
+        CLAWDAD_CODEX_LIVE_EVENT_FILE: eventFile,
+        CLAWDAD_CODEX_LIVE_RUN_ID: "run-live",
+        CLAWDAD_CODEX_LIVE_STEP: "3",
+      },
+      timeout: 5000,
+    });
+
+    assert.equal(result.stderr, "");
+    assert.equal(result.exitCode, 0);
+
+    const lines = (await readFile(eventFile, "utf8")).trim().split(/\r?\n/u);
+    const latest = JSON.parse(lines.at(-1));
+    assert.equal(latest.title, "Live stream checkpoint");
+    assert.equal(latest.payload.truncated, true);
+    assert.equal(latest.payload.decision.state, "continue");
+    assert.equal(latest.payload.decision.next_action, "keep going");
+    assert.equal(latest.payload.decision.checkpoint.progress_signal, "high");
   });
 });

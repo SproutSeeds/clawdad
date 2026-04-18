@@ -7,6 +7,7 @@ import {
   delegatePauseDecision,
   delegatePlanRefreshDecision,
   delegateRunListState,
+  delegateStatusStepText,
   recoverableCodexStreamDisconnect,
   shouldClearPendingDelegatePause,
 } from "../lib/delegate-state.mjs";
@@ -211,6 +212,40 @@ test("delegateRunListState uses log event state for non-current historical runs"
       statusMatchesRun: false,
     }),
     "failed",
+  );
+});
+
+test("delegateStatusStepText labels active in-flight step instead of completed count", () => {
+  assert.equal(
+    delegateStatusStepText({
+      state: "running",
+      stepCount: 9,
+      activeStep: 10,
+      activeRequestId: "request-10",
+    }),
+    "active step 10",
+  );
+});
+
+test("delegateStatusStepText falls back to next step for legacy active status", () => {
+  assert.equal(
+    delegateStatusStepText({
+      state: "running",
+      stepCount: 9,
+      activeRequestId: "request-10",
+    }),
+    "active step 10",
+  );
+});
+
+test("delegateStatusStepText keeps completed step count when idle between requests", () => {
+  assert.equal(
+    delegateStatusStepText({
+      state: "running",
+      stepCount: 9,
+      activeRequestId: "",
+    }),
+    "step 9",
   );
 });
 

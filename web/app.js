@@ -440,11 +440,59 @@ function featuredProjectMeta(projectPath, fallbackDisplayName = "") {
   };
 }
 
+function delegateCatalogStatusIsLive(status) {
+  const normalizedState = String(status?.state || "").trim().toLowerCase();
+  return normalizedState === "planning" || normalizedState === "running";
+}
+
+function projectDelegateStatus(project) {
+  if (!project?.path) {
+    return null;
+  }
+
+  const liveState = delegateStateFor(project.path)?.status || null;
+  if (liveState) {
+    const normalizedLiveState = normalizeDelegateStatus(liveState);
+    return normalizedLiveState.state === "idle" ? null : normalizedLiveState;
+  }
+
+  if (project.delegateStatus) {
+    const normalizedProjectStatus = normalizeDelegateStatus(project.delegateStatus);
+    return normalizedProjectStatus.state === "idle" ? null : normalizedProjectStatus;
+  }
+
+  return null;
+}
+
+function projectHasLiveDelegate(project) {
+  return delegateCatalogStatusIsLive(projectDelegateStatus(project));
+}
+
+function projectDelegateStatusKey(project) {
+  const status = projectDelegateStatus(project);
+  if (!status) {
+    return "";
+  }
+  return [
+    status.state,
+    status.runId || "",
+    status.activeStep || 0,
+    status.stepCount || 0,
+    Number(Boolean(status.pauseRequested)),
+  ].join(":");
+}
+
 function compareProjects(left, right) {
   const leftFeatured = Boolean(left?.featured);
   const rightFeatured = Boolean(right?.featured);
   if (leftFeatured !== rightFeatured) {
     return leftFeatured ? -1 : 1;
+  }
+
+  const leftLive = projectHasLiveDelegate(left);
+  const rightLive = projectHasLiveDelegate(right);
+  if (leftLive !== rightLive) {
+    return leftLive ? -1 : 1;
   }
 
   const leftName = String(left?.displayName || left?.slug || left?.path || "");
@@ -2229,6 +2277,10 @@ function normalizeDelegateComputeBudget(budget) {
 
 function normalizeDelegateStatus(status) {
   const normalizedState = String(status?.state || "idle").trim().toLowerCase();
+  const stepCount = Number.parseInt(String(status?.stepCount || "0"), 10) || 0;
+  const activeRequestId = String(status?.activeRequestId || status?.active_request_id || "").trim() || null;
+  const activeStep = Number.parseInt(String(status?.activeStep ?? status?.active_step ?? ""), 10);
+  const normalizedActiveStep = Number.isFinite(activeStep) && activeStep > 0 ? activeStep : null;
   return {
     state: ["idle", "planning", "running", "paused", "blocked", "completed", "failed"].includes(normalizedState)
       ? normalizedState
@@ -2241,7 +2293,9 @@ function normalizeDelegateStatus(status) {
     delegateSessionId: String(status?.delegateSessionId || status?.sessionId || "").trim() || null,
     delegateSessionLabel: String(status?.delegateSessionLabel || status?.sessionLabel || "").trim() || "",
     planSnapshotId: String(status?.planSnapshotId || "").trim() || null,
-    stepCount: Number.parseInt(String(status?.stepCount || "0"), 10) || 0,
+    activeRequestId,
+    activeStep: normalizedActiveStep || (normalizedState === "running" && activeRequestId ? stepCount + 1 : null),
+    stepCount,
     maxSteps: Number.parseInt(String(status?.maxSteps || "0"), 10) || 0,
     computeBudget: normalizeDelegateComputeBudget(status?.computeBudget),
     lastOutcomeSummary: String(status?.lastOutcomeSummary || "").trim(),
@@ -2322,6 +2376,43 @@ function upsertProject(projectDetails) {
 
 function removeProject(projectPath) {
   state.projects = state.projects.filter((project) => project.path !== projectPath);
+}
+
+function projectCatalogDelegateStatus(status, projectPath) {
+  if (!status) {
+    return null;
+  }
+
+  const normalized = normalizeDelegateStatus({
+    ...status,
+    projectPath: status.projectPath || projectPath,
+  });
+  if (normalized.state === "idle") {
+    return null;
+  }
+
+  return normalized;
+}
+
+function updateProjectDelegateStatus(projectPath, status) {
+  if (!projectPath) {
+    return;
+  }
+
+  const projectIndex = state.projects.findIndex((project) => project.path === projectPath);
+  if (projectIndex < 0) {
+    return;
+  }
+
+  state.projects.splice(
+    projectIndex,
+    1,
+    hydrateProjectVisuals({
+      ...state.projects[projectIndex],
+      delegateStatus: projectCatalogDelegateStatus(status, projectPath),
+    }),
+  );
+  state.projects.sort(compareProjects);
 }
 
 function pruneTrackedArtifacts(projectPath, sessionId = "") {
@@ -2808,6 +2899,53 @@ function refreshCopyButtons(root = document) {
   }
 }
 
+function projectOptionLabel(project) {
+  const label = project?.displayName || project?.slug || project?.path || "Project";
+  return projectHasLiveDelegate(project) ? `\u221e ${label}` : label;
+}
+
+function appendProjectOption(parent, project) {
+  const option = document.createElement("option");
+  option.value = project.path;
+  option.textContent = projectOptionLabel(project);
+  parent.append(option);
+}
+
+function appendProjectOptionGroup(label, projects) {
+  if (projects.length === 0) {
+    return;
+  }
+
+  const group = document.createElement("optgroup");
+  group.label = label;
+  for (const project of projects) {
+    appendProjectOption(group, project);
+  }
+  elements.projectSelect.append(group);
+}
+
+function groupedProjectOptions() {
+  const featured = [];
+  const liveDelegates = [];
+  const projects = [];
+
+  for (const project of state.projects) {
+    if (project?.featured || project?.specialRole === "global-mind") {
+      featured.push(project);
+    } else if (projectHasLiveDelegate(project)) {
+      liveDelegates.push(project);
+    } else {
+      projects.push(project);
+    }
+  }
+
+  return {
+    featured,
+    liveDelegates,
+    projects,
+  };
+}
+
 function renderProjectOptions() {
   if (controlInteractionLocked("project-select")) {
     return;
@@ -2820,6 +2958,9 @@ function renderProjectOptions() {
     projects: state.projects.map((project) => [
       project.path,
       project.displayName || project.slug || project.path,
+      Number(Boolean(project.featured)),
+      project.specialRole || "",
+      projectDelegateStatusKey(project),
     ]),
   });
   if (elements.projectSelect.dataset.renderKey === renderKey) {
@@ -2847,12 +2988,12 @@ function renderProjectOptions() {
     return;
   }
 
-  for (const project of state.projects) {
-    const option = document.createElement("option");
-    option.value = project.path;
-    option.textContent = project.displayName || project.slug || project.path;
-    elements.projectSelect.append(option);
+  const projectGroups = groupedProjectOptions();
+  for (const project of projectGroups.featured) {
+    appendProjectOption(elements.projectSelect, project);
   }
+  appendProjectOptionGroup("\u221e Live delegation", projectGroups.liveDelegates);
+  appendProjectOptionGroup("Projects", projectGroups.projects);
 
   elements.projectSelect.disabled = disabled;
   elements.projectSelect.value = state.selectedProject;
@@ -2862,10 +3003,20 @@ function renderProjectOptions() {
 function updateProjectControlAppearance() {
   const project = currentProject();
   const isFeatured = Boolean(project?.featured);
+  const hasLiveDelegates = state.projects.some((entry) => projectHasLiveDelegate(entry));
+  const selectedProjectIsLive = projectHasLiveDelegate(project);
   const projectControl = elements.projectSelect.closest(".project-control");
 
   elements.projectSelect.classList.toggle("is-featured", isFeatured);
+  elements.projectSelect.classList.toggle("is-live-delegate", selectedProjectIsLive);
   projectControl?.classList.toggle("is-featured", isFeatured);
+  projectControl?.classList.toggle("has-live-delegates", hasLiveDelegates);
+  projectControl?.classList.toggle("is-live-delegate", selectedProjectIsLive);
+  elements.projectDelegateButton.classList.toggle("has-live-delegates", hasLiveDelegates);
+  elements.projectDelegateButton.setAttribute(
+    "aria-label",
+    hasLiveDelegates ? "Open auto delegate, live delegation active" : "Open auto delegate",
+  );
 }
 
 function renderSessionOptions() {
@@ -4839,6 +4990,10 @@ function projectIsBusy(project) {
   return projectStatus === "running" || projectStatus === "dispatched";
 }
 
+function catalogIsBootstrapping() {
+  return state.projectsLoading && state.projects.length === 0;
+}
+
 function updateMailboxState() {
   const pending = pendingEntryForSession(state.selectedProject, state.selectedSessionId);
   if (pending) {
@@ -4852,7 +5007,7 @@ function updateMailboxState() {
     setText(elements.mailboxState, "setting up", { empty: false });
     return;
   }
-  if (projectIsBusy(project)) {
+  if (sessionIsBusy(session)) {
     setText(elements.mailboxState, currentProcessingPhrase(), { empty: false });
     return;
   }
@@ -4886,24 +5041,24 @@ function updateQueueUnreadOrb() {
 }
 
 function updateSendAvailability() {
-  const project = currentProject();
   const session = currentSession();
   const hasPending = Boolean(pendingEntryForSession(state.selectedProject, state.selectedSessionId));
   const sessionBusy = hasPending || sessionIsBusy(session);
-  const projectBusy = projectIsBusy(project);
+  const catalogBlocking = catalogIsBootstrapping();
   const canSend =
-    !state.projectsLoading &&
+    !catalogBlocking &&
     !state.dispatchPending &&
     !state.sessionSwitchPending &&
     Boolean(state.selectedProject) &&
     Boolean(state.selectedSessionId) &&
-    !sessionBusy &&
-    !projectBusy;
+    !sessionBusy;
 
   elements.dispatchButton.disabled = !canSend;
   elements.dispatchButton.querySelector(".button-text").textContent = state.dispatchPending
     ? "Sending…"
-    : sessionBusy || projectBusy
+    : catalogBlocking
+      ? "Loading…"
+      : sessionBusy
       ? `${currentProcessingPhrase()}…`
       : "Send";
 }
@@ -6253,6 +6408,7 @@ async function loadDelegateProject(projectPath, { force = false } = {}) {
       ...delegatePayloadState(projectPath, payload),
       status: nextStatus,
     });
+    updateProjectDelegateStatus(projectPath, nextStatus);
     const nextDelegateState = delegateStateFor(projectPath);
     const nextRunId = selectedDelegateRunId(projectPath, nextDelegateState);
     if (nextRunId) {
@@ -6756,8 +6912,8 @@ async function handleDispatch(event) {
     return;
   }
 
-  if (projectIsBusy(currentProject())) {
-    showError(new Error("This project is busy."));
+  if (sessionIsBusy(sessionDetails)) {
+    showError(new Error("This session is busy."));
     return;
   }
 
