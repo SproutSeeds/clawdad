@@ -8,6 +8,7 @@ import {
   delegatePlanRefreshDecision,
   delegatePostStepPlanRefreshDecision,
   delegateRunListState,
+  delegateStrategyBreakoutDecision,
   delegateStatusStepText,
   recoverableCodexStreamDisconnect,
   shouldClearPendingDelegatePause,
@@ -301,6 +302,53 @@ test("analyzeDelegatePhaseHandoff ignores varied work packets", () => {
 
   assert.equal(analysis.triggered, false);
   assert.equal(analysis.repeatCount, 1);
+});
+
+test("delegateStrategyBreakoutDecision triggers once for a repeated pattern", () => {
+  const first = delegateStrategyBreakoutDecision({
+    status: { state: "running" },
+    phaseHandoffAnalysis: {
+      triggered: true,
+      pattern: "certify q#",
+      repeatCount: 4,
+      recentActions: ["Certify q541", "Certify q547", "Certify q557", "Certify q563"],
+    },
+  });
+
+  assert.equal(first.breakout, true);
+  assert.equal(first.reason, "phase_handoff");
+  assert.equal(first.pattern, "certify q#");
+
+  const second = delegateStrategyBreakoutDecision({
+    status: { state: "running" },
+    lastBreakoutPattern: "certify q#",
+    phaseHandoffAnalysis: {
+      triggered: true,
+      pattern: "certify q#",
+      repeatCount: 5,
+      recentActions: ["Certify q547", "Certify q557", "Certify q563", "Certify q569"],
+    },
+  });
+
+  assert.equal(second.breakout, false);
+  assert.equal(second.reason, "already_reviewed");
+});
+
+test("delegateStrategyBreakoutDecision ignores fresh or non-running states", () => {
+  assert.equal(
+    delegateStrategyBreakoutDecision({
+      status: { state: "running" },
+      phaseHandoffAnalysis: { triggered: false, pattern: "" },
+    }).breakout,
+    false,
+  );
+  assert.equal(
+    delegateStrategyBreakoutDecision({
+      status: { state: "paused" },
+      phaseHandoffAnalysis: { triggered: true, pattern: "repeat", repeatCount: 3 },
+    }).reason,
+    "not_running",
+  );
 });
 
 test("delegatePlanRefreshDecision refreshes when no plan exists", () => {
