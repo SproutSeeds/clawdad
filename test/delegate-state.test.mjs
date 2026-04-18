@@ -6,6 +6,7 @@ import {
   chooseDelegateSession,
   delegatePauseDecision,
   delegatePlanRefreshDecision,
+  delegatePostStepPlanRefreshDecision,
   delegateRunListState,
   delegateStatusStepText,
   recoverableCodexStreamDisconnect,
@@ -378,4 +379,100 @@ test("delegatePlanRefreshDecision refreshes after enough completed steps", () =>
 
   assert.equal(decision.refresh, true);
   assert.equal(decision.reason, "step_interval");
+});
+
+test("delegatePostStepPlanRefreshDecision refreshes when a run blocks", () => {
+  const decision = delegatePostStepPlanRefreshDecision({
+    latestPlan: {
+      createdAt: "2026-04-12T10:00:00Z",
+      stepCount: 4,
+      plan: "old plan",
+    },
+    statusBefore: { stepCount: 4, nextAction: "Continue local proof search." },
+    statusAfter: { stepCount: 5, nextAction: "Ask for source audit release." },
+    decision: {
+      state: "blocked",
+      stopReason: "paid",
+      nextAction: "Ask for source audit release.",
+      checkpoint: {
+        progressSignal: "medium",
+        blockers: "source audit needs explicit release",
+      },
+    },
+  });
+
+  assert.equal(decision.refresh, true);
+  assert.equal(decision.reason, "run_blocked");
+});
+
+test("delegatePostStepPlanRefreshDecision refreshes material learning immediately", () => {
+  const decision = delegatePostStepPlanRefreshDecision({
+    latestPlan: {
+      createdAt: "2026-04-12T10:00:00Z",
+      stepCount: 8,
+      plan: "old plan",
+    },
+    statusBefore: { stepCount: 8, nextAction: "Audit source registry." },
+    statusAfter: { stepCount: 9, nextAction: "Write source-import blocker." },
+    decision: {
+      state: "continue",
+      nextAction: "Write source-import blocker.",
+      checkpoint: {
+        progressSignal: "high",
+        breakthroughs: "found the missing source theorem boundary",
+        nextProbe: "write source-import blocker",
+      },
+    },
+  });
+
+  assert.equal(decision.refresh, true);
+  assert.equal(decision.reason, "material_learning");
+});
+
+test("delegatePostStepPlanRefreshDecision ignores low-signal adjacent steps", () => {
+  const decision = delegatePostStepPlanRefreshDecision({
+    latestPlan: {
+      createdAt: "2026-04-12T10:00:00Z",
+      stepCount: 8,
+      plan: "current enough plan",
+    },
+    statusBefore: { stepCount: 8, nextAction: "Run smoke tests." },
+    statusAfter: { stepCount: 9, nextAction: "Run smoke tests." },
+    decision: {
+      state: "continue",
+      nextAction: "Run smoke tests.",
+      checkpoint: {
+        progressSignal: "low",
+        breakthroughs: "none",
+        blockers: "none",
+      },
+    },
+  });
+
+  assert.equal(decision.refresh, false);
+  assert.equal(decision.reason, "fresh");
+});
+
+test("delegatePostStepPlanRefreshDecision does not spend compute after compute limit", () => {
+  const decision = delegatePostStepPlanRefreshDecision({
+    latestPlan: {
+      createdAt: "2026-04-12T10:00:00Z",
+      stepCount: 8,
+      plan: "current enough plan",
+    },
+    statusBefore: { stepCount: 8, nextAction: "Continue." },
+    statusAfter: { stepCount: 9, nextAction: "Wait for compute." },
+    decision: {
+      state: "blocked",
+      stopReason: "compute_limit",
+      nextAction: "Wait for compute.",
+      checkpoint: {
+        progressSignal: "none",
+        blockers: "compute limit",
+      },
+    },
+  });
+
+  assert.equal(decision.refresh, false);
+  assert.equal(decision.reason, "compute_limit");
 });
