@@ -39,6 +39,7 @@ _build_cmd_codex() {
 _build_cmd_chimera() {
   local project_path="$1" message="$2" session_id="$3" session_seeded="$4"
   local permission_mode="$5" model="$6"
+  local chimera_model="${model:-$CLAWDAD_CHIMERA_MODEL}"
 
   cmd=(
     "$CLAWDAD_NODE"
@@ -47,6 +48,7 @@ _build_cmd_chimera() {
     "--message" "$message"
     "--session-id" "$session_id"
     "--permission-mode" "$permission_mode"
+    "--model" "$chimera_model"
     "--chimera-binary" "$CLAWDAD_CHIMERA"
     "--home-dir" "$HOME"
   )
@@ -55,9 +57,6 @@ _build_cmd_chimera() {
     cmd+=("--session-seeded")
   fi
 
-  if [[ -n "$model" ]]; then
-    cmd+=("--model" "$model")
-  fi
 }
 
 _build_dispatch_command() {

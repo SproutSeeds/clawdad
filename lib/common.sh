@@ -32,7 +32,18 @@ CLAWDAD_JQ="${CLAWDAD_JQ:-jq}"
 CLAWDAD_NODE="${CLAWDAD_NODE:-node}"
 CLAWDAD_CODEX="${CLAWDAD_CODEX:-codex}"
 CLAWDAD_CODEX_HOME="${CLAWDAD_CODEX_HOME:-$HOME/.codex}"
-CLAWDAD_CHIMERA="${CLAWDAD_CHIMERA:-chimera}"
+if [[ -z "${CLAWDAD_CHIMERA:-}" ]]; then
+  if command -v chimera &>/dev/null; then
+    CLAWDAD_CHIMERA="chimera"
+  elif [[ -x "$CLAWDAD_ROOT/../Chimera/target/debug/chimera" ]]; then
+    CLAWDAD_CHIMERA="$CLAWDAD_ROOT/../Chimera/target/debug/chimera"
+  elif [[ -x "$CLAWDAD_ROOT/../Chimera/target/release/chimera" ]]; then
+    CLAWDAD_CHIMERA="$CLAWDAD_ROOT/../Chimera/target/release/chimera"
+  else
+    CLAWDAD_CHIMERA="chimera"
+  fi
+fi
+CLAWDAD_CHIMERA_MODEL="${CLAWDAD_CHIMERA_MODEL:-local}"
 CLAWDAD_TMUX="${CLAWDAD_TMUX:-/opt/homebrew/bin/tmux}"
 
 # Listener defaults

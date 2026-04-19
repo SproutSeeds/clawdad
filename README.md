@@ -134,6 +134,7 @@ clawdad read my-project
 | `clawdad serve` | Run a secure HTTP listener for remote/iPhone entrypoints |
 | `clawdad secure-bootstrap` | Write the recommended Tailscale-first self-hosted setup |
 | `clawdad secure-doctor` | Verify the secure self-hosted deployment end-to-end |
+| `clawdad chimera-doctor` | Verify the local Chimera/Ollama provider lane |
 | `clawdad gen-token --write` | Generate and store a bearer token for the listener |
 | `clawdad install-launch-agent` | Install a macOS launchd plist for always-on listening |
 | `clawdad install-systemd-unit` | Install a Linux systemd user unit for always-on listening |
@@ -187,7 +188,12 @@ clawdad dispatches to the right CLI based on the active session's `resumeTool`:
 | Provider | Interactive (human) | Non-interactive (clawdad) |
 |----------|-------------------|--------------------------|
 | Codex | `codex` or `codex resume <id>` | Native saved Codex thread created or adopted per repo, then Clawdad resumes that same thread programmatically |
-| Chimera | `chimera --resume <id>` | `chimera --prompt "msg" --resume <id> --json` after Clawdad seeds and maintains the session file |
+| Chimera | `chimera --resume <id>` | `chimera --model local --prompt "msg" --resume <id> --json` after Clawdad seeds and maintains the session file |
+
+Chimera is Clawdad's local-first provider lane. Install `chimera-sigil` or keep a
+sibling `../Chimera` checkout, pull an Ollama model, then register or add a
+project session with `--provider chimera`. Run `clawdad chimera-doctor` when the
+local lane needs a quick health check. See [Chimera Local Lane](docs/chimera-local-lane.md).
 
 ## Requirements
 
@@ -196,7 +202,7 @@ clawdad dispatches to the right CLI based on the active session's `resumeTool`:
 - jq
 - orp CLI (workspace tab management)
 - codex CLI
-- chimera CLI (optional / experimental)
+- chimera CLI from `chimera-sigil` (optional local-first provider)
 - tmux (for watch daemon mode)
 
 ## Secure Setup Notes
@@ -267,4 +273,11 @@ Permission modes map to Codex sandbox behavior like this:
 
 ## Chimera Session Notes
 
-For Chimera-backed projects, Clawdad seeds a real Chimera session on first use, then dispatches future requests through `chimera --prompt --resume <id> --json`. Because Chimera does not yet expose a noninteractive middle approval mode, `approve` and `full` currently map to `--auto-approve`, while `plan` runs without auto-approve and relies on Chimera denying gated tools when stdin is closed.
+For Chimera-backed projects, Clawdad seeds a real Chimera session on first use,
+then dispatches future requests through `chimera --model local --prompt --resume
+<id> --json`. `CLAWDAD_CHIMERA_MODEL` defaults to `local`, and one-off dispatches
+can still pass `--model local-coder` or any other Chimera/Ollama profile.
+
+Permission modes pass through to Chimera: `plan` stays conservative, `approve`
+allows workspace writes while denying shell execution, and `full` allows all
+Chimera tools.

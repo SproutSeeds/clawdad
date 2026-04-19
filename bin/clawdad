@@ -50,6 +50,7 @@ Commands:
   serve [options]               Run the secure HTTP listener entrypoint
   secure-bootstrap [options]    Write a Tailscale-first secure server setup
   secure-doctor [options]       Verify the secure self-hosted setup
+  chimera-doctor [options]      Verify the local Chimera/Ollama provider lane
   gen-token [options]           Generate a bearer token for the listener
   print-launch-agent [opts]     Print a macOS launchd plist for clawdad serve
   install-launch-agent [opts]   Install a macOS launchd plist for clawdad serve
@@ -98,6 +99,10 @@ Options for watch:
   --stop                        Stop the watch daemon
   --once                        Single poll pass, then exit
 
+Options for chimera-doctor:
+  --json                        Emit machine-readable JSON
+  --model <model>               Check a Chimera/Ollama model profile
+
 Environment:
   CLAWDAD_HOME                  Config directory (default: ~/.clawdad)
   CLAWDAD_LOG                   Log file (default: ~/Library/Logs/clawdad.log)
@@ -105,6 +110,7 @@ Environment:
   CLAWDAD_PERMISSION_MODE       Default permission mode (default: plan)
   CLAWDAD_DEFAULT_PROVIDER      Default provider (default: codex)
   CLAWDAD_CHIMERA               Chimera CLI binary (default: chimera)
+  CLAWDAD_CHIMERA_MODEL         Default Chimera model/profile (default: local)
   CLAWDAD_ORP_WORKSPACE         ORP workspace name (default: main)
   CLAWDAD_SERVER_HOST           Listener host (default: 127.0.0.1)
   CLAWDAD_SERVER_PORT           Listener port (default: 4477)
@@ -127,6 +133,14 @@ cmd_init() {
   require_jq
   require_orp
   registry_init
+}
+
+cmd_chimera_doctor() {
+  require_node
+  "$CLAWDAD_NODE" "$CLAWDAD_ROOT/lib/chimera-doctor.mjs" \
+    --chimera-binary "$CLAWDAD_CHIMERA" \
+    --model "$CLAWDAD_CHIMERA_MODEL" \
+    "$@"
 }
 
 choose_provider_session_seed() {
@@ -966,6 +980,7 @@ main() {
     serve)      cmd_serve "$@" ;;
     secure-bootstrap) cmd_secure_bootstrap "$@" ;;
     secure-doctor) cmd_secure_doctor "$@" ;;
+    chimera-doctor) cmd_chimera_doctor "$@" ;;
     gen-token)  cmd_gen_token "$@" ;;
     print-launch-agent) cmd_print_launch_agent "$@" ;;
     install-launch-agent) cmd_install_launch_agent "$@" ;;
