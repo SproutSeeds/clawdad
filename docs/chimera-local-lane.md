@@ -35,7 +35,7 @@ GPU, workstation, or 4090 profiles:
 ```bash
 export CLAWDAD_CHIMERA_MODEL=local
 export CLAWDAD_CHIMERA_LOCAL_OLLAMA_BASE_URL=http://127.0.0.1:11434/v1
-export CLAWDAD_CHIMERA_4090_OLLAMA_BASE_URL=http://192.168.1.162:11434/v1
+export CLAWDAD_CHIMERA_4090_OLLAMA_BASE_URL=http://umbra-4090.YOUR-TAILNET.ts.net:11434/v1
 ```
 
 Then use `--model local-coder-4090` for coding runs on the workstation and

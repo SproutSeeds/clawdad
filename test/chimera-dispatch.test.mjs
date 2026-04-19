@@ -155,7 +155,7 @@ test("chimera dispatch routes 4090 profiles to the configured workstation Ollama
       env: {
         HOME: homeDir,
         FAKE_CHIMERA_ENV_LOG: envLogPath,
-        CLAWDAD_CHIMERA_4090_OLLAMA_BASE_URL: "http://192.168.1.162:11434/v1",
+        CLAWDAD_CHIMERA_4090_OLLAMA_BASE_URL: "http://umbra-4090.tailnet.example:11434/v1",
         CLAWDAD_CHIMERA_LOCAL_OLLAMA_BASE_URL: "http://127.0.0.1:11434/v1",
         OLLAMA_BASE_URL: "http://127.0.0.1:11434/v1",
       },
@@ -164,10 +164,10 @@ test("chimera dispatch routes 4090 profiles to the configured workstation Ollama
 
   assert.equal(result.exitCode, 0, result.stderr || result.stdout);
   const payload = JSON.parse(result.stdout);
-  assert.equal(payload.ollama_base_url, "http://192.168.1.162:11434/v1");
+  assert.equal(payload.ollama_base_url, "http://umbra-4090.tailnet.example:11434/v1");
 
   const records = (await readFile(envLogPath, "utf8")).trim().split(/\r?\n/u).map((line) => JSON.parse(line));
-  assert.equal(records.every((record) => record.ollamaBaseUrl === "http://192.168.1.162:11434/v1"), true);
+  assert.equal(records.every((record) => record.ollamaBaseUrl === "http://umbra-4090.tailnet.example:11434/v1"), true);
   assert.ok(records.some((record) => record.args.includes("--prompt")), "expected prompt invocation");
 });
 
