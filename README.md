@@ -193,6 +193,7 @@ clawdad dispatches to the right CLI based on the active session's `resumeTool`:
 - `secure-bootstrap` writes `~/.clawdad/server.json`, the iPhone Shortcut template, and the OS service file for you
 - if you want multiple Tailscale users, add `--allow-user <login>` more than once
 - if you skip `--apply-serve`, `secure-bootstrap` prints the exact `tailscale serve` command to run
+- `secure-doctor` also checks node key expiry, local Tailscale CLI/daemon drift, public Funnel exposure, tagged Service readiness, and any sibling app health URLs configured under `tailscale.liveApps`
 
 The mobile app and automation routes live under the same origin:
 
