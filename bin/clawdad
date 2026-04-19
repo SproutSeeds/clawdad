@@ -102,6 +102,7 @@ Options for watch:
 Options for chimera-doctor:
   --json                        Emit machine-readable JSON
   --model <model>               Check a Chimera/Ollama model profile
+  --ollama-base-url <url>        Check an explicit Ollama OpenAI-compatible base URL
 
 Environment:
   CLAWDAD_HOME                  Config directory (default: ~/.clawdad)
@@ -111,6 +112,8 @@ Environment:
   CLAWDAD_DEFAULT_PROVIDER      Default provider (default: codex)
   CLAWDAD_CHIMERA               Chimera CLI binary (default: chimera)
   CLAWDAD_CHIMERA_MODEL         Default Chimera model/profile (default: local)
+  CLAWDAD_CHIMERA_LOCAL_OLLAMA_BASE_URL Local Ollama base URL for Mac fallback
+  CLAWDAD_CHIMERA_4090_OLLAMA_BASE_URL  Ollama base URL for 4090/workstation profiles
   CLAWDAD_ORP_WORKSPACE         ORP workspace name (default: main)
   CLAWDAD_SERVER_HOST           Listener host (default: 127.0.0.1)
   CLAWDAD_SERVER_PORT           Listener port (default: 4477)

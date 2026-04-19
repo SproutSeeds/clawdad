@@ -278,6 +278,12 @@ then dispatches future requests through `chimera --model local --prompt --resume
 <id> --json`. `CLAWDAD_CHIMERA_MODEL` defaults to `local`, and one-off dispatches
 can still pass `--model local-coder` or any other Chimera/Ollama profile.
 
+Large workstation profiles route to a separate Ollama endpoint when configured.
+Set `CLAWDAD_CHIMERA_4090_OLLAMA_BASE_URL` to the OpenAI-compatible Ollama URL on
+the 4090 host, then dispatch with `--model local-coder-4090` or
+`--model local-4090`. Regular profiles such as `local` keep using the Mac/local
+Ollama endpoint.
+
 Permission modes pass through to Chimera: `plan` stays conservative, `approve`
 allows workspace writes while denying shell execution, and `full` allows all
 Chimera tools.

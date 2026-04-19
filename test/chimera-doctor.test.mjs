@@ -94,3 +94,34 @@ test("chimera doctor reports a ready local lane when binary and Ollama model exi
     assert.deepEqual(payload.suggestions, []);
   });
 });
+
+test("chimera doctor checks 4090 profiles against the workstation Ollama endpoint", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawdad-chimera-doctor-4090-"));
+  const fakeChimera = await createFakeChimera(tempDir);
+
+  await withOllamaTags(["qwen2.5-coder:32b"], async (ollamaBaseUrl) => {
+    const result = await execFileAsync(
+      process.execPath,
+      [
+        chimeraDoctor,
+        "--chimera-binary", fakeChimera,
+        "--model", "local-coder-4090",
+        "--json",
+      ],
+      {
+        env: {
+          ...process.env,
+          OLLAMA_BASE_URL: "http://127.0.0.1:11434/v1",
+          CLAWDAD_CHIMERA_4090_OLLAMA_BASE_URL: ollamaBaseUrl,
+        },
+      },
+    );
+
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.ready, true);
+    assert.equal(payload.resolvedModel, "qwen2.5-coder:32b");
+    assert.equal(payload.ollama.url, ollamaBaseUrl.replace(/\/v1$/u, "") + "/api/tags");
+    assert.deepEqual(payload.suggestions, []);
+  });
+});

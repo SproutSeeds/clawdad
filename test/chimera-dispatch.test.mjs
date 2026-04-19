@@ -23,12 +23,19 @@ import path from "node:path";
 const args = process.argv.slice(2);
 const home = process.env.HOME || os.homedir();
 const sessionId = "11111111-2222-3333-4444-555555555555";
-const sessionDir = path.join(home, ".chimera-harness", "sessions");
+const sessionRoot = process.env.FAKE_CHIMERA_SESSION_ROOT || ".chimera-harness";
+const sessionDir = path.join(home, sessionRoot, "sessions");
 const sessionPath = path.join(sessionDir, sessionId + ".jsonl");
 mkdirSync(sessionDir, { recursive: true });
 
 if (process.env.FAKE_CHIMERA_LOG) {
   appendFileSync(process.env.FAKE_CHIMERA_LOG, JSON.stringify(args) + "\\n");
+}
+if (process.env.FAKE_CHIMERA_ENV_LOG) {
+  appendFileSync(
+    process.env.FAKE_CHIMERA_ENV_LOG,
+    JSON.stringify({ args, ollamaBaseUrl: process.env.OLLAMA_BASE_URL || "" }) + "\\n",
+  );
 }
 
 if (!args.includes("--prompt")) {
@@ -123,6 +130,82 @@ test("chimera dispatch seeds local sessions and uses Chimera approval-mode", asy
   assert.match(sessionFile, /Chimera says hi/u);
 });
 
+test("chimera dispatch routes 4090 profiles to the configured workstation Ollama endpoint", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawdad-chimera-dispatch-4090-"));
+  const projectPath = path.join(tempDir, "project");
+  const homeDir = path.join(tempDir, "home");
+  await Promise.all([
+    mkdir(projectPath, { recursive: true }),
+    mkdir(homeDir, { recursive: true }),
+  ]);
+  const fakeChimera = await createFakeChimera(tempDir);
+  const envLogPath = path.join(tempDir, "env.log");
+
+  const result = await runDispatch(
+    [
+      "--project-path", projectPath,
+      "--message", "use the big card",
+      "--session-id", "pending-session",
+      "--permission-mode", "plan",
+      "--model", "local-coder-4090",
+      "--chimera-binary", fakeChimera,
+      "--home-dir", homeDir,
+    ],
+    {
+      env: {
+        HOME: homeDir,
+        FAKE_CHIMERA_ENV_LOG: envLogPath,
+        CLAWDAD_CHIMERA_4090_OLLAMA_BASE_URL: "http://192.168.1.162:11434/v1",
+        CLAWDAD_CHIMERA_LOCAL_OLLAMA_BASE_URL: "http://127.0.0.1:11434/v1",
+        OLLAMA_BASE_URL: "http://127.0.0.1:11434/v1",
+      },
+    },
+  );
+
+  assert.equal(result.exitCode, 0, result.stderr || result.stdout);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.ollama_base_url, "http://192.168.1.162:11434/v1");
+
+  const records = (await readFile(envLogPath, "utf8")).trim().split(/\r?\n/u).map((line) => JSON.parse(line));
+  assert.equal(records.every((record) => record.ollamaBaseUrl === "http://192.168.1.162:11434/v1"), true);
+  assert.ok(records.some((record) => record.args.includes("--prompt")), "expected prompt invocation");
+});
+
+test("chimera dispatch reads current Chimera Sigil session files", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawdad-chimera-dispatch-sigil-"));
+  const projectPath = path.join(tempDir, "project");
+  const homeDir = path.join(tempDir, "home");
+  await Promise.all([
+    mkdir(projectPath, { recursive: true }),
+    mkdir(homeDir, { recursive: true }),
+  ]);
+  const fakeChimera = await createFakeChimera(tempDir);
+
+  const result = await runDispatch(
+    [
+      "--project-path", projectPath,
+      "--message", "hello sigil session",
+      "--session-id", "pending-session",
+      "--permission-mode", "plan",
+      "--model", "local",
+      "--chimera-binary", fakeChimera,
+      "--home-dir", homeDir,
+    ],
+    {
+      env: {
+        HOME: homeDir,
+        FAKE_CHIMERA_SESSION_ROOT: ".chimera-sigil",
+      },
+    },
+  );
+
+  assert.equal(result.exitCode, 0, result.stderr || result.stdout);
+  const payload = JSON.parse(result.stdout);
+  assert.match(payload.session_path, /\.chimera-sigil\/sessions/u);
+  const sessionFile = await readFile(payload.session_path, "utf8");
+  assert.match(sessionFile, /hello sigil session/u);
+});
+
 test("chimera dispatch explains Ollama connection failures", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawdad-chimera-failure-"));
   const projectPath = path.join(tempDir, "project");
@@ -149,7 +232,7 @@ test("chimera dispatch explains Ollama connection failures", async () => {
   assert.notEqual(result.exitCode, 0);
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.ok, false);
-  assert.match(payload.error_text, /Ollama is not running/u);
+  assert.match(payload.error_text, /cannot reach the local Ollama endpoint/u);
   assert.match(payload.error_text, /clawdad chimera-doctor/u);
   assert.match(payload.error_text, /ollama pull qwen3:4b/u);
 });

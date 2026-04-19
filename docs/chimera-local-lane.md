@@ -28,11 +28,25 @@ when you want a coding model:
 export CLAWDAD_CHIMERA_MODEL=local-coder
 ```
 
+For a Mac fallback plus 4090 workstation setup, keep the default model small and
+add a workstation Ollama endpoint. Clawdad only injects this endpoint for 24 GB,
+GPU, workstation, or 4090 profiles:
+
+```bash
+export CLAWDAD_CHIMERA_MODEL=local
+export CLAWDAD_CHIMERA_LOCAL_OLLAMA_BASE_URL=http://127.0.0.1:11434/v1
+export CLAWDAD_CHIMERA_4090_OLLAMA_BASE_URL=http://192.168.1.162:11434/v1
+```
+
+Then use `--model local-coder-4090` for coding runs on the workstation and
+`--model local` for the Mac Studio fallback.
+
 Run the local-lane doctor before dispatching:
 
 ```bash
 clawdad chimera-doctor
 clawdad chimera-doctor --model local-coder
+clawdad chimera-doctor --model local-coder-4090
 ```
 
 ## Register a Chimera Session
