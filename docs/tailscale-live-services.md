@@ -1,7 +1,7 @@
 # Tailscale Live Services
 
-Clawdad, Cmail, and Dumpy should keep their current device URLs live while durable
-Tailscale Services are introduced in parallel.
+Clawdad, Cmail, and Dumpy keep their original device URLs live as compatibility
+routes, and use durable Tailscale Services as the primary phone URLs.
 
 Current compatibility URLs:
 
@@ -9,7 +9,7 @@ Current compatibility URLs:
 - Cmail: `https://codys-mac-studio-1.tail649edd.ts.net:4311`
 - Dumpy: `https://codys-mac-studio-1.tail649edd.ts.net:7331`
 
-Target durable URLs:
+Primary durable URLs:
 
 - Clawdad: `https://clawdad.tail649edd.ts.net`
 - Cmail: `https://cmail.tail649edd.ts.net`
@@ -17,7 +17,7 @@ Target durable URLs:
 
 ## Service Host
 
-The durable route should use a separate userspace Tailscale node rather than
+The durable route uses a separate userspace Tailscale node rather than
 tagging the primary Mac user device. This keeps the normal Mac Tailscale identity
 intact while giving the live apps their own infrastructure identity.
 
@@ -29,13 +29,13 @@ Local service-host state:
 
 ## Required Tailnet Policy
 
-Merge the following into the existing Tailscale Access Controls policy. Do not
-replace the whole policy with this snippet.
+The following keys are merged into the existing Tailscale Access Controls
+policy. Do not replace the whole policy with this snippet.
 
 ```json
 {
   "tagOwners": {
-    "tag:live-app-host": ["autogroup:admin"]
+    "tag:live-app-host": ["autogroup:admin", "autogroup:owner"]
   },
   "autoApprovers": {
     "services": {
@@ -43,24 +43,32 @@ replace the whole policy with this snippet.
       "svc:cmail": ["tag:live-app-host"],
       "svc:dumpy": ["tag:live-app-host"]
     }
-  }
+  },
+  "grants": [
+    {
+      "src": ["autogroup:member"],
+      "dst": ["svc:clawdad", "svc:cmail", "svc:dumpy"],
+      "ip": ["443"]
+    }
+  ]
 }
 ```
 
-If `tagOwners` or `autoApprovers` already exist, merge these keys into the
-existing objects.
+If `tagOwners`, `autoApprovers`, or `grants` already exist, merge these keys into
+the existing policy rather than replacing unrelated rules.
 
 ## Service Definitions
 
-In the Tailscale Services admin page, define these Services with endpoint
+The Tailscale Services API/admin page defines these Services with endpoint
 `tcp:443`:
 
 - `svc:clawdad`
 - `svc:cmail`
 - `svc:dumpy`
 
-If auto-approval is not configured, approve the advertised host for each Service
-after the CLI advertisement step.
+The service host tag is auto-approved for these Services. If auto-approval is
+not configured, approve the advertised host for each Service after the CLI
+advertisement step.
 
 ## CLI Steps
 
@@ -83,16 +91,16 @@ Advertise the live app Services:
 ```bash
 /opt/homebrew/opt/tailscale/bin/tailscale \
   --socket ~/.clawdad/tailscale-live-host/tailscaled.sock \
-  serve --yes --service=svc:clawdad --https=443 127.0.0.1:4477
+  serve --yes --service=svc:clawdad --https=443 http://127.0.0.1:4477
 
 /opt/homebrew/opt/tailscale/bin/tailscale \
   --socket ~/.clawdad/tailscale-live-host/tailscaled.sock \
-  serve --yes --service=svc:cmail --https=443 127.0.0.1:4311
+  serve --yes --service=svc:cmail --https=443 http://127.0.0.1:4311
 
 /opt/homebrew/opt/tailscale/bin/tailscale \
   --socket ~/.clawdad/tailscale-live-host/tailscaled.sock \
-  serve --yes --service=svc:dumpy --https=443 127.0.0.1:7331
+  serve --yes --service=svc:dumpy --https=443 http://127.0.0.1:7331
 ```
 
-Verify both compatibility and durable URLs before updating any user-facing links.
-
+Verify both compatibility and durable URLs after any Tailscale policy or Serve
+change.
