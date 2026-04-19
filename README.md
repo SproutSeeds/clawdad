@@ -65,6 +65,20 @@ https://YOUR-DEVICE.YOUR-TAILNET.ts.net/
 
 `secure-bootstrap` usually infers your current Tailscale login automatically. Add the app to your iPhone home screen if you want it to feel native.
 
+For a small single-host setup, the device URL is enough. For a team or hosted
+setup that should keep a stable phone URL, use a durable Tailscale Service URL
+such as:
+
+```text
+https://clawdad.YOUR-TAILNET.ts.net/
+```
+
+That durable route still stays private to your tailnet. Team members only need
+Tailscale connected on their phone and the Clawdad URL; the host/admin owns the
+service process and routing setup. See
+[Tailscale Live Services](docs/tailscale-live-services.md) for the tagged
+service-host pattern.
+
 If you ever just want the local CLI and not the phone app yet, you can stop after `clawdad register`.
 
 ## What You Get
@@ -193,6 +207,8 @@ clawdad dispatches to the right CLI based on the active session's `resumeTool`:
 - `secure-bootstrap` writes `~/.clawdad/server.json`, the iPhone Shortcut template, and the OS service file for you
 - if you want multiple Tailscale users, add `--allow-user <login>` more than once
 - if you skip `--apply-serve`, `secure-bootstrap` prints the exact `tailscale serve` command to run
+- durable team URLs can use a tagged Tailscale Service host, for example `svc:clawdad` behind `https://clawdad.YOUR-TAILNET.ts.net`
+- do not enable public Funnel unless you explicitly want a public internet surface
 - `secure-doctor` also checks node key expiry, local Tailscale CLI/daemon drift, public Funnel exposure, tagged Service readiness, and any sibling app health URLs configured under `tailscale.liveApps`
 
 The mobile app and automation routes live under the same origin:
