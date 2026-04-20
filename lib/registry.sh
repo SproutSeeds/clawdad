@@ -139,6 +139,7 @@ _state_upgrade_schema() {
               .value |= (
                 .slug = (.slug // "")
                 | .provider = (.provider // "")
+                | .provider_override = (.provider_override // "")
                 | .provider_session_seeded = (.provider_session_seeded // "true")
                 | .local_only = (.local_only // "false")
                 | .orp_error = (.orp_error // "")
@@ -262,9 +263,11 @@ state_register_session() {
       .projects[$path].sessions = (.projects[$path].sessions // {})
       | .projects[$path].sessions[$session] = (
           (.projects[$path].sessions[$session] // {})
-          + {
+          | (if $provider == "codex" and (((.provider // "") == "chimera") or ((.provider_override // "") == "chimera")) then "chimera" else $provider end) as $effective_provider
+          | . + {
               slug: $slug,
-              provider: $provider,
+              provider: $effective_provider,
+              provider_override: (if $provider == "chimera" or ((.provider_override // "") == "chimera") then "chimera" else (.provider_override // "") end),
               provider_session_seeded: ((.projects[$path].sessions[$session].provider_session_seeded // $seeded)),
               tracked_at: ((.projects[$path].sessions[$session].tracked_at // $ts)),
               last_selected_at: (.projects[$path].sessions[$session].last_selected_at // null),
@@ -407,6 +410,7 @@ state_rekey_session() {
           + {
               slug: $slug,
               provider: $provider,
+              provider_override: (if $provider == "chimera" or (($prior.provider_override // "") == "chimera") then "chimera" else ($prior.provider_override // "") end),
               provider_session_seeded: $seeded,
               tracked_at: ($prior.tracked_at // $ts),
               last_selected_at: ($prior.last_selected_at // null),
@@ -962,7 +966,7 @@ registry_local_session_json() {
       | if $entry == null then
           empty
         else
-          (if ($entry.value.provider // "") == "" then $defaultProvider else $entry.value.provider end) as $provider
+          (if ($entry.value.provider_override // "") != "" then $entry.value.provider_override elif ($entry.value.provider // "") == "" then $defaultProvider else $entry.value.provider end) as $provider
           | {
               title: ($entry.value.slug // ""),
               path: $path,
@@ -992,6 +996,12 @@ registry_sync_sessions_for_project() {
   if [[ -n "$lines" ]]; then
     while IFS=$'\t' read -r session_id slug provider; do
       [[ -n "$session_id" ]] || continue
+      local existing_provider existing_provider_override
+      existing_provider=$(state_session_field "$project_path" "$session_id" "provider")
+      existing_provider_override=$(state_session_field "$project_path" "$session_id" "provider_override")
+      if [[ "$provider" == "codex" && ( "$existing_provider" == "chimera" || "$existing_provider_override" == "chimera" ) ]]; then
+        provider="chimera"
+      fi
       local seeded
       seeded=$(state_session_field "$project_path" "$session_id" "provider_session_seeded")
       if [[ -z "$seeded" ]]; then
@@ -1044,6 +1054,19 @@ registry_session_json() {
 
   if [[ -z "$selector" ]]; then
     return 1
+  fi
+
+  # ORP currently normalizes some non-Codex resume tabs back to codex. When
+  # local state knows the selected session is Chimera-backed, trust that local
+  # provider metadata so Clawdad dispatches through the Chimera lane.
+  local local_session_json local_provider
+  local_session_json=$(registry_local_session_json "$project_path" "$selector" 2>/dev/null || true)
+  if [[ -n "$local_session_json" ]]; then
+    local_provider=$(echo "$local_session_json" | "$CLAWDAD_JQ" -r '.resumeTool // ""' 2>/dev/null || true)
+    if [[ "$local_provider" == "chimera" ]]; then
+      echo "$local_session_json"
+      return 0
+    fi
   fi
 
   local session_json
@@ -1100,10 +1123,11 @@ registry_list_sessions_json() {
                 and (((.resumeTool // "codex") == "codex") or ((.resumeTool // "codex") == "chimera"))
               )
             | . as $tab
+            | (if (($session_state[$tab.resumeSessionId].provider_override // "") != "") then ($session_state[$tab.resumeSessionId].provider_override // "") elif (($tab.resumeTool // "codex") == "codex" and (($session_state[$tab.resumeSessionId].provider // "") == "chimera")) then "chimera" else ($tab.resumeTool // "codex") end) as $provider
             | {
                 slug: ($tab.title // ($tab.path | split("/") | last)),
                 path: $tab.path,
-                provider: ($tab.resumeTool // "codex"),
+                provider: $provider,
                 sessionId: ($tab.resumeSessionId // null),
                 active: (($tab.resumeSessionId // "") == $active),
                 status: ($session_state[$tab.resumeSessionId].status // "idle"),
@@ -1122,7 +1146,7 @@ registry_list_sessions_json() {
             | to_entries[]?
             | . as $entry
             | select(($orp_session_ids | index($entry.key)) == null)
-            | (if ($entry.value.provider // "") == "" then $defaultProvider else $entry.value.provider end) as $provider
+            | (if ($entry.value.provider_override // "") != "" then $entry.value.provider_override elif ($entry.value.provider // "") == "" then $defaultProvider else $entry.value.provider end) as $provider
             | {
                 slug: ($entry.value.slug // ""),
                 path: $path,
