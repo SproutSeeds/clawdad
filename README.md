@@ -22,7 +22,7 @@ without letting them become parallel sources of truth. See
 
 Before you start:
 
-- install [ORP](https://orp.earth), `jq`, and the `codex` CLI
+- install [ORP](https://orp.earth) >= 0.4.27, `jq`, and the `codex` CLI
 - install [Tailscale](https://tailscale.com/download) on your Mac and phone if you want the private mobile app
 
 ```bash
@@ -128,6 +128,7 @@ clawdad read my-project
 | `clawdad read <slug>` | Read latest response from a spoke |
 | `clawdad delegate <slug>` | Show the saved delegate brief, plan, status, and guardrails |
 | `clawdad delegate-set <slug> ...` | Update the delegate brief or guardrails such as `--compute-reserve-percent 10` |
+| `clawdad go <slug>` | Friendly autonomous delegation entrypoint after ORP confirms a safe continuation |
 | `clawdad delegate-run <slug>` | Start autonomous Codex delegate mode for a project |
 | `clawdad delegate-pause <slug>` | Pause autonomous delegate mode after the current step |
 | `clawdad watch` | Monitor mailboxes for responses |
@@ -153,8 +154,22 @@ Delegate mode is Codex-first and runs on the same machine as the Clawdad server.
 
 ```bash
 clawdad delegate-set my-project --compute-reserve-percent 10
-clawdad delegate-run my-project
+clawdad go my-project
 ```
+
+`clawdad go` and `clawdad delegate-run` both ask ORP whether autonomous work is
+safe before the delegate loop starts. Clawdad runs `orp hygiene --json`, `orp
+project refresh --json`, and `orp frontier preflight-delegate --json` from the
+project directory. If ORP reports missing research-system/frontier state,
+bootstrap the repo first:
+
+```bash
+orp init --research-system --project-startup --current-codex --json
+```
+
+If ORP reports unclassified dirty state, no active safe continuation, paid or
+human-gated work, or another hard stop, Clawdad prints the ORP reason and leaves
+the delegate loop stopped.
 
 If a project uses ORP Frontier additional items, Clawdad checks that queue whenever a delegate marks a run complete. A queued item is activated and becomes the next delegate action instead of ending the run:
 
@@ -200,7 +215,7 @@ local lane needs a quick health check. See [Chimera Local Lane](docs/chimera-loc
 - zsh
 - node >= 18
 - jq
-- orp CLI (workspace tab management)
+- orp CLI >= 0.4.27 (workspace tab management and delegate preflight)
 - codex CLI
 - chimera CLI from `chimera-sigil` (optional local-first provider)
 - tmux (for watch daemon mode)
@@ -287,3 +302,7 @@ as `local` keep using the Mac/local Ollama endpoint.
 Permission modes pass through to Chimera: `plan` stays conservative, `approve`
 allows workspace writes while denying shell execution, and `full` allows all
 Chimera tools.
+
+## Support
+
+Everything here is released for public use. If Clawdad saved you time or you want to keep the work moving, you can [support public FRG releases](https://frg.earth/support?utm_source=readme&utm_medium=repo&utm_campaign=public_work_support&package=clawdad).

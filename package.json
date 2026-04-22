@@ -1,6 +1,6 @@
 {
   "name": "clawdad",
-  "version": "0.6.35",
+  "version": "0.6.36",
   "description": "Multi-agent orchestration CLI for AI coding agents. Manages persistent spoke agents across projects using ORP as the canonical data store.",
   "scripts": {
     "test": "node --test test/*.test.mjs"
@@ -21,6 +21,10 @@
   ],
   "author": "Cody Mitchell <cody@frg.earth>",
   "license": "MIT",
+  "funding": {
+    "type": "individual",
+    "url": "https://frg.earth/support?utm_source=npm&utm_medium=funding&utm_campaign=public_work_support&package=clawdad"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/SproutSeeds/clawdad.git"
@@ -56,6 +60,6 @@
     "README.md"
   ],
   "dependencies": {
-    "open-research-protocol": ">=0.4.18"
+    "open-research-protocol": ">=0.4.27"
   }
 }

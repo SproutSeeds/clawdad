@@ -223,6 +223,147 @@ sleep 10
   }
 });
 
+test("projects endpoint does not keep serving a cached busy session after completion", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-project-cache-"));
+  const home = path.join(root, "home");
+  const projectPath = path.join(root, "clawdad");
+  const configPath = path.join(root, "server.json");
+  const mockBinPath = path.join(root, "clawdad-mock");
+  const sessionId = "019d564e-ec8d-7d80-8303-ed4f17090c35";
+  const requestId = "busy-cache-request";
+  const dispatchedAt = "2026-04-20T16:10:00Z";
+  const completedAt = "2026-04-20T16:12:00Z";
+
+  await mkdir(path.join(projectPath, ".clawdad", "mailbox"), { recursive: true });
+  await mkdir(home, { recursive: true });
+
+  const writeState = async ({ status, lastResponse }) => {
+    await writeFile(
+      path.join(home, "state.json"),
+      JSON.stringify(
+        {
+          version: 3,
+          projects: {
+            [projectPath]: {
+              status,
+              last_dispatch: dispatchedAt,
+              last_response: lastResponse,
+              dispatch_count: 1,
+              registered_at: "2026-04-20T00:00:00Z",
+              active_session_id: sessionId,
+              sessions: {
+                [sessionId]: {
+                  slug: "Main-claw",
+                  provider: "codex",
+                  provider_session_seeded: "true",
+                  tracked_at: "2026-04-20T00:00:00Z",
+                  dispatch_count: 1,
+                  last_dispatch: dispatchedAt,
+                  last_response: lastResponse,
+                  status,
+                  local_only: "false",
+                },
+              },
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+  };
+
+  await writeState({ status: "running", lastResponse: null });
+  await writeFile(
+    path.join(projectPath, ".clawdad", "mailbox", "status.json"),
+    JSON.stringify(
+      {
+        state: "running",
+        request_id: requestId,
+        session_id: sessionId,
+        dispatched_at: dispatchedAt,
+        pid: process.pid,
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(mockBinPath, "#!/bin/sh\nexit 1\n", "utf8");
+  await chmod(mockBinPath, 0o755);
+
+  const port = await freePort();
+  await writeFile(
+    configPath,
+    JSON.stringify(
+      {
+        host: "127.0.0.1",
+        port,
+        defaultProject: projectPath,
+        authMode: "tailscale",
+        allowedUsers: ["tester@example.com"],
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  const child = spawn(process.execPath, [serverScript, "serve", "--config", configPath], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      CLAWDAD_HOME: home,
+      CLAWDAD_BIN_PATH: mockBinPath,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const stderr = [];
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => stderr.push(chunk));
+
+  try {
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const headers = {
+      "tailscale-user-login": "tester@example.com",
+    };
+    await waitForHealth(baseUrl, child);
+
+    const runningResponse = await fetch(`${baseUrl}/v1/projects`, { headers });
+    assert.equal(runningResponse.status, 200, stderr.join(""));
+    const runningPayload = await runningResponse.json();
+    assert.equal(runningPayload.projects[0].sessions[0].status, "running");
+
+    await writeState({ status: "completed", lastResponse: completedAt });
+    await writeFile(
+      path.join(projectPath, ".clawdad", "mailbox", "status.json"),
+      JSON.stringify(
+        {
+          state: "completed",
+          request_id: requestId,
+          session_id: sessionId,
+          dispatched_at: dispatchedAt,
+          completed_at: completedAt,
+          pid: null,
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const completedResponse = await fetch(`${baseUrl}/v1/projects`, { headers });
+    assert.equal(completedResponse.status, 200, stderr.join(""));
+    const completedPayload = await completedResponse.json();
+    assert.equal(completedPayload.projects[0].sessions[0].status, "completed");
+    assert.equal(completedPayload.projects[0].sessions[0].lastResponse, completedAt);
+  } finally {
+    await stopServer(child);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("history endpoint merges mirrored requests with provider transcript handoff copies", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-history-"));
   const home = path.join(root, "home");

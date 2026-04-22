@@ -339,6 +339,13 @@ const dateTimeFormatter = new Intl.DateTimeFormat([], {
   hour: "numeric",
   minute: "2-digit",
 });
+const fullDateTimeFormatter = new Intl.DateTimeFormat([], {
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+});
 const controlLockMs = 2600;
 
 function copyIconMarkup() {
@@ -1220,12 +1227,24 @@ function formatTimestamp(value) {
   }
 
   const now = new Date();
+  const dateDay = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const dayDelta = Math.round((today - dateDay) / (24 * 60 * 60 * 1000));
   const sameDay =
     date.getFullYear() === now.getFullYear() &&
     date.getMonth() === now.getMonth() &&
     date.getDate() === now.getDate();
 
-  return sameDay ? timeFormatter.format(date) : dateTimeFormatter.format(date);
+  if (sameDay) {
+    return `Today ${timeFormatter.format(date)}`;
+  }
+  if (dayDelta === 1) {
+    return `Yesterday ${timeFormatter.format(date)}`;
+  }
+  if (date.getFullYear() === now.getFullYear()) {
+    return dateTimeFormatter.format(date);
+  }
+  return fullDateTimeFormatter.format(date);
 }
 
 function copyFeedbackActive(copyKey) {
@@ -2864,7 +2883,22 @@ function sessionIsBusy(session) {
     return true;
   }
   const status = String(session?.status || "").trim().toLowerCase();
-  return status === "running" || status === "dispatched";
+  if (status !== "running" && status !== "dispatched") {
+    return false;
+  }
+
+  const dispatchMs = new Date(session?.lastDispatch || 0).getTime();
+  const responseMs = new Date(session?.lastResponse || 0).getTime();
+  if (
+    Number.isFinite(dispatchMs) &&
+    dispatchMs > 0 &&
+    Number.isFinite(responseMs) &&
+    responseMs >= dispatchMs - 1000
+  ) {
+    return false;
+  }
+
+  return true;
 }
 
 function decorateCopyButton(button, copyKey) {

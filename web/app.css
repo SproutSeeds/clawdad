@@ -915,6 +915,7 @@ textarea:disabled {
 }
 
 .detail-head {
+  min-width: 0;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -922,6 +923,7 @@ textarea:disabled {
 }
 
 .detail-meta {
+  min-width: 0;
   display: grid;
   gap: 4px;
 }
@@ -932,11 +934,13 @@ textarea:disabled {
 }
 
 .detail-session {
+  min-width: 0;
   font-family: var(--mono);
   font-size: 0.72rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--muted);
+  overflow-wrap: anywhere;
 }
 
 .detail-close {
@@ -950,6 +954,7 @@ textarea:disabled {
 }
 
 .detail-actions {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1784,6 +1789,31 @@ textarea:disabled {
     grid-template-columns: 1fr;
   }
 
+  .project-control,
+  .session-control {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .project-control select,
+  .session-control select {
+    grid-column: 1 / -1;
+  }
+
+  .project-control .thread-button,
+  .session-control .thread-button {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .session-control {
+    --session-spinner-right: 14px;
+  }
+
+  .session-control.is-loading::after {
+    top: 24px;
+  }
+
   .delegate-open-button {
     min-width: 48px;
     padding: 0;
@@ -1800,5 +1830,25 @@ textarea:disabled {
   .detail-panel {
     width: calc(100% - 16px);
     bottom: max(8px, env(safe-area-inset-bottom));
+    max-height: min(88dvh, 760px);
+    padding: 12px;
+  }
+
+  .project-modal-panel {
+    max-width: none;
+  }
+
+  .artifacts-list {
+    min-height: min(48dvh, 360px);
+  }
+
+  .artifact-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .artifact-action,
+  .artifact-action-button {
+    width: 100%;
   }
 }
