@@ -1358,7 +1358,7 @@ textarea:disabled {
 
 .delegate-carousel-tabs {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -1471,6 +1471,12 @@ textarea:disabled {
   border-radius: 8px;
 }
 
+.delegate-review-list {
+  display: grid;
+  gap: 8px;
+  min-height: min(44vh, 320px);
+}
+
 .delegate-log-mode-switch {
   position: sticky;
   top: 0;
@@ -1500,7 +1506,8 @@ textarea:disabled {
 }
 
 .delegate-live-current,
-.delegate-event-card {
+.delegate-event-card,
+.delegate-review-card {
   position: relative;
   display: grid;
   gap: 7px;
@@ -1517,6 +1524,26 @@ textarea:disabled {
 
 .delegate-event-card.failed {
   border-color: rgba(225, 113, 113, 0.38);
+}
+
+.delegate-review-card.is-hard-stop,
+.delegate-review-card.is-pause-recommended {
+  border-color: rgba(225, 113, 113, 0.42);
+}
+
+.delegate-review-card.is-needs-review {
+  border-color: rgba(240, 208, 109, 0.38);
+}
+
+.delegate-review-risks {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: rgba(255, 226, 179, 0.66);
+  font-family: var(--mono);
+  font-size: 0.63rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .delegate-event-card.is-live {

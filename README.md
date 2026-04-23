@@ -22,7 +22,7 @@ without letting them become parallel sources of truth. See
 
 Before you start:
 
-- install [ORP](https://orp.earth) >= 0.4.27, `jq`, and the `codex` CLI
+- install [ORP](https://orp.earth) >= 0.4.27, `jq`, `sqlite3`, and the `codex` CLI
 - install [Tailscale](https://tailscale.com/download) on your Mac and phone if you want the private mobile app
 
 ```bash
@@ -131,6 +131,11 @@ clawdad read my-project
 | `clawdad go <slug>` | Friendly autonomous delegation entrypoint after ORP confirms a safe continuation |
 | `clawdad delegate-run <slug>` | Start autonomous Codex delegate mode for a project |
 | `clawdad delegate-pause <slug>` | Pause autonomous delegate mode after the current step |
+| `clawdad watchtower <slug>` | Run the read-only delegation observer sidecar |
+| `clawdad watch <slug>` | Friendly alias for `watchtower` when a project is supplied |
+| `clawdad feed tail <slug>` | Show recent Watchtower feed events |
+| `clawdad feed search <slug> "query"` | Search the local SQLite/FTS delegation feed |
+| `clawdad feed review <slug>` | Show queued Watchtower review cards |
 | `clawdad watch` | Monitor mailboxes for responses |
 | `clawdad serve` | Run a secure HTTP listener for remote/iPhone entrypoints |
 | `clawdad secure-bootstrap` | Write the recommended Tailscale-first self-hosted setup |
@@ -170,6 +175,25 @@ orp init --research-system --project-startup --current-codex --json
 If ORP reports unclassified dirty state, no active safe continuation, paid or
 human-gated work, or another hard stop, Clawdad prints the ORP reason and leaves
 the delegate loop stopped.
+
+Watchtower is the read-only delegation review sidecar. It watches delegate run
+events, ORP continuation/hygiene state, and git status, then appends structured
+updates and review cards to `.clawdad/feed/watchtower.sqlite`. It does not edit,
+approve, or advance the project.
+
+```bash
+clawdad watchtower my-project --once
+clawdad feed tail my-project
+clawdad feed search my-project "paper fills"
+clawdad feed review my-project
+```
+
+Review cards are queued for important changes such as active ORP item changes,
+checkpoint commits, failing tests, dirty unclassified hygiene, sensitive
+broker/payment/credential/live-order file boundaries, readiness claims, paper
+results, paid/API entitlement mentions, large diffs, and blocked or paused runs.
+The first store is local SQLite with FTS search; embeddings can be layered on
+later without changing the observer contract.
 
 If a project uses ORP Frontier additional items, Clawdad checks that queue whenever a delegate marks a run complete. A queued item is activated and becomes the next delegate action instead of ending the run:
 
@@ -215,6 +239,7 @@ local lane needs a quick health check. See [Chimera Local Lane](docs/chimera-loc
 - zsh
 - node >= 18
 - jq
+- sqlite3 with FTS5
 - orp CLI >= 0.4.27 (workspace tab management and delegate preflight)
 - codex CLI
 - chimera CLI from `chimera-sigil` (optional local-first provider)
@@ -239,6 +264,8 @@ The mobile app and automation routes live under the same origin:
 - `GET /v1/projects`
 - `GET /v1/project-roots`
 - `GET /v1/project-summary`
+- `GET /v1/delegate/feed`
+- `GET /v1/delegate/run-log`
 - `GET /v1/history`
 - `POST /v1/projects`
 - `POST /v1/active-session`

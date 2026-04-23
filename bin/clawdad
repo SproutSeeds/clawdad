@@ -22,7 +22,7 @@ clawdad v$CLAWDAD_VERSION — Multi-agent orchestration for AI coding agents
 Usage:
   clawdad <command> [options]
 
-Requires: orp, jq, codex (Chimera optional)
+Requires: orp, jq, sqlite3, codex (Chimera optional)
 
 Commands:
   init                          Initialize clawdad (~/.clawdad + verify ORP)
@@ -34,6 +34,8 @@ Commands:
   delegate-run <project>        Start autonomous delegate mode for a project
   delegate-pause <project>      Pause autonomous delegate mode for a project
   delegate-reset <project>      Reset the delegate brief to the default template
+  watchtower <project>          Observe delegation read-only and index review cards
+  feed <tail|search|review>     Read the delegation review feed
   track-session <project> <session-id>
                                 Track an existing native Codex session in a project bucket
   rename-session <project> <session> <title>
@@ -872,6 +874,11 @@ cmd_read() {
 }
 
 cmd_watch() {
+  if [[ "${1:-}" != "" && "${1:-}" != --* ]]; then
+    run_server_helper watchtower "$@"
+    return
+  fi
+
   require_jq
 
   local interval="$CLAWDAD_POLL_INTERVAL" daemon=false stop=false once=false
@@ -936,6 +943,14 @@ cmd_go() {
   run_server_helper go "$@"
 }
 
+cmd_watchtower() {
+  run_server_helper watchtower "$@"
+}
+
+cmd_feed() {
+  run_server_helper feed "$@"
+}
+
 cmd_delegate_pause() {
   run_server_helper delegate-pause "$@"
 }
@@ -975,6 +990,8 @@ main() {
     delegate-run|delegate-start) cmd_delegate_run "$@" ;;
     delegate-pause|delegate-stop) cmd_delegate_pause "$@" ;;
     delegate-reset) cmd_delegate_reset "$@" ;;
+    watchtower) cmd_watchtower "$@" ;;
+    feed)       cmd_feed "$@" ;;
     track-session) cmd_track_session "$@" ;;
     rename-session) cmd_rename_session "$@" ;;
     remove-session) cmd_remove_session "$@" ;;

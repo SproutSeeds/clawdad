@@ -33,6 +33,7 @@ const state = {
   delegatePlanPending: false,
   delegateRunPending: false,
   delegateRunSummaryPending: false,
+  delegateFeedPending: false,
   projectModalOpen: false,
   projectModalMode: "existing",
   projectModalRoot: "",
@@ -162,11 +163,13 @@ const elements = {
   delegateCarouselTabs: document.querySelector("#delegateCarouselTabs"),
   delegateRunsPanel: document.querySelector("#delegateRunsPanel"),
   delegateRunLogPanel: document.querySelector("#delegateRunLogPanel"),
+  delegateReviewPanel: document.querySelector("#delegateReviewPanel"),
   delegateBriefPanel: document.querySelector("#delegateBriefPanel"),
   delegatePlanPanel: document.querySelector("#delegatePlanPanel"),
   delegateSummaryPanel: document.querySelector("#delegateSummaryPanel"),
   delegateRunCardList: document.querySelector("#delegateRunCardList"),
   delegateRunList: document.querySelector("#delegateRunList"),
+  delegateReviewList: document.querySelector("#delegateReviewList"),
   delegateSummaryList: document.querySelector("#delegateSummaryList"),
   delegatePlanList: document.querySelector("#delegatePlanList"),
 };
@@ -259,6 +262,7 @@ const processingStatusPhrases = [
 const delegateCarouselSlides = Object.freeze([
   { id: "runs", label: "History" },
   { id: "log", label: "Log" },
+  { id: "review", label: "Review" },
   { id: "brief", label: "Brief" },
 ]);
 const delegateAutoIcon = "\u221e";
@@ -1819,6 +1823,14 @@ function delegateStateFor(projectPath) {
         initialized: false,
         error: "",
       },
+      feed: {
+        cards: [],
+        events: [],
+        scan: null,
+        loading: false,
+        initialized: false,
+        error: "",
+      },
       loading: false,
       initialized: false,
       error: "",
@@ -2224,6 +2236,47 @@ function normalizeDelegateRunEvent(event) {
     error: String(event?.error || "").trim(),
     checkpoint: normalizeDelegateCheckpoint(rawCheckpoint),
     computeBudget: normalizeDelegateComputeBudget(event?.computeBudget),
+  };
+}
+
+function normalizeWatchtowerCard(card) {
+  const riskFlags = Array.isArray(card?.riskFlags)
+    ? card.riskFlags
+    : Array.isArray(card?.risk_flags)
+      ? card.risk_flags
+      : [];
+  return {
+    id: String(card?.id || "").trim() || makeEntryId(),
+    eventId: String(card?.eventId || card?.event_id || "").trim(),
+    projectPath: String(card?.projectPath || card?.project_path || "").trim(),
+    runId: String(card?.runId || card?.run_id || "").trim() || null,
+    at: String(card?.at || "").trim() || null,
+    trigger: String(card?.trigger || "").trim(),
+    title: String(card?.title || "").trim() || "Review card",
+    summary: String(card?.summary || "").trim(),
+    reviewStatus: String(card?.reviewStatus || card?.review_status || "info").trim(),
+    riskFlags: riskFlags.map((flag) => String(flag || "").trim()).filter(Boolean),
+  };
+}
+
+function normalizeWatchtowerEvent(event) {
+  const riskFlags = Array.isArray(event?.riskFlags)
+    ? event.riskFlags
+    : Array.isArray(event?.risk_flags)
+      ? event.risk_flags
+      : [];
+  return {
+    id: String(event?.id || "").trim() || makeEntryId(),
+    projectPath: String(event?.projectPath || event?.project_path || "").trim(),
+    runId: String(event?.runId || event?.run_id || "").trim() || null,
+    at: String(event?.at || "").trim() || null,
+    title: String(event?.title || "").trim() || "Feed event",
+    body: String(event?.body || "").trim(),
+    workerSummary: String(event?.workerSummary || event?.worker_summary || "").trim(),
+    activeOrpItem: String(event?.activeOrpItem || event?.active_orp_item || "").trim(),
+    currentDecision: String(event?.currentDecision || event?.current_decision || "").trim(),
+    reviewStatus: String(event?.reviewStatus || event?.review_status || "info").trim(),
+    riskFlags: riskFlags.map((flag) => String(flag || "").trim()).filter(Boolean),
   };
 }
 
@@ -3922,6 +3975,7 @@ function renderDelegateCarouselChrome() {
   const panelBySlide = {
     runs: elements.delegateRunsPanel,
     log: elements.delegateRunLogPanel,
+    review: elements.delegateReviewPanel,
     brief: elements.delegateBriefPanel,
   };
 
@@ -4106,6 +4160,49 @@ function buildDelegateRunEventCard(event, { compact = false, live = false } = {}
 
   card.append(head, body);
   return card;
+}
+
+function watchtowerStatusLabel(status) {
+  return String(status || "info").replace(/_/g, " ");
+}
+
+function buildWatchtowerReviewCard(card) {
+  const root = document.createElement("article");
+  root.className = [
+    "delegate-review-card",
+    `is-${String(card.reviewStatus || "info").replace(/_/g, "-")}`,
+  ].join(" ");
+
+  const head = document.createElement("div");
+  head.className = "delegate-event-head";
+
+  const title = document.createElement("div");
+  title.className = "delegate-event-title";
+  title.textContent = card.title;
+
+  const meta = document.createElement("div");
+  meta.className = "delegate-event-meta";
+  meta.textContent = [
+    watchtowerStatusLabel(card.reviewStatus),
+    formatTimestamp(card.at),
+    card.trigger,
+    card.runId ? `run ${card.runId}` : "",
+  ].filter(Boolean).join(" • ");
+
+  head.append(title, meta);
+
+  const body = document.createElement("div");
+  body.className = "thread-text delegate-event-body";
+  renderRichText(body, card.summary, { emptyText: "No review details captured yet." });
+
+  root.append(head, body);
+  if (card.riskFlags.length > 0) {
+    const risks = document.createElement("div");
+    risks.className = "delegate-review-risks";
+    risks.textContent = card.riskFlags.join(" • ");
+    root.append(risks);
+  }
+  return root;
 }
 
 function latestDelegateEvent(events, predicate = () => true) {
@@ -4797,6 +4894,9 @@ function renderDelegateModal() {
     }
     clearNode(elements.delegateRunCardList);
     clearNode(elements.delegateRunList);
+    if (elements.delegateReviewList) {
+      clearNode(elements.delegateReviewList);
+    }
     if (elements.delegateSummaryList) {
       clearNode(elements.delegateSummaryList);
     }
@@ -4819,6 +4919,7 @@ function renderDelegateModal() {
   const latestPlan = delegateState.latestPlanSnapshot;
   const delegateSession = delegateState.delegateSession;
   const runLog = delegateState.runLog || {};
+  const feed = delegateState.feed || {};
   const runSummarySnapshots = Array.isArray(delegateState.runSummarySnapshots)
     ? delegateState.runSummarySnapshots
     : [];
@@ -5007,6 +5108,40 @@ function renderDelegateModal() {
     elements.delegateRunList.dataset.runKey = runKey;
     elements.delegateRunList.dataset.renderKey = renderKey;
     applyDelegateRunSnapshot(scrollSnapshot);
+  }
+
+  if (elements.delegateReviewList) {
+    const cards = Array.isArray(feed.cards) ? feed.cards : [];
+    const feedRenderKey = JSON.stringify({
+      projectPath: project.path,
+      loading: Boolean(feed.loading && !feed.initialized),
+      error: feed.error || "",
+      cards: cards.map((card) => [card.id, card.reviewStatus, card.at, card.title]),
+    });
+    if (elements.delegateReviewList.dataset.renderKey !== feedRenderKey) {
+      clearNode(elements.delegateReviewList);
+      if (feed.loading && !feed.initialized) {
+        const card = document.createElement("div");
+        card.className = "history-state-card";
+        card.textContent = "Scanning review feed...";
+        elements.delegateReviewList.append(card);
+      } else if (feed.error) {
+        const card = document.createElement("div");
+        card.className = "history-state-card";
+        card.textContent = feed.error;
+        elements.delegateReviewList.append(card);
+      } else if (cards.length === 0) {
+        const card = document.createElement("div");
+        card.className = "history-state-card";
+        card.textContent = "No review cards yet.";
+        elements.delegateReviewList.append(card);
+      } else {
+        for (const card of cards) {
+          elements.delegateReviewList.append(buildWatchtowerReviewCard(card));
+        }
+      }
+      elements.delegateReviewList.dataset.renderKey = feedRenderKey;
+    }
   }
 
   if (elements.delegateSummaryList) {
@@ -6415,6 +6550,64 @@ async function loadDelegateRunLog(projectPath, { force = false, reset = false, r
   return delegateStateFor(projectPath).runLog;
 }
 
+async function loadDelegateFeed(projectPath, { force = false } = {}) {
+  if (!projectPath) {
+    return delegateStateFor(projectPath).feed;
+  }
+
+  const existing = delegateStateFor(projectPath);
+  if (existing.feed?.loading) {
+    return existing.feed;
+  }
+  if (!force && existing.feed?.initialized && !state.delegateFeedPending) {
+    return existing.feed;
+  }
+
+  state.delegateFeedPending = true;
+  setDelegateState(projectPath, {
+    feed: {
+      ...(existing.feed || {}),
+      loading: true,
+      error: "",
+    },
+  });
+  renderAll();
+
+  try {
+    const payload = await fetchJson(
+      `/v1/delegate/feed?project=${encodeURIComponent(projectPath)}&mode=review`,
+    );
+    setDelegateState(projectPath, {
+      feed: {
+        cards: Array.isArray(payload.cards)
+          ? payload.cards.map(normalizeWatchtowerCard)
+          : [],
+        events: Array.isArray(payload.events)
+          ? payload.events.map(normalizeWatchtowerEvent)
+          : [],
+        scan: payload.scan || null,
+        loading: false,
+        initialized: true,
+        error: "",
+      },
+    });
+  } catch (error) {
+    setDelegateState(projectPath, {
+      feed: {
+        ...(delegateStateFor(projectPath).feed || {}),
+        loading: false,
+        initialized: true,
+        error: error.message,
+      },
+    });
+  } finally {
+    state.delegateFeedPending = false;
+  }
+
+  renderAll();
+  return delegateStateFor(projectPath).feed;
+}
+
 async function loadDelegateProject(projectPath, { force = false } = {}) {
   if (!projectPath) {
     return delegateStateFor(projectPath);
@@ -6453,6 +6646,7 @@ async function loadDelegateProject(projectPath, { force = false } = {}) {
       reset: Boolean(nextRunId && nextRunId !== previousRunId),
       runId: nextRunId,
     });
+    await loadDelegateFeed(projectPath, { force: true });
   } catch (error) {
     setDelegateState(projectPath, {
       loading: false,
@@ -6482,6 +6676,7 @@ async function openDelegateModal(projectPath = state.selectedProject) {
   state.delegatePlanPending = false;
   state.delegateRunPending = false;
   state.delegateRunSummaryPending = false;
+  state.delegateFeedPending = false;
   state.delegateBriefDirty = false;
   state.delegateBriefDraft = "";
   state.delegateCarouselSlide = "runs";
@@ -6497,6 +6692,7 @@ function closeDelegateModal() {
   state.delegatePlanPending = false;
   state.delegateRunPending = false;
   state.delegateRunSummaryPending = false;
+  state.delegateFeedPending = false;
   delegateRunRenderSnapshot = null;
   renderAll();
 }
@@ -6653,6 +6849,7 @@ async function toggleDelegateRun() {
       force: true,
       reset: action === "start",
     });
+    await loadDelegateFeed(project.path, { force: true });
   } catch (error) {
     setDelegateState(project.path, {
       error: error.message,
@@ -7118,6 +7315,12 @@ function bindEvents() {
       return;
     }
     setDelegateCarouselSlide(button.dataset.delegateSlide);
+    if (button.dataset.delegateSlide === "review") {
+      const project = currentDelegateProject();
+      if (project?.path) {
+        void loadDelegateFeed(project.path, { force: true });
+      }
+    }
   });
   elements.delegateRunCardList.addEventListener("click", (event) => {
     const button =
