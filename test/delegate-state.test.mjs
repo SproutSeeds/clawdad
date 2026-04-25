@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   analyzeDelegatePhaseHandoff,
   chooseDelegateSession,
+  classifyDelegateLaneOverlap,
   delegatePauseDecision,
   delegatePlanRefreshDecision,
   delegatePostStepPlanRefreshDecision,
@@ -67,6 +68,79 @@ test("chooseDelegateSession asks caller to create Delegate when only the active 
   assert.equal(choice.session, null);
   assert.equal(choice.resetToDefault, true);
   assert.equal(choice.collidesWithActive, true);
+});
+
+test("classifyDelegateLaneOverlap reports safe disjoint lane scopes", () => {
+  const result = classifyDelegateLaneOverlap({
+    lane: {
+      laneId: "frontend",
+      scopeGlobs: ["web/**"],
+    },
+    activeLanes: [
+      {
+        laneId: "backend",
+        scopeGlobs: ["lib/**"],
+      },
+    ],
+    changedFiles: ["web/app.js"],
+  });
+
+  assert.equal(result.level, "safe");
+  assert.equal(result.reason, "scope_classified");
+  assert.deepEqual(result.overlappingLanes, []);
+});
+
+test("classifyDelegateLaneOverlap reports caution for shared or unscoped surfaces", () => {
+  const sharedSurface = classifyDelegateLaneOverlap({
+    lane: {
+      laneId: "frontend",
+      scopeGlobs: ["web/**"],
+    },
+    activeLanes: [
+      {
+        laneId: "default",
+        scopeGlobs: [],
+      },
+    ],
+    changedFiles: ["README.md"],
+  });
+
+  assert.equal(sharedSurface.level, "caution");
+  assert.equal(sharedSurface.reason, "unscoped_active_lane");
+  assert.deepEqual(sharedSurface.unscopedActiveLanes, ["default"]);
+  assert.deepEqual(sharedSurface.sharedFiles, ["README.md"]);
+
+  const unscopedLane = classifyDelegateLaneOverlap({
+    lane: {
+      laneId: "default",
+      scopeGlobs: [],
+    },
+    activeLanes: [],
+    changedFiles: [],
+  });
+
+  assert.equal(unscopedLane.level, "caution");
+  assert.equal(unscopedLane.reason, "unscoped_lane");
+});
+
+test("classifyDelegateLaneOverlap reports unsafe overlapping scopes", () => {
+  const result = classifyDelegateLaneOverlap({
+    lane: {
+      laneId: "frontend",
+      scopeGlobs: ["web/components/**"],
+    },
+    activeLanes: [
+      {
+        laneId: "design-system",
+        scopeGlobs: ["web/**"],
+      },
+    ],
+    changedFiles: ["web/components/Card.js"],
+  });
+
+  assert.equal(result.level, "unsafe");
+  assert.equal(result.reason, "scope_overlap");
+  assert.deepEqual(result.overlappingLanes, ["design-system"]);
 });
 
 test("shouldClearPendingDelegatePause ignores inactive delegate runs", () => {

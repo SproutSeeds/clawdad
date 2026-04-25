@@ -81,7 +81,8 @@ _build_dispatch_command() {
 
 _artifact_augmented_message() {
   local project_path="$1" message="$2"
-  printf '%s\n\n%s\n' "$message" "[Clawdad artifact handoff: If you create a deliverable file the user may need to download or share, save it under '$project_path/.clawdad/artifacts' using a clear filename. Create that folder if needed. Mention the saved filename in your final reply. Clawdad will surface files from that folder in the mobile app.]"
+  local artifact_dir="${CLAWDAD_ARTIFACTS_DIR:-$project_path/.clawdad/artifacts}"
+  printf '%s\n\n%s\n' "$message" "[Clawdad artifact handoff: If you create a deliverable file the user may need to download or share, save it under '$artifact_dir' using a clear filename. Create that folder if needed. Mention the saved filename in your final reply. Clawdad will surface files from that folder in the mobile app.]"
 }
 
 _extract_result_codex() {

@@ -3,6 +3,10 @@
 
 mailbox_dir() {
   local project_path="$1"
+  if [[ -n "${CLAWDAD_MAILBOX_DIR:-}" ]]; then
+    echo "$CLAWDAD_MAILBOX_DIR"
+    return 0
+  fi
   echo "$project_path/.clawdad/mailbox"
 }
 
