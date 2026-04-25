@@ -158,14 +158,11 @@
         </div>
 
         <section id="autoWorkspacePane" class="workspace-pane auto-workspace" role="tabpanel" aria-labelledby="autoWorkspaceTab" hidden>
-          <button
-            id="selectedProjectDelegateButton"
-            class="selected-delegate-card"
-            type="button"
-          >
-            <span class="selected-delegate-title">Selected project</span>
-            <span id="selectedProjectDelegateMeta" class="selected-delegate-meta"></span>
-          </button>
+          <div class="active-runs-inline-head">
+            <span id="selectedProjectDelegateMeta" class="active-runs-inline-meta">Selected project</span>
+          </div>
+          <div id="selectedProjectDelegateState" class="detail-history-state is-empty"></div>
+          <div id="selectedProjectDelegateList" class="detail-history-list active-runs-list selected-delegate-list"></div>
           <div class="active-runs-inline-head">
             <span id="activeRunsInlineMeta" class="active-runs-inline-meta"></span>
           </div>

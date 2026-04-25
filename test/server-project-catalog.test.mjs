@@ -276,8 +276,196 @@ sleep 10
     assert.equal(payload.projects[0].delegateStatus.live, true);
     assert.equal(payload.projects[0].delegateStatus.runId, "delegate-run-1");
     assert.equal(payload.projects[0].delegateStatus.activeStep, 2);
+    assert.equal(Array.isArray(payload.projects[0].delegateLanes), true);
+    assert.equal(payload.projects[0].delegateLanes.length, 1);
+    assert.equal(payload.projects[0].delegateLanes[0].laneId, "default");
+    assert.equal(payload.projects[0].delegateLanes[0].displayName, "Default delegate");
+    assert.equal(payload.projects[0].delegateLanes[0].status.runId, "delegate-run-1");
 
     await assert.rejects(readFile(invokedPath, "utf8"), { code: "ENOENT" });
+  } finally {
+    await stopServer(child);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("projects and delegate lanes endpoints expose explicit lane metadata with default fallback", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-project-lanes-"));
+  const home = path.join(root, "home");
+  const projectPath = path.join(root, "research-lab");
+  const configPath = path.join(root, "server.json");
+  const mockBinPath = path.join(root, "clawdad-mock");
+
+  await mkdir(path.join(projectPath, ".clawdad", "mailbox"), { recursive: true });
+  await mkdir(path.join(projectPath, ".clawdad", "delegate", "lanes", "research"), { recursive: true });
+  await mkdir(home, { recursive: true });
+  await writeFile(
+    path.join(home, "state.json"),
+    JSON.stringify(
+      {
+        version: 3,
+        projects: {
+          [projectPath]: {
+            status: "idle",
+            last_dispatch: null,
+            last_response: null,
+            dispatch_count: 0,
+            registered_at: "2026-04-24T00:00:00Z",
+            active_session_id: "delegate-session",
+            sessions: {
+              "delegate-session": {
+                slug: "Delegate",
+                provider: "codex",
+                provider_session_seeded: "true",
+                tracked_at: "2026-04-24T00:00:00Z",
+                dispatch_count: 0,
+                last_dispatch: null,
+                last_response: null,
+                status: "idle",
+                local_only: "false",
+                orp_error: "",
+              },
+            },
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    path.join(projectPath, ".clawdad", "mailbox", "status.json"),
+    JSON.stringify({ state: "idle", request_id: null, session_id: "delegate-session" }, null, 2),
+    "utf8",
+  );
+  await writeFile(
+    path.join(projectPath, ".clawdad", "delegate", "lanes", "research", "delegate-config.json"),
+    JSON.stringify(
+      {
+        version: 2,
+        laneId: "research",
+        displayName: "Research lane",
+        objective: "Compare the live benchmark cohorts.",
+        projectPath,
+        enabled: true,
+        hardStops: ["needs_human"],
+        computeReservePercent: 20,
+        createdAt: "2026-04-24T00:00:00Z",
+        updatedAt: "2026-04-24T00:00:00Z",
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    path.join(projectPath, ".clawdad", "delegate", "lanes", "research", "delegate-status.json"),
+    JSON.stringify(
+      {
+        version: 1,
+        laneId: "research",
+        state: "running",
+        runId: "lane-run-1",
+        activeStep: 3,
+        stepCount: 2,
+        updatedAt: "2026-04-24T00:02:00Z",
+        lastOutcomeSummary: "Benchmarked the first cohort against the control.",
+        nextAction: "Run the second cohort and compare deltas.",
+        computeBudget: {
+          status: "observed",
+          usedPercent: 45,
+          remainingPercent: 55,
+          reservePercent: 20,
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    path.join(projectPath, ".clawdad", "delegate", "lanes", "research", "delegate-run-summaries.json"),
+    JSON.stringify(
+      {
+        version: 1,
+        snapshots: [
+          {
+            runId: "lane-run-1",
+            createdAt: "2026-04-24T00:02:00Z",
+            summary: "Benchmarked the first cohort against the control.",
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(mockBinPath, "#!/bin/sh\nexit 1\n", "utf8");
+  await chmod(mockBinPath, 0o755);
+
+  const port = await freePort();
+  await writeFile(
+    configPath,
+    JSON.stringify(
+      {
+        host: "127.0.0.1",
+        port,
+        authMode: "tailscale",
+        allowedUsers: ["tester@example.com"],
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  const child = spawn(process.execPath, [serverScript, "serve", "--config", configPath], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      CLAWDAD_HOME: home,
+      CLAWDAD_BIN_PATH: mockBinPath,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  try {
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const headers = { "tailscale-user-login": "tester@example.com" };
+    await waitForHealth(baseUrl, child);
+
+    const projectsResponse = await fetch(`${baseUrl}/v1/projects`, { headers });
+    assert.equal(projectsResponse.status, 200);
+    const projectsPayload = await projectsResponse.json();
+    assert.equal(projectsPayload.ok, true);
+    assert.equal(projectsPayload.projects.length, 1);
+    assert.equal(projectsPayload.projects[0].delegateLanes.length, 2);
+    assert.equal(projectsPayload.projects[0].delegateLanes[0].laneId, "default");
+    assert.equal(projectsPayload.projects[0].delegateLanes[0].displayName, "Default delegate");
+    assert.equal(projectsPayload.projects[0].delegateLanes[1].laneId, "research");
+    assert.equal(projectsPayload.projects[0].delegateLanes[1].displayName, "Research lane");
+    assert.equal(projectsPayload.projects[0].delegateLanes[1].objective, "Compare the live benchmark cohorts.");
+    assert.equal(projectsPayload.projects[0].delegateLanes[1].latestOutcome, "Benchmarked the first cohort against the control.");
+    assert.equal(projectsPayload.projects[0].delegateLanes[1].nextAction, "Run the second cohort and compare deltas.");
+    assert.equal(projectsPayload.projects[0].delegateLanes[1].hygieneState, "ok");
+    assert.equal(projectsPayload.projects[0].delegateLanes[1].computeState.status, "observed");
+    assert.equal(projectsPayload.projects[0].delegateLanes[1].status.runId, "lane-run-1");
+
+    const lanesResponse = await fetch(
+      `${baseUrl}/v1/delegate/lanes?project=${encodeURIComponent(projectPath)}`,
+      { headers },
+    );
+    assert.equal(lanesResponse.status, 200);
+    const lanesPayload = await lanesResponse.json();
+    assert.equal(lanesPayload.ok, true);
+    assert.deepEqual(
+      lanesPayload.lanes.map((lane) => lane.laneId),
+      ["default", "research"],
+    );
+    assert.equal(lanesPayload.lanes[1].status.state, "running");
+    assert.equal(lanesPayload.lanes[1].nextAction, "Run the second cohort and compare deltas.");
   } finally {
     await stopServer(child);
     await rm(root, { recursive: true, force: true });

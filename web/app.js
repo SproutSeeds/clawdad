@@ -25,6 +25,7 @@ const state = {
   artifactShelfCollapsed: false,
   activeRunsModalOpen: false,
   delegateModalProject: "",
+  delegateModalLane: "default",
   delegatesByProject: {},
   delegateSelectedRunIds: {},
   delegateLogModes: {},
@@ -73,8 +74,9 @@ const elements = {
   filesWorkspaceTab: document.querySelector("#filesWorkspaceTab"),
   projectWorkspacePane: document.querySelector("#projectWorkspacePane"),
   autoWorkspacePane: document.querySelector("#autoWorkspacePane"),
-  selectedProjectDelegateButton: document.querySelector("#selectedProjectDelegateButton"),
   selectedProjectDelegateMeta: document.querySelector("#selectedProjectDelegateMeta"),
+  selectedProjectDelegateState: document.querySelector("#selectedProjectDelegateState"),
+  selectedProjectDelegateList: document.querySelector("#selectedProjectDelegateList"),
   activeRunsInlineMeta: document.querySelector("#activeRunsInlineMeta"),
   activeRunsInlineState: document.querySelector("#activeRunsInlineState"),
   activeRunsInlineList: document.querySelector("#activeRunsInlineList"),
@@ -481,15 +483,133 @@ function delegateCatalogStatusIsLive(status) {
   return normalizedState === "planning" || normalizedState === "running";
 }
 
+function normalizeDelegateLaneId(value = "") {
+  const raw = String(value || "default").trim().toLowerCase();
+  const slug = raw
+    .replace(/[^a-z0-9._-]+/gu, "-")
+    .replace(/^-+|-+$/gu, "")
+    .replace(/-{2,}/gu, "-");
+  return slug || "default";
+}
+
+function delegateStateKey(projectPath, laneId = "default") {
+  return `${String(projectPath || "").trim()}::${normalizeDelegateLaneId(laneId)}`;
+}
+
+function delegateStateProjectPathFromKey(key = "", delegateState = null) {
+  const explicit = String(
+    delegateState?.status?.projectPath ||
+      delegateState?.config?.projectPath ||
+      delegateState?.projectPath ||
+      "",
+  ).trim();
+  if (explicit) {
+    return explicit;
+  }
+  const value = String(key || "").trim();
+  const separatorIndex = value.lastIndexOf("::");
+  return separatorIndex >= 0 ? value.slice(0, separatorIndex) : value;
+}
+
+function delegateStateLaneIdFromKey(key = "", delegateState = null) {
+  const explicit = String(
+    delegateState?.laneId ||
+      delegateState?.status?.laneId ||
+      delegateState?.config?.laneId ||
+      "",
+  ).trim();
+  if (explicit) {
+    return normalizeDelegateLaneId(explicit);
+  }
+  const value = String(key || "").trim();
+  const separatorIndex = value.lastIndexOf("::");
+  return normalizeDelegateLaneId(separatorIndex >= 0 ? value.slice(separatorIndex + 2) : "default");
+}
+
+function delegateStateEntriesForProject(projectPath = "") {
+  const normalizedProjectPath = String(projectPath || "").trim();
+  if (!normalizedProjectPath) {
+    return [];
+  }
+  return Object.entries(state.delegatesByProject).filter(
+    ([key, delegateState]) => delegateStateProjectPathFromKey(key, delegateState) === normalizedProjectPath,
+  );
+}
+
+function projectDelegateLanes(project) {
+  const lanes = Array.isArray(project?.delegateLanes) ? project.delegateLanes : [];
+  if (lanes.length > 0) {
+    return lanes;
+  }
+  return [
+    {
+      laneId: "default",
+      displayName: "Default delegate",
+      objective: "",
+      status: project?.delegateStatus || null,
+    },
+  ];
+}
+
+function projectDelegateLaneItems(project) {
+  if (!project?.path) {
+    return [];
+  }
+
+  return projectDelegateLanes(project).map((lane) => {
+    const laneId = normalizeDelegateLaneId(lane?.laneId || "default");
+    const liveState = delegateStateFor(project.path, laneId);
+    const liveStatus = liveState?.status ? normalizeDelegateStatus(liveState.status) : null;
+    const catalogStatus = lane?.status ? normalizeDelegateStatus(lane.status) : null;
+    const fallbackStatus =
+      laneId === "default" && project?.delegateStatus ? normalizeDelegateStatus(project.delegateStatus) : null;
+    const status = liveStatus || catalogStatus || fallbackStatus || null;
+    return {
+      ...project,
+      laneId,
+      delegateLane: {
+        ...lane,
+        laneId,
+        status,
+      },
+      delegateStatus: status && status.state !== "idle" ? status : null,
+      currentObjective: String(lane?.objective || liveState?.config?.objective || "").trim(),
+      latestOutcome: String(status?.lastOutcomeSummary || lane?.latestOutcome || "").trim(),
+      nextAction: String(status?.nextAction || lane?.nextAction || "").trim(),
+      hygieneState: String(lane?.hygieneState || "").trim(),
+      computeState: lane?.computeState || status?.computeBudget || null,
+    };
+  });
+}
+
+function activeDelegateItems() {
+  return state.projects.flatMap((project) =>
+    projectDelegateLaneItems(project)
+      .filter((item) =>
+        item.delegateStatus?.state === "running" ||
+        item.delegateStatus?.state === "planning" ||
+        Boolean(item.delegateStatus?.pauseRequested),
+      ),
+  );
+}
+
 function projectDelegateStatus(project) {
   if (!project?.path) {
     return null;
   }
 
-  const liveState = delegateStateFor(project.path)?.status || null;
-  if (liveState) {
-    const normalizedLiveState = normalizeDelegateStatus(liveState);
-    return normalizedLiveState.state === "idle" ? null : normalizedLiveState;
+  const laneItems = projectDelegateLaneItems(project);
+  const requestedLaneId = project.delegateLane?.laneId || project.laneId
+    ? normalizeDelegateLaneId(project.delegateLane?.laneId || project.laneId || "default")
+    : "";
+  const matchingLane = requestedLaneId
+    ? laneItems.find((lane) => lane.laneId === requestedLaneId) || null
+    : laneItems.find((lane) => lane.delegateStatus) ||
+      laneItems.find((lane) => lane.laneId === "default") ||
+      laneItems[0] ||
+      null;
+  if (matchingLane?.delegateStatus) {
+    return matchingLane.delegateStatus;
   }
 
   if (project.delegateStatus) {
@@ -501,7 +621,7 @@ function projectDelegateStatus(project) {
 }
 
 function projectHasLiveDelegate(project) {
-  return delegateCatalogStatusIsLive(projectDelegateStatus(project));
+  return projectDelegateLaneItems(project).some((lane) => delegateCatalogStatusIsLive(lane.delegateStatus));
 }
 
 function projectHasActiveDelegateRun(project) {
@@ -513,7 +633,7 @@ function projectHasActiveDelegateRun(project) {
 }
 
 function activeDelegateProjects() {
-  return state.projects.filter((project) => projectHasActiveDelegateRun(project));
+  return activeDelegateItems();
 }
 
 function projectDelegateStatusMarker(project) {
@@ -1517,6 +1637,10 @@ function currentDelegateProject() {
   return projectByPath(state.delegateModalProject) || null;
 }
 
+function currentDelegateLaneId() {
+  return normalizeDelegateLaneId(state.delegateModalLane);
+}
+
 function currentProjectRoot() {
   return state.projectRoots.find((root) => root.path === state.projectModalRoot) || null;
 }
@@ -1678,8 +1802,8 @@ function applyDetailHistorySnapshot(snapshot) {
   });
 }
 
-function delegateRunKey(projectPath, runId) {
-  return `${String(projectPath || "").trim()}::${String(runId || "").trim()}`;
+function delegateRunKey(projectPath, runId, laneId = "default") {
+  return `${delegateStateKey(projectPath, laneId)}::${String(runId || "").trim()}`;
 }
 
 function delegateCarouselSlideIndex(slideId = state.delegateCarouselSlide) {
@@ -1700,9 +1824,10 @@ function advanceDelegateCarousel(direction) {
   setDelegateCarouselSlide(delegateCarouselSlides[nextIndex].id);
 }
 
-function selectedDelegateRunId(projectPath, delegateState = delegateStateFor(projectPath)) {
+function selectedDelegateRunId(projectPath, delegateState = delegateStateFor(projectPath), laneId = delegateState?.laneId || "default") {
+  const key = delegateStateKey(projectPath, laneId);
   return (
-    String(state.delegateSelectedRunIds[projectPath] || "").trim() ||
+    String(state.delegateSelectedRunIds[key] || "").trim() ||
     String(delegateState?.status?.runId || "").trim() ||
     String(delegateState?.runLog?.runId || "").trim() ||
     String(delegateState?.latestRunSummarySnapshot?.runId || "").trim() ||
@@ -1710,17 +1835,17 @@ function selectedDelegateRunId(projectPath, delegateState = delegateStateFor(pro
   );
 }
 
-function delegateLogModeFor(projectPath) {
-  const mode = String(state.delegateLogModes[projectPath] || "").trim();
+function delegateLogModeFor(projectPath, laneId = "default") {
+  const mode = String(state.delegateLogModes[delegateStateKey(projectPath, laneId)] || "").trim();
   return mode === "steps" ? "steps" : "live";
 }
 
-function setDelegateLogMode(projectPath, mode) {
+function setDelegateLogMode(projectPath, mode, laneId = "default") {
   const nextMode = mode === "steps" ? "steps" : "live";
-  if (!projectPath || delegateLogModeFor(projectPath) === nextMode) {
+  if (!projectPath || delegateLogModeFor(projectPath, laneId) === nextMode) {
     return;
   }
-  state.delegateLogModes[projectPath] = nextMode;
+  state.delegateLogModes[delegateStateKey(projectPath, laneId)] = nextMode;
   delegateRunRenderSnapshot = null;
   renderAll();
 }
@@ -1793,8 +1918,9 @@ function applyDelegateRunSnapshot(snapshot) {
   window.requestAnimationFrame(() => {
     const container = delegateRunScrollContainer();
     const project = currentDelegateProject();
-    const runId = delegateStateFor(project?.path || "").runLog?.runId || "";
-    if (delegateRunKey(project?.path || "", runId) !== snapshot.runKey) {
+    const laneId = currentDelegateLaneId();
+    const runId = delegateStateFor(project?.path || "", laneId).runLog?.runId || "";
+    if (delegateRunKey(project?.path || "", runId, laneId) !== snapshot.runKey) {
       return;
     }
 
@@ -1868,9 +1994,12 @@ function setArtifactsState(projectPath, nextState) {
   };
 }
 
-function delegateStateFor(projectPath) {
+function delegateStateFor(projectPath, laneId = "default") {
+  const key = delegateStateKey(projectPath, laneId);
   return (
-    state.delegatesByProject[projectPath] || {
+    state.delegatesByProject[key] || {
+      laneId: normalizeDelegateLaneId(laneId),
+      lanes: [],
       config: null,
       brief: "",
       status: null,
@@ -1904,20 +2033,27 @@ function delegateStateFor(projectPath) {
   );
 }
 
-function setDelegateState(projectPath, nextState) {
-  state.delegatesByProject[projectPath] = {
-    ...delegateStateFor(projectPath),
+function setDelegateState(projectPath, nextState, laneId = nextState?.laneId || "default") {
+  const normalizedLaneId = normalizeDelegateLaneId(laneId);
+  const key = delegateStateKey(projectPath, normalizedLaneId);
+  state.delegatesByProject[key] = {
+    ...delegateStateFor(projectPath, normalizedLaneId),
+    laneId: normalizedLaneId,
     ...nextState,
   };
 }
 
 function delegatePayloadState(projectPath, payload = {}, { briefFallback = "" } = {}) {
-  const existing = delegateStateFor(projectPath);
+  const laneId = normalizeDelegateLaneId(payload.laneId || payload.lane?.laneId || payload.config?.laneId || "default");
+  const existing = delegateStateFor(projectPath, laneId);
   const hasBrief = Object.prototype.hasOwnProperty.call(payload, "brief");
   return {
+    laneId,
     loading: false,
     initialized: true,
     error: "",
+    lane: payload.lane || existing.lane || null,
+    lanes: Array.isArray(payload.lanes) ? payload.lanes : existing.lanes,
     config: payload.config || existing.config || null,
     brief: hasBrief ? String(payload.brief || "") : String(briefFallback || existing.brief || ""),
     status: payload.status ? normalizeDelegateStatus(payload.status) : existing.status,
@@ -2420,6 +2556,7 @@ function normalizeDelegateStatus(status) {
   const activeStep = Number.parseInt(String(status?.activeStep ?? status?.active_step ?? ""), 10);
   const normalizedActiveStep = Number.isFinite(activeStep) && activeStep > 0 ? activeStep : null;
   return {
+    laneId: normalizeDelegateLaneId(status?.laneId || status?.lane_id || "default"),
     state: ["idle", "planning", "running", "paused", "blocked", "completed", "failed"].includes(normalizedState)
       ? normalizedState
       : "idle",
@@ -2542,12 +2679,48 @@ function updateProjectDelegateStatus(projectPath, status) {
     return;
   }
 
+  const normalizedStatus = projectCatalogDelegateStatus(status, projectPath);
+  const laneId = normalizeDelegateLaneId(normalizedStatus?.laneId || status?.laneId || "default");
+  const existingProject = state.projects[projectIndex];
+  const delegateLanes = Array.isArray(existingProject.delegateLanes)
+    ? (() => {
+        let matched = false;
+        const nextLanes = existingProject.delegateLanes.map((lane) => {
+          if (normalizeDelegateLaneId(lane?.laneId) !== laneId) {
+            return lane;
+          }
+          matched = true;
+          return {
+            ...lane,
+            status: normalizedStatus,
+            latestOutcome: normalizedStatus?.lastOutcomeSummary || lane?.latestOutcome || "",
+            nextAction: normalizedStatus?.nextAction || lane?.nextAction || "",
+            computeState: normalizedStatus?.computeBudget || lane?.computeState || null,
+          };
+        });
+        if (!matched) {
+          nextLanes.push({
+            laneId,
+            displayName: laneId === "default" ? "Default delegate" : laneId,
+            objective: "",
+            status: normalizedStatus,
+            latestOutcome: normalizedStatus?.lastOutcomeSummary || "",
+            nextAction: normalizedStatus?.nextAction || "",
+            hygieneState: "",
+            computeState: normalizedStatus?.computeBudget || null,
+          });
+        }
+        return nextLanes;
+      })()
+    : existingProject.delegateLanes;
+
   state.projects.splice(
     projectIndex,
     1,
     hydrateProjectVisuals({
-      ...state.projects[projectIndex],
-      delegateStatus: projectCatalogDelegateStatus(status, projectPath),
+      ...existingProject,
+      delegateStatus: laneId === "default" ? normalizedStatus : existingProject.delegateStatus,
+      delegateLanes,
     }),
   );
   state.projects.sort(compareProjects);
@@ -2608,7 +2781,21 @@ function pruneTrackedArtifacts(projectPath, sessionId = "") {
 
   delete state.projectSummaries[normalizedProjectPath];
   delete state.artifactsByProject[normalizedProjectPath];
-  delete state.delegatesByProject[normalizedProjectPath];
+  for (const [key, delegateState] of Object.entries(state.delegatesByProject)) {
+    if (delegateStateProjectPathFromKey(key, delegateState) === normalizedProjectPath) {
+      delete state.delegatesByProject[key];
+    }
+  }
+  for (const key of Object.keys(state.delegateSelectedRunIds)) {
+    if (delegateStateProjectPathFromKey(key) === normalizedProjectPath) {
+      delete state.delegateSelectedRunIds[key];
+    }
+  }
+  for (const key of Object.keys(state.delegateLogModes)) {
+    if (delegateStateProjectPathFromKey(key) === normalizedProjectPath) {
+      delete state.delegateLogModes[key];
+    }
+  }
   clearImportableSessionsState(normalizedProjectPath);
 
   if (state.modalThread?.projectPath === normalizedProjectPath) {
@@ -4073,49 +4260,120 @@ function activeRunCardMetaParts(status) {
   return [stateLabel, stepText, updatedAt].filter(Boolean);
 }
 
-function buildActiveRunCard(project) {
+function delegateLaneDisplayText(project) {
+  const lane = project?.delegateLane || {};
+  const laneId = normalizeDelegateLaneId(project?.laneId || lane?.laneId || "default");
+  const displayName = String(lane?.displayName || "").trim();
+  if (displayName) {
+    return displayName;
+  }
+  return laneId === "default" ? "Default delegate" : laneId;
+}
+
+function delegateLaneShortId(project) {
+  const laneId = normalizeDelegateLaneId(project?.laneId || project?.delegateLane?.laneId || "default");
+  return laneId === "default" ? "" : laneId;
+}
+
+function delegateComputeStateText(computeState) {
+  if (!computeState) {
+    return "";
+  }
+  if (typeof computeState === "string") {
+    return String(computeState).trim();
+  }
+  const budget = normalizeDelegateComputeBudget(computeState);
+  if (!budget) {
+    return "";
+  }
+  return delegateComputeInlineText({ computeBudget: budget }) || String(budget.status || "").trim();
+}
+
+function buildDelegateLaneCard(project, { showProject = false } = {}) {
   const button = document.createElement("button");
-  button.className = "active-run-card";
+  button.className = "active-run-card delegate-lane-card";
   button.type = "button";
   button.dataset.projectPath = project.path;
+  button.dataset.laneId = normalizeDelegateLaneId(project.laneId || project?.delegateLane?.laneId || "default");
 
   const status = projectDelegateStatus(project);
-  const delegateState = delegateStateFor(project.path);
+  const delegateState = delegateStateFor(project.path, button.dataset.laneId);
   const liveStatus = delegateState?.status || status || null;
   const runId = String(liveStatus?.runId || "").trim();
   const title = document.createElement("div");
   title.className = "active-run-title";
-  title.textContent = project.displayName || project.slug || fallbackProjectLabel(project.path);
+  title.textContent = delegateLaneDisplayText(project);
 
   const meta = document.createElement("div");
   meta.className = "active-run-meta";
-  meta.textContent = activeRunCardMetaParts(liveStatus).join(" • ") || "Delegate active";
+  meta.textContent = [
+    showProject ? project.displayName || project.slug || fallbackProjectLabel(project.path) : "",
+    delegateLaneShortId(project),
+    ...activeRunCardMetaParts(liveStatus),
+  ].filter(Boolean).join(" • ") || "Delegate lane";
+
+  const body = document.createElement("div");
+  body.className = "delegate-lane-body";
+
+  for (const [label, text] of [
+    ["Objective", project.currentObjective],
+    ["Latest", project.latestOutcome || projectDelegateSummaryText(project)],
+    ["Next", project.nextAction],
+  ]) {
+    const value = shortDelegateRunText(text, "", label === "Objective" ? 160 : 180);
+    if (!value) {
+      continue;
+    }
+    const line = document.createElement("div");
+    line.className = "delegate-lane-line";
+    const lineLabel = document.createElement("span");
+    lineLabel.className = "delegate-lane-line-label";
+    lineLabel.textContent = `${label}:`;
+    const lineValue = document.createElement("span");
+    lineValue.className = "delegate-lane-line-value";
+    lineValue.textContent = value;
+    line.append(lineLabel, lineValue);
+    body.append(line);
+  }
 
   const summary = document.createElement("div");
   summary.className = "active-run-summary";
   summary.textContent =
-    shortDelegateRunText(
-      liveStatus?.error ||
-        liveStatus?.lastOutcomeSummary ||
-        liveStatus?.nextAction ||
-        projectDelegateSummaryText(project),
-      "Open this run",
-      180,
-    ) || "Open this run";
+    body.childElementCount > 0
+      ? ""
+      : shortDelegateRunText(
+          liveStatus?.error ||
+            liveStatus?.lastOutcomeSummary ||
+            liveStatus?.nextAction ||
+            projectDelegateSummaryText(project),
+          "Open this lane",
+          180,
+        ) || "Open this lane";
 
   const footer = document.createElement("div");
   footer.className = "active-run-footer";
 
   const compute = document.createElement("span");
   compute.className = "active-run-chip";
-  compute.textContent = delegateComputeInlineText(liveStatus) || (runId ? `run ${sessionFingerprint(runId)}` : "delegate");
+  compute.textContent = delegateComputeStateText(project.computeState) || (runId ? `run ${sessionFingerprint(runId)}` : "delegate");
+
+  const hygiene = document.createElement("span");
+  hygiene.className = "active-run-chip";
+  hygiene.textContent = project.hygieneState ? `hygiene ${project.hygieneState}` : "";
+  hygiene.hidden = !hygiene.textContent;
 
   const open = document.createElement("span");
   open.className = "active-run-open";
   open.textContent = "Open";
 
-  footer.append(compute, open);
-  button.append(title, meta, summary, footer);
+  footer.append(compute, hygiene, open);
+  button.append(title, meta);
+  if (body.childElementCount > 0) {
+    button.append(body);
+  } else {
+    button.append(summary);
+  }
+  button.append(footer);
   return button;
 }
 
@@ -4147,7 +4405,7 @@ function renderWorkspaceTabs() {
     elements.autoWorkspaceTab.setAttribute("aria-pressed", String(mode === "auto"));
     elements.autoWorkspaceTab.setAttribute(
       "aria-label",
-      activeCount > 0 ? `Auto, ${activeCount} active run${activeCount === 1 ? "" : "s"}` : "Auto",
+      activeCount > 0 ? `Auto, ${activeCount} active lane${activeCount === 1 ? "" : "s"}` : "Auto",
     );
     elements.autoWorkspaceTab.tabIndex = 0;
   }
@@ -4170,29 +4428,65 @@ function renderWorkspaceTabs() {
 }
 
 function renderSelectedProjectDelegateCard() {
-  if (!elements.selectedProjectDelegateButton) {
+  if (!elements.selectedProjectDelegateList) {
     return;
   }
 
   const project = currentProject();
-  const title = elements.selectedProjectDelegateButton.querySelector(".selected-delegate-title");
-  const status = projectDelegateStatus(project);
-  const delegateState = project?.path ? delegateStateFor(project.path) : null;
-  const liveStatus = delegateState?.status || status || null;
-  const metaParts = [
-    project ? delegateRunStateLabel(liveStatus?.state || "idle") : "Pick a project",
-    delegateRunStepText(liveStatus),
-    delegateComputeInlineText(liveStatus),
-  ].filter(Boolean);
+  const lanes = project ? projectDelegateLaneItems(project) : [];
+  const loadingCount = lanes.filter((lane) => delegateStateFor(lane.path, lane.laneId).loading).length;
 
-  if (title) {
-    title.textContent = project?.displayName || project?.slug || "Selected project";
-  }
   if (elements.selectedProjectDelegateMeta) {
-    elements.selectedProjectDelegateMeta.textContent = metaParts.join(" • ") || "Auto setup";
+    elements.selectedProjectDelegateMeta.textContent =
+      project?.path
+        ? `${project.displayName || project.slug || fallbackProjectLabel(project.path)} • ${lanes.length} lane${lanes.length === 1 ? "" : "s"}`
+        : "Selected project";
   }
 
-  elements.selectedProjectDelegateButton.disabled = state.projectsLoading || !project?.path;
+  if (!project?.path) {
+    setText(elements.selectedProjectDelegateState, "Pick a project to view its delegate lanes.", { empty: false });
+  } else if (lanes.length === 0) {
+    setText(elements.selectedProjectDelegateState, "No delegate lanes yet.", { empty: false });
+  } else if (loadingCount > 0) {
+    setText(
+      elements.selectedProjectDelegateState,
+      `Refreshing ${loadingCount} lane${loadingCount === 1 ? "" : "s"}`,
+      { empty: false },
+    );
+  } else {
+    setText(elements.selectedProjectDelegateState, "Tap a lane to open its delegate view.", { empty: false });
+  }
+
+  const renderKey = JSON.stringify(
+    lanes.map((lane) => [
+      lane.path,
+      lane.laneId,
+      lane.delegateStatus?.state || "",
+      lane.delegateStatus?.runId || "",
+      lane.currentObjective || "",
+      lane.latestOutcome || "",
+      lane.nextAction || "",
+      lane.hygieneState || "",
+      delegateComputeStateText(lane.computeState),
+      Number(Boolean(delegateStateFor(lane.path, lane.laneId).loading)),
+    ]),
+  );
+  if (elements.selectedProjectDelegateList.dataset.renderKey === renderKey) {
+    return;
+  }
+
+  clearNode(elements.selectedProjectDelegateList);
+  if (!project?.path) {
+    const card = document.createElement("div");
+    card.className = "history-state-card";
+    card.textContent = "Select a project to open its delegate lanes.";
+    elements.selectedProjectDelegateList.append(card);
+  } else {
+    for (const lane of lanes) {
+      elements.selectedProjectDelegateList.append(buildDelegateLaneCard(lane));
+    }
+  }
+  elements.selectedProjectDelegateList.dataset.renderKey = renderKey;
 }
 
 function renderActiveRunsInline() {
@@ -4201,41 +4495,45 @@ function renderActiveRunsInline() {
   }
 
   const projects = activeDelegateProjects();
-  const loadingCount = projects.filter((project) => delegateStateFor(project.path).loading).length;
+  const loadingCount = projects.filter((project) => delegateStateFor(project.path, project.laneId).loading).length;
   const activeCount = projects.length;
 
   if (elements.activeRunsInlineMeta) {
     elements.activeRunsInlineMeta.textContent =
       activeCount > 0
-        ? `${activeCount} active run${activeCount === 1 ? "" : "s"}`
-        : "No active runs";
+        ? `${activeCount} active lane${activeCount === 1 ? "" : "s"}`
+        : "No active lanes";
   }
 
   if (activeCount === 0) {
     setText(elements.activeRunsInlineState, "Nothing is running right now.", { empty: false });
   } else if (loadingCount > 0) {
-    setText(elements.activeRunsInlineState, `Refreshing ${loadingCount} run${loadingCount === 1 ? "" : "s"}`, {
+    setText(elements.activeRunsInlineState, `Refreshing ${loadingCount} lane${loadingCount === 1 ? "" : "s"}`, {
       empty: false,
     });
   } else {
-    setText(elements.activeRunsInlineState, "Tap a run to open its delegate view.", { empty: false });
+    setText(elements.activeRunsInlineState, "Tap a lane to open its delegate view.", { empty: false });
   }
 
   const renderKey = JSON.stringify(
     projects.map((project) => {
       const status = projectDelegateStatus(project);
-      const delegateState = delegateStateFor(project.path);
+      const delegateState = delegateStateFor(project.path, project.laneId);
       const liveStatus = delegateState?.status || status || null;
       return [
         project.path,
+        project.laneId,
         project.displayName || project.slug || "",
         liveStatus?.state || "",
         liveStatus?.runId || "",
         liveStatus?.activeStep || 0,
         liveStatus?.stepCount || 0,
         liveStatus?.updatedAt || "",
-        liveStatus?.lastOutcomeSummary || "",
-        liveStatus?.nextAction || "",
+        project.currentObjective || "",
+        project.latestOutcome || liveStatus?.lastOutcomeSummary || "",
+        project.nextAction || liveStatus?.nextAction || "",
+        project.hygieneState || "",
+        delegateComputeStateText(project.computeState),
         liveStatus?.error || "",
         Number(Boolean(delegateState.loading)),
       ];
@@ -4254,7 +4552,7 @@ function renderActiveRunsInline() {
     elements.activeRunsInlineList.append(card);
   } else {
     for (const project of projects) {
-      elements.activeRunsInlineList.append(buildActiveRunCard(project));
+      elements.activeRunsInlineList.append(buildDelegateLaneCard(project, { showProject: true }));
     }
   }
   elements.activeRunsInlineList.dataset.renderKey = renderKey;
@@ -4268,7 +4566,8 @@ async function primeActiveRunsModal() {
         force: false,
         includeRunLog: false,
         includeFeed: false,
-      }).catch(() => delegateStateFor(project.path)),
+        laneId: project.laneId,
+      }).catch(() => delegateStateFor(project.path, project.laneId)),
     ),
   );
 }
@@ -4283,20 +4582,20 @@ function renderActiveRunsModal() {
   }
 
   const projects = activeDelegateProjects();
-  const loadingCount = projects.filter((project) => delegateStateFor(project.path).loading).length;
+  const loadingCount = projects.filter((project) => delegateStateFor(project.path, project.laneId).loading).length;
   const activeCount = projects.length;
 
   elements.activeRunsMeta.textContent =
     activeCount > 0
-      ? `${activeCount} active project${activeCount === 1 ? "" : "s"}`
+      ? `${activeCount} active lane${activeCount === 1 ? "" : "s"}`
       : "No active delegates";
 
   if (activeCount === 0) {
     setText(elements.activeRunsState, "Nothing is running right now.", { empty: false });
   } else if (loadingCount > 0) {
-    setText(elements.activeRunsState, `Refreshing ${loadingCount} run${loadingCount === 1 ? "" : "s"}`, { empty: false });
+    setText(elements.activeRunsState, `Refreshing ${loadingCount} lane${loadingCount === 1 ? "" : "s"}`, { empty: false });
   } else {
-    setText(elements.activeRunsState, "Tap a run to open its project delegate view.", {
+    setText(elements.activeRunsState, "Tap a lane to open its delegate view.", {
       empty: false,
     });
   }
@@ -4304,18 +4603,22 @@ function renderActiveRunsModal() {
   const renderKey = JSON.stringify(
     projects.map((project) => {
       const status = projectDelegateStatus(project);
-      const delegateState = delegateStateFor(project.path);
+      const delegateState = delegateStateFor(project.path, project.laneId);
       const liveStatus = delegateState?.status || status || null;
       return [
         project.path,
+        project.laneId,
         project.displayName || project.slug || "",
         liveStatus?.state || "",
         liveStatus?.runId || "",
         liveStatus?.activeStep || 0,
         liveStatus?.stepCount || 0,
         liveStatus?.updatedAt || "",
-        liveStatus?.lastOutcomeSummary || "",
-        liveStatus?.nextAction || "",
+        project.currentObjective || "",
+        project.latestOutcome || liveStatus?.lastOutcomeSummary || "",
+        project.nextAction || liveStatus?.nextAction || "",
+        project.hygieneState || "",
+        delegateComputeStateText(project.computeState),
         liveStatus?.error || "",
         Number(Boolean(delegateState.loading)),
       ];
@@ -4331,7 +4634,7 @@ function renderActiveRunsModal() {
       elements.activeRunsList.append(card);
     } else {
       for (const project of projects) {
-        elements.activeRunsList.append(buildActiveRunCard(project));
+        elements.activeRunsList.append(buildDelegateLaneCard(project, { showProject: true }));
       }
     }
     elements.activeRunsList.dataset.renderKey = renderKey;
@@ -5289,7 +5592,8 @@ function renderDelegateModal() {
     return;
   }
 
-  const delegateState = delegateStateFor(project.path);
+  const laneId = currentDelegateLaneId();
+  const delegateState = delegateStateFor(project.path, laneId);
   const status = delegateState.status;
   const latestPlan = delegateState.latestPlanSnapshot;
   const delegateSession = delegateState.delegateSession;
@@ -5299,13 +5603,18 @@ function renderDelegateModal() {
     ? delegateState.runSummarySnapshots
     : [];
   const runCards = delegateRunCardData(delegateState, runLog);
-  const runId = selectedDelegateRunId(project.path, delegateState);
-  const delegateLogMode = delegateLogModeFor(project.path);
+  const runId = selectedDelegateRunId(project.path, delegateState, laneId);
+  const delegateLogMode = delegateLogModeFor(project.path, laneId);
+  const laneLabel = delegateLaneDisplayText({
+    path: project.path,
+    laneId,
+    delegateLane: delegateState.lane || { laneId, displayName: delegateState.config?.displayName || "" },
+  });
 
   elements.delegateProject.textContent =
     project.displayName || project.slug || fallbackProjectLabel(project.path);
   elements.delegateSession.textContent =
-    delegateSession?.label || "Delegate session will be created on first use";
+    [laneLabel, delegateSession?.label || ""].filter(Boolean).join(" • ") || "Delegate session will be created on first use";
 
   const saveButtonLabel = elements.delegateSaveButton.querySelector(".button-text");
   if (saveButtonLabel) {
@@ -5419,7 +5728,7 @@ function renderDelegateModal() {
 
   renderDelegateCarouselChrome();
 
-  const runKey = delegateRunKey(project.path, runId);
+  const runKey = delegateRunKey(project.path, runId, laneId);
   const renderKey = delegateRunRenderSignature(runLog, { logMode: delegateLogMode });
   const existingRunKey = elements.delegateRunList.dataset.runKey || "";
   const existingRenderKey = elements.delegateRunList.dataset.renderKey || "";
@@ -5489,6 +5798,7 @@ function renderDelegateModal() {
     const cards = Array.isArray(feed.cards) ? feed.cards : [];
     const feedRenderKey = JSON.stringify({
       projectPath: project.path,
+      laneId,
       loading: Boolean(feed.loading && !feed.initialized),
       error: feed.error || "",
       cards: cards.map((card) => [card.id, card.reviewStatus, card.at, card.title]),
@@ -5629,9 +5939,7 @@ function updateSummaryButtonAvailability() {
 }
 
 function updateDelegateButtonAvailability() {
-  if (elements.selectedProjectDelegateButton) {
-    elements.selectedProjectDelegateButton.disabled = state.projectsLoading || !state.selectedProject;
-  }
+  return;
 }
 
 function updateActiveRunsButtonAvailability() {
@@ -5644,10 +5952,10 @@ function updateActiveRunsButtonAvailability() {
     elements.activeRunsButton.setAttribute(
       "aria-label",
       activeCount > 0
-        ? `Open active delegate runs, ${activeCount} active`
-        : "No active runs",
+        ? `Open active delegate lanes, ${activeCount} active`
+        : "No active lanes",
     );
-    elements.activeRunsButton.title = activeCount > 0 ? "Active runs" : "No active runs";
+    elements.activeRunsButton.title = activeCount > 0 ? "Active lanes" : "No active lanes";
   }
 }
 
@@ -6024,19 +6332,24 @@ async function refreshProjectSummaries() {
 }
 
 function delegateProjectsNeedingRefresh() {
-  const targets = new Set();
+  const targets = new Map();
   if (state.delegateModalProject) {
-    targets.add(state.delegateModalProject);
+    targets.set(
+      delegateStateKey(state.delegateModalProject, currentDelegateLaneId()),
+      { projectPath: state.delegateModalProject, laneId: currentDelegateLaneId() },
+    );
   }
 
-  for (const [projectPath, delegateState] of Object.entries(state.delegatesByProject)) {
+  for (const [key, delegateState] of Object.entries(state.delegatesByProject)) {
     const delegateStatus = delegateState?.status?.state;
     if (delegateStatus === "planning" || delegateStatus === "running") {
-      targets.add(projectPath);
+      const projectPath = delegateStateProjectPathFromKey(key, delegateState);
+      const laneId = delegateStateLaneIdFromKey(key, delegateState);
+      targets.set(delegateStateKey(projectPath, laneId), { projectPath, laneId });
     }
   }
 
-  return [...targets].filter(Boolean);
+  return [...targets.values()].filter((entry) => entry.projectPath);
 }
 
 async function refreshDelegates() {
@@ -6050,7 +6363,7 @@ async function refreshDelegates() {
   }
 
   state.delegateRefreshPromise = Promise.all(
-    targets.map((projectPath) => loadDelegateProject(projectPath, { force: true })),
+    targets.map((entry) => loadDelegateProject(entry.projectPath, { force: true, laneId: entry.laneId })),
   ).finally(() => {
     state.delegateRefreshPromise = null;
   });
@@ -6070,10 +6383,10 @@ function artifactProjectsNeedingRefresh() {
     targets.add(state.delegateModalProject);
   }
 
-  for (const [projectPath, delegateState] of Object.entries(state.delegatesByProject)) {
+  for (const [key, delegateState] of Object.entries(state.delegatesByProject)) {
     const delegateStatus = delegateState?.status?.state;
     if (delegateStatus === "planning" || delegateStatus === "running") {
-      targets.add(projectPath);
+      targets.add(delegateStateProjectPathFromKey(key, delegateState));
     }
   }
 
@@ -6884,15 +7197,20 @@ function mergeDelegateRunEvents(existingEvents = [], incomingEvents = []) {
   });
 }
 
-async function loadDelegateRunLog(projectPath, { force = false, reset = false, runId: requestedRunId = "" } = {}) {
+async function loadDelegateRunLog(
+  projectPath,
+  { force = false, reset = false, runId: requestedRunId = "", laneId = "default" } = {},
+) {
+  const normalizedLaneId = normalizeDelegateLaneId(laneId);
   if (!projectPath) {
-    return delegateStateFor(projectPath).runLog;
+    return delegateStateFor(projectPath, normalizedLaneId).runLog;
   }
 
-  const existing = delegateStateFor(projectPath);
+  const existing = delegateStateFor(projectPath, normalizedLaneId);
   const statusRunId = existing.status?.runId || "";
   const existingRunId = existing.runLog?.runId || "";
-  const selectedRunIdValue = state.delegateSelectedRunIds[projectPath] || "";
+  const selectedKey = delegateStateKey(projectPath, normalizedLaneId);
+  const selectedRunIdValue = state.delegateSelectedRunIds[selectedKey] || "";
   const runId = String(requestedRunId || selectedRunIdValue || statusRunId || existingRunId).trim();
   if (!runId) {
     setDelegateState(projectPath, {
@@ -6905,14 +7223,14 @@ async function loadDelegateRunLog(projectPath, { force = false, reset = false, r
         initialized: true,
         error: "",
       },
-    });
-    return delegateStateFor(projectPath).runLog;
+    }, normalizedLaneId);
+    return delegateStateFor(projectPath, normalizedLaneId).runLog;
   }
 
   if (existing.runLog?.loading) {
     return existing.runLog;
   }
-  state.delegateSelectedRunIds[projectPath] = runId;
+  state.delegateSelectedRunIds[selectedKey] = runId;
   const runChanged = Boolean(existingRunId && existingRunId !== runId);
   const shouldReset = reset || runChanged;
   if (
@@ -6932,7 +7250,7 @@ async function loadDelegateRunLog(projectPath, { force = false, reset = false, r
       loading: true,
       error: "",
     },
-  });
+  }, normalizedLaneId);
   if (showLoadingState) {
     renderAll();
   }
@@ -6942,7 +7260,7 @@ async function loadDelegateRunLog(projectPath, { force = false, reset = false, r
       ? "tail"
       : String(existing.runLog?.nextCursor || "0");
     const payload = await fetchJson(
-      `/v1/delegate/run-log?project=${encodeURIComponent(projectPath)}&runId=${encodeURIComponent(runId)}&cursor=${encodeURIComponent(cursor)}`,
+      `/v1/delegate/run-log?project=${encodeURIComponent(projectPath)}&lane=${encodeURIComponent(normalizedLaneId)}&runId=${encodeURIComponent(runId)}&cursor=${encodeURIComponent(cursor)}`,
     );
     const incomingEvents = Array.isArray(payload.events)
       ? payload.events.map(normalizeDelegateRunEvent)
@@ -6954,10 +7272,10 @@ async function loadDelegateRunLog(projectPath, { force = false, reset = false, r
         : delegateStateFor(projectPath).runList,
       latestRunSummarySnapshot: payload.latestRunSummarySnapshot
         ? normalizeDelegateRunSummarySnapshot(payload.latestRunSummarySnapshot)
-        : delegateStateFor(projectPath).latestRunSummarySnapshot,
+        : delegateStateFor(projectPath, normalizedLaneId).latestRunSummarySnapshot,
       runSummarySnapshots: Array.isArray(payload.runSummarySnapshots)
         ? payload.runSummarySnapshots.map(normalizeDelegateRunSummarySnapshot)
-        : delegateStateFor(projectPath).runSummarySnapshots,
+        : delegateStateFor(projectPath, normalizedLaneId).runSummarySnapshots,
       runLog: {
         runId: String(payload.runId || runId),
         events: mergeDelegateRunEvents(keptEvents, incomingEvents),
@@ -6967,29 +7285,30 @@ async function loadDelegateRunLog(projectPath, { force = false, reset = false, r
         initialized: true,
         error: "",
       },
-    });
+    }, normalizedLaneId);
   } catch (error) {
     setDelegateState(projectPath, {
       runLog: {
-        ...(delegateStateFor(projectPath).runLog || {}),
+        ...(delegateStateFor(projectPath, normalizedLaneId).runLog || {}),
         runId,
         loading: false,
         initialized: true,
         error: error.message,
       },
-    });
+    }, normalizedLaneId);
   }
 
   renderAll();
-  return delegateStateFor(projectPath).runLog;
+  return delegateStateFor(projectPath, normalizedLaneId).runLog;
 }
 
-async function loadDelegateFeed(projectPath, { force = false } = {}) {
+async function loadDelegateFeed(projectPath, { force = false, laneId = "default" } = {}) {
+  const normalizedLaneId = normalizeDelegateLaneId(laneId);
   if (!projectPath) {
-    return delegateStateFor(projectPath).feed;
+    return delegateStateFor(projectPath, normalizedLaneId).feed;
   }
 
-  const existing = delegateStateFor(projectPath);
+  const existing = delegateStateFor(projectPath, normalizedLaneId);
   if (existing.feed?.loading) {
     return existing.feed;
   }
@@ -7004,12 +7323,12 @@ async function loadDelegateFeed(projectPath, { force = false } = {}) {
       loading: true,
       error: "",
     },
-  });
+  }, normalizedLaneId);
   renderAll();
 
   try {
     const payload = await fetchJson(
-      `/v1/delegate/feed?project=${encodeURIComponent(projectPath)}&mode=review`,
+      `/v1/delegate/feed?project=${encodeURIComponent(projectPath)}&lane=${encodeURIComponent(normalizedLaneId)}&mode=review`,
     );
     setDelegateState(projectPath, {
       feed: {
@@ -7024,33 +7343,34 @@ async function loadDelegateFeed(projectPath, { force = false } = {}) {
         initialized: true,
         error: "",
       },
-    });
+    }, normalizedLaneId);
   } catch (error) {
     setDelegateState(projectPath, {
       feed: {
-        ...(delegateStateFor(projectPath).feed || {}),
+        ...(delegateStateFor(projectPath, normalizedLaneId).feed || {}),
         loading: false,
         initialized: true,
         error: error.message,
       },
-    });
+    }, normalizedLaneId);
   } finally {
     state.delegateFeedPending = false;
   }
 
   renderAll();
-  return delegateStateFor(projectPath).feed;
+  return delegateStateFor(projectPath, normalizedLaneId).feed;
 }
 
 async function loadDelegateProject(
   projectPath,
-  { force = false, includeRunLog = true, includeFeed = true } = {},
+  { force = false, includeRunLog = true, includeFeed = true, laneId = "default" } = {},
 ) {
+  const normalizedLaneId = normalizeDelegateLaneId(laneId);
   if (!projectPath) {
-    return delegateStateFor(projectPath);
+    return delegateStateFor(projectPath, normalizedLaneId);
   }
 
-  const existing = delegateStateFor(projectPath);
+  const existing = delegateStateFor(projectPath, normalizedLaneId);
   if (existing.loading) {
     return existing;
   }
@@ -7061,46 +7381,49 @@ async function loadDelegateProject(
   setDelegateState(projectPath, {
     loading: true,
     error: "",
-  });
+  }, normalizedLaneId);
   renderAll();
 
   try {
-    const payload = await fetchJson(`/v1/delegate?project=${encodeURIComponent(projectPath)}`);
-    const previousRunId = selectedDelegateRunId(projectPath);
+    const payload = await fetchJson(
+      `/v1/delegate?project=${encodeURIComponent(projectPath)}&lane=${encodeURIComponent(normalizedLaneId)}`,
+    );
+    const previousRunId = selectedDelegateRunId(projectPath, existing, normalizedLaneId);
     const nextStatus = payload.status ? normalizeDelegateStatus(payload.status) : null;
     setDelegateState(projectPath, {
       ...delegatePayloadState(projectPath, payload),
       status: nextStatus,
-    });
+    }, normalizedLaneId);
     updateProjectDelegateStatus(projectPath, nextStatus);
-    const nextDelegateState = delegateStateFor(projectPath);
-    const nextRunId = selectedDelegateRunId(projectPath, nextDelegateState);
+    const nextDelegateState = delegateStateFor(projectPath, normalizedLaneId);
+    const nextRunId = selectedDelegateRunId(projectPath, nextDelegateState, normalizedLaneId);
     if (nextRunId) {
-      state.delegateSelectedRunIds[projectPath] = nextRunId;
+      state.delegateSelectedRunIds[delegateStateKey(projectPath, normalizedLaneId)] = nextRunId;
     }
     if (includeRunLog) {
       await loadDelegateRunLog(projectPath, {
         force: true,
         reset: Boolean(nextRunId && nextRunId !== previousRunId),
         runId: nextRunId,
+        laneId: normalizedLaneId,
       });
     }
     if (includeFeed) {
-      await loadDelegateFeed(projectPath, { force: true });
+      await loadDelegateFeed(projectPath, { force: true, laneId: normalizedLaneId });
     }
   } catch (error) {
     setDelegateState(projectPath, {
       loading: false,
       initialized: true,
       error: error.message,
-    });
+    }, normalizedLaneId);
   }
 
   renderAll();
-  return delegateStateFor(projectPath);
+  return delegateStateFor(projectPath, normalizedLaneId);
 }
 
-async function openDelegateModal(projectPath = state.selectedProject) {
+async function openDelegateModal(projectPath = state.selectedProject, laneId = "default") {
   if (!projectPath) {
     return;
   }
@@ -7114,6 +7437,7 @@ async function openDelegateModal(projectPath = state.selectedProject) {
   state.sessionTitleModalProject = "";
   state.sessionTitleModalSessionId = "";
   state.delegateModalProject = projectPath;
+  state.delegateModalLane = normalizeDelegateLaneId(laneId);
   state.delegateBriefPending = false;
   state.delegatePlanPending = false;
   state.delegateRunPending = false;
@@ -7123,11 +7447,12 @@ async function openDelegateModal(projectPath = state.selectedProject) {
   state.delegateBriefDraft = "";
   state.delegateCarouselSlide = "runs";
   renderAll();
-  await loadDelegateProject(projectPath);
+  await loadDelegateProject(projectPath, { laneId: state.delegateModalLane });
 }
 
 function closeDelegateModal() {
   state.delegateModalProject = "";
+  state.delegateModalLane = "default";
   state.delegateBriefDraft = "";
   state.delegateBriefDirty = false;
   state.delegateBriefPending = false;
@@ -7160,13 +7485,15 @@ function closeActiveRunsModal() {
 
 async function selectDelegateRun(runId) {
   const project = currentDelegateProject();
+  const laneId = currentDelegateLaneId();
   const selectedRunIdValue = String(runId || "").trim();
   if (!project?.path || !selectedRunIdValue) {
     return;
   }
 
-  const previousRunId = state.delegateSelectedRunIds[project.path] || "";
-  state.delegateSelectedRunIds[project.path] = selectedRunIdValue;
+  const stateKey = delegateStateKey(project.path, laneId);
+  const previousRunId = state.delegateSelectedRunIds[stateKey] || "";
+  state.delegateSelectedRunIds[stateKey] = selectedRunIdValue;
   state.delegateCarouselSlide = "log";
   delegateRunRenderSnapshot = null;
   renderAll();
@@ -7175,16 +7502,20 @@ async function selectDelegateRun(runId) {
     force: true,
     reset: previousRunId !== selectedRunIdValue,
     runId: selectedRunIdValue,
+    laneId,
   });
 }
 
 async function saveDelegateBrief({ quiet = false } = {}) {
   const project = currentDelegateProject();
+  const laneId = currentDelegateLaneId();
   if (!project?.path) {
     return null;
   }
 
-  const brief = (state.delegateBriefDirty ? state.delegateBriefDraft : delegateStateFor(project.path).brief || "").trim();
+  const brief = (
+    state.delegateBriefDirty ? state.delegateBriefDraft : delegateStateFor(project.path, laneId).brief || ""
+  ).trim();
   state.delegateBriefPending = true;
   renderAll();
 
@@ -7196,11 +7527,12 @@ async function saveDelegateBrief({ quiet = false } = {}) {
       },
       body: JSON.stringify({
         project: project.path,
+        lane: laneId,
         brief,
       }),
     });
 
-    setDelegateState(project.path, delegatePayloadState(project.path, payload, { briefFallback: brief }));
+    setDelegateState(project.path, delegatePayloadState(project.path, payload, { briefFallback: brief }), laneId);
     state.delegateBriefDraft = String(payload.brief || brief);
     state.delegateBriefDirty = false;
     renderAll();
@@ -7225,6 +7557,7 @@ async function ensureDelegateBriefSaved() {
 
 async function requestDelegatePlan() {
   const project = currentDelegateProject();
+  const laneId = currentDelegateLaneId();
   if (!project?.path || state.delegatePlanPending || state.delegateRunPending) {
     return;
   }
@@ -7232,7 +7565,7 @@ async function requestDelegatePlan() {
   await ensureDelegateBriefSaved();
 
   state.delegatePlanPending = true;
-  const existing = delegateStateFor(project.path);
+  const existing = delegateStateFor(project.path, laneId);
   setDelegateState(project.path, {
     status: normalizeDelegateStatus({
       ...(existing.status || {}),
@@ -7240,7 +7573,7 @@ async function requestDelegatePlan() {
       projectPath: project.path,
     }),
     error: "",
-  });
+  }, laneId);
   renderAll();
 
   try {
@@ -7251,14 +7584,15 @@ async function requestDelegatePlan() {
       },
       body: JSON.stringify({
         project: project.path,
+        lane: laneId,
       }),
     });
 
-    setDelegateState(project.path, delegatePayloadState(project.path, payload));
+    setDelegateState(project.path, delegatePayloadState(project.path, payload), laneId);
   } catch (error) {
     setDelegateState(project.path, {
       error: error.message,
-    });
+    }, laneId);
     showError(error);
   } finally {
     state.delegatePlanPending = false;
@@ -7268,11 +7602,12 @@ async function requestDelegatePlan() {
 
 async function toggleDelegateRun() {
   const project = currentDelegateProject();
+  const laneId = currentDelegateLaneId();
   if (!project?.path || state.delegatePlanPending || state.delegateRunPending) {
     return;
   }
 
-  const existing = delegateStateFor(project.path);
+  const existing = delegateStateFor(project.path, laneId);
   const action =
     existing.status?.state === "running" && !existing.status?.pauseRequested ? "pause" : "start";
 
@@ -7289,7 +7624,7 @@ async function toggleDelegateRun() {
         state: existing.status?.state || "running",
         pauseRequested: true,
       }),
-    });
+    }, laneId);
   }
   renderAll();
 
@@ -7301,20 +7636,22 @@ async function toggleDelegateRun() {
       },
       body: JSON.stringify({
         project: project.path,
+        lane: laneId,
         action,
       }),
     });
 
-    setDelegateState(project.path, delegatePayloadState(project.path, payload));
+    setDelegateState(project.path, delegatePayloadState(project.path, payload), laneId);
     await loadDelegateRunLog(project.path, {
       force: true,
       reset: action === "start",
+      laneId,
     });
-    await loadDelegateFeed(project.path, { force: true });
+    await loadDelegateFeed(project.path, { force: true, laneId });
   } catch (error) {
     setDelegateState(project.path, {
       error: error.message,
-    });
+    }, laneId);
     showError(error);
   } finally {
     state.delegateRunPending = false;
@@ -7324,12 +7661,13 @@ async function toggleDelegateRun() {
 
 async function requestDelegateRunSummary() {
   const project = currentDelegateProject();
+  const laneId = currentDelegateLaneId();
   if (!project?.path || state.delegateRunSummaryPending) {
     return;
   }
 
-  const delegateState = delegateStateFor(project.path);
-  const runId = selectedDelegateRunId(project.path, delegateState);
+  const delegateState = delegateStateFor(project.path, laneId);
+  const runId = selectedDelegateRunId(project.path, delegateState, laneId);
   if (!runId) {
     return;
   }
@@ -7345,6 +7683,7 @@ async function requestDelegateRunSummary() {
       },
       body: JSON.stringify({
         project: project.path,
+        lane: laneId,
         runId,
       }),
     });
@@ -7352,15 +7691,15 @@ async function requestDelegateRunSummary() {
     setDelegateState(project.path, {
       latestRunSummarySnapshot: payload.latestRunSummarySnapshot
         ? normalizeDelegateRunSummarySnapshot(payload.latestRunSummarySnapshot)
-        : delegateStateFor(project.path).latestRunSummarySnapshot,
+        : delegateStateFor(project.path, laneId).latestRunSummarySnapshot,
       runSummarySnapshots: Array.isArray(payload.runSummarySnapshots)
         ? payload.runSummarySnapshots.map(normalizeDelegateRunSummarySnapshot)
-        : delegateStateFor(project.path).runSummarySnapshots,
-    });
+        : delegateStateFor(project.path, laneId).runSummarySnapshots,
+    }, laneId);
   } catch (error) {
     setDelegateState(project.path, {
       error: error.message,
-    });
+    }, laneId);
     showError(error);
   } finally {
     state.delegateRunSummaryPending = false;
@@ -7710,12 +8049,6 @@ function bindEvents() {
     }
     void openArtifactsModal();
   });
-  elements.selectedProjectDelegateButton?.addEventListener("click", () => {
-    if (!state.selectedProject) {
-      return;
-    }
-    void openDelegateModal(state.selectedProject);
-  });
   elements.projectSummaryButton?.addEventListener("click", () => {
     void openProjectSummary();
   });
@@ -7770,19 +8103,31 @@ function bindEvents() {
     const button =
       event.target instanceof Element ? event.target.closest("[data-project-path]") : null;
     const projectPath = String(button?.dataset?.projectPath || "").trim();
+    const laneId = String(button?.dataset?.laneId || "default").trim();
     if (!projectPath) {
       return;
     }
-    void openDelegateModal(projectPath);
+    void openDelegateModal(projectPath, laneId);
+  });
+  elements.selectedProjectDelegateList?.addEventListener("click", (event) => {
+    const button =
+      event.target instanceof Element ? event.target.closest("[data-project-path]") : null;
+    const projectPath = String(button?.dataset?.projectPath || "").trim();
+    const laneId = String(button?.dataset?.laneId || "default").trim();
+    if (!projectPath) {
+      return;
+    }
+    void openDelegateModal(projectPath, laneId);
   });
   elements.activeRunsInlineList?.addEventListener("click", (event) => {
     const button =
       event.target instanceof Element ? event.target.closest("[data-project-path]") : null;
     const projectPath = String(button?.dataset?.projectPath || "").trim();
+    const laneId = String(button?.dataset?.laneId || "default").trim();
     if (!projectPath) {
       return;
     }
-    void openDelegateModal(projectPath);
+    void openDelegateModal(projectPath, laneId);
   });
   elements.artifactsBackdrop.addEventListener("click", closeArtifactsModal);
   elements.artifactsClose.addEventListener("click", closeArtifactsModal);
@@ -7824,7 +8169,7 @@ function bindEvents() {
     if (button.dataset.delegateSlide === "review") {
       const project = currentDelegateProject();
       if (project?.path) {
-        void loadDelegateFeed(project.path, { force: true });
+        void loadDelegateFeed(project.path, { force: true, laneId: currentDelegateLaneId() });
       }
     }
   });
@@ -7848,7 +8193,7 @@ function bindEvents() {
     }
     const project = currentDelegateProject();
     if (project?.path) {
-      setDelegateLogMode(project.path, button.dataset.delegateLogMode);
+      setDelegateLogMode(project.path, button.dataset.delegateLogMode, currentDelegateLaneId());
     }
   });
   elements.delegateBriefInput.addEventListener("input", (event) => {
