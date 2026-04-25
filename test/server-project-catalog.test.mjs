@@ -61,6 +61,67 @@ async function stopServer(child) {
   });
 }
 
+test("app shell injects a fresh build fingerprint for frontend assets", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-app-shell-"));
+  const home = path.join(root, "home");
+  const configPath = path.join(root, "server.json");
+  const mockBinPath = path.join(root, "clawdad-mock");
+  await mkdir(home, { recursive: true });
+  await writeFile(
+    path.join(home, "state.json"),
+    JSON.stringify({ version: 3, projects: {} }, null, 2),
+    "utf8",
+  );
+  await writeFile(mockBinPath, "#!/bin/sh\nexit 1\n", "utf8");
+  await chmod(mockBinPath, 0o755);
+
+  const port = await freePort();
+  await writeFile(
+    configPath,
+    JSON.stringify(
+      {
+        host: "127.0.0.1",
+        port,
+        authMode: "tailscale",
+        allowedUsers: ["tester@example.com"],
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  const child = spawn(process.execPath, [serverScript, "serve", "--config", configPath], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      HOME: home,
+      CLAWDAD_HOME: home,
+      CLAWDAD_BIN_PATH: mockBinPath,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  try {
+    const baseUrl = `http://127.0.0.1:${port}`;
+    await waitForHealth(baseUrl, child);
+    const response = await fetch(`${baseUrl}/`, {
+      headers: {
+        "tailscale-user-login": "tester@example.com",
+      },
+    });
+    assert.equal(response.status, 200);
+    const html = await response.text();
+    assert.doesNotMatch(html, /__CLAWDAD_APP_BUILD_VALUE__|__CLAWDAD_ASSET_VERSION__/u);
+    assert.match(html, /window\.__CLAWDAD_APP_BUILD__ = "[^"]+"/u);
+    assert.match(html, /\/app\.js\?v=[^"]+"/u);
+    assert.match(html, /\/app\.css\?v=[^"]+"/u);
+  } finally {
+    await stopServer(child);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("projects endpoint reads local state without invoking the ORP-backed CLI", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-projects-"));
   const home = path.join(root, "home");
@@ -466,6 +527,15 @@ test("history endpoint merges mirrored requests with provider transcript handoff
           content: "Working notes.\n\nFinal answer.",
         },
       }),
+      JSON.stringify({
+        type: "response_item",
+        timestamp: "2026-04-16T22:58:09.187Z",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: "Working notes.\n\nFinal answer.\n\nLate transcript noise.",
+        },
+      }),
     ].join("\n") + "\n",
     "utf8",
   );
@@ -521,7 +591,8 @@ test("history endpoint merges mirrored requests with provider transcript handoff
     assert.equal(payload.items.length, 1);
     assert.equal(payload.items[0].requestId, requestId);
     assert.equal(payload.items[0].message, message);
-    assert.match(payload.items[0].response, /Final answer/u);
+    assert.equal(payload.items[0].answeredAt, "2026-04-16T21:58:11Z");
+    assert.equal(payload.items[0].response, "Final answer.");
   } finally {
     await stopServer(child);
     await rm(root, { recursive: true, force: true });

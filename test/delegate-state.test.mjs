@@ -10,6 +10,7 @@ import {
   delegateRunListState,
   delegateStrategyBreakoutDecision,
   delegateStatusStepText,
+  delegateWatchtowerReviewDecision,
   recoverableCodexStreamDisconnect,
   shouldClearPendingDelegatePause,
 } from "../lib/delegate-state.mjs";
@@ -159,6 +160,108 @@ test("delegatePauseDecision requests a safe-point pause for active planning jobs
       waitForSafePoint: true,
     },
   );
+});
+
+test("delegateWatchtowerReviewDecision treats clean large diffs as checkpoint-only", () => {
+  const decision = delegateWatchtowerReviewDecision({
+    signals: [
+      {
+        reviewStatus: "pause_recommended",
+        trigger: "large_diff",
+        title: "Large diff checkpoint",
+        summary: "32 files changed, 1200 insertions.",
+      },
+    ],
+    delegateDecision: {
+      state: "continue",
+      stopReason: "none",
+      checkpoint: {
+        blockers: "none",
+      },
+    },
+  });
+
+  assert.equal(decision.hardStop, false);
+  assert.equal(decision.pauseRecommended, false);
+  assert.equal(decision.repairRecommended, false);
+  assert.equal(decision.checkpointRecommended, true);
+  assert.equal(decision.reason, "large_diff_checkpoint");
+});
+
+test("delegateWatchtowerReviewDecision routes unclassified hygiene to repair instead of human pause", () => {
+  const decision = delegateWatchtowerReviewDecision({
+    signals: [
+      {
+        reviewStatus: "pause_recommended",
+        trigger: "worktree_hygiene_unclassified",
+        title: "Worktree has unclassified dirty state",
+        summary: "Generic worktree hygiene reports 2 unclassified path(s).",
+      },
+    ],
+    delegateDecision: {
+      state: "continue",
+      stopReason: "none",
+    },
+  });
+
+  assert.equal(decision.hardStop, false);
+  assert.equal(decision.pauseRecommended, false);
+  assert.equal(decision.repairRecommended, true);
+  assert.equal(decision.checkpointRecommended, false);
+  assert.equal(decision.reason, "worktree_hygiene_unclassified");
+  assert.match(decision.nextAction, /hygiene repair\/checkpoint/u);
+});
+
+test("delegateWatchtowerReviewDecision blocks on sensitive file changes", () => {
+  const decision = delegateWatchtowerReviewDecision({
+    signals: [
+      {
+        reviewStatus: "pause_recommended",
+        trigger: "sensitive_files",
+        title: "Sensitive files changed",
+        summary: ".env",
+      },
+      {
+        reviewStatus: "needs_review",
+        trigger: "large_diff",
+      },
+    ],
+    delegateDecision: {
+      state: "continue",
+      stopReason: "none",
+    },
+  });
+
+  assert.equal(decision.hardStop, true);
+  assert.equal(decision.pauseRecommended, false);
+  assert.equal(decision.reason, "sensitive_files");
+  assert.match(decision.nextAction, /sensitive file/u);
+});
+
+test("delegateWatchtowerReviewDecision pauses on validation failure even with a large diff", () => {
+  const decision = delegateWatchtowerReviewDecision({
+    signals: [
+      {
+        reviewStatus: "needs_review",
+        trigger: "large_diff",
+      },
+      {
+        reviewStatus: "pause_recommended",
+        trigger: "tests_failed",
+        title: "Tests failed",
+      },
+    ],
+    delegateDecision: {
+      state: "continue",
+      stopReason: "none",
+    },
+  });
+
+  assert.equal(decision.hardStop, false);
+  assert.equal(decision.pauseRecommended, true);
+  assert.equal(decision.checkpointRecommended, false);
+  assert.equal(decision.reason, "tests_failed");
+  assert.match(decision.nextAction, /validation/u);
 });
 
 test("recoverableCodexStreamDisconnect detects retryable websocket drops", () => {

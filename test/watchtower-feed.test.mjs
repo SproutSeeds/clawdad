@@ -237,6 +237,166 @@ test("watchtower indexes delegate events into a searchable review feed", async (
   }
 });
 
+test("watchtower ignores paid and credential terms inside guardrail sections", async () => {
+  const fixture = await createFixture("clawdad-watchtower-guardrails-");
+  try {
+    const sourceEventId = "evt-guardrail-brief";
+    const paidBlockerEvents = [
+      {
+        id: sourceEventId,
+        at: "2026-04-23T12:01:00Z",
+        type: "run_blocked",
+        runId: fixture.runId,
+        step: 1,
+        title: "Delegate blocked",
+        state: "blocked",
+        stopReason: "paid",
+        summary: "The next action is blocked because a paid API entitlement is required.",
+      },
+    ];
+    await writeFile(
+      path.join(fixture.projectPath, ".clawdad", "delegate", "runs", `${fixture.runId}.jsonl`),
+      `${paidBlockerEvents.map((event) => JSON.stringify(event)).join("\n")}\n`,
+      "utf8",
+    );
+
+    const firstScanResult = await runServer(fixture, ["watchtower", fixture.projectPath, "--once", "--json"]);
+    assert.equal(firstScanResult.exitCode, 0, firstScanResult.stderr || firstScanResult.stdout);
+    const firstReviewResult = await runServer(fixture, ["feed", "review", fixture.projectPath, "--json"]);
+    assert.equal(firstReviewResult.exitCode, 0, firstReviewResult.stderr || firstReviewResult.stdout);
+    const firstReviewPayload = JSON.parse(firstReviewResult.stdout);
+    assert.ok(firstReviewPayload.cards.some((card) => card.trigger === "paid_data_or_api"));
+
+    const events = [
+      {
+        id: sourceEventId,
+        at: "2026-04-23T12:01:00Z",
+        type: "plan_snapshot_saved",
+        runId: fixture.runId,
+        step: 1,
+        title: "Delegate plan snapshot",
+        summary: [
+          "**Hard Stops**",
+          "- Paid service, paid API, remote GPU, or other paid compute is required.",
+          "- Credentials, MFA, billing, account decisions, external approval, or another human decision is required.",
+          "",
+          "**Next Steps**",
+          "1. Continue the local proof packet.",
+          "2. Do not spend money or use credentials.",
+        ].join("\n"),
+      },
+    ];
+    await writeFile(
+      path.join(fixture.projectPath, ".clawdad", "delegate", "runs", `${fixture.runId}.jsonl`),
+      `${events.map((event) => JSON.stringify(event)).join("\n")}\n`,
+      "utf8",
+    );
+
+    const scanResult = await runServer(fixture, ["watchtower", fixture.projectPath, "--once", "--json"]);
+    assert.equal(scanResult.exitCode, 0, scanResult.stderr || scanResult.stdout);
+    const reviewResult = await runServer(fixture, ["feed", "review", fixture.projectPath, "--json"]);
+    assert.equal(reviewResult.exitCode, 0, reviewResult.stderr || reviewResult.stdout);
+    const reviewPayload = JSON.parse(reviewResult.stdout);
+    const triggers = new Set(reviewPayload.cards.map((card) => card.trigger));
+    assert.equal(triggers.has("paid_data_or_api"), false);
+    assert.equal(triggers.has("credential_boundary"), false);
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("watchtower still flags actual paid API blockers outside guardrails", async () => {
+  const fixture = await createFixture("clawdad-watchtower-paid-blocker-");
+  try {
+    const events = [
+      {
+        id: "evt-paid-blocker",
+        at: "2026-04-23T12:01:00Z",
+        type: "run_blocked",
+        runId: fixture.runId,
+        step: 1,
+        title: "Delegate blocked",
+        state: "blocked",
+        stopReason: "paid",
+        summary: "The next action is blocked because a paid API entitlement is required.",
+      },
+    ];
+    await writeFile(
+      path.join(fixture.projectPath, ".clawdad", "delegate", "runs", `${fixture.runId}.jsonl`),
+      `${events.map((event) => JSON.stringify(event)).join("\n")}\n`,
+      "utf8",
+    );
+
+    const scanResult = await runServer(fixture, ["watchtower", fixture.projectPath, "--once", "--json"]);
+    assert.equal(scanResult.exitCode, 0, scanResult.stderr || scanResult.stdout);
+    const reviewResult = await runServer(fixture, ["feed", "review", fixture.projectPath, "--json"]);
+    assert.equal(reviewResult.exitCode, 0, reviewResult.stderr || reviewResult.stdout);
+    const reviewPayload = JSON.parse(reviewResult.stdout);
+    const paidCard = reviewPayload.cards.find((card) => card.trigger === "paid_data_or_api");
+    assert.ok(paidCard);
+    assert.equal(paidCard.reviewStatus, "hard_stop");
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("watchtower current-state output hides stale cards from older runs", async () => {
+  const fixture = await createFixture("clawdad-watchtower-current-scope-");
+  try {
+    const oldRunId = "old-paid-run";
+    const events = [
+      {
+        id: "evt-old-paid-blocker",
+        at: "2026-04-22T12:01:00Z",
+        type: "run_blocked",
+        runId: oldRunId,
+        step: 1,
+        title: "Old delegate blocked",
+        state: "blocked",
+        stopReason: "paid",
+        summary: "The old lane needed a paid API entitlement.",
+      },
+    ];
+    await writeFile(
+      path.join(fixture.projectPath, ".clawdad", "delegate", "runs", `${oldRunId}.jsonl`),
+      `${events.map((event) => JSON.stringify(event)).join("\n")}\n`,
+      "utf8",
+    );
+
+    const scanResult = await runServer(fixture, ["watchtower", fixture.projectPath, "--once", "--json"]);
+    assert.equal(scanResult.exitCode, 0, scanResult.stderr || scanResult.stdout);
+    const scanPayload = JSON.parse(scanResult.stdout);
+    assert.ok(scanPayload.historicalReviewCardCount > 0);
+    assert.equal(scanPayload.reviewCards.some((card) => card.runId === oldRunId), false);
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("watchtower flags generic suspicious worktree state and ignores Clawdad runtime files", async () => {
+  const fixture = await createFixture("clawdad-watchtower-generic-hygiene-");
+  try {
+    await writeFile(path.join(fixture.projectPath, "="), "", "utf8");
+
+    const scanResult = await runServer(fixture, ["watchtower", fixture.projectPath, "--once", "--json"]);
+    assert.equal(scanResult.exitCode, 0, scanResult.stderr || scanResult.stdout);
+    const scanPayload = JSON.parse(scanResult.stdout);
+    assert.equal(scanPayload.ok, true);
+    assert.equal(scanPayload.scan.filesChanged.some((filePath) => filePath.startsWith(".clawdad/")), false);
+
+    const excludeText = await readFile(path.join(fixture.projectPath, ".git", "info", "exclude"), "utf8");
+    assert.match(excludeText, /^\.clawdad\/$/mu);
+
+    const reviewResult = await runServer(fixture, ["feed", "review", fixture.projectPath, "--json"]);
+    assert.equal(reviewResult.exitCode, 0, reviewResult.stderr || reviewResult.stdout);
+    const reviewPayload = JSON.parse(reviewResult.stdout);
+    const triggers = new Set(reviewPayload.cards.map((card) => card.trigger));
+    assert.ok(triggers.has("worktree_hygiene_suspicious"));
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("clawdad watch <project> routes to the read-only watchtower sidecar", async () => {
   const fixture = await createFixture("clawdad-watchtower-watch-alias-");
   try {
@@ -249,4 +409,3 @@ test("clawdad watch <project> routes to the read-only watchtower sidecar", async
     await rm(fixture.root, { recursive: true, force: true });
   }
 });
-

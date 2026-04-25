@@ -3,6 +3,7 @@ const state = {
   projectRoots: [],
   selectedProject: "",
   selectedSessionId: "",
+  workspaceMode: "project",
   sessionImportModalProject: "",
   sessionImportPendingId: "",
   sessionTitleModalProject: "",
@@ -22,6 +23,7 @@ const state = {
   artifactDownloadPendingId: "",
   artifactRefreshPromises: {},
   artifactShelfCollapsed: false,
+  activeRunsModalOpen: false,
   delegateModalProject: "",
   delegatesByProject: {},
   delegateSelectedRunIds: {},
@@ -65,6 +67,17 @@ const elements = {
   headerCarouselButton: document.querySelector("#headerCarouselButton"),
   headerCarouselImage: document.querySelector("#headerCarouselImage"),
   headerCatchphrase: document.querySelector("#headerCatchphrase"),
+  projectWorkspaceTab: document.querySelector("#projectWorkspaceTab"),
+  autoWorkspaceTab: document.querySelector("#autoWorkspaceTab"),
+  summaryWorkspaceTab: document.querySelector("#summaryWorkspaceTab"),
+  filesWorkspaceTab: document.querySelector("#filesWorkspaceTab"),
+  projectWorkspacePane: document.querySelector("#projectWorkspacePane"),
+  autoWorkspacePane: document.querySelector("#autoWorkspacePane"),
+  selectedProjectDelegateButton: document.querySelector("#selectedProjectDelegateButton"),
+  selectedProjectDelegateMeta: document.querySelector("#selectedProjectDelegateMeta"),
+  activeRunsInlineMeta: document.querySelector("#activeRunsInlineMeta"),
+  activeRunsInlineState: document.querySelector("#activeRunsInlineState"),
+  activeRunsInlineList: document.querySelector("#activeRunsInlineList"),
   projectSelect: document.querySelector("#projectSelect"),
   projectAddButton: document.querySelector("#projectAddButton"),
   sessionControl: document.querySelector(".session-control"),
@@ -89,7 +102,8 @@ const elements = {
   detailHistoryState: document.querySelector("#detailHistoryState"),
   detailHistoryList: document.querySelector("#detailHistoryList"),
   projectSummaryButton: document.querySelector("#projectSummaryButton"),
-  projectDelegateButton: document.querySelector("#projectDelegateButton"),
+  activeRunsButton: document.querySelector("#activeRunsButton"),
+  activeRunsOrb: document.querySelector("#activeRunsOrb"),
   projectArtifactsButton: document.querySelector("#projectArtifactsButton"),
   projectArtifactsOrb: document.querySelector("#projectArtifactsOrb"),
   artifactShelf: document.querySelector("#artifactShelf"),
@@ -136,6 +150,12 @@ const elements = {
   summaryState: document.querySelector("#summaryState"),
   summaryList: document.querySelector("#summaryList"),
   summaryRefreshButton: document.querySelector("#summaryRefreshButton"),
+  activeRunsModal: document.querySelector("#activeRunsModal"),
+  activeRunsBackdrop: document.querySelector("#activeRunsBackdrop"),
+  activeRunsClose: document.querySelector("#activeRunsClose"),
+  activeRunsMeta: document.querySelector("#activeRunsMeta"),
+  activeRunsState: document.querySelector("#activeRunsState"),
+  activeRunsList: document.querySelector("#activeRunsList"),
   artifactsModal: document.querySelector("#artifactsModal"),
   artifactsBackdrop: document.querySelector("#artifactsBackdrop"),
   artifactsClose: document.querySelector("#artifactsClose"),
@@ -177,13 +197,18 @@ const elements = {
 const autoRefreshMs = 15000;
 const foregroundRefreshDebounceMs = 1500;
 const importableSessionsCacheMs = 30000;
-const projectCacheKey = "clawdad-project-catalog-v4";
-const threadCacheKey = "clawdad-thread-log-v1";
+const appBuildVersion = String(window.__CLAWDAD_APP_BUILD__ || "dev").replace(/[^A-Za-z0-9._-]/g, "_");
+const cacheVersionSuffix = appBuildVersion && appBuildVersion !== "__CLAWDAD_APP_BUILD__"
+  ? `-${appBuildVersion}`
+  : "";
+const projectCacheKey = `clawdad-project-catalog-v4${cacheVersionSuffix}`;
+const threadCacheKey = `clawdad-thread-log-v1${cacheVersionSuffix}`;
 const queueCollapsedKey = "clawdad-queue-collapsed-v1";
 const artifactShelfCollapsedKey = "clawdad-artifact-shelf-collapsed-v1";
 const queuedDispatchGraceMs = 15000;
 // Dispatch startup can lag behind refreshes; do not mark optimistic queue cards failed too early.
 const queuedDispatchAttachGraceMs = 2 * 60 * 1000;
+const staleLocalPendingBlockMs = queuedDispatchAttachGraceMs;
 const historyDuplicateWindowMs = queuedDispatchAttachGraceMs;
 const copiedFeedbackMs = 1400;
 const historyPageSize = 20;
@@ -477,6 +502,47 @@ function projectDelegateStatus(project) {
 
 function projectHasLiveDelegate(project) {
   return delegateCatalogStatusIsLive(projectDelegateStatus(project));
+}
+
+function projectHasActiveDelegateRun(project) {
+  const status = projectDelegateStatus(project);
+  if (!status) {
+    return false;
+  }
+  return status.state === "running" || status.state === "planning" || Boolean(status.pauseRequested);
+}
+
+function activeDelegateProjects() {
+  return state.projects.filter((project) => projectHasActiveDelegateRun(project));
+}
+
+function projectDelegateStatusMarker(project) {
+  const status = projectDelegateStatus(project);
+  if (!status) {
+    return "";
+  }
+  if (status.pauseRequested || status.state === "paused") {
+    return "\u23f8";
+  }
+  if (status.state === "running") {
+    return "\u25cf";
+  }
+  if (status.state === "planning") {
+    return "\u25cc";
+  }
+  return "";
+}
+
+function projectDelegateSummaryText(project) {
+  const status = projectDelegateStatus(project);
+  if (!status) {
+    return "";
+  }
+  return shortDelegateRunText(
+    status.error || status.lastOutcomeSummary || status.nextAction,
+    status.state === "running" ? "Delegate running" : status.state === "planning" ? "Delegate planning" : "",
+    140,
+  );
 }
 
 function projectDelegateStatusKey(project) {
@@ -2747,10 +2813,17 @@ function queueEntries() {
 function pendingEntryForSession(projectPath, sessionId) {
   return (
     state.threadEntries.find(
-      (entry) =>
-        entry.projectPath === projectPath &&
-        entry.sessionId === sessionId &&
-        entry.status === "queued",
+      (entry) => {
+        if (
+          entry.projectPath !== projectPath ||
+          entry.sessionId !== sessionId ||
+          entry.status !== "queued"
+        ) {
+          return false;
+        }
+        const sentAtMs = new Date(entry.sentAt || 0).getTime();
+        return Number.isFinite(sentAtMs) && Date.now() - sentAtMs <= staleLocalPendingBlockMs;
+      },
     ) || null
   );
 }
@@ -2987,8 +3060,7 @@ function refreshCopyButtons(root = document) {
 }
 
 function projectOptionLabel(project) {
-  const label = project?.displayName || project?.slug || project?.path || "Project";
-  return projectHasLiveDelegate(project) ? `\u221e ${label}` : label;
+  return project?.displayName || project?.slug || project?.path || "Project";
 }
 
 function appendProjectOption(parent, project) {
@@ -3079,7 +3151,7 @@ function renderProjectOptions() {
   for (const project of projectGroups.featured) {
     appendProjectOption(elements.projectSelect, project);
   }
-  appendProjectOptionGroup("\u221e Live delegation", projectGroups.liveDelegates);
+  appendProjectOptionGroup("\u25cf Active delegation", projectGroups.liveDelegates);
   appendProjectOptionGroup("Projects", projectGroups.projects);
 
   elements.projectSelect.disabled = disabled;
@@ -3091,6 +3163,7 @@ function updateProjectControlAppearance() {
   const project = currentProject();
   const isFeatured = Boolean(project?.featured);
   const hasLiveDelegates = state.projects.some((entry) => projectHasLiveDelegate(entry));
+  const hasActiveRuns = activeDelegateProjects().length > 0;
   const selectedProjectIsLive = projectHasLiveDelegate(project);
   const projectControl = elements.projectSelect.closest(".project-control");
 
@@ -3099,11 +3172,7 @@ function updateProjectControlAppearance() {
   projectControl?.classList.toggle("is-featured", isFeatured);
   projectControl?.classList.toggle("has-live-delegates", hasLiveDelegates);
   projectControl?.classList.toggle("is-live-delegate", selectedProjectIsLive);
-  elements.projectDelegateButton.classList.toggle("has-live-delegates", hasLiveDelegates);
-  elements.projectDelegateButton.setAttribute(
-    "aria-label",
-    hasLiveDelegates ? "Open auto delegate, live delegation active" : "Open auto delegate",
-  );
+  elements.activeRunsButton?.classList.toggle("has-live-delegates", hasActiveRuns);
 }
 
 function renderSessionOptions() {
@@ -3206,6 +3275,7 @@ function updateBodyModalState() {
       Boolean(state.sessionImportModalProject) ||
       state.projectModalOpen ||
       Boolean(state.summaryModalProject) ||
+      Boolean(state.activeRunsModalOpen) ||
       Boolean(state.artifactModalProject) ||
       Boolean(state.delegateModalProject) ||
       Boolean(state.sessionTitleModalProject),
@@ -3969,6 +4039,307 @@ function delegateRunStateLabel(state) {
   }
 }
 
+function delegateRunStepText(status) {
+  if (!status) {
+    return "";
+  }
+  if (status.activeStep) {
+    return `step ${status.activeStep}`;
+  }
+  if (status.stepCount > 0) {
+    return `step ${status.stepCount}`;
+  }
+  return "";
+}
+
+function delegateComputeInlineText(status) {
+  const budget = status?.computeBudget;
+  if (!budget) {
+    return "";
+  }
+  const used = Number.isFinite(budget.usedPercent) ? `${Math.round(budget.usedPercent)}% used` : "";
+  const remaining = Number.isFinite(budget.remainingPercent)
+    ? `${Math.round(budget.remainingPercent)}% left`
+    : "";
+  return [used, remaining].filter(Boolean).join(" • ");
+}
+
+function activeRunCardMetaParts(status) {
+  const stateLabel = delegateRunStateLabel(status?.state || "");
+  const stepText = delegateRunStepText(status);
+  const updatedAt = formatTimestamp(
+    status?.updatedAt || status?.completedAt || status?.startedAt || "",
+  );
+  return [stateLabel, stepText, updatedAt].filter(Boolean);
+}
+
+function buildActiveRunCard(project) {
+  const button = document.createElement("button");
+  button.className = "active-run-card";
+  button.type = "button";
+  button.dataset.projectPath = project.path;
+
+  const status = projectDelegateStatus(project);
+  const delegateState = delegateStateFor(project.path);
+  const liveStatus = delegateState?.status || status || null;
+  const runId = String(liveStatus?.runId || "").trim();
+  const title = document.createElement("div");
+  title.className = "active-run-title";
+  title.textContent = project.displayName || project.slug || fallbackProjectLabel(project.path);
+
+  const meta = document.createElement("div");
+  meta.className = "active-run-meta";
+  meta.textContent = activeRunCardMetaParts(liveStatus).join(" • ") || "Delegate active";
+
+  const summary = document.createElement("div");
+  summary.className = "active-run-summary";
+  summary.textContent =
+    shortDelegateRunText(
+      liveStatus?.error ||
+        liveStatus?.lastOutcomeSummary ||
+        liveStatus?.nextAction ||
+        projectDelegateSummaryText(project),
+      "Open this run",
+      180,
+    ) || "Open this run";
+
+  const footer = document.createElement("div");
+  footer.className = "active-run-footer";
+
+  const compute = document.createElement("span");
+  compute.className = "active-run-chip";
+  compute.textContent = delegateComputeInlineText(liveStatus) || (runId ? `run ${sessionFingerprint(runId)}` : "delegate");
+
+  const open = document.createElement("span");
+  open.className = "active-run-open";
+  open.textContent = "Open";
+
+  footer.append(compute, open);
+  button.append(title, meta, summary, footer);
+  return button;
+}
+
+function setWorkspaceMode(mode) {
+  const nextMode = mode === "auto" ? "auto" : "project";
+  if (state.workspaceMode === nextMode) {
+    return;
+  }
+  state.workspaceMode = nextMode;
+  renderAll();
+  if (nextMode === "auto") {
+    void primeActiveRunsModal().then(renderAll).catch(showError);
+  }
+}
+
+function renderWorkspaceTabs() {
+  const mode = state.workspaceMode === "auto" ? "auto" : "project";
+  const activeCount = activeDelegateProjects().length;
+  const hasProject = !state.projectsLoading && Boolean(state.selectedProject);
+
+  if (elements.projectWorkspaceTab) {
+    elements.projectWorkspaceTab.classList.toggle("is-active", mode === "project");
+    elements.projectWorkspaceTab.setAttribute("aria-pressed", String(mode === "project"));
+    elements.projectWorkspaceTab.tabIndex = 0;
+  }
+  if (elements.autoWorkspaceTab) {
+    elements.autoWorkspaceTab.classList.toggle("is-active", mode === "auto");
+    elements.autoWorkspaceTab.classList.toggle("has-live-delegates", activeCount > 0);
+    elements.autoWorkspaceTab.setAttribute("aria-pressed", String(mode === "auto"));
+    elements.autoWorkspaceTab.setAttribute(
+      "aria-label",
+      activeCount > 0 ? `Auto, ${activeCount} active run${activeCount === 1 ? "" : "s"}` : "Auto",
+    );
+    elements.autoWorkspaceTab.tabIndex = 0;
+  }
+  if (elements.summaryWorkspaceTab) {
+    elements.summaryWorkspaceTab.classList.remove("is-active");
+    elements.summaryWorkspaceTab.disabled = !hasProject;
+    elements.summaryWorkspaceTab.setAttribute("aria-disabled", String(!hasProject));
+  }
+  if (elements.filesWorkspaceTab) {
+    elements.filesWorkspaceTab.classList.remove("is-active");
+    elements.filesWorkspaceTab.disabled = !hasProject;
+    elements.filesWorkspaceTab.setAttribute("aria-disabled", String(!hasProject));
+  }
+  if (elements.projectWorkspacePane) {
+    elements.projectWorkspacePane.hidden = mode !== "project";
+  }
+  if (elements.autoWorkspacePane) {
+    elements.autoWorkspacePane.hidden = mode !== "auto";
+  }
+}
+
+function renderSelectedProjectDelegateCard() {
+  if (!elements.selectedProjectDelegateButton) {
+    return;
+  }
+
+  const project = currentProject();
+  const title = elements.selectedProjectDelegateButton.querySelector(".selected-delegate-title");
+  const status = projectDelegateStatus(project);
+  const delegateState = project?.path ? delegateStateFor(project.path) : null;
+  const liveStatus = delegateState?.status || status || null;
+  const metaParts = [
+    project ? delegateRunStateLabel(liveStatus?.state || "idle") : "Pick a project",
+    delegateRunStepText(liveStatus),
+    delegateComputeInlineText(liveStatus),
+  ].filter(Boolean);
+
+  if (title) {
+    title.textContent = project?.displayName || project?.slug || "Selected project";
+  }
+  if (elements.selectedProjectDelegateMeta) {
+    elements.selectedProjectDelegateMeta.textContent = metaParts.join(" • ") || "Auto setup";
+  }
+
+  elements.selectedProjectDelegateButton.disabled = state.projectsLoading || !project?.path;
+}
+
+function renderActiveRunsInline() {
+  if (!elements.activeRunsInlineList) {
+    return;
+  }
+
+  const projects = activeDelegateProjects();
+  const loadingCount = projects.filter((project) => delegateStateFor(project.path).loading).length;
+  const activeCount = projects.length;
+
+  if (elements.activeRunsInlineMeta) {
+    elements.activeRunsInlineMeta.textContent =
+      activeCount > 0
+        ? `${activeCount} active run${activeCount === 1 ? "" : "s"}`
+        : "No active runs";
+  }
+
+  if (activeCount === 0) {
+    setText(elements.activeRunsInlineState, "Nothing is running right now.", { empty: false });
+  } else if (loadingCount > 0) {
+    setText(elements.activeRunsInlineState, `Refreshing ${loadingCount} run${loadingCount === 1 ? "" : "s"}`, {
+      empty: false,
+    });
+  } else {
+    setText(elements.activeRunsInlineState, "Tap a run to open its delegate view.", { empty: false });
+  }
+
+  const renderKey = JSON.stringify(
+    projects.map((project) => {
+      const status = projectDelegateStatus(project);
+      const delegateState = delegateStateFor(project.path);
+      const liveStatus = delegateState?.status || status || null;
+      return [
+        project.path,
+        project.displayName || project.slug || "",
+        liveStatus?.state || "",
+        liveStatus?.runId || "",
+        liveStatus?.activeStep || 0,
+        liveStatus?.stepCount || 0,
+        liveStatus?.updatedAt || "",
+        liveStatus?.lastOutcomeSummary || "",
+        liveStatus?.nextAction || "",
+        liveStatus?.error || "",
+        Number(Boolean(delegateState.loading)),
+      ];
+    }),
+  );
+
+  if (elements.activeRunsInlineList.dataset.renderKey === renderKey) {
+    return;
+  }
+
+  clearNode(elements.activeRunsInlineList);
+  if (projects.length === 0) {
+    const card = document.createElement("div");
+    card.className = "history-state-card";
+    card.textContent = "No active delegate runs.";
+    elements.activeRunsInlineList.append(card);
+  } else {
+    for (const project of projects) {
+      elements.activeRunsInlineList.append(buildActiveRunCard(project));
+    }
+  }
+  elements.activeRunsInlineList.dataset.renderKey = renderKey;
+}
+
+async function primeActiveRunsModal() {
+  const projects = activeDelegateProjects();
+  await Promise.all(
+    projects.map((project) =>
+      loadDelegateProject(project.path, {
+        force: false,
+        includeRunLog: false,
+        includeFeed: false,
+      }).catch(() => delegateStateFor(project.path)),
+    ),
+  );
+}
+
+function renderActiveRunsModal() {
+  if (!state.activeRunsModalOpen) {
+    setText(elements.activeRunsState, "", { empty: true });
+    clearNode(elements.activeRunsList);
+    delete elements.activeRunsList.dataset.renderKey;
+    elements.activeRunsModal.hidden = true;
+    return;
+  }
+
+  const projects = activeDelegateProjects();
+  const loadingCount = projects.filter((project) => delegateStateFor(project.path).loading).length;
+  const activeCount = projects.length;
+
+  elements.activeRunsMeta.textContent =
+    activeCount > 0
+      ? `${activeCount} active project${activeCount === 1 ? "" : "s"}`
+      : "No active delegates";
+
+  if (activeCount === 0) {
+    setText(elements.activeRunsState, "Nothing is running right now.", { empty: false });
+  } else if (loadingCount > 0) {
+    setText(elements.activeRunsState, `Refreshing ${loadingCount} run${loadingCount === 1 ? "" : "s"}`, { empty: false });
+  } else {
+    setText(elements.activeRunsState, "Tap a run to open its project delegate view.", {
+      empty: false,
+    });
+  }
+
+  const renderKey = JSON.stringify(
+    projects.map((project) => {
+      const status = projectDelegateStatus(project);
+      const delegateState = delegateStateFor(project.path);
+      const liveStatus = delegateState?.status || status || null;
+      return [
+        project.path,
+        project.displayName || project.slug || "",
+        liveStatus?.state || "",
+        liveStatus?.runId || "",
+        liveStatus?.activeStep || 0,
+        liveStatus?.stepCount || 0,
+        liveStatus?.updatedAt || "",
+        liveStatus?.lastOutcomeSummary || "",
+        liveStatus?.nextAction || "",
+        liveStatus?.error || "",
+        Number(Boolean(delegateState.loading)),
+      ];
+    }),
+  );
+
+  if (elements.activeRunsList.dataset.renderKey !== renderKey) {
+    clearNode(elements.activeRunsList);
+    if (projects.length === 0) {
+      const card = document.createElement("div");
+      card.className = "history-state-card";
+      card.textContent = "No active delegate runs.";
+      elements.activeRunsList.append(card);
+    } else {
+      for (const project of projects) {
+        elements.activeRunsList.append(buildActiveRunCard(project));
+      }
+    }
+    elements.activeRunsList.dataset.renderKey = renderKey;
+  }
+
+  elements.activeRunsModal.hidden = false;
+}
+
 function renderDelegateCarouselChrome() {
   const activeSlideId = delegateCarouselSlides[delegateCarouselSlideIndex()]?.id || "runs";
   const activeSlide = delegateCarouselSlides.find((slide) => slide.id === activeSlideId) || delegateCarouselSlides[0];
@@ -4672,6 +5043,10 @@ function renderArtifactShelf() {
     elements.projectArtifactsButton.title =
       itemCount > 0 ? `${itemCount} agent file${itemCount === 1 ? "" : "s"}` : "Files";
   }
+  if (elements.filesWorkspaceTab) {
+    elements.filesWorkspaceTab.title =
+      itemCount > 0 ? `${itemCount} agent file${itemCount === 1 ? "" : "s"}` : "Files";
+  }
 
   if (!elements.artifactShelf || !project?.path || (itemCount === 0 && !artifactState.loading)) {
     if (elements.artifactShelf) {
@@ -5242,15 +5617,55 @@ function updateThreadButtonAvailability() {
 }
 
 function updateSummaryButtonAvailability() {
-  elements.projectSummaryButton.disabled = state.projectsLoading || !state.selectedProject;
+  const disabled = state.projectsLoading || !state.selectedProject;
+  if (elements.projectSummaryButton) {
+    elements.projectSummaryButton.disabled = disabled;
+  }
+  if (elements.summaryWorkspaceTab) {
+    elements.summaryWorkspaceTab.disabled = disabled;
+    elements.summaryWorkspaceTab.setAttribute("aria-disabled", String(disabled));
+    elements.summaryWorkspaceTab.title = disabled ? "Select a project first" : "Project summary";
+  }
 }
 
 function updateDelegateButtonAvailability() {
-  elements.projectDelegateButton.disabled = state.projectsLoading || !state.selectedProject;
+  if (elements.selectedProjectDelegateButton) {
+    elements.selectedProjectDelegateButton.disabled = state.projectsLoading || !state.selectedProject;
+  }
+}
+
+function updateActiveRunsButtonAvailability() {
+  const activeCount = activeDelegateProjects().length;
+  if (elements.activeRunsOrb) {
+    elements.activeRunsOrb.hidden = activeCount === 0;
+  }
+  if (elements.activeRunsButton) {
+    elements.activeRunsButton.disabled = catalogIsBootstrapping() || activeCount === 0;
+    elements.activeRunsButton.setAttribute(
+      "aria-label",
+      activeCount > 0
+        ? `Open active delegate runs, ${activeCount} active`
+        : "No active runs",
+    );
+    elements.activeRunsButton.title = activeCount > 0 ? "Active runs" : "No active runs";
+  }
 }
 
 function updateArtifactsButtonAvailability() {
-  elements.projectArtifactsButton.disabled = state.projectsLoading || !state.selectedProject;
+  const disabled = state.projectsLoading || !state.selectedProject;
+  if (elements.projectArtifactsButton) {
+    elements.projectArtifactsButton.disabled = disabled;
+  }
+  if (elements.filesWorkspaceTab) {
+    elements.filesWorkspaceTab.disabled = disabled;
+    elements.filesWorkspaceTab.setAttribute("aria-disabled", String(disabled));
+    if (disabled) {
+      elements.filesWorkspaceTab.title = "Select a project first";
+    }
+  }
+  if (disabled && elements.projectArtifactsOrb) {
+    elements.projectArtifactsOrb.hidden = true;
+  }
 }
 
 function updateImportButtonAvailability() {
@@ -5288,15 +5703,19 @@ function updateQueueChrome() {
 
 function renderAll() {
   pruneCopyFeedback();
+  renderWorkspaceTabs();
   renderProjectOptions();
   updateProjectControlAppearance();
   renderSessionOptions();
+  renderSelectedProjectDelegateCard();
+  renderActiveRunsInline();
   renderQueueList();
   renderArtifactShelf();
   renderModal();
   renderSessionImportModal();
   renderSessionTitleModal();
   renderSummaryModal();
+  renderActiveRunsModal();
   renderArtifactsModal();
   renderDelegateModal();
   renderProjectModal();
@@ -5309,6 +5728,7 @@ function renderAll() {
   updateSummaryButtonAvailability();
   updateArtifactsButtonAvailability();
   updateDelegateButtonAvailability();
+  updateActiveRunsButtonAvailability();
   updateQueueChrome();
   updateBodyModalState();
   refreshCopyButtons();
@@ -5377,6 +5797,7 @@ async function reconcileThreadEntries() {
           ),
           answeredAt:
             mailboxStatus.completed_at ||
+            mailboxStatus.completedAt ||
             mailboxCompletionFallbackSession.lastResponse ||
             project?.lastResponse ||
             new Date().toISOString(),
@@ -5490,7 +5911,12 @@ async function reconcileThreadEntries() {
 
     completeThreadEntry(entry, {
       status: status === "completed" ? "answered" : "failed",
-      answeredAt: session?.lastResponse || project?.lastResponse || new Date().toISOString(),
+      answeredAt:
+        mailboxStatus.completed_at ||
+        mailboxStatus.completedAt ||
+        session?.lastResponse ||
+        project?.lastResponse ||
+        new Date().toISOString(),
       requestId: effectiveRequestId || liveRequestId || trackedRequestId,
       response: readsByRequest.get(readKey) || (status === "failed" ? "Failed." : ""),
       seenAt: null,
@@ -5535,6 +5961,12 @@ async function refreshProjects() {
       if (state.selectedProject) {
         void refreshImportableSessions(state.selectedProject).catch(() => {});
         void loadProjectArtifacts(state.selectedProject, { quiet: true }).catch(() => {});
+      }
+      if (state.activeRunsModalOpen) {
+        void primeActiveRunsModal().catch(() => {});
+      }
+      if (state.workspaceMode === "auto") {
+        void primeActiveRunsModal().then(renderAll).catch(() => {});
       }
     } finally {
       state.projectsLoading = false;
@@ -5770,10 +6202,10 @@ async function loadSessionHistory(projectPath, sessionId, { reset = false, appen
       .filter(Boolean);
 
     const nextItems = reset
-      ? mergeHistoryItems(pageItems, localItems)
+      ? mergeHistoryItems(localItems, pageItems)
       : appendOlder
         ? mergeHistoryItems(pageItems, existing.items)
-        : mergeHistoryItems(pageItems, localItems);
+        : mergeHistoryItems(localItems, pageItems);
 
     if (sameOpenThread) {
       queueDetailHistorySnapshot(
@@ -6005,6 +6437,7 @@ async function openProjectSummary(projectPath = state.selectedProject) {
   state.modalThread = null;
   state.projectModalOpen = false;
   state.sessionImportModalProject = "";
+  state.activeRunsModalOpen = false;
   state.artifactModalProject = "";
   state.delegateModalProject = "";
   state.sessionTitleModalProject = "";
@@ -6086,6 +6519,7 @@ async function openArtifactsModal(projectPath = state.selectedProject) {
   state.projectModalOpen = false;
   state.sessionImportModalProject = "";
   state.summaryModalProject = "";
+  state.activeRunsModalOpen = false;
   state.delegateModalProject = "";
   state.sessionTitleModalProject = "";
   state.sessionTitleModalSessionId = "";
@@ -6608,7 +7042,10 @@ async function loadDelegateFeed(projectPath, { force = false } = {}) {
   return delegateStateFor(projectPath).feed;
 }
 
-async function loadDelegateProject(projectPath, { force = false } = {}) {
+async function loadDelegateProject(
+  projectPath,
+  { force = false, includeRunLog = true, includeFeed = true } = {},
+) {
   if (!projectPath) {
     return delegateStateFor(projectPath);
   }
@@ -6641,12 +7078,16 @@ async function loadDelegateProject(projectPath, { force = false } = {}) {
     if (nextRunId) {
       state.delegateSelectedRunIds[projectPath] = nextRunId;
     }
-    await loadDelegateRunLog(projectPath, {
-      force: true,
-      reset: Boolean(nextRunId && nextRunId !== previousRunId),
-      runId: nextRunId,
-    });
-    await loadDelegateFeed(projectPath, { force: true });
+    if (includeRunLog) {
+      await loadDelegateRunLog(projectPath, {
+        force: true,
+        reset: Boolean(nextRunId && nextRunId !== previousRunId),
+        runId: nextRunId,
+      });
+    }
+    if (includeFeed) {
+      await loadDelegateFeed(projectPath, { force: true });
+    }
   } catch (error) {
     setDelegateState(projectPath, {
       loading: false,
@@ -6668,6 +7109,7 @@ async function openDelegateModal(projectPath = state.selectedProject) {
   state.projectModalOpen = false;
   state.sessionImportModalProject = "";
   state.summaryModalProject = "";
+  state.activeRunsModalOpen = false;
   state.artifactModalProject = "";
   state.sessionTitleModalProject = "";
   state.sessionTitleModalSessionId = "";
@@ -6694,6 +7136,25 @@ function closeDelegateModal() {
   state.delegateRunSummaryPending = false;
   state.delegateFeedPending = false;
   delegateRunRenderSnapshot = null;
+  renderAll();
+}
+
+async function openActiveRunsModal() {
+  state.modalThread = null;
+  state.projectModalOpen = false;
+  state.sessionImportModalProject = "";
+  state.summaryModalProject = "";
+  state.artifactModalProject = "";
+  state.sessionTitleModalProject = "";
+  state.sessionTitleModalSessionId = "";
+  state.delegateModalProject = "";
+  state.activeRunsModalOpen = true;
+  renderAll();
+  await primeActiveRunsModal();
+}
+
+function closeActiveRunsModal() {
+  state.activeRunsModalOpen = false;
   renderAll();
 }
 
@@ -6917,6 +7378,7 @@ function setProjectModalMode(mode) {
 async function openProjectModal() {
   state.summaryModalProject = "";
   state.sessionImportModalProject = "";
+  state.activeRunsModalOpen = false;
   state.artifactModalProject = "";
   state.delegateModalProject = "";
   state.sessionTitleModalProject = "";
@@ -7230,16 +7692,40 @@ function bindEvents() {
       void advanceHeaderCarousel();
     });
   }
-  elements.projectSummaryButton.addEventListener("click", () => {
+  elements.projectWorkspaceTab?.addEventListener("click", () => {
+    setWorkspaceMode("project");
+  });
+  elements.autoWorkspaceTab?.addEventListener("click", () => {
+    setWorkspaceMode("auto");
+  });
+  elements.summaryWorkspaceTab?.addEventListener("click", () => {
+    if (elements.summaryWorkspaceTab.disabled) {
+      return;
+    }
     void openProjectSummary();
   });
-  elements.projectDelegateButton.addEventListener("click", () => {
-    void openDelegateModal();
+  elements.filesWorkspaceTab?.addEventListener("click", () => {
+    if (elements.filesWorkspaceTab.disabled) {
+      return;
+    }
+    void openArtifactsModal();
+  });
+  elements.selectedProjectDelegateButton?.addEventListener("click", () => {
+    if (!state.selectedProject) {
+      return;
+    }
+    void openDelegateModal(state.selectedProject);
+  });
+  elements.projectSummaryButton?.addEventListener("click", () => {
+    void openProjectSummary();
+  });
+  elements.activeRunsButton?.addEventListener("click", () => {
+    void openActiveRunsModal();
   });
   elements.projectAddButton.addEventListener("click", () => {
     void openProjectModal();
   });
-  elements.projectArtifactsButton.addEventListener("click", () => {
+  elements.projectArtifactsButton?.addEventListener("click", () => {
     void openArtifactsModal();
   });
   elements.artifactShelfOpenButton?.addEventListener("click", () => {
@@ -7277,6 +7763,26 @@ function bindEvents() {
   elements.summaryClose.addEventListener("click", closeProjectSummary);
   elements.summaryRefreshButton.addEventListener("click", () => {
     void requestNewProjectSummary();
+  });
+  elements.activeRunsBackdrop.addEventListener("click", closeActiveRunsModal);
+  elements.activeRunsClose.addEventListener("click", closeActiveRunsModal);
+  elements.activeRunsList.addEventListener("click", (event) => {
+    const button =
+      event.target instanceof Element ? event.target.closest("[data-project-path]") : null;
+    const projectPath = String(button?.dataset?.projectPath || "").trim();
+    if (!projectPath) {
+      return;
+    }
+    void openDelegateModal(projectPath);
+  });
+  elements.activeRunsInlineList?.addEventListener("click", (event) => {
+    const button =
+      event.target instanceof Element ? event.target.closest("[data-project-path]") : null;
+    const projectPath = String(button?.dataset?.projectPath || "").trim();
+    if (!projectPath) {
+      return;
+    }
+    void openDelegateModal(projectPath);
   });
   elements.artifactsBackdrop.addEventListener("click", closeArtifactsModal);
   elements.artifactsClose.addEventListener("click", closeArtifactsModal);
@@ -7491,6 +7997,10 @@ function bindEvents() {
       closeProjectSummary();
       return;
     }
+    if (event.key === "Escape" && state.activeRunsModalOpen) {
+      closeActiveRunsModal();
+      return;
+    }
     if (event.key === "Escape" && state.artifactModalProject) {
       closeArtifactsModal();
       return;
@@ -7557,4 +8067,21 @@ async function boot() {
   }, 3200);
 }
 
-boot();
+function showBootFailure(error) {
+  console.error("[clawdad] boot failed", error);
+  const message = document.createElement("main");
+  message.className = "app-shell boot-failure";
+  message.innerHTML = `
+    <section class="boot-failure-panel">
+      <h1>Clawdad needs a refresh.</h1>
+      <p>The app shell did not finish loading after the latest local update.</p>
+      <button type="button">Reload</button>
+    </section>
+  `;
+  message.querySelector("button")?.addEventListener("click", () => {
+    window.location.reload();
+  });
+  document.body.replaceChildren(message);
+}
+
+boot().catch(showBootFailure);
