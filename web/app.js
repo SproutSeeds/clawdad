@@ -4443,16 +4443,18 @@ function delegateHygieneTone(hygieneState = "") {
 }
 
 function buildDelegateLaneCard(project, { showProject = false, compact = false } = {}) {
-  const button = document.createElement("button");
-  button.className = `active-run-card delegate-lane-card${compact ? " is-compact" : ""}`;
-  button.type = "button";
-  button.dataset.projectPath = project.path;
-  button.dataset.laneId = normalizeDelegateLaneId(project.laneId || project?.delegateLane?.laneId || "default");
+  const card = document.createElement("article");
+  card.className = `active-run-card delegate-lane-card${compact ? " is-compact" : ""}`;
+  card.dataset.projectPath = project.path;
+  card.dataset.laneId = normalizeDelegateLaneId(project.laneId || project?.delegateLane?.laneId || "default");
 
   const status = projectDelegateStatus(project);
-  const delegateState = delegateStateFor(project.path, button.dataset.laneId);
+  const delegateState = delegateStateFor(project.path, card.dataset.laneId);
   const liveStatus = delegateState?.status || status || null;
   const runId = String(liveStatus?.runId || "").trim();
+  const statusState = String(liveStatus?.state || "").trim().toLowerCase();
+  const running = statusState === "running" || statusState === "planning";
+  const pauseRequested = Boolean(liveStatus?.pauseRequested);
   const title = document.createElement("div");
   title.className = "active-run-title";
   title.textContent = showProject ? delegateProjectCardTitle(project) : delegateLaneDisplayText(project);
@@ -4517,19 +4519,41 @@ function buildDelegateLaneCard(project, { showProject = false, compact = false }
   }
   hygiene.hidden = !hygiene.textContent;
 
-  const open = document.createElement("span");
-  open.className = "active-run-open";
-  open.textContent = "Open";
+  const actions = document.createElement("div");
+  actions.className = "active-run-actions";
 
-  footer.append(compute, hygiene, open);
-  button.append(title, meta);
-  if (!compact && body.childElementCount > 0) {
-    button.append(body);
-  } else if (!compact) {
-    button.append(summary);
+  if (running) {
+    const pause = document.createElement("button");
+    pause.className = "active-run-action-button is-pause";
+    pause.type = "button";
+    pause.dataset.delegateAction = "pause";
+    pause.disabled = pauseRequested;
+    pause.textContent = pauseRequested ? "Stopping" : "Stop";
+    pause.setAttribute(
+      "aria-label",
+      pauseRequested
+        ? "Stop already requested for this delegation lane"
+        : "Stop this delegation lane after the current safe point",
+    );
+    actions.append(pause);
   }
-  button.append(footer);
-  return button;
+
+  const open = document.createElement("button");
+  open.className = "active-run-action-button";
+  open.type = "button";
+  open.dataset.delegateAction = "open";
+  open.textContent = "Open";
+  actions.append(open);
+
+  footer.append(compute, hygiene, actions);
+  card.append(title, meta);
+  if (!compact && body.childElementCount > 0) {
+    card.append(body);
+  } else if (!compact) {
+    card.append(summary);
+  }
+  card.append(footer);
+  return card;
 }
 
 function setWorkspaceMode(mode) {
@@ -8010,6 +8034,53 @@ async function requestDelegateRunSummary() {
   }
 }
 
+async function requestDelegateLanePause(projectPath, laneId = "default") {
+  const normalizedLaneId = normalizeDelegateLaneId(laneId);
+  const existing = delegateStateFor(projectPath, normalizedLaneId);
+  const nextStatus = normalizeDelegateStatus({
+    ...(existing.status || {}),
+    state: existing.status?.state || "running",
+    pauseRequested: true,
+  });
+
+  setDelegateState(projectPath, { status: nextStatus }, normalizedLaneId);
+  updateProjectDelegateStatus(projectPath, nextStatus);
+  renderAll();
+
+  try {
+    const payload = await fetchJson("/v1/delegate/run", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        project: projectPath,
+        lane: normalizedLaneId,
+        action: "pause",
+      }),
+    });
+
+    setDelegateState(projectPath, delegatePayloadState(projectPath, payload), normalizedLaneId);
+    if (payload.status) {
+      updateProjectDelegateStatus(projectPath, payload.status);
+    }
+    await loadDelegateRunLog(projectPath, { force: true, laneId: normalizedLaneId });
+    await loadDelegateFeed(projectPath, { force: true, laneId: normalizedLaneId });
+    void refreshProjects().catch(() => {});
+  } catch (error) {
+    setDelegateState(projectPath, {
+      status: existing.status || null,
+      error: error.message,
+    }, normalizedLaneId);
+    if (existing.status) {
+      updateProjectDelegateStatus(projectPath, existing.status);
+    }
+    showError(error);
+  } finally {
+    renderAll();
+  }
+}
+
 function setProjectModalMode(mode) {
   state.projectModalMode = mode === "new" ? "new" : "existing";
   state.projectModalStatus = "";
@@ -8412,16 +8483,25 @@ function bindEvents() {
   elements.activeRunsBackdrop.addEventListener("click", closeActiveRunsModal);
   elements.activeRunsClose.addEventListener("click", closeActiveRunsModal);
   elements.activeRunsList.addEventListener("click", (event) => {
+    const actionButton =
+      event.target instanceof Element ? event.target.closest("[data-delegate-action]") : null;
     const button =
       event.target instanceof Element ? event.target.closest("[data-project-path]") : null;
     const projectPath = String(button?.dataset?.projectPath || "").trim();
     const laneId = String(button?.dataset?.laneId || "default").trim();
     if (!projectPath) {
+      return;
+    }
+    if (actionButton?.dataset?.delegateAction === "pause") {
+      event.preventDefault();
+      void requestDelegateLanePause(projectPath, laneId);
       return;
     }
     void openDelegateModal(projectPath, laneId);
   });
   elements.selectedProjectDelegateList?.addEventListener("click", (event) => {
+    const actionButton =
+      event.target instanceof Element ? event.target.closest("[data-delegate-action]") : null;
     const button =
       event.target instanceof Element ? event.target.closest("[data-project-path]") : null;
     const projectPath = String(button?.dataset?.projectPath || "").trim();
@@ -8429,14 +8509,26 @@ function bindEvents() {
     if (!projectPath) {
       return;
     }
+    if (actionButton?.dataset?.delegateAction === "pause") {
+      event.preventDefault();
+      void requestDelegateLanePause(projectPath, laneId);
+      return;
+    }
     void openDelegateModal(projectPath, laneId);
   });
   elements.activeRunsInlineList?.addEventListener("click", (event) => {
+    const actionButton =
+      event.target instanceof Element ? event.target.closest("[data-delegate-action]") : null;
     const button =
       event.target instanceof Element ? event.target.closest("[data-project-path]") : null;
     const projectPath = String(button?.dataset?.projectPath || "").trim();
     const laneId = String(button?.dataset?.laneId || "default").trim();
     if (!projectPath) {
+      return;
+    }
+    if (actionButton?.dataset?.delegateAction === "pause") {
+      event.preventDefault();
+      void requestDelegateLanePause(projectPath, laneId);
       return;
     }
     void openDelegateModal(projectPath, laneId);

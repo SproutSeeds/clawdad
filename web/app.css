@@ -1687,6 +1687,7 @@ textarea:disabled {
   background: rgba(45, 7, 9, 0.36);
   color: var(--text);
   text-align: left;
+  cursor: pointer;
 }
 
 .active-run-card:hover,
@@ -1768,8 +1769,7 @@ textarea:disabled {
   gap: 10px;
 }
 
-.active-run-chip,
-.active-run-open {
+.active-run-chip {
   font-size: 0.74rem;
   font-weight: 700;
 }
@@ -1791,8 +1791,40 @@ textarea:disabled {
   color: rgba(255, 177, 159, 0.95);
 }
 
-.active-run-open {
+.active-run-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.active-run-action-button {
+  width: auto;
+  min-height: 28px;
+  padding: 0 9px;
+  border: 1px solid rgba(255, 236, 219, 0.14);
+  border-radius: 7px;
+  background: rgba(45, 7, 9, 0.46);
   color: rgba(255, 248, 238, 0.96);
+  font-size: 0.74rem;
+  font-weight: 800;
+}
+
+.active-run-action-button:hover:not(:disabled),
+.active-run-action-button:focus-visible:not(:disabled) {
+  border-color: rgba(240, 208, 109, 0.5);
+  background: rgba(84, 18, 18, 0.74);
+}
+
+.active-run-action-button.is-pause {
+  color: rgba(255, 226, 179, 0.96);
+}
+
+.active-run-action-button.is-pause:hover:not(:disabled),
+.active-run-action-button.is-pause:focus-visible:not(:disabled) {
+  border-color: rgba(255, 177, 159, 0.62);
+  color: rgba(255, 248, 238, 0.98);
 }
 
 .delegate-run-card {
