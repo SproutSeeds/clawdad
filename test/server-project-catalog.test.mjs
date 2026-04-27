@@ -116,6 +116,9 @@ test("app shell injects a fresh build fingerprint for frontend assets", async ()
     assert.match(html, /window\.__CLAWDAD_APP_BUILD__ = "[^"]+"/u);
     assert.match(html, /\/app\.js\?v=[^"]+"/u);
     assert.match(html, /\/app\.css\?v=[^"]+"/u);
+    assert.match(html, /id="projectDelegateButton"/u);
+    assert.match(html, /Auto-Claw/u);
+    assert.match(html, /id="delegateOverview"/u);
   } finally {
     await stopServer(child);
     await rm(root, { recursive: true, force: true });

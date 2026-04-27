@@ -87,6 +87,7 @@ const elements = {
   filesWorkspaceRefreshButton: document.querySelector("#filesWorkspaceRefreshButton"),
   projectSelect: document.querySelector("#projectSelect"),
   projectAddButton: document.querySelector("#projectAddButton"),
+  projectDelegateButton: document.querySelector("#projectDelegateButton"),
   sessionControl: document.querySelector(".session-control"),
   sessionSelect: document.querySelector("#sessionSelect"),
   sessionImportButton: document.querySelector("#sessionImportButton"),
@@ -4325,6 +4326,82 @@ function delegateComputeStateText(computeState) {
   return delegateComputeInlineText({ computeBudget: budget }) || String(budget.status || "").trim();
 }
 
+function compactSingleLine(value = "", maxLength = 170) {
+  const normalized = String(value || "").replace(/\s+/gu, " ").trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, maxLength - 1)).trim()}...`;
+}
+
+function appendDelegateOverviewField(container, label, value) {
+  const item = document.createElement("div");
+  item.className = "delegate-overview-field";
+
+  const fieldLabel = document.createElement("div");
+  fieldLabel.className = "delegate-overview-label";
+  fieldLabel.textContent = label;
+
+  const fieldValue = document.createElement("div");
+  fieldValue.className = "delegate-overview-value";
+  fieldValue.textContent = value;
+
+  item.append(fieldLabel, fieldValue);
+  container.append(item);
+}
+
+function buildDelegateOverview(project, delegateState, laneId, laneLabel) {
+  const overview = document.createElement("section");
+  overview.className = "delegate-overview-card";
+
+  const statusState = String(delegateState?.status?.state || "").trim().toLowerCase();
+  const live = statusState === "running";
+  const paused = statusState === "paused" || delegateState?.status?.pauseRequested;
+  const blocked = statusState === "blocked" || statusState === "failed";
+  const brief = String(delegateState?.brief || "").trim();
+  const watchtowerMode = String(delegateState?.config?.watchtowerReviewMode || "off").trim() || "off";
+  const projectLabel = project?.displayName || project?.slug || fallbackProjectLabel(project?.path);
+  const runText = live
+    ? "Live loop running"
+    : paused
+      ? "Pause requested"
+      : blocked
+        ? "Needs attention"
+        : "Ready to launch";
+  const briefText = brief
+    ? compactSingleLine(brief)
+    : "No saved North Star yet. Use Brief to set the objective before launch.";
+
+  const head = document.createElement("div");
+  head.className = "delegate-overview-head";
+
+  const title = document.createElement("div");
+  title.className = "delegate-overview-title";
+  title.textContent = "Auto-Claw loop";
+
+  const meta = document.createElement("div");
+  meta.className = "delegate-overview-meta";
+  meta.textContent = [
+    projectLabel,
+    laneLabel || (laneId === "default" ? "Main lane" : laneId),
+    runText,
+  ].filter(Boolean).join(" • ");
+
+  head.append(title, meta);
+
+  const fields = document.createElement("div");
+  fields.className = "delegate-overview-fields";
+  appendDelegateOverviewField(fields, "North Star", briefText);
+  appendDelegateOverviewField(fields, "Source", "ORP frontier plus the saved brief for this lane.");
+  appendDelegateOverviewField(fields, "Preflight", "ORP hygiene and frontier checks must pass before delegate work starts.");
+  appendDelegateOverviewField(fields, "Loop", "Delegate step, status readback, run log, then continue until done or blocked.");
+  appendDelegateOverviewField(fields, "Stops", "Completion, hard stop, compute reserve, explicit pause, or failed preflight.");
+  appendDelegateOverviewField(fields, "Watchtower", watchtowerMode === "off" ? "Off unless explicitly enabled." : watchtowerMode);
+
+  overview.append(head, fields);
+  return overview;
+}
+
 function delegateHygieneStateText(hygieneState = "") {
   switch (String(hygieneState || "").trim().toLowerCase()) {
     case "clean":
@@ -5820,7 +5897,7 @@ function renderDelegateModal() {
     } else if (status?.state === "running") {
       runButtonLabel.textContent = "Pause";
     } else {
-      runButtonLabel.textContent = "Start";
+      runButtonLabel.textContent = "Auto-Claw";
     }
   }
   const runButtonIcon = elements.delegateRunButton.querySelector(".auto-icon");
@@ -5889,6 +5966,7 @@ function renderDelegateModal() {
   const eventCount = logMatchesSelection && Array.isArray(runLog.events) ? runLog.events.length : 0;
   if (elements.delegateOverview) {
     clearNode(elements.delegateOverview);
+    elements.delegateOverview.append(buildDelegateOverview(project, delegateState, laneId, laneLabel));
   }
 
   clearNode(elements.delegateRunCardList);
@@ -6121,7 +6199,37 @@ function updateSummaryButtonAvailability() {
 }
 
 function updateDelegateButtonAvailability() {
-  return;
+  if (!elements.projectDelegateButton) {
+    return;
+  }
+
+  const project = currentProject();
+  const defaultLane = projectDelegateLaneItems(project).find((lane) => normalizeDelegateLaneId(lane.laneId) === "default");
+  const statusState = String(defaultLane?.status?.state || "").trim().toLowerCase();
+  const live = statusState === "running";
+  const blocked = statusState === "blocked" || statusState === "failed";
+  const disabled = state.projectsLoading || !project?.path;
+  const label = elements.projectDelegateButton.querySelector(".button-text");
+
+  elements.projectDelegateButton.disabled = disabled;
+  elements.projectDelegateButton.classList.toggle("is-live", live);
+  elements.projectDelegateButton.classList.toggle("is-blocked", blocked);
+  elements.projectDelegateButton.title = disabled
+    ? "Select a project first"
+    : live
+      ? "Open the live Auto-Claw loop"
+      : "Open Auto-Claw for this project";
+  elements.projectDelegateButton.setAttribute(
+    "aria-label",
+    disabled
+      ? "Select a project before opening Auto-Claw"
+      : live
+        ? "Open live Auto-Claw loop for selected project"
+        : "Open Auto-Claw for selected project",
+  );
+  if (label) {
+    label.textContent = live ? "Live" : "Auto-Claw";
+  }
 }
 
 function updateActiveRunsButtonAvailability() {
@@ -7614,7 +7722,7 @@ async function loadDelegateProject(
   return delegateStateFor(projectPath, normalizedLaneId);
 }
 
-async function openDelegateModal(projectPath = state.selectedProject, laneId = "default") {
+async function openDelegateModal(projectPath = state.selectedProject, laneId = "default", options = {}) {
   if (!projectPath) {
     return;
   }
@@ -7636,9 +7744,13 @@ async function openDelegateModal(projectPath = state.selectedProject, laneId = "
   state.delegateFeedPending = false;
   state.delegateBriefDirty = false;
   state.delegateBriefDraft = "";
-  state.delegateCarouselSlide = "runs";
+  state.delegateCarouselSlide = delegateCarouselSlides.find((slide) => slide.id === options.slide)?.id || "runs";
   renderAll();
-  await loadDelegateProject(projectPath, { laneId: state.delegateModalLane });
+  const loadedState = await loadDelegateProject(projectPath, { laneId: state.delegateModalLane });
+  if (options.preferBriefWhenEmpty && !String(loadedState?.brief || "").trim()) {
+    state.delegateCarouselSlide = "brief";
+    renderAll();
+  }
 }
 
 function closeDelegateModal() {
@@ -8251,6 +8363,12 @@ function bindEvents() {
   });
   elements.projectAddButton.addEventListener("click", () => {
     void openProjectModal();
+  });
+  elements.projectDelegateButton?.addEventListener("click", () => {
+    if (elements.projectDelegateButton.disabled || !state.selectedProject) {
+      return;
+    }
+    void openDelegateModal(state.selectedProject, "default", { preferBriefWhenEmpty: true });
   });
   elements.projectArtifactsButton?.addEventListener("click", () => {
     void openArtifactsModal();
