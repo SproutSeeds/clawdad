@@ -700,7 +700,7 @@ async function writeTightComputeTelemetry(fixture) {
   );
 }
 
-async function startApiServer(fixture) {
+async function startApiServer(fixture, env = {}) {
   const port = await freePort();
   await writeJson(fixture.configPath, {
     host: "127.0.0.1",
@@ -711,7 +711,7 @@ async function startApiServer(fixture) {
   });
   const child = spawn(process.execPath, [serverScript, "serve", "--config", fixture.configPath], {
     cwd: repoRoot,
-    env: testEnv(fixture),
+    env: testEnv(fixture, env),
     stdio: ["ignore", "pipe", "pipe"],
   });
   const baseUrl = `http://127.0.0.1:${port}`;
@@ -1031,6 +1031,107 @@ test("supervise retargets a completed lane with nextAction and restarts after cl
       (status) => status.state === "completed",
       "supervised lane completion",
     );
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("delegate supervise API previews launch checks without starting the worker", async () => {
+  const fixture = await createFixture("clawdad-supervise-api-preview-");
+  try {
+    await seedLane(fixture, "lane-a", {
+      displayName: "Lane A",
+      objective: "Finish lane A.",
+      scopeGlobs: ["src/lane-a/**"],
+      delegateSessionId: "lane-a-session",
+    });
+    const nextAction = "Refresh the lane A report and checkpoint the verified result.";
+    await writeCompletedLaneStatus(fixture, "lane-a", {
+      runId: "lane-a-finished-preview",
+      nextAction,
+      lastOutcomeSummary: "Patched lane A and verified the focused test target.",
+    });
+
+    const { child, baseUrl, headers } = await startApiServer(fixture);
+    try {
+      const response = await fetch(`${baseUrl}/v1/delegate/supervise`, {
+        method: "POST",
+        headers: {
+          ...headers,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          project: fixture.projectPath,
+          lane: "lane-a",
+          action: "preview",
+        }),
+      });
+      assert.equal(response.status, 200);
+      const payload = await response.json();
+      assert.equal(payload.ok, true);
+      assert.equal(payload.previewOk, true);
+      assert.equal(payload.supervisorPreview.action, "dry_run");
+      assert.equal(payload.supervisorPreview.started, false);
+      assert.equal(payload.supervisorPreview.gate.code, "ok");
+      assert.equal(payload.supervisorPreview.gate.lastGateResult.code, "safe_to_continue");
+      assert.equal(payload.supervisorPreview.supervisor.lastConsumedNextAction, nextAction);
+    } finally {
+      await stopServer(child);
+    }
+
+    const status = await readJson(path.join(laneDir(fixture.projectPath, "lane-a"), "delegate-status.json"));
+    assert.equal(status.runId, "lane-a-finished-preview");
+    assert.equal(status.state, "completed");
+    const config = await readJson(path.join(laneDir(fixture.projectPath, "lane-a"), "delegate-config.json"));
+    assert.equal(config.objective, "Finish lane A.");
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("delegate supervise API returns preview blockers as checklist data", async () => {
+  const fixture = await createFixture("clawdad-supervise-api-blocker-");
+  try {
+    await seedLane(fixture, "lane-a", {
+      displayName: "Lane A",
+      objective: "Finish lane A.",
+      scopeGlobs: ["src/lane-a/**"],
+      delegateSessionId: "lane-a-session",
+    });
+    await writeCompletedLaneStatus(fixture, "lane-a", {
+      runId: "lane-a-finished-blocked-preview",
+      nextAction: "Refresh lane A after the checkpoint lands cleanly.",
+    });
+
+    const { child, baseUrl, headers } = await startApiServer(fixture, { ORP_SCENARIO: "hygiene_block" });
+    try {
+      const response = await fetch(`${baseUrl}/v1/delegate/supervise`, {
+        method: "POST",
+        headers: {
+          ...headers,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          project: fixture.projectPath,
+          lane: "lane-a",
+          action: "preview",
+        }),
+      });
+      assert.equal(response.status, 200);
+      const payload = await response.json();
+      assert.equal(payload.ok, true);
+      assert.equal(payload.previewOk, false);
+      assert.equal(payload.supervisorPreview.action, "blocked");
+      assert.equal(payload.supervisorPreview.started, false);
+      assert.equal(payload.supervisorPreview.gate.code, "hygiene");
+      assert.match(payload.supervisorPreview.error, /Classify dirty paths/u);
+    } finally {
+      await stopServer(child);
+    }
+
+    const status = await readJson(path.join(laneDir(fixture.projectPath, "lane-a"), "delegate-status.json"));
+    assert.equal(status.runId, "lane-a-finished-blocked-preview");
+    assert.equal(status.state, "completed");
   } finally {
     await cleanupFixture(fixture);
   }

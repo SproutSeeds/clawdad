@@ -1615,9 +1615,37 @@ textarea:disabled {
   background: rgba(45, 7, 9, 0.34);
 }
 
+.delegate-supervisor-card {
+  display: grid;
+  gap: 12px;
+  padding: 11px 12px;
+  border: 1px solid rgba(240, 208, 109, 0.2);
+  border-radius: 8px;
+  background: rgba(35, 7, 8, 0.48);
+}
+
 .delegate-overview-head {
   display: grid;
   gap: 3px;
+}
+
+.delegate-supervisor-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+}
+
+.delegate-supervisor-title-wrap {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.delegate-supervisor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
 }
 
 .delegate-overview-title {
@@ -1637,6 +1665,89 @@ textarea:disabled {
 .delegate-overview-fields {
   display: grid;
   gap: 7px;
+}
+
+.delegate-supervisor-sections {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.delegate-supervisor-section {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 7px;
+}
+
+.delegate-check-section-title {
+  color: rgba(255, 226, 179, 0.74);
+  font-family: var(--mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.delegate-checklist {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.delegate-check-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  padding: 7px 8px;
+  border: 1px solid rgba(255, 236, 219, 0.1);
+  border-radius: 7px;
+  background: rgba(25, 5, 7, 0.32);
+}
+
+.delegate-check-row.is-current {
+  border-color: rgba(240, 208, 109, 0.34);
+  background: rgba(72, 43, 9, 0.24);
+}
+
+.delegate-check-row.is-blocked {
+  border-color: rgba(255, 130, 130, 0.34);
+  background: rgba(75, 15, 17, 0.34);
+}
+
+.delegate-check-box {
+  width: 15px;
+  height: 15px;
+  margin: 1px 0 0;
+  accent-color: rgb(240, 208, 109);
+}
+
+.delegate-check-body {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.delegate-check-label {
+  min-width: 0;
+  color: rgba(255, 248, 238, 0.94);
+  font-size: 0.8rem;
+  font-weight: 900;
+  line-height: 1.18;
+}
+
+.delegate-check-detail {
+  min-width: 0;
+  color: rgba(255, 226, 179, 0.76);
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.delegate-check-row.is-blocked .delegate-check-detail {
+  color: rgba(255, 178, 166, 0.9);
 }
 
 .delegate-overview-field {
@@ -2062,6 +2173,17 @@ textarea:disabled {
 
   .delegate-overview-value {
     font-size: 0.82rem;
+  }
+
+  .delegate-supervisor-head,
+  .delegate-supervisor-sections {
+    grid-template-columns: 1fr;
+  }
+
+  .delegate-supervisor-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    justify-content: stretch;
   }
 
   .delegate-slide {
