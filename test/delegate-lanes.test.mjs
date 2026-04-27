@@ -155,6 +155,7 @@ test("lane-create initializes durable lane storage and lanes lists them", async 
     assert.equal(frontendConfig.laneId, "frontend");
     assert.equal(frontendConfig.displayName, "Frontend lane");
     assert.deepEqual(frontendConfig.scopeGlobs, ["web/**", "assets/**"]);
+    assert.equal(frontendConfig.watchtowerReviewMode, "off");
     assert.equal(frontendStatus.laneId, "frontend");
     assert.equal(frontendStatus.state, "idle");
     assert.equal(backendConfig.laneId, "backend");
@@ -168,6 +169,10 @@ test("lane-create initializes durable lane storage and lanes lists them", async 
     assert.deepEqual(
       lanes.lanes.map((lane) => lane.laneId),
       ["default", "backend", "frontend"],
+    );
+    assert.equal(
+      lanes.lanes.find((lane) => lane.laneId === "frontend").watchtowerReviewMode,
+      "off",
     );
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
@@ -222,8 +227,30 @@ test("lane-aware delegate commands keep default lane compatibility intact", asyn
     ]);
     assert.equal(defaultPayload.config.laneId, "default");
     assert.equal(frontendPayload.config.laneId, "frontend");
+    assert.equal(defaultPayload.config.watchtowerReviewMode, "off");
+    assert.equal(frontendPayload.config.watchtowerReviewMode, "off");
     assert.match(defaultPayload.brief, /Default lane brief\./u);
     assert.match(frontendPayload.brief, /Frontend lane brief\./u);
+
+    const loggingPayload = await runJsonCommand(fixture, [
+      "delegate-set",
+      fixture.projectPath,
+      "--lane",
+      "frontend",
+      "--watchtower-review-mode",
+      "log",
+    ]);
+    assert.equal(loggingPayload.config.watchtowerReviewMode, "log");
+
+    const enforcingPayload = await runJsonCommand(fixture, [
+      "delegate-set",
+      fixture.projectPath,
+      "--lane",
+      "frontend",
+      "--watchtower-review-mode",
+      "enforce",
+    ]);
+    assert.equal(enforcingPayload.config.watchtowerReviewMode, "enforce");
 
     const pausePayload = await runJsonCommand(fixture, [
       "delegate-pause",

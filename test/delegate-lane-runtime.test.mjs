@@ -721,6 +721,7 @@ test("delegate-run keeps named lane runtime state isolated and lane APIs stay sc
       assert.equal(laneALogPayload.ok, true);
       assert.equal(laneALogPayload.runId, laneAFinal.runId);
       assert.equal(laneALogPayload.events.some((event) => event.runId === laneBFinal.runId), false);
+      assert.equal(laneALogPayload.events.some((event) => String(event.type || "").startsWith("watchtower_")), false);
 
       const laneBLogResponse = await fetch(
         `${baseUrl}/v1/delegate/run-log?project=${encodeURIComponent(fixture.projectPath)}&lane=lane-b&runId=${encodeURIComponent(laneBFinal.runId)}`,
@@ -731,6 +732,7 @@ test("delegate-run keeps named lane runtime state isolated and lane APIs stay sc
       assert.equal(laneBLogPayload.ok, true);
       assert.equal(laneBLogPayload.runId, laneBFinal.runId);
       assert.equal(laneBLogPayload.events.some((event) => event.runId === laneAFinal.runId), false);
+      assert.equal(laneBLogPayload.events.some((event) => String(event.type || "").startsWith("watchtower_")), false);
 
       const laneAFeedResponse = await fetch(
         `${baseUrl}/v1/delegate/feed?project=${encodeURIComponent(fixture.projectPath)}&lane=lane-a&mode=tail&limit=20`,

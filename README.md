@@ -127,7 +127,7 @@ clawdad read my-project
 | `clawdad list` | List registered projects (from ORP) |
 | `clawdad read <slug>` | Read latest response from a spoke |
 | `clawdad delegate <slug>` | Show the saved delegate brief, plan, status, and guardrails |
-| `clawdad delegate-set <slug> ...` | Update the delegate brief or guardrails such as `--compute-reserve-percent 10` |
+| `clawdad delegate-set <slug> ...` | Update the delegate brief or guardrails such as `--compute-reserve-percent 10`; Watchtower is off by default and only runs in delegation with `--watchtower-review-mode log` or `--watchtower-review-mode enforce` |
 | `clawdad go <slug>` | Friendly autonomous delegation entrypoint after ORP confirms a safe continuation |
 | `clawdad delegate-run <slug>` | Start autonomous Codex delegate mode for a project |
 | `clawdad delegate-pause <slug>` | Pause autonomous delegate mode after the current step |
@@ -176,10 +176,11 @@ If ORP reports unclassified dirty state, no active safe continuation, paid or
 human-gated work, or another hard stop, Clawdad prints the ORP reason and leaves
 the delegate loop stopped.
 
-Watchtower is the read-only delegation review sidecar. It watches delegate run
-events, ORP continuation/hygiene state, and git status, then appends structured
-updates and review cards to `.clawdad/feed/watchtower.sqlite`. It does not edit,
-approve, or advance the project.
+Watchtower is an optional read-only delegation review sidecar. It watches
+delegate run events, ORP continuation/hygiene state, and git status, then appends
+structured updates and review cards to `.clawdad/feed/watchtower.sqlite`. It does
+not edit, approve, or advance the project unless a delegate lane explicitly opts
+into `--watchtower-review-mode enforce`.
 
 ```bash
 clawdad watchtower my-project --once
