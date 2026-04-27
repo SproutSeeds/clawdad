@@ -130,6 +130,7 @@ clawdad read my-project
 | `clawdad delegate-set <slug> ...` | Update the delegate brief or guardrails such as `--compute-reserve-percent 10`; Watchtower is off by default and only runs in delegation with `--watchtower-review-mode log` or `--watchtower-review-mode enforce` |
 | `clawdad go <slug>` | Friendly autonomous delegation entrypoint after ORP confirms a safe continuation |
 | `clawdad delegate-run <slug>` | Start autonomous Codex delegate mode for a project |
+| `clawdad supervise <slug> --lane <laneId>` | Opt into continuity orchestration that restarts bounded delegate runs only after ORP and compute gates pass |
 | `clawdad delegate-pause <slug>` | Pause autonomous delegate mode after the current step |
 | `clawdad watchtower <slug>` | Run the read-only delegation observer sidecar |
 | `clawdad watch <slug>` | Friendly alias for `watchtower` when a project is supplied |
@@ -175,6 +176,15 @@ orp init --research-system --project-startup --current-codex --json
 If ORP reports unclassified dirty state, no active safe continuation, paid or
 human-gated work, or another hard stop, Clawdad prints the ORP reason and leaves
 the delegate loop stopped.
+
+`clawdad supervise <slug> --lane <laneId>` is an explicit continuity loop, not
+Watchtower and not a replacement for bounded delegate runs. It watches the target
+lane status, consumes a completed run's `nextAction`, refreshes the lane
+objective, reruns the ORP and compute gates, and starts exactly one new bounded
+delegate run when safe. Use `--once` for a single supervisor tick, `--daemon` for
+a background supervisor, `--interval <seconds>` for polling, `--max-runs <n>` for
+a per-invocation cap, and `--dry-run` to inspect the next decision without
+starting a worker.
 
 Watchtower is an optional read-only delegation review sidecar. It watches
 delegate run events, ORP continuation/hygiene state, and git status, then appends

@@ -32,6 +32,8 @@ Commands:
   delegate-set <project> ...    Update the delegate brief text for a project
   go <project>                  Start autonomous delegate mode after ORP preflight
   delegate-run <project>        Start autonomous delegate mode for a project
+  supervise <project> --lane <laneId>
+                                Opt into continuity orchestration for a delegate lane
   delegate-pause <project>      Pause autonomous delegate mode for a project
   delegate-reset <project>      Reset the delegate brief to the default template
   watchtower <project>          Observe delegation read-only and index review cards
@@ -940,6 +942,10 @@ cmd_delegate_run() {
   run_server_helper delegate-run "$@"
 }
 
+cmd_supervise() {
+  run_server_helper supervise "$@"
+}
+
 cmd_go() {
   run_server_helper go "$@"
 }
@@ -989,6 +995,7 @@ main() {
     delegate-set) cmd_delegate_set "$@" ;;
     go)         cmd_go "$@" ;;
     delegate-run|delegate-start) cmd_delegate_run "$@" ;;
+    supervise)  cmd_supervise "$@" ;;
     delegate-pause|delegate-stop) cmd_delegate_pause "$@" ;;
     delegate-reset) cmd_delegate_reset "$@" ;;
     watchtower) cmd_watchtower "$@" ;;

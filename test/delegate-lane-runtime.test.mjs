@@ -120,6 +120,7 @@ async function createFakeOrp(dir) {
     binaryPath,
     `#!/usr/bin/env node
 const args = process.argv.slice(2);
+const scenario = process.env.ORP_SCENARIO || "success";
 
 function print(payload, code = 0) {
   console.log(JSON.stringify(payload, null, 2));
@@ -128,6 +129,21 @@ function print(payload, code = 0) {
 
 const joined = args.join(" ");
 if (joined === "hygiene --json") {
+  if (scenario === "hygiene_block") {
+    print({
+      schema: "orp.worktree_hygiene/1",
+      status: "dirty",
+      clean: false,
+      unclassified_count: 2,
+      unclassifiedCount: 2,
+      stop_condition: true,
+      stopCondition: true,
+      safe_to_expand: false,
+      safeToExpand: false,
+      required_action: "Classify dirty paths before delegation.",
+      requiredAction: "Classify dirty paths before delegation."
+    });
+  }
   print({
     schema: "orp.worktree_hygiene/1",
     status: "clean",
@@ -150,6 +166,15 @@ if (joined === "project refresh --json") {
 }
 
 if (joined === "frontier preflight-delegate --json") {
+  if (scenario === "preflight_block") {
+    print({
+      ok: false,
+      issues: [
+        { severity: "error", code: "needs_human", message: "Continuation requires human approval." }
+      ],
+      preflight: { ready: false }
+    }, 1);
+  }
   print({
     ok: true,
     continuation: {
@@ -465,7 +490,7 @@ async function createFixture(prefix) {
   };
 }
 
-function testEnv(fixture) {
+function testEnv(fixture, overrides = {}) {
   return {
     ...process.env,
     HOME: fixture.home,
@@ -473,17 +498,18 @@ function testEnv(fixture) {
     CLAWDAD_ORP: fixture.fakeOrp,
     CLAWDAD_CODEX: fixture.fakeCodex,
     CLAWDAD_BIN_PATH: fixture.fakeClawdad,
+    ...overrides,
   };
 }
 
-async function runServerCommand(fixture, args, { json = true } = {}) {
+async function runServerCommand(fixture, args, { json = true, env = {} } = {}) {
   const commandArgs = json && !args.includes("--json")
     ? [...args, "--json"]
     : args;
   try {
     const result = await execFileAsync(process.execPath, [serverScript, ...commandArgs], {
       cwd: repoRoot,
-      env: testEnv(fixture),
+      env: testEnv(fixture, env),
       maxBuffer: 10 * 1024 * 1024,
     });
     return { exitCode: 0, stdout: result.stdout, stderr: result.stderr };
@@ -607,6 +633,71 @@ async function seedLane(fixture, laneId, {
     await mkdir(path.join(mirrorDir, "artifacts"), { recursive: true });
     await mkdir(path.join(mirrorDir, "mailbox"), { recursive: true });
   }
+}
+
+async function writeCompletedLaneStatus(fixture, laneId, {
+  runId = `${laneId}-completed-run`,
+  nextAction = `Continue ${laneId} safely with a concrete follow-up task.`,
+  lastOutcomeSummary = `Completed the previous ${laneId} task cleanly.`,
+  stopReason = "none",
+  error = "",
+} = {}) {
+  const completedAt = "2026-04-27T14:00:00.000Z";
+  await writeJson(path.join(laneDir(fixture.projectPath, laneId), "delegate-status.json"), {
+    version: 1,
+    laneId,
+    state: "completed",
+    runId,
+    startedAt: "2026-04-27T13:55:00.000Z",
+    completedAt,
+    delegateSessionId: `${laneId}-session`,
+    delegateSessionLabel: laneId,
+    stepCount: 1,
+    maxSteps: 1,
+    activeRequestId: null,
+    activeStep: null,
+    lastRequestId: `${laneId}-request-previous`,
+    supervisorPid: null,
+    supervisorStartedAt: null,
+    pauseRequested: false,
+    lastOutcomeSummary,
+    nextAction,
+    stopReason,
+    error,
+  });
+}
+
+async function writeTightComputeTelemetry(fixture) {
+  const sessionsDir = path.join(fixture.home, ".codex", "sessions", "2026", "04", "27");
+  await mkdir(sessionsDir, { recursive: true });
+  const reset = Math.floor((Date.now() + 5 * 24 * 60 * 60 * 1000) / 1000);
+  await writeFile(
+    path.join(sessionsDir, "tight.jsonl"),
+    `${JSON.stringify({
+      timestamp: new Date().toISOString(),
+      type: "event_msg",
+      payload: {
+        type: "token_count",
+        rate_limits: {
+          limit_id: "codex",
+          primary: {
+            used_percent: 20,
+            window_minutes: 300,
+            resets_at: reset,
+          },
+          secondary: {
+            used_percent: 95,
+            window_minutes: 10080,
+            resets_at: reset,
+          },
+          credits: {
+            unlimited: false,
+          },
+        },
+      },
+    })}\n`,
+    "utf8",
+  );
 }
 
 async function startApiServer(fixture) {
@@ -886,6 +977,256 @@ test("default delegate-run stays on default delegate storage and leaves shared m
     assert.match(defaultMailbox.request_id, /^default-request-/u);
     assert.equal(sharedMailbox.state, "idle");
     assert.equal(namedLaneStatus.state, "idle");
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("supervise retargets a completed lane with nextAction and restarts after clean gates", async () => {
+  const fixture = await createFixture("clawdad-supervise-restart-");
+  try {
+    await seedLane(fixture, "lane-a", {
+      displayName: "Lane A",
+      objective: "Finish lane A.",
+      scopeGlobs: ["src/lane-a/**"],
+      delegateSessionId: "lane-a-session",
+    });
+    const nextAction = "Refresh the lane A report and checkpoint the verified result.";
+    const latestOutcome = "Patched lane A and verified the focused test target.";
+    await writeCompletedLaneStatus(fixture, "lane-a", {
+      runId: "lane-a-finished-1",
+      nextAction,
+      lastOutcomeSummary: latestOutcome,
+    });
+
+    const result = await runJsonCommand(fixture, [
+      "supervise",
+      fixture.projectPath,
+      "--lane",
+      "lane-a",
+      "--once",
+    ]);
+
+    assert.equal(result.ok, true);
+    assert.equal(result.action, "restart");
+    assert.equal(result.started, true);
+    assert.equal(result.accepted, true);
+    assert.equal(result.status.state, "running");
+    assert.equal(result.supervisor.state, "stopped");
+    assert.equal(result.supervisor.enabled, false);
+    assert.equal(result.supervisor.restartCount, 1);
+    assert.equal(result.supervisor.lastConsumedNextAction, nextAction);
+    assert.equal(result.gate.lastGateResult.code, "safe_to_continue");
+
+    const config = await readJson(path.join(laneDir(fixture.projectPath, "lane-a"), "delegate-config.json"));
+    assert.equal(config.objective, nextAction);
+    assert.equal(config.watchtowerReviewMode, "off");
+    const brief = await readFile(path.join(laneDir(fixture.projectPath, "lane-a"), "delegate-brief.md"), "utf8");
+    assert.match(brief, /# Supervisor Continuation/u);
+    assert.match(brief, /Patched lane A and verified/u);
+    assert.match(brief, /Refresh the lane A report/u);
+
+    await waitForValue(
+      () => readJson(path.join(laneDir(fixture.projectPath, "lane-a"), "delegate-status.json")),
+      (status) => status.state === "completed",
+      "supervised lane completion",
+    );
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("supervise waits on a running lane and does not duplicate the worker run", async () => {
+  const fixture = await createFixture("clawdad-supervise-running-");
+  try {
+    await seedLane(fixture, "lane-a", {
+      displayName: "Lane A",
+      objective: "Finish lane A.",
+      scopeGlobs: ["src/lane-a/**"],
+      delegateSessionId: "lane-a-session",
+    });
+    await writeJson(path.join(laneDir(fixture.projectPath, "lane-a"), "delegate-status.json"), {
+      version: 1,
+      laneId: "lane-a",
+      state: "running",
+      runId: "lane-a-live-run",
+      startedAt: "2026-04-27T13:00:00.000Z",
+      completedAt: null,
+      delegateSessionId: "lane-a-session",
+      delegateSessionLabel: "Lane A",
+      stepCount: 1,
+      maxSteps: 1,
+      activeRequestId: "lane-a-request-live",
+      activeStep: 2,
+      lastRequestId: "lane-a-request-live",
+      supervisorPid: process.pid,
+      pauseRequested: false,
+      error: "",
+    });
+
+    const result = await runJsonCommand(fixture, [
+      "supervise",
+      fixture.projectPath,
+      "--lane",
+      "lane-a",
+      "--once",
+    ]);
+
+    assert.equal(result.ok, true);
+    assert.equal(result.action, "wait");
+    assert.equal(result.started, false);
+    assert.equal(result.status.runId, "lane-a-live-run");
+    assert.equal(result.supervisor.restartCount, 0);
+    const status = await readJson(path.join(laneDir(fixture.projectPath, "lane-a"), "delegate-status.json"));
+    assert.equal(status.runId, "lane-a-live-run");
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("supervise stops cleanly when a completed lane has no nextAction", async () => {
+  const fixture = await createFixture("clawdad-supervise-no-next-");
+  try {
+    await seedLane(fixture, "lane-a", {
+      displayName: "Lane A",
+      objective: "Finish lane A.",
+      scopeGlobs: ["src/lane-a/**"],
+      delegateSessionId: "lane-a-session",
+    });
+    await writeCompletedLaneStatus(fixture, "lane-a", {
+      runId: "lane-a-finished-no-next",
+      nextAction: "",
+      lastOutcomeSummary: "Lane A is complete.",
+    });
+
+    const result = await runJsonCommand(fixture, [
+      "supervise",
+      fixture.projectPath,
+      "--lane",
+      "lane-a",
+      "--once",
+    ]);
+
+    assert.equal(result.ok, true);
+    assert.equal(result.action, "completed");
+    assert.equal(result.started, false);
+    assert.equal(result.supervisor.state, "completed");
+    assert.equal(result.supervisor.enabled, false);
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("supervise blocks dirty_unclassified ORP hygiene and does not restart", async () => {
+  const fixture = await createFixture("clawdad-supervise-dirty-");
+  try {
+    await seedLane(fixture, "lane-a", {
+      displayName: "Lane A",
+      objective: "Finish lane A.",
+      scopeGlobs: ["src/lane-a/**"],
+      delegateSessionId: "lane-a-session",
+    });
+    await writeCompletedLaneStatus(fixture, "lane-a", {
+      runId: "lane-a-finished-dirty",
+      nextAction: "Refresh lane A after the checkpoint lands cleanly.",
+    });
+
+    const result = await runServerCommand(
+      fixture,
+      [
+        "supervise",
+        fixture.projectPath,
+        "--lane",
+        "lane-a",
+        "--once",
+      ],
+      { env: { ORP_SCENARIO: "hygiene_block" } },
+    );
+    assert.equal(result.exitCode, 1);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.action, "blocked");
+    assert.equal(payload.started, false);
+    assert.equal(payload.supervisor.state, "blocked");
+    assert.match(payload.error, /Classify dirty paths/u);
+
+    const status = await readJson(path.join(laneDir(fixture.projectPath, "lane-a"), "delegate-status.json"));
+    assert.equal(status.runId, "lane-a-finished-dirty");
+    assert.equal(status.state, "completed");
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("supervise blocks compute reserve pressure and does not restart", async () => {
+  const fixture = await createFixture("clawdad-supervise-compute-");
+  try {
+    await seedLane(fixture, "lane-a", {
+      displayName: "Lane A",
+      objective: "Finish lane A.",
+      scopeGlobs: ["src/lane-a/**"],
+      delegateSessionId: "lane-a-session",
+    });
+    await writeCompletedLaneStatus(fixture, "lane-a", {
+      runId: "lane-a-finished-compute",
+      nextAction: "Refresh lane A after the checkpoint lands cleanly.",
+    });
+    await writeTightComputeTelemetry(fixture);
+
+    const result = await runServerCommand(fixture, [
+      "supervise",
+      fixture.projectPath,
+      "--lane",
+      "lane-a",
+      "--once",
+    ]);
+    assert.equal(result.exitCode, 1);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.action, "blocked");
+    assert.equal(payload.started, false);
+    assert.equal(payload.gate.code, "compute_limit");
+    assert.equal(payload.supervisor.state, "blocked");
+
+    const status = await readJson(path.join(laneDir(fixture.projectPath, "lane-a"), "delegate-status.json"));
+    assert.equal(status.runId, "lane-a-finished-compute");
+    assert.equal(status.state, "completed");
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("delegate-run remains bounded and does not enable continuity supervisor", async () => {
+  const fixture = await createFixture("clawdad-delegate-run-bounded-");
+  try {
+    await seedLane(fixture, "lane-a", {
+      displayName: "Lane A",
+      objective: "Finish lane A.",
+      scopeGlobs: ["src/lane-a/**"],
+      delegateSessionId: "lane-a-session",
+    });
+
+    const started = await runJsonCommand(fixture, [
+      "delegate-run",
+      fixture.projectPath,
+      "--lane",
+      "lane-a",
+    ]);
+    assert.equal(started.ok, true);
+    assert.equal(started.action, "start");
+    assert.equal(started.accepted, true);
+    assert.equal(started.config.watchtowerReviewMode, "off");
+    assert.equal(started.supervisor.state, "stopped");
+    assert.equal(started.supervisor.restartCount, 0);
+
+    const finalStatus = await waitForValue(
+      () => readJson(path.join(laneDir(fixture.projectPath, "lane-a"), "delegate-status.json")),
+      (status) => status.state === "completed",
+      "bounded delegate-run completion",
+    );
+    assert.equal(finalStatus.stepCount, 1);
+    assert.match(finalStatus.nextAction, /archive lane-a lane result/u);
+    const supervisor = await readJson(path.join(laneDir(fixture.projectPath, "lane-a"), "delegate-supervisor.json"));
+    assert.equal(supervisor.state, "stopped");
+    assert.equal(supervisor.restartCount, 0);
   } finally {
     await cleanupFixture(fixture);
   }
