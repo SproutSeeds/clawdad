@@ -68,24 +68,15 @@
             aria-pressed="false"
             aria-controls="autoWorkspacePane"
           >
-            Auto
+            Delegation
             <span id="activeRunsOrb" class="control-orb" hidden aria-hidden="true"></span>
-          </button>
-          <button
-            id="summaryWorkspaceTab"
-            class="workspace-tab"
-            type="button"
-            aria-label="Open project summary"
-            disabled
-          >
-            Summary
           </button>
           <button
             id="filesWorkspaceTab"
             class="workspace-tab"
             type="button"
-            aria-label="Open project files"
-            disabled
+            aria-pressed="false"
+            aria-controls="filesWorkspacePane"
           >
             Files
             <span id="projectArtifactsOrb" class="control-orb" hidden aria-hidden="true"></span>
@@ -93,6 +84,13 @@
         </div>
 
         <div id="projectWorkspacePane" class="workspace-pane" role="tabpanel" aria-labelledby="projectWorkspaceTab">
+          <div class="project-subtabs" aria-label="Project views">
+            <button class="project-subtab is-active" type="button" aria-pressed="true">Message</button>
+            <button id="projectSummaryButton" class="project-subtab" type="button" aria-label="Open selected project summary" disabled>
+              Summary
+            </button>
+          </div>
+
           <label class="sr-only" for="projectSelect">Project</label>
           <label class="sr-only" for="sessionSelect">Session</label>
           <div class="controls">
@@ -158,16 +156,34 @@
         </div>
 
         <section id="autoWorkspacePane" class="workspace-pane auto-workspace" role="tabpanel" aria-labelledby="autoWorkspaceTab" hidden>
-          <div class="active-runs-inline-head">
-            <span id="selectedProjectDelegateMeta" class="active-runs-inline-meta">Selected project</span>
+          <div class="delegation-dashboard-head">
+            <div class="delegation-dashboard-title">Delegation Dashboard</div>
+            <div id="activeRunsInlineMeta" class="active-runs-inline-meta"></div>
           </div>
-          <div id="selectedProjectDelegateState" class="detail-history-state is-empty"></div>
-          <div id="selectedProjectDelegateList" class="detail-history-list active-runs-list selected-delegate-list"></div>
           <div class="active-runs-inline-head">
-            <span id="activeRunsInlineMeta" class="active-runs-inline-meta"></span>
+            <span class="active-runs-inline-meta">Live Delegation Runs</span>
           </div>
           <div id="activeRunsInlineState" class="detail-history-state is-empty"></div>
           <div id="activeRunsInlineList" class="detail-history-list active-runs-list"></div>
+          <div class="active-runs-inline-head">
+            <span id="selectedProjectDelegateMeta" class="active-runs-inline-meta">Selected Project Lanes</span>
+          </div>
+          <div id="selectedProjectDelegateState" class="detail-history-state is-empty"></div>
+          <div id="selectedProjectDelegateList" class="detail-history-list active-runs-list selected-delegate-list"></div>
+        </section>
+
+        <section id="filesWorkspacePane" class="workspace-pane files-workspace" role="tabpanel" aria-labelledby="filesWorkspaceTab" hidden>
+          <div class="delegation-dashboard-head">
+            <div class="delegation-dashboard-title">Files</div>
+            <div id="filesWorkspaceMeta" class="active-runs-inline-meta">Recent agent files</div>
+          </div>
+          <div class="files-workspace-actions">
+            <button id="filesWorkspaceRefreshButton" class="detail-action-button" type="button">
+              <span class="button-text">Refresh</span>
+            </button>
+          </div>
+          <div id="filesWorkspaceState" class="detail-history-state is-empty"></div>
+          <div id="filesWorkspaceList" class="detail-history-list artifacts-list files-workspace-list"></div>
         </section>
       </form>
 
@@ -371,7 +387,7 @@
       <section class="detail-panel project-modal-panel" role="dialog" aria-modal="true" aria-labelledby="activeRunsTitle">
         <div class="detail-head">
           <div class="detail-meta">
-            <div id="activeRunsTitle" class="detail-project">Active Runs</div>
+            <div id="activeRunsTitle" class="detail-project">Delegation Dashboard</div>
             <div id="activeRunsMeta" class="detail-session"></div>
           </div>
           <button id="activeRunsClose" class="detail-close" type="button" aria-label="Close">×</button>
@@ -394,9 +410,9 @@
             <button id="delegateSaveButton" class="detail-action-button" type="button">
               <span class="button-text">Save</span>
             </button>
-            <button id="delegateRunButton" class="detail-action-button delegate-auto-button" type="button" aria-label="Start or pause auto delegate">
+            <button id="delegateRunButton" class="detail-action-button delegate-auto-button" type="button" aria-label="Start or pause delegation">
               <span class="auto-icon" aria-hidden="true">&infin;</span>
-              <span class="button-text">Auto</span>
+              <span class="button-text">Start</span>
             </button>
             <button id="delegateClose" class="detail-close" type="button" aria-label="Close">×</button>
           </div>

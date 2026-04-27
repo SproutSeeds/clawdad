@@ -261,7 +261,7 @@ body::-webkit-scrollbar {
 
 .workspace-tabs {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: minmax(82px, 1fr) minmax(128px, 1.35fr) minmax(82px, 1fr);
   gap: 2px;
   padding: 4px;
   border: 1px solid rgba(255, 218, 185, 0.12);
@@ -282,8 +282,9 @@ body::-webkit-scrollbar {
   color: var(--muted);
   font-size: 0.86rem;
   font-weight: 850;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
   box-shadow: none;
+  white-space: nowrap;
   transition:
     background 160ms ease,
     color 160ms ease,
@@ -345,8 +346,66 @@ body::-webkit-scrollbar {
   display: none;
 }
 
+.project-subtabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid rgba(255, 218, 185, 0.1);
+  border-radius: 12px;
+  background: rgba(45, 5, 8, 0.42);
+}
+
+.project-subtab {
+  min-height: 32px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 850;
+  letter-spacing: 0;
+}
+
+.project-subtab.is-active {
+  background: rgba(103, 26, 22, 0.62);
+  color: rgba(255, 248, 238, 0.98);
+}
+
+.project-subtab:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
 .auto-workspace {
   gap: 10px;
+}
+
+.delegation-dashboard-head {
+  display: grid;
+  gap: 3px;
+  padding: 1px 2px 0;
+}
+
+.delegation-dashboard-title {
+  color: rgba(255, 248, 238, 0.98);
+  font-size: 1rem;
+  font-weight: 900;
+  letter-spacing: 0;
+}
+
+.files-workspace {
+  gap: 10px;
+}
+
+.files-workspace-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.files-workspace-list {
+  max-height: min(54vh, 540px);
+  overflow: auto;
 }
 
 .active-runs-inline-meta {
@@ -1547,7 +1606,7 @@ textarea:disabled {
 }
 
 .selected-delegate-list {
-  min-height: 180px;
+  min-height: 0;
 }
 
 .active-run-card {
@@ -1566,6 +1625,20 @@ textarea:disabled {
 .active-run-card:focus-visible {
   border-color: rgba(240, 208, 109, 0.38);
   background: rgba(65, 9, 12, 0.72);
+}
+
+.active-run-card.is-compact {
+  gap: 4px;
+  padding: 9px 10px;
+  background: rgba(45, 7, 9, 0.24);
+}
+
+.active-run-card.is-compact .active-run-title {
+  font-size: 0.92rem;
+}
+
+.active-run-card.is-compact .active-run-footer {
+  padding-top: 2px;
 }
 
 .active-run-title {
@@ -1635,6 +1708,19 @@ textarea:disabled {
 
 .active-run-chip {
   color: rgba(255, 226, 179, 0.8);
+}
+
+.hygiene-chip.is-ok {
+  color: rgba(185, 235, 190, 0.9);
+}
+
+.hygiene-chip.is-work {
+  color: rgba(240, 208, 109, 0.95);
+}
+
+.hygiene-chip.is-review,
+.hygiene-chip.is-blocked {
+  color: rgba(255, 177, 159, 0.95);
 }
 
 .active-run-open {
@@ -2028,6 +2114,7 @@ textarea:disabled {
   }
 
   .workspace-tabs {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 2px;
     padding: 3px;
     border-radius: 14px;

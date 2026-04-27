@@ -74,12 +74,17 @@ const elements = {
   filesWorkspaceTab: document.querySelector("#filesWorkspaceTab"),
   projectWorkspacePane: document.querySelector("#projectWorkspacePane"),
   autoWorkspacePane: document.querySelector("#autoWorkspacePane"),
+  filesWorkspacePane: document.querySelector("#filesWorkspacePane"),
   selectedProjectDelegateMeta: document.querySelector("#selectedProjectDelegateMeta"),
   selectedProjectDelegateState: document.querySelector("#selectedProjectDelegateState"),
   selectedProjectDelegateList: document.querySelector("#selectedProjectDelegateList"),
   activeRunsInlineMeta: document.querySelector("#activeRunsInlineMeta"),
   activeRunsInlineState: document.querySelector("#activeRunsInlineState"),
   activeRunsInlineList: document.querySelector("#activeRunsInlineList"),
+  filesWorkspaceMeta: document.querySelector("#filesWorkspaceMeta"),
+  filesWorkspaceState: document.querySelector("#filesWorkspaceState"),
+  filesWorkspaceList: document.querySelector("#filesWorkspaceList"),
+  filesWorkspaceRefreshButton: document.querySelector("#filesWorkspaceRefreshButton"),
   projectSelect: document.querySelector("#projectSelect"),
   projectAddButton: document.querySelector("#projectAddButton"),
   sessionControl: document.querySelector(".session-control"),
@@ -576,7 +581,8 @@ function projectDelegateLaneItems(project) {
       currentObjective: String(lane?.objective || liveState?.config?.objective || "").trim(),
       latestOutcome: String(status?.lastOutcomeSummary || lane?.latestOutcome || "").trim(),
       nextAction: String(status?.nextAction || lane?.nextAction || "").trim(),
-      hygieneState: String(lane?.hygieneState || "").trim(),
+      hygieneState: String(status?.hygieneState || lane?.hygieneState || "").trim(),
+      hygieneReason: String(status?.hygieneReason || lane?.hygieneReason || "").trim(),
       computeState: lane?.computeState || status?.computeBudget || null,
     };
   });
@@ -2378,6 +2384,7 @@ function normalizeProjectSummarySnapshot(snapshot) {
     sessionLabel: String(snapshot?.sessionLabel || "").trim() || "",
     sourceEntryCount: Number.parseInt(String(snapshot?.sourceEntryCount || "0"), 10) || 0,
     sourceSessionCount: Number.parseInt(String(snapshot?.sourceSessionCount || "0"), 10) || 0,
+    contextItemCount: Number.parseInt(String(snapshot?.contextItemCount || "0"), 10) || 0,
     summary: String(snapshot?.summary || ""),
   };
 }
@@ -2575,6 +2582,8 @@ function normalizeDelegateStatus(status) {
     computeBudget: normalizeDelegateComputeBudget(status?.computeBudget),
     lastOutcomeSummary: String(status?.lastOutcomeSummary || "").trim(),
     nextAction: String(status?.nextAction || "").trim(),
+    hygieneState: String(status?.hygieneState || status?.hygiene_state || "").trim(),
+    hygieneReason: String(status?.hygieneReason || status?.hygiene_reason || "").trim(),
     stopReason: String(status?.stopReason || "").trim(),
     pauseRequested: Boolean(status?.pauseRequested),
     error: String(status?.error || "").trim(),
@@ -2695,6 +2704,8 @@ function updateProjectDelegateStatus(projectPath, status) {
             status: normalizedStatus,
             latestOutcome: normalizedStatus?.lastOutcomeSummary || lane?.latestOutcome || "",
             nextAction: normalizedStatus?.nextAction || lane?.nextAction || "",
+            hygieneState: normalizedStatus?.hygieneState || lane?.hygieneState || "",
+            hygieneReason: normalizedStatus?.hygieneReason || lane?.hygieneReason || "",
             computeState: normalizedStatus?.computeBudget || lane?.computeState || null,
           };
         });
@@ -2706,7 +2717,8 @@ function updateProjectDelegateStatus(projectPath, status) {
             status: normalizedStatus,
             latestOutcome: normalizedStatus?.lastOutcomeSummary || "",
             nextAction: normalizedStatus?.nextAction || "",
-            hygieneState: "",
+            hygieneState: normalizedStatus?.hygieneState || "",
+            hygieneReason: normalizedStatus?.hygieneReason || "",
             computeState: normalizedStatus?.computeBudget || null,
           });
         }
@@ -4022,10 +4034,18 @@ function buildSummaryCard(snapshot) {
 
   const sourceMeta = document.createElement("div");
   sourceMeta.className = "summary-source-meta";
-  const sourceCountLabel = `${snapshot.sourceEntryCount} note${snapshot.sourceEntryCount === 1 ? "" : "s"}`;
-  const sessionCountLabel = `${snapshot.sourceSessionCount} session${snapshot.sourceSessionCount === 1 ? "" : "s"}`;
+  const sourceParts = [];
+  if (snapshot.sourceEntryCount > 0) {
+    sourceParts.push(`${snapshot.sourceEntryCount} note${snapshot.sourceEntryCount === 1 ? "" : "s"}`);
+  }
+  if (snapshot.sourceSessionCount > 0) {
+    sourceParts.push(`${snapshot.sourceSessionCount} session${snapshot.sourceSessionCount === 1 ? "" : "s"}`);
+  }
+  if (snapshot.contextItemCount > 0) {
+    sourceParts.push(`${snapshot.contextItemCount} dashboard signal${snapshot.contextItemCount === 1 ? "" : "s"}`);
+  }
   const providerText = snapshot.sessionLabel || providerLabel(snapshot.provider);
-  sourceMeta.textContent = `${providerText} • ${sourceCountLabel} • ${sessionCountLabel}`;
+  sourceMeta.textContent = `${providerText} • ${sourceParts.length > 0 ? sourceParts.join(" • ") : "project context"}`;
 
   head.append(timestamp, sourceMeta);
 
@@ -4206,23 +4226,23 @@ function delegateRunStateLabel(state) {
   const value = String(state || "").trim().toLowerCase();
   switch (value) {
     case "running":
-      return "Auto running";
+      return "Delegation running";
     case "paused":
-      return "Auto paused";
+      return "Delegation paused";
     case "blocked":
-      return "Auto blocked";
+      return "Delegation blocked";
     case "completed":
-      return "Auto completed";
+      return "Delegation completed";
     case "failed":
-      return "Auto failed";
+      return "Delegation failed";
     case "planning":
-      return "Auto planning";
+      return "Delegation planning";
     case "idle":
-      return "Auto idle";
+      return "Delegation idle";
     case "summary":
-      return "Auto summary";
+      return "Delegation summary";
     default:
-      return "Auto session";
+      return "Delegation session";
   }
 }
 
@@ -4264,15 +4284,31 @@ function delegateLaneDisplayText(project) {
   const lane = project?.delegateLane || {};
   const laneId = normalizeDelegateLaneId(project?.laneId || lane?.laneId || "default");
   const displayName = String(lane?.displayName || "").trim();
+  if (laneId === "default") {
+    return displayName && !/^default delegate$/iu.test(displayName) ? displayName : "Main lane";
+  }
   if (displayName) {
     return displayName;
   }
-  return laneId === "default" ? "Default delegate" : laneId;
+  return laneId;
 }
 
 function delegateLaneShortId(project) {
   const laneId = normalizeDelegateLaneId(project?.laneId || project?.delegateLane?.laneId || "default");
   return laneId === "default" ? "" : laneId;
+}
+
+function delegateLaneMetaLabel(project) {
+  const laneId = delegateLaneShortId(project);
+  if (!laneId) {
+    return "";
+  }
+  const displayName = delegateLaneDisplayText(project);
+  return displayName && displayName !== laneId ? `${displayName} (${laneId})` : laneId;
+}
+
+function delegateProjectCardTitle(project) {
+  return project?.displayName || project?.slug || fallbackProjectLabel(project?.path);
 }
 
 function delegateComputeStateText(computeState) {
@@ -4289,9 +4325,49 @@ function delegateComputeStateText(computeState) {
   return delegateComputeInlineText({ computeBudget: budget }) || String(budget.status || "").trim();
 }
 
-function buildDelegateLaneCard(project, { showProject = false } = {}) {
+function delegateHygieneStateText(hygieneState = "") {
+  switch (String(hygieneState || "").trim().toLowerCase()) {
+    case "clean":
+    case "ok":
+      return "Clean";
+    case "cleanup_queued":
+      return "Cleanup queued";
+    case "checkpoint_required":
+    case "needs_checkpoint":
+      return "Needs checkpoint";
+    case "dirty_external":
+      return "External dirt";
+    case "review":
+      return "Paused for review";
+    case "blocked":
+      return "Blocked";
+    default:
+      return hygieneState ? String(hygieneState).replace(/_/gu, " ") : "";
+  }
+}
+
+function delegateHygieneTone(hygieneState = "") {
+  switch (String(hygieneState || "").trim().toLowerCase()) {
+    case "clean":
+    case "ok":
+      return " is-ok";
+    case "cleanup_queued":
+    case "checkpoint_required":
+    case "needs_checkpoint":
+      return " is-work";
+    case "dirty_external":
+    case "review":
+      return " is-review";
+    case "blocked":
+      return " is-blocked";
+    default:
+      return "";
+  }
+}
+
+function buildDelegateLaneCard(project, { showProject = false, compact = false } = {}) {
   const button = document.createElement("button");
-  button.className = "active-run-card delegate-lane-card";
+  button.className = `active-run-card delegate-lane-card${compact ? " is-compact" : ""}`;
   button.type = "button";
   button.dataset.projectPath = project.path;
   button.dataset.laneId = normalizeDelegateLaneId(project.laneId || project?.delegateLane?.laneId || "default");
@@ -4302,13 +4378,12 @@ function buildDelegateLaneCard(project, { showProject = false } = {}) {
   const runId = String(liveStatus?.runId || "").trim();
   const title = document.createElement("div");
   title.className = "active-run-title";
-  title.textContent = delegateLaneDisplayText(project);
+  title.textContent = showProject ? delegateProjectCardTitle(project) : delegateLaneDisplayText(project);
 
   const meta = document.createElement("div");
   meta.className = "active-run-meta";
   meta.textContent = [
-    showProject ? project.displayName || project.slug || fallbackProjectLabel(project.path) : "",
-    delegateLaneShortId(project),
+    showProject ? delegateLaneMetaLabel(project) : "",
     ...activeRunCardMetaParts(liveStatus),
   ].filter(Boolean).join(" • ") || "Delegate lane";
 
@@ -4358,8 +4433,11 @@ function buildDelegateLaneCard(project, { showProject = false } = {}) {
   compute.textContent = delegateComputeStateText(project.computeState) || (runId ? `run ${sessionFingerprint(runId)}` : "delegate");
 
   const hygiene = document.createElement("span");
-  hygiene.className = "active-run-chip";
-  hygiene.textContent = project.hygieneState ? `hygiene ${project.hygieneState}` : "";
+  hygiene.className = `active-run-chip hygiene-chip${delegateHygieneTone(project.hygieneState)}`;
+  hygiene.textContent = delegateHygieneStateText(project.hygieneState);
+  if (project.hygieneReason) {
+    hygiene.title = project.hygieneReason;
+  }
   hygiene.hidden = !hygiene.textContent;
 
   const open = document.createElement("span");
@@ -4368,9 +4446,9 @@ function buildDelegateLaneCard(project, { showProject = false } = {}) {
 
   footer.append(compute, hygiene, open);
   button.append(title, meta);
-  if (body.childElementCount > 0) {
+  if (!compact && body.childElementCount > 0) {
     button.append(body);
-  } else {
+  } else if (!compact) {
     button.append(summary);
   }
   button.append(footer);
@@ -4378,7 +4456,7 @@ function buildDelegateLaneCard(project, { showProject = false } = {}) {
 }
 
 function setWorkspaceMode(mode) {
-  const nextMode = mode === "auto" ? "auto" : "project";
+  const nextMode = mode === "auto" || mode === "files" ? mode : "project";
   if (state.workspaceMode === nextMode) {
     return;
   }
@@ -4386,11 +4464,13 @@ function setWorkspaceMode(mode) {
   renderAll();
   if (nextMode === "auto") {
     void primeActiveRunsModal().then(renderAll).catch(showError);
+  } else if (nextMode === "files") {
+    void refreshArtifacts({ force: false }).then(renderAll).catch(showError);
   }
 }
 
 function renderWorkspaceTabs() {
-  const mode = state.workspaceMode === "auto" ? "auto" : "project";
+  const mode = ["auto", "files"].includes(state.workspaceMode) ? state.workspaceMode : "project";
   const activeCount = activeDelegateProjects().length;
   const hasProject = !state.projectsLoading && Boolean(state.selectedProject);
 
@@ -4405,7 +4485,9 @@ function renderWorkspaceTabs() {
     elements.autoWorkspaceTab.setAttribute("aria-pressed", String(mode === "auto"));
     elements.autoWorkspaceTab.setAttribute(
       "aria-label",
-      activeCount > 0 ? `Auto, ${activeCount} active lane${activeCount === 1 ? "" : "s"}` : "Auto",
+      activeCount > 0
+        ? `Delegation dashboard, ${activeCount} live lane${activeCount === 1 ? "" : "s"}`
+        : "Delegation dashboard",
     );
     elements.autoWorkspaceTab.tabIndex = 0;
   }
@@ -4415,15 +4497,19 @@ function renderWorkspaceTabs() {
     elements.summaryWorkspaceTab.setAttribute("aria-disabled", String(!hasProject));
   }
   if (elements.filesWorkspaceTab) {
-    elements.filesWorkspaceTab.classList.remove("is-active");
-    elements.filesWorkspaceTab.disabled = !hasProject;
-    elements.filesWorkspaceTab.setAttribute("aria-disabled", String(!hasProject));
+    elements.filesWorkspaceTab.classList.toggle("is-active", mode === "files");
+    elements.filesWorkspaceTab.disabled = state.projectsLoading;
+    elements.filesWorkspaceTab.setAttribute("aria-disabled", String(state.projectsLoading));
+    elements.filesWorkspaceTab.setAttribute("aria-pressed", String(mode === "files"));
   }
   if (elements.projectWorkspacePane) {
     elements.projectWorkspacePane.hidden = mode !== "project";
   }
   if (elements.autoWorkspacePane) {
     elements.autoWorkspacePane.hidden = mode !== "auto";
+  }
+  if (elements.filesWorkspacePane) {
+    elements.filesWorkspacePane.hidden = mode !== "files";
   }
 }
 
@@ -4439,8 +4525,8 @@ function renderSelectedProjectDelegateCard() {
   if (elements.selectedProjectDelegateMeta) {
     elements.selectedProjectDelegateMeta.textContent =
       project?.path
-        ? `${project.displayName || project.slug || fallbackProjectLabel(project.path)} • ${lanes.length} lane${lanes.length === 1 ? "" : "s"}`
-        : "Selected project";
+        ? `Selected project • ${project.displayName || project.slug || fallbackProjectLabel(project.path)} • ${lanes.length} lane${lanes.length === 1 ? "" : "s"}`
+        : "Selected project lanes";
   }
 
   if (!project?.path) {
@@ -4454,7 +4540,7 @@ function renderSelectedProjectDelegateCard() {
       { empty: false },
     );
   } else {
-    setText(elements.selectedProjectDelegateState, "Tap a lane to open its delegate view.", { empty: false });
+    setText(elements.selectedProjectDelegateState, "Paused and idle lanes for the selected project.", { empty: false });
   }
 
   const renderKey = JSON.stringify(
@@ -4467,6 +4553,7 @@ function renderSelectedProjectDelegateCard() {
       lane.latestOutcome || "",
       lane.nextAction || "",
       lane.hygieneState || "",
+      lane.hygieneReason || "",
       delegateComputeStateText(lane.computeState),
       Number(Boolean(delegateStateFor(lane.path, lane.laneId).loading)),
     ]),
@@ -4483,7 +4570,7 @@ function renderSelectedProjectDelegateCard() {
     elements.selectedProjectDelegateList.append(card);
   } else {
     for (const lane of lanes) {
-      elements.selectedProjectDelegateList.append(buildDelegateLaneCard(lane));
+      elements.selectedProjectDelegateList.append(buildDelegateLaneCard(lane, { compact: true }));
     }
   }
   elements.selectedProjectDelegateList.dataset.renderKey = renderKey;
@@ -4501,18 +4588,18 @@ function renderActiveRunsInline() {
   if (elements.activeRunsInlineMeta) {
     elements.activeRunsInlineMeta.textContent =
       activeCount > 0
-        ? `${activeCount} active lane${activeCount === 1 ? "" : "s"}`
-        : "No active lanes";
+        ? `${activeCount} live lane${activeCount === 1 ? "" : "s"}`
+        : "No live lanes";
   }
 
   if (activeCount === 0) {
-    setText(elements.activeRunsInlineState, "Nothing is running right now.", { empty: false });
+    setText(elements.activeRunsInlineState, "No delegation is running right now.", { empty: false });
   } else if (loadingCount > 0) {
     setText(elements.activeRunsInlineState, `Refreshing ${loadingCount} lane${loadingCount === 1 ? "" : "s"}`, {
       empty: false,
     });
   } else {
-    setText(elements.activeRunsInlineState, "Tap a lane to open its delegate view.", { empty: false });
+    setText(elements.activeRunsInlineState, "Open a live lane to inspect its run.", { empty: false });
   }
 
   const renderKey = JSON.stringify(
@@ -4533,6 +4620,7 @@ function renderActiveRunsInline() {
         project.latestOutcome || liveStatus?.lastOutcomeSummary || "",
         project.nextAction || liveStatus?.nextAction || "",
         project.hygieneState || "",
+        project.hygieneReason || "",
         delegateComputeStateText(project.computeState),
         liveStatus?.error || "",
         Number(Boolean(delegateState.loading)),
@@ -4548,7 +4636,7 @@ function renderActiveRunsInline() {
   if (projects.length === 0) {
     const card = document.createElement("div");
     card.className = "history-state-card";
-    card.textContent = "No active delegate runs.";
+    card.textContent = "No live delegation runs.";
     elements.activeRunsInlineList.append(card);
   } else {
     for (const project of projects) {
@@ -4587,15 +4675,15 @@ function renderActiveRunsModal() {
 
   elements.activeRunsMeta.textContent =
     activeCount > 0
-      ? `${activeCount} active lane${activeCount === 1 ? "" : "s"}`
-      : "No active delegates";
+      ? `${activeCount} live lane${activeCount === 1 ? "" : "s"}`
+      : "No live delegation";
 
   if (activeCount === 0) {
-    setText(elements.activeRunsState, "Nothing is running right now.", { empty: false });
+    setText(elements.activeRunsState, "No delegation is running right now.", { empty: false });
   } else if (loadingCount > 0) {
     setText(elements.activeRunsState, `Refreshing ${loadingCount} lane${loadingCount === 1 ? "" : "s"}`, { empty: false });
   } else {
-    setText(elements.activeRunsState, "Tap a lane to open its delegate view.", {
+    setText(elements.activeRunsState, "Open a live lane to inspect its run.", {
       empty: false,
     });
   }
@@ -4618,6 +4706,7 @@ function renderActiveRunsModal() {
         project.latestOutcome || liveStatus?.lastOutcomeSummary || "",
         project.nextAction || liveStatus?.nextAction || "",
         project.hygieneState || "",
+        project.hygieneReason || "",
         delegateComputeStateText(project.computeState),
         liveStatus?.error || "",
         Number(Boolean(delegateState.loading)),
@@ -4630,7 +4719,7 @@ function renderActiveRunsModal() {
     if (projects.length === 0) {
       const card = document.createElement("div");
       card.className = "history-state-card";
-      card.textContent = "No active delegate runs.";
+      card.textContent = "No live delegation runs.";
       elements.activeRunsList.append(card);
     } else {
       for (const project of projects) {
@@ -5283,7 +5372,7 @@ async function downloadArtifact(artifact) {
   }
 }
 
-function buildArtifactCard(artifact, { compact = false } = {}) {
+function buildArtifactCard(artifact, { compact = false, projectLabel = "" } = {}) {
   const card = document.createElement("article");
   card.className = `artifact-card${compact ? " is-compact" : ""}`;
 
@@ -5305,7 +5394,7 @@ function buildArtifactCard(artifact, { compact = false } = {}) {
 
   const pathLabel = document.createElement("div");
   pathLabel.className = "artifact-path";
-  pathLabel.textContent = artifact.relativePath;
+  pathLabel.textContent = [projectLabel, artifact.relativePath].filter(Boolean).join(" • ");
 
   const actions = document.createElement("div");
   actions.className = "artifact-actions";
@@ -5412,6 +5501,99 @@ function renderArtifactShelf() {
     }
   }
   elements.artifactShelfList.dataset.renderKey = renderKey;
+}
+
+function projectLabelForPath(projectPath = "") {
+  const project = projectByPath(projectPath);
+  return project?.displayName || project?.slug || fallbackProjectLabel(projectPath);
+}
+
+function allArtifactItems() {
+  const items = [];
+  for (const [projectPath, artifactState] of Object.entries(state.artifactsByProject)) {
+    for (const artifact of Array.isArray(artifactState?.items) ? artifactState.items : []) {
+      items.push({
+        ...artifact,
+        projectPath: artifact.projectPath || projectPath,
+      });
+    }
+  }
+  return items.sort((left, right) => {
+    const leftTime = Date.parse(left.modifiedAt || "");
+    const rightTime = Date.parse(right.modifiedAt || "");
+    return (Number.isFinite(rightTime) ? rightTime : 0) - (Number.isFinite(leftTime) ? leftTime : 0);
+  });
+}
+
+function renderFilesWorkspace() {
+  if (!elements.filesWorkspaceList) {
+    return;
+  }
+
+  const projectCount = state.projects.length;
+  const artifactStates = Object.values(state.artifactsByProject);
+  const loadingCount = artifactStates.filter((artifactState) => artifactState?.loading).length;
+  const items = allArtifactItems();
+
+  if (elements.filesWorkspaceMeta) {
+    elements.filesWorkspaceMeta.textContent =
+      projectCount > 0
+        ? `${items.length} file${items.length === 1 ? "" : "s"} across ${projectCount} project${projectCount === 1 ? "" : "s"}`
+        : "Recent agent files";
+  }
+  if (elements.filesWorkspaceRefreshButton) {
+    elements.filesWorkspaceRefreshButton.disabled = state.projectsLoading || loadingCount > 0;
+    const label = elements.filesWorkspaceRefreshButton.querySelector(".button-text");
+    if (label) {
+      label.textContent = loadingCount > 0 ? "Refreshing..." : "Refresh";
+    }
+  }
+
+  if (state.projectsLoading) {
+    setText(elements.filesWorkspaceState, "Loading projects", { empty: false });
+  } else if (loadingCount > 0 && items.length === 0) {
+    setText(elements.filesWorkspaceState, "Checking for files", { empty: false });
+  } else if (items.length > 0) {
+    setText(elements.filesWorkspaceState, `${items.length} recent file${items.length === 1 ? "" : "s"}`, { empty: false });
+  } else {
+    setText(elements.filesWorkspaceState, "No agent files yet", { empty: false });
+  }
+
+  const renderKey = JSON.stringify({
+    loadingCount,
+    downloadPendingId: state.artifactDownloadPendingId,
+    items: items.map((artifact) => [
+      artifact.id,
+      artifact.projectPath,
+      artifact.relativePath,
+      artifact.modifiedAt,
+      artifact.size,
+      copyFeedbackActive(`artifact-download:${artifact.id}`),
+    ]),
+  });
+  if (elements.filesWorkspaceList.dataset.renderKey === renderKey) {
+    return;
+  }
+
+  clearNode(elements.filesWorkspaceList);
+  if (state.projectsLoading || (loadingCount > 0 && items.length === 0)) {
+    const card = document.createElement("div");
+    card.className = "history-state-card";
+    card.textContent = "Looking for files...";
+    elements.filesWorkspaceList.append(card);
+  } else if (items.length === 0) {
+    const card = document.createElement("div");
+    card.className = "history-state-card";
+    card.textContent = "Files agents save into .clawdad/artifacts will show up here.";
+    elements.filesWorkspaceList.append(card);
+  } else {
+    for (const artifact of items.slice(0, 80)) {
+      elements.filesWorkspaceList.append(buildArtifactCard(artifact, {
+        projectLabel: projectLabelForPath(artifact.projectPath),
+      }));
+    }
+  }
+  elements.filesWorkspaceList.dataset.renderKey = renderKey;
 }
 
 function renderArtifactsModal() {
@@ -5638,7 +5820,7 @@ function renderDelegateModal() {
     } else if (status?.state === "running") {
       runButtonLabel.textContent = "Pause";
     } else {
-      runButtonLabel.textContent = "Auto";
+      runButtonLabel.textContent = "Start";
     }
   }
   const runButtonIcon = elements.delegateRunButton.querySelector(".auto-icon");
@@ -5713,12 +5895,12 @@ function renderDelegateModal() {
   if (!delegateState.initialized && delegateState.loading) {
     const card = document.createElement("div");
     card.className = "history-state-card";
-    card.textContent = "Loading auto history...";
+    card.textContent = "Loading delegation history...";
     elements.delegateRunCardList.append(card);
   } else if (runCards.length === 0) {
     const card = document.createElement("div");
     card.className = "history-state-card";
-    card.textContent = "No auto history yet.";
+    card.textContent = "No delegation history yet.";
     elements.delegateRunCardList.append(card);
   } else {
     for (const run of runCards) {
@@ -5756,7 +5938,7 @@ function renderDelegateModal() {
     } else if (!runId) {
       const card = document.createElement("div");
       card.className = "history-state-card";
-      card.textContent = "Choose an auto session to see its log.";
+      card.textContent = "Choose a delegation run to see its log.";
       elements.delegateRunList.append(card);
     } else if (!logMatchesSelection || (runLog.loading && !runLog.initialized)) {
       const card = document.createElement("div");
@@ -5952,26 +6134,24 @@ function updateActiveRunsButtonAvailability() {
     elements.activeRunsButton.setAttribute(
       "aria-label",
       activeCount > 0
-        ? `Open active delegate lanes, ${activeCount} active`
-        : "No active lanes",
+        ? `Open delegation dashboard, ${activeCount} live lane${activeCount === 1 ? "" : "s"}`
+        : "No live delegation lanes",
     );
-    elements.activeRunsButton.title = activeCount > 0 ? "Active lanes" : "No active lanes";
+    elements.activeRunsButton.title = activeCount > 0 ? "Delegation dashboard" : "No live delegation lanes";
   }
 }
 
 function updateArtifactsButtonAvailability() {
-  const disabled = state.projectsLoading || !state.selectedProject;
+  const projectDisabled = state.projectsLoading || !state.selectedProject;
   if (elements.projectArtifactsButton) {
-    elements.projectArtifactsButton.disabled = disabled;
+    elements.projectArtifactsButton.disabled = projectDisabled;
   }
   if (elements.filesWorkspaceTab) {
-    elements.filesWorkspaceTab.disabled = disabled;
-    elements.filesWorkspaceTab.setAttribute("aria-disabled", String(disabled));
-    if (disabled) {
-      elements.filesWorkspaceTab.title = "Select a project first";
-    }
+    elements.filesWorkspaceTab.disabled = state.projectsLoading;
+    elements.filesWorkspaceTab.setAttribute("aria-disabled", String(state.projectsLoading));
+    elements.filesWorkspaceTab.title = state.projectsLoading ? "Loading projects" : "Files";
   }
-  if (disabled && elements.projectArtifactsOrb) {
+  if (projectDisabled && elements.projectArtifactsOrb) {
     elements.projectArtifactsOrb.hidden = true;
   }
 }
@@ -6019,6 +6199,7 @@ function renderAll() {
   renderActiveRunsInline();
   renderQueueList();
   renderArtifactShelf();
+  renderFilesWorkspace();
   renderModal();
   renderSessionImportModal();
   renderSessionTitleModal();
@@ -6276,6 +6457,9 @@ async function refreshProjects() {
       if (state.workspaceMode === "auto") {
         void primeActiveRunsModal().then(renderAll).catch(() => {});
       }
+      if (state.workspaceMode === "files") {
+        void refreshArtifacts({ force: false }).then(renderAll).catch(() => {});
+      }
     } finally {
       state.projectsLoading = false;
       renderAll();
@@ -6373,6 +6557,13 @@ async function refreshDelegates() {
 
 function artifactProjectsNeedingRefresh() {
   const targets = new Set();
+  if (state.workspaceMode === "files") {
+    for (const project of state.projects) {
+      if (project?.path) {
+        targets.add(project.path);
+      }
+    }
+  }
   if (state.selectedProject) {
     targets.add(state.selectedProject);
   }
@@ -7269,7 +7460,7 @@ async function loadDelegateRunLog(
     setDelegateState(projectPath, {
       runList: Array.isArray(payload.delegateRuns)
         ? payload.delegateRuns.map(normalizeDelegateRunInfo)
-        : delegateStateFor(projectPath).runList,
+        : delegateStateFor(projectPath, normalizedLaneId).runList,
       latestRunSummarySnapshot: payload.latestRunSummarySnapshot
         ? normalizeDelegateRunSummarySnapshot(payload.latestRunSummarySnapshot)
         : delegateStateFor(projectPath, normalizedLaneId).latestRunSummarySnapshot,
@@ -8047,7 +8238,10 @@ function bindEvents() {
     if (elements.filesWorkspaceTab.disabled) {
       return;
     }
-    void openArtifactsModal();
+    setWorkspaceMode("files");
+  });
+  elements.filesWorkspaceRefreshButton?.addEventListener("click", () => {
+    void refreshArtifacts({ force: true }).then(renderAll).catch(showError);
   });
   elements.projectSummaryButton?.addEventListener("click", () => {
     void openProjectSummary();
