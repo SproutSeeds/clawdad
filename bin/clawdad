@@ -36,6 +36,7 @@ Commands:
                                 Opt into continuity orchestration for a delegate lane
   delegate-pause <project>      Pause autonomous delegate mode for a project
   delegate-reset <project>      Reset the delegate brief to the default template
+  sessions-doctor [project]     Audit/repair stale sessions and delegate lanes
   watchtower <project>          Observe delegation read-only and index review cards
   feed <tail|search|review>     Read the delegation review feed
   track-session <project> <session-id>
@@ -523,7 +524,7 @@ cmd_remove_session() {
   session_id=$(echo "$session_json" | "$CLAWDAD_JQ" -r '.resumeSessionId // ""')
 
   if [[ -z "$session_id" ]]; then
-    clawdad_error "Session '$selector' has no resumable session id"
+    clawdad_error "Session '$selector' has no resumable session id; nothing was removed"
     return 1
   fi
 
@@ -966,6 +967,10 @@ cmd_delegate_reset() {
   run_server_helper delegate-reset "$@"
 }
 
+cmd_sessions_doctor() {
+  run_server_helper sessions-doctor "$@"
+}
+
 cmd_print_launch_agent() {
   run_server_helper print-launch-agent "$@"
 }
@@ -998,6 +1003,7 @@ main() {
     supervise)  cmd_supervise "$@" ;;
     delegate-pause|delegate-stop) cmd_delegate_pause "$@" ;;
     delegate-reset) cmd_delegate_reset "$@" ;;
+    sessions-doctor|session-doctor) cmd_sessions_doctor "$@" ;;
     watchtower) cmd_watchtower "$@" ;;
     feed)       cmd_feed "$@" ;;
     track-session) cmd_track_session "$@" ;;

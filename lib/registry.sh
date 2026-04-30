@@ -134,6 +134,7 @@ _state_upgrade_schema() {
           | .dispatch_count = (.dispatch_count // 0)
           | .registered_at = (.registered_at // null)
           | .active_session_id = (.active_session_id // "")
+          | .quarantined_sessions = (.quarantined_sessions // {})
           | .sessions = (.sessions // {})
           | .sessions |= with_entries(
               .value |= (
@@ -194,6 +195,7 @@ state_ensure_project() {
         dispatch_count: 0,
         registered_at: $ts,
         active_session_id: "",
+        quarantined_sessions: {},
         sessions: {}
       }' "$CLAWDAD_STATE")
     _state_write "$updated" || {
@@ -261,22 +263,23 @@ state_register_session() {
     --arg seeded "$session_seeded" \
     --arg ts "$ts" '
       .projects[$path].sessions = (.projects[$path].sessions // {})
+      | (.projects[$path].sessions[$session] // {}) as $prior
       | .projects[$path].sessions[$session] = (
-          (.projects[$path].sessions[$session] // {})
+          $prior
           | (if $provider == "codex" and (((.provider // "") == "chimera") or ((.provider_override // "") == "chimera")) then "chimera" else $provider end) as $effective_provider
-          | . + {
+          | $prior + {
               slug: $slug,
               provider: $effective_provider,
-              provider_override: (if $provider == "chimera" or ((.provider_override // "") == "chimera") then "chimera" else (.provider_override // "") end),
-              provider_session_seeded: ((.projects[$path].sessions[$session].provider_session_seeded // $seeded)),
-              tracked_at: ((.projects[$path].sessions[$session].tracked_at // $ts)),
-              last_selected_at: (.projects[$path].sessions[$session].last_selected_at // null),
-              dispatch_count: ((.projects[$path].sessions[$session].dispatch_count // 0) | tonumber? // 0),
-              last_dispatch: (.projects[$path].sessions[$session].last_dispatch // null),
-              last_response: (.projects[$path].sessions[$session].last_response // null),
-              status: (.projects[$path].sessions[$session].status // "idle"),
-              local_only: (.projects[$path].sessions[$session].local_only // "false"),
-              orp_error: (.projects[$path].sessions[$session].orp_error // "")
+              provider_override: (if $provider == "chimera" or (($prior.provider_override // "") == "chimera") then "chimera" else ($prior.provider_override // "") end),
+              provider_session_seeded: ($prior.provider_session_seeded // $seeded),
+              tracked_at: ($prior.tracked_at // $ts),
+              last_selected_at: ($prior.last_selected_at // null),
+              dispatch_count: (($prior.dispatch_count // 0) | tonumber? // 0),
+              last_dispatch: ($prior.last_dispatch // null),
+              last_response: ($prior.last_response // null),
+              status: ($prior.status // "idle"),
+              local_only: ($prior.local_only // "false"),
+              orp_error: ($prior.orp_error // "")
             }
         )
     ' "$CLAWDAD_STATE")
@@ -354,6 +357,79 @@ state_update_session() {
   fi
   _state_lock_release
   return $exit_code
+}
+
+state_quarantine_session() {
+  local project_path="$1" session_id="$2" reason="${3:-quarantined}" detail="${4:-}"
+  state_init
+  _state_lock_acquire || return 1
+  state_ensure_project "$project_path" || {
+    _state_lock_release
+    return 1
+  }
+
+  local updated ts
+  ts="$(iso_timestamp)"
+  updated=$("$CLAWDAD_JQ" \
+    --arg path "$project_path" \
+    --arg session "$session_id" \
+    --arg reason "$reason" \
+    --arg detail "$detail" \
+    --arg ts "$ts" '
+      .projects[$path].quarantined_sessions = (.projects[$path].quarantined_sessions // {})
+      | (.projects[$path].sessions[$session] // .projects[$path].quarantined_sessions[$session] // {}) as $prior
+      | .projects[$path].quarantined_sessions[$session] = (
+          $prior + {
+            slug: ($prior.slug // ""),
+            provider: ($prior.provider // "codex"),
+            status: ($prior.status // "failed"),
+            dispatch_count: (($prior.dispatch_count // 0) | tonumber? // 0),
+            last_dispatch: ($prior.last_dispatch // null),
+            last_response: ($prior.last_response // null),
+            reason: $reason,
+            detail: $detail,
+            quarantined_at: $ts
+          }
+        )
+      | if (.projects[$path].sessions[$session] // null) != null then
+          .projects[$path].sessions[$session].quarantined = "true"
+          | .projects[$path].sessions[$session].quarantine_reason = $reason
+          | .projects[$path].sessions[$session].quarantine_detail = $detail
+          | .projects[$path].sessions[$session].quarantined_at = $ts
+        else
+          .
+        end
+    ' "$CLAWDAD_STATE")
+  local exit_code=$?
+  if (( exit_code == 0 )); then
+    _state_write "$updated" || exit_code=$?
+  fi
+  _state_lock_release
+  return $exit_code
+}
+
+state_session_is_quarantined() {
+  local project_path="$1" session_id="$2"
+  [[ -f "$CLAWDAD_STATE" ]] || return 1
+  "$CLAWDAD_JQ" -e \
+    --arg path "$project_path" \
+    --arg session "$session_id" '
+      ((.projects[$path].quarantined_sessions[$session] // null) != null)
+      or ((.projects[$path].sessions[$session].quarantined // "false") == "true")
+    ' "$CLAWDAD_STATE" >/dev/null 2>&1
+}
+
+state_session_quarantine_reason() {
+  local project_path="$1" session_id="$2"
+  if [[ -f "$CLAWDAD_STATE" ]]; then
+    "$CLAWDAD_JQ" -r \
+      --arg path "$project_path" \
+      --arg session "$session_id" '
+        .projects[$path].quarantined_sessions[$session].reason
+        // .projects[$path].sessions[$session].quarantine_reason
+        // "quarantined"
+      ' "$CLAWDAD_STATE" 2>/dev/null
+  fi
 }
 
 state_increment_session() {
@@ -550,10 +626,18 @@ registry_codex_tracked_session_ids_for_path() {
   if [[ -f "$CLAWDAD_STATE" ]]; then
     "$CLAWDAD_JQ" -r \
       --arg path "$project_path" '
-        (.projects[$path].sessions // {})
-        | to_entries[]?
-        | select((.value.provider // "codex") == "codex")
-        | .key
+        (
+          (.projects[$path].sessions // {})
+          | to_entries[]?
+          | select((.value.provider // "codex") == "codex")
+          | .key
+        ),
+        (
+          (.projects[$path].quarantined_sessions // {})
+          | to_entries[]?
+          | select((.value.provider // "codex") == "codex")
+          | .key
+        )
       ' "$CLAWDAD_STATE" 2>/dev/null
   fi
 }
@@ -612,7 +696,15 @@ registry_remove() {
   fi
   orp_cmd+=("--json")
 
-  "${orp_cmd[@]}" &>/dev/null
+  local remove_result remove_exit
+  if remove_result=$("${orp_cmd[@]}" 2>&1); then
+    remove_exit=0
+  else
+    remove_exit=$?
+  fi
+  if (( remove_exit != 0 )); then
+    clawdad_warn "Failed to remove session from ORP workspace; removing local state only: $remove_result"
+  fi
 
   # Clean up local state
   if [[ -f "$CLAWDAD_STATE" ]]; then
@@ -625,7 +717,7 @@ registry_remove() {
             .
           else
             .projects[$path].sessions |= del(.[$session])
-            | if ((.projects[$path].sessions // {}) | length) == 0 then
+            | if (((.projects[$path].sessions // {}) | length) == 0 and ((.projects[$path].quarantined_sessions // {}) | length) == 0) then
                 .projects |= del(.[$path])
               elif .projects[$path].active_session_id == $session then
                 .projects[$path].active_session_id = ""
@@ -841,6 +933,9 @@ _registry_tabs_for_path_tsv() {
 
 registry_session_exists() {
   local project_path="$1" session_id="$2"
+  if state_session_is_quarantined "$project_path" "$session_id"; then
+    return 1
+  fi
   local match
   match=$(_orp_tabs_json | "$CLAWDAD_JQ" -r \
     --arg path "$project_path" \
@@ -873,12 +968,17 @@ registry_has_slug_in_project() {
   match=$(_orp_tabs_json | "$CLAWDAD_JQ" -r \
     --arg path "$project_path" \
     --arg title "$slug" \
-    --arg exclude "$exclude_session_id" '
-      .tabs[]
+    --arg exclude "$exclude_session_id" \
+    --slurpfile state "$CLAWDAD_STATE" '
+      ($state[0].projects[$path].sessions // {}) as $session_state
+      | ($state[0].projects[$path].quarantined_sessions // {}) as $quarantined
+      | .tabs[]
       | select(
           .path == $path
           and (.title // "") == $title
           and ($exclude == "" or (.resumeSessionId // "") != $exclude)
+          and (($quarantined[.resumeSessionId] // null) == null)
+          and (($session_state[.resumeSessionId].quarantined // "false") != "true")
         )
       | .title
     ' | head -1)
@@ -891,11 +991,15 @@ registry_has_slug_in_project() {
       --arg path "$project_path" \
       --arg title "$slug" \
       --arg exclude "$exclude_session_id" '
+        (.projects[$path].quarantined_sessions // {}) as $quarantined
+        |
         (.projects[$path].sessions // {})
         | to_entries[]?
         | select(
             (.value.slug // "") == $title
             and ($exclude == "" or .key != $exclude)
+            and (($quarantined[.key] // null) == null)
+            and ((.value.quarantined // "false") != "true")
           )
         | .value.slug
       ' "$CLAWDAD_STATE" 2>/dev/null | head -1)
@@ -909,8 +1013,19 @@ _registry_default_session_id() {
   local base_slug="${project_path:t}"
   _orp_tabs_json | "$CLAWDAD_JQ" -r \
     --arg path "$project_path" \
-    --arg base_slug "$base_slug" '
-      [ .tabs[] | select(.path == $path and (.resumeSessionId // "") != "") ] as $tabs
+    --arg base_slug "$base_slug" \
+    --slurpfile state "$CLAWDAD_STATE" '
+      ($state[0].projects[$path].sessions // {}) as $session_state
+      | ($state[0].projects[$path].quarantined_sessions // {}) as $quarantined
+      | [
+          .tabs[]
+          | select(
+              .path == $path
+              and (.resumeSessionId // "") != ""
+              and (($quarantined[.resumeSessionId] // null) == null)
+              and (($session_state[.resumeSessionId].quarantined // "false") != "true")
+            )
+        ] as $tabs
       | if ($tabs | length) == 0 then
           ""
         else
@@ -933,10 +1048,22 @@ _registry_default_local_session_id() {
   "$CLAWDAD_JQ" -r \
     --arg path "$project_path" '
       (.projects[$path].active_session_id // "") as $active
-      | if $active != "" and ((.projects[$path].sessions[$active] // null) != null) then
+      | (.projects[$path].quarantined_sessions // {}) as $quarantined
+      | (.projects[$path].sessions // {}) as $sessions
+      | if (
+          $active != ""
+          and (($sessions[$active] // null) != null)
+          and (($quarantined[$active] // null) == null)
+          and (($sessions[$active].quarantined // "false") != "true")
+        ) then
           $active
         else
-          ((.projects[$path].sessions // {}) | to_entries | .[0].key // "")
+          (
+            $sessions
+            | to_entries
+            | map(select((($quarantined[.key] // null) == null) and ((.value.quarantined // "false") != "true")))
+            | .[0].key // ""
+          )
         end
     ' "$CLAWDAD_STATE" 2>/dev/null
 }
@@ -952,14 +1079,19 @@ registry_local_session_json() {
     --arg defaultProvider "$CLAWDAD_DEFAULT_PROVIDER" '
       (.projects[$path] // {}) as $project
       | ($project.sessions // {}) as $sessions
+      | ($project.quarantined_sessions // {}) as $quarantined
       | (if $selector != "" then $selector else ($project.active_session_id // "") end) as $target
       | (
           [
             $sessions
             | to_entries[]?
             | select(
-                ($target != "" and (.key == $target or (.value.slug // "") == $target))
-                or ($target == "" and .key == ($project.active_session_id // ""))
+                (
+                  ($target != "" and (.key == $target or (.value.slug // "") == $target))
+                  or ($target == "" and .key == ($project.active_session_id // ""))
+                )
+                and (($quarantined[.key] // null) == null)
+                and ((.value.quarantined // "false") != "true")
               )
           ][0]
         ) as $entry
@@ -1072,12 +1204,18 @@ registry_session_json() {
   local session_json
   session_json=$(_orp_tabs_json | "$CLAWDAD_JQ" -c \
     --arg path "$project_path" \
-    --arg selector "$selector" '
+    --arg selector "$selector" \
+    --slurpfile state "$CLAWDAD_STATE" '
+      ($state[0].projects[$path].sessions // {}) as $session_state
+      | ($state[0].projects[$path].quarantined_sessions // {}) as $quarantined
+      |
       [
         .tabs[]
         | select(
             .path == $path
             and (((.resumeTool // "codex") == "codex") or ((.resumeTool // "codex") == "chimera"))
+            and (($quarantined[.resumeSessionId] // null) == null)
+            and (($session_state[.resumeSessionId].quarantined // "false") != "true")
           )
       ] as $tabs
       | (
@@ -1114,6 +1252,7 @@ registry_list_sessions_json() {
     --arg defaultProvider "$CLAWDAD_DEFAULT_PROVIDER" \
     --slurpfile state "$CLAWDAD_STATE" '
       ($state[0].projects[$path].sessions // {}) as $session_state
+      | ($state[0].projects[$path].quarantined_sessions // {}) as $quarantined
       | (
           [
             .tabs[]
@@ -1121,6 +1260,8 @@ registry_list_sessions_json() {
                 .path == $path
                 and (.resumeSessionId // "") != ""
                 and (((.resumeTool // "codex") == "codex") or ((.resumeTool // "codex") == "chimera"))
+                and (($quarantined[.resumeSessionId] // null) == null)
+                and (($session_state[.resumeSessionId].quarantined // "false") != "true")
               )
             | . as $tab
             | (if (($session_state[$tab.resumeSessionId].provider_override // "") != "") then ($session_state[$tab.resumeSessionId].provider_override // "") elif (($tab.resumeTool // "codex") == "codex" and (($session_state[$tab.resumeSessionId].provider // "") == "chimera")) then "chimera" else ($tab.resumeTool // "codex") end) as $provider
@@ -1146,6 +1287,8 @@ registry_list_sessions_json() {
             | to_entries[]?
             | . as $entry
             | select(($orp_session_ids | index($entry.key)) == null)
+            | select(($quarantined[$entry.key] // null) == null)
+            | select(($entry.value.quarantined // "false") != "true")
             | (if ($entry.value.provider_override // "") != "" then $entry.value.provider_override elif ($entry.value.provider // "") == "" then $defaultProvider else $entry.value.provider end) as $provider
             | {
                 slug: ($entry.value.slug // ""),

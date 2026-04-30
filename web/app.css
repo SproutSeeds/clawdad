@@ -431,7 +431,7 @@ body::-webkit-scrollbar {
 
 .project-control {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 48px 48px;
+  grid-template-columns: minmax(0, 1fr) 48px minmax(48px, max-content);
   align-items: stretch;
   gap: 8px;
   min-width: 0;
@@ -637,9 +637,13 @@ textarea:disabled {
 
 .delegate-open-button {
   min-width: 48px;
-  width: 48px;
-  padding: 0;
+  width: auto;
+  padding: 0 13px;
   justify-self: end;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
   font-size: 0.76rem;
   letter-spacing: 0.02em;
   color: rgba(255, 244, 227, 0.86);
@@ -662,7 +666,7 @@ textarea:disabled {
 }
 
 .delegate-open-button .button-text {
-  display: none;
+  display: inline;
 }
 
 .delegate-auto-glyph,
@@ -681,6 +685,7 @@ textarea:disabled {
 .delegate-auto-button {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 7px;
 }
 
@@ -1544,7 +1549,7 @@ textarea:disabled {
 
 .delegate-carousel-tabs {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -1702,9 +1707,9 @@ textarea:disabled {
 .delegate-check-row {
   min-width: 0;
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
-  gap: 9px;
-  align-items: center;
+  grid-template-columns: 26px minmax(0, 1fr);
+  gap: 10px;
+  align-items: stretch;
   min-height: 62px;
   padding: 8px 10px;
   border: 1px solid rgba(255, 236, 219, 0.1);
@@ -1732,6 +1737,7 @@ textarea:disabled {
   margin: 0;
   padding: 0;
   align-self: center;
+  justify-self: center;
   border: 1px solid rgba(240, 208, 109, 0.48);
   border-radius: 5px;
   background: rgba(45, 7, 9, 0.72);
@@ -1751,6 +1757,7 @@ textarea:disabled {
   min-width: 0;
   display: grid;
   align-content: center;
+  justify-content: stretch;
   gap: 2px;
 }
 
@@ -1773,6 +1780,108 @@ textarea:disabled {
 
 .delegate-check-row.is-blocked .delegate-check-detail {
   color: rgba(255, 178, 166, 0.9);
+}
+
+.delegate-supervisor-timeline {
+  display: grid;
+  gap: 8px;
+  min-height: min(44vh, 320px);
+}
+
+.delegate-supervisor-event {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 10px;
+  padding: 10px 11px;
+  border: 1px solid rgba(255, 236, 219, 0.11);
+  border-radius: 8px;
+  background: rgba(45, 7, 9, 0.34);
+}
+
+.delegate-supervisor-event.is-latest {
+  border-color: rgba(240, 208, 109, 0.28);
+  background: rgba(55, 9, 10, 0.54);
+}
+
+.delegate-supervisor-event.is-blocked {
+  border-color: rgba(255, 130, 130, 0.34);
+}
+
+.delegate-supervisor-event-marker {
+  width: 11px;
+  height: 11px;
+  align-self: start;
+  justify-self: center;
+  margin-top: 5px;
+  border: 1px solid rgba(240, 208, 109, 0.56);
+  border-radius: 999px;
+  background: rgba(45, 7, 9, 0.72);
+}
+
+.delegate-supervisor-event.is-done .delegate-supervisor-event-marker {
+  background: rgba(118, 76, 14, 0.82);
+}
+
+.delegate-supervisor-event.is-current .delegate-supervisor-event-marker {
+  background: rgba(240, 208, 109, 0.84);
+  box-shadow: 0 0 10px rgba(240, 208, 109, 0.24);
+}
+
+.delegate-supervisor-event.is-blocked .delegate-supervisor-event-marker {
+  border-color: rgba(255, 130, 130, 0.58);
+  background: rgba(137, 28, 29, 0.74);
+}
+
+.delegate-supervisor-event-body {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.delegate-supervisor-event-head {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.delegate-supervisor-event-title {
+  min-width: 0;
+  color: rgba(255, 248, 238, 0.94);
+  font-weight: 900;
+  line-height: 1.18;
+  overflow-wrap: anywhere;
+}
+
+.delegate-supervisor-event-time,
+.delegate-supervisor-event-key {
+  color: rgba(255, 226, 179, 0.72);
+  font-family: var(--mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.delegate-supervisor-event-detail,
+.delegate-supervisor-event-value {
+  color: rgba(255, 226, 179, 0.84);
+  font-size: 0.74rem;
+  font-weight: 750;
+  line-height: 1.28;
+  overflow-wrap: anywhere;
+}
+
+.delegate-supervisor-event-fields {
+  display: grid;
+  gap: 3px;
+}
+
+.delegate-supervisor-event-row {
+  display: grid;
+  grid-template-columns: minmax(64px, auto) minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
 }
 
 .delegate-overview-field {
@@ -2180,7 +2289,7 @@ textarea:disabled {
   #delegateModal .detail-actions {
     width: 100%;
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr)) 40px;
+    grid-template-columns: minmax(72px, 1fr) minmax(118px, 1.25fr) 40px;
     gap: 8px;
   }
 
@@ -2420,6 +2529,7 @@ textarea:disabled {
 
   .delegate-open-button {
     min-width: 48px;
+    width: 48px;
     padding: 0;
   }
 

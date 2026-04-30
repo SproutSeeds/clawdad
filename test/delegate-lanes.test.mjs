@@ -229,6 +229,8 @@ test("lane-aware delegate commands keep default lane compatibility intact", asyn
     assert.equal(frontendPayload.config.laneId, "frontend");
     assert.equal(defaultPayload.config.watchtowerReviewMode, "off");
     assert.equal(frontendPayload.config.watchtowerReviewMode, "off");
+    assert.equal(defaultPayload.config.directionCheckMode, "observe");
+    assert.equal(frontendPayload.config.directionCheckMode, "observe");
     assert.match(defaultPayload.brief, /Default lane brief\./u);
     assert.match(frontendPayload.brief, /Frontend lane brief\./u);
 
@@ -251,6 +253,16 @@ test("lane-aware delegate commands keep default lane compatibility intact", asyn
       "enforce",
     ]);
     assert.equal(enforcingPayload.config.watchtowerReviewMode, "enforce");
+
+    const directionPayload = await runJsonCommand(fixture, [
+      "delegate-set",
+      fixture.projectPath,
+      "--lane",
+      "frontend",
+      "--direction-check-mode",
+      "enforce",
+    ]);
+    assert.equal(directionPayload.config.directionCheckMode, "enforce");
 
     const pausePayload = await runJsonCommand(fixture, [
       "delegate-pause",

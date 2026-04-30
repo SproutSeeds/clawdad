@@ -192,12 +192,14 @@ const elements = {
   delegateCarouselTabs: document.querySelector("#delegateCarouselTabs"),
   delegateRunsPanel: document.querySelector("#delegateRunsPanel"),
   delegateRunLogPanel: document.querySelector("#delegateRunLogPanel"),
+  delegateSupervisorPanel: document.querySelector("#delegateSupervisorPanel"),
   delegateReviewPanel: document.querySelector("#delegateReviewPanel"),
   delegateBriefPanel: document.querySelector("#delegateBriefPanel"),
   delegatePlanPanel: document.querySelector("#delegatePlanPanel"),
   delegateSummaryPanel: document.querySelector("#delegateSummaryPanel"),
   delegateRunCardList: document.querySelector("#delegateRunCardList"),
   delegateRunList: document.querySelector("#delegateRunList"),
+  delegateSupervisorList: document.querySelector("#delegateSupervisorList"),
   delegateReviewList: document.querySelector("#delegateReviewList"),
   delegateSummaryList: document.querySelector("#delegateSummaryList"),
   delegatePlanList: document.querySelector("#delegatePlanList"),
@@ -296,6 +298,7 @@ const processingStatusPhrases = [
 const delegateCarouselSlides = Object.freeze([
   { id: "runs", label: "History" },
   { id: "log", label: "Log" },
+  { id: "supervisor", label: "Loop" },
   { id: "review", label: "Review" },
   { id: "brief", label: "Brief" },
 ]);
@@ -2015,6 +2018,9 @@ function delegateStateFor(projectPath, laneId = "default") {
       status: null,
       supervisor: null,
       supervisorPreview: null,
+      supervisorEvents: [],
+      supervisorEventsCursor: "0",
+      supervisorEventsTotal: 0,
       delegateSession: null,
       latestPlanSnapshot: null,
       planSnapshots: [],
@@ -2071,6 +2077,11 @@ function delegatePayloadState(projectPath, payload = {}, { briefFallback = "" } 
     status: payload.status ? normalizeDelegateStatus(payload.status) : existing.status,
     supervisor: payload.supervisor ? normalizeDelegateSupervisorState(payload.supervisor) : existing.supervisor,
     supervisorPreview: payload.supervisorPreview || existing.supervisorPreview || null,
+    supervisorEvents: Array.isArray(payload.supervisorEvents)
+      ? payload.supervisorEvents.map(normalizeDelegateSupervisorEvent)
+      : existing.supervisorEvents,
+    supervisorEventsCursor: String(payload.supervisorEventsCursor || existing.supervisorEventsCursor || "0"),
+    supervisorEventsTotal: Number.parseInt(String(payload.supervisorEventsTotal ?? existing.supervisorEventsTotal ?? "0"), 10) || 0,
     delegateSession: payload.delegateSession || existing.delegateSession,
     latestPlanSnapshot: payload.latestPlanSnapshot
       ? normalizeDelegatePlanSnapshot(payload.latestPlanSnapshot)
@@ -2189,6 +2200,20 @@ function historyItemStatusRank(status) {
   return { queued: 1, failed: 2, answered: 3 }[normalized] || 0;
 }
 
+function historyItemHasAnsweredResponse(item) {
+  return (
+    String(item?.status || "").trim().toLowerCase() === "answered" &&
+    Boolean(String(item?.response || "").trim())
+  );
+}
+
+function historyItemLooksLikeStaleDispatchFailure(item) {
+  return (
+    String(item?.status || "").trim().toLowerCase() === "failed" &&
+    /Clawdad marked this dispatch failed because it went stale\./u.test(String(item?.response || ""))
+  );
+}
+
 function isSyntheticHistoryRequestId(value) {
   const requestId = String(value || "").trim();
   return requestId.startsWith("codex:") || requestId.startsWith("chimera:");
@@ -2264,8 +2289,16 @@ function mergeHistoryItem(existing, incoming) {
     return "";
   };
   const response =
-    String(incoming?.response || "").trim() ||
-    String(existing?.response || "");
+    historyItemHasAnsweredResponse(existing) && historyItemLooksLikeStaleDispatchFailure(incoming)
+      ? String(existing.response || "")
+      : historyItemHasAnsweredResponse(incoming) && historyItemLooksLikeStaleDispatchFailure(existing)
+        ? String(incoming.response || "")
+        : status === "answered" && historyItemHasAnsweredResponse(existing)
+          ? String(existing.response || "")
+          : status === "answered" && historyItemHasAnsweredResponse(incoming)
+            ? String(incoming.response || "")
+            : String(incoming?.response || "").trim() ||
+              String(existing?.response || "");
   const requestId =
     String(incoming?.requestId || "").trim() ||
     String(existing?.requestId || "").trim();
@@ -2624,11 +2657,32 @@ function normalizeDelegateSupervisorState(supervisor) {
       supervisor?.lastGateResult && typeof supervisor.lastGateResult === "object"
         ? supervisor.lastGateResult
         : null,
+    lastDirectionCheck:
+      supervisor?.lastDirectionCheck && typeof supervisor.lastDirectionCheck === "object"
+        ? supervisor.lastDirectionCheck
+        : null,
     lastRestartAt: String(supervisor?.lastRestartAt || "").trim() || null,
     lastBlockerReason: String(supervisor?.lastBlockerReason || "").trim(),
     lastConsumedNextAction: String(supervisor?.lastConsumedNextAction || "").trim(),
     lastOutcome: String(supervisor?.lastOutcome || "").trim(),
     lastAction: String(supervisor?.lastAction || "").trim(),
+  };
+}
+
+function normalizeDelegateSupervisorEvent(event) {
+  const restartCount = Number.parseInt(String(event?.restartCount || "0"), 10) || 0;
+  return {
+    id: String(event?.id || "").trim() || makeEntryId(),
+    at: String(event?.at || event?.createdAt || "").trim() || null,
+    type: String(event?.type || "supervisor_event").trim() || "supervisor_event",
+    laneId: normalizeDelegateLaneId(event?.laneId || event?.lane_id || "default"),
+    action: String(event?.action || "").trim(),
+    state: String(event?.state || "").trim(),
+    reason: String(event?.reason || "").trim(),
+    nextAction: String(event?.nextAction || event?.next_action || "").trim(),
+    runId: String(event?.runId || event?.run_id || "").trim(),
+    restartCount: Math.max(0, restartCount),
+    payload: event?.payload && typeof event.payload === "object" ? event.payload : {},
   };
 }
 
@@ -4193,6 +4247,192 @@ function delegateSupervisorGate(delegateState) {
   return preview?.gate || preview?.supervisor?.lastGateResult || delegateState?.supervisor?.lastGateResult || null;
 }
 
+function delegateDirectionCheck(delegateState) {
+  const gate = delegateSupervisorGate(delegateState);
+  const preview = delegateState?.supervisorPreview || null;
+  const latestEvent = delegateLatestSupervisorEvent(delegateState);
+  return (
+    gate?.directionCheck ||
+    preview?.gate?.directionCheck ||
+    preview?.supervisor?.lastDirectionCheck ||
+    delegateState?.supervisor?.lastDirectionCheck ||
+    latestEvent?.payload?.directionCheck ||
+    latestEvent?.payload?.gate?.directionCheck ||
+    null
+  );
+}
+
+function delegateDirectionCheckText(check) {
+  if (!check || typeof check !== "object") {
+    return "";
+  }
+  const mode = String(check.mode || "").trim();
+  const decision = String(check.decision || "").trim();
+  const reason = String(check.reason || "").trim();
+  if (decision === "skipped" || mode === "off") {
+    return "Direction check is off for this lane.";
+  }
+  return [
+    decision ? `Direction ${decision}` : "Direction checked",
+    reason,
+  ].filter(Boolean).join(" • ");
+}
+
+function delegateLatestSupervisorEvent(delegateState) {
+  const events = Array.isArray(delegateState?.supervisorEvents) ? delegateState.supervisorEvents : [];
+  return events[events.length - 1] || null;
+}
+
+function delegateSupervisorEventText(event) {
+  if (!event) {
+    return "";
+  }
+  const action = String(event.action || event.type || "").replace(/_/gu, " ").trim();
+  const reason = String(event.reason || "").trim();
+  const when = formatTimestamp(event.at || "");
+  return [action, reason, when].filter(Boolean).join(" • ");
+}
+
+function delegateSupervisorEventLabel(event) {
+  const type = String(event?.type || "").trim().toLowerCase();
+  const action = String(event?.action || "").trim().toLowerCase();
+  switch (type || action) {
+    case "supervisor_daemon_started":
+      return "Loop started";
+    case "supervisor_waiting":
+    case "wait":
+      return "Worker already running";
+    case "supervisor_restarted_lane":
+    case "restart":
+      return "Worker restarted";
+    case "supervisor_completed":
+    case "completed":
+      return "Loop completed";
+    case "supervisor_blocked":
+    case "blocked":
+      return "Blocked";
+    case "supervisor_stop_requested":
+    case "stop":
+      return "Stop requested";
+    case "supervisor_restart_rejected":
+    case "restart_rejected":
+      return "Restart rejected";
+    case "supervisor_direction_checked":
+    case "direction_check":
+      return "Direction checked";
+    default:
+      return action || type ? String(action || type).replace(/_/gu, " ") : "Supervisor event";
+  }
+}
+
+function delegateSupervisorEventTone(event) {
+  const type = String(event?.type || "").trim().toLowerCase();
+  const action = String(event?.action || "").trim().toLowerCase();
+  const directionCheck = event?.payload?.directionCheck || event?.payload?.gate?.directionCheck || null;
+  if (directionCheck?.enforceable) {
+    return "blocked";
+  }
+  if (/blocked|rejected|failed/u.test(`${type} ${action}`)) {
+    return "blocked";
+  }
+  if (/waiting|started|restart|daemon/u.test(`${type} ${action}`)) {
+    return "current";
+  }
+  if (/completed|stop/u.test(`${type} ${action}`)) {
+    return "done";
+  }
+  return "";
+}
+
+function delegateSupervisorEventDetail(event) {
+  const payload = event?.payload && typeof event.payload === "object" ? event.payload : {};
+  const gate = payload.gate || payload.lastGateResult || {};
+  const directionCheck = payload.directionCheck || gate.directionCheck || null;
+  return (
+    String(event?.reason || "").trim() ||
+    delegateDirectionCheckText(directionCheck) ||
+    String(gate.reason || gate.lastGateResult?.reason || "").trim() ||
+    String(event?.nextAction || "").trim() ||
+    String(event?.state || "").trim()
+  );
+}
+
+function appendDelegateSupervisorEventRow(container, label, value) {
+  const cleanValue = String(value || "").trim();
+  if (!cleanValue) {
+    return;
+  }
+  const row = document.createElement("div");
+  row.className = "delegate-supervisor-event-row";
+
+  const key = document.createElement("span");
+  key.className = "delegate-supervisor-event-key";
+  key.textContent = label;
+
+  const text = document.createElement("span");
+  text.className = "delegate-supervisor-event-value";
+  text.textContent = cleanValue;
+
+  row.append(key, text);
+  container.append(row);
+}
+
+function buildDelegateSupervisorEventCard(event, { latest = false } = {}) {
+  const tone = delegateSupervisorEventTone(event);
+  const card = document.createElement("article");
+  card.className = [
+    "delegate-supervisor-event",
+    tone ? `is-${tone}` : "",
+    latest ? "is-latest" : "",
+  ].filter(Boolean).join(" ");
+
+  const marker = document.createElement("span");
+  marker.className = "delegate-supervisor-event-marker";
+  marker.setAttribute("aria-hidden", "true");
+
+  const body = document.createElement("div");
+  body.className = "delegate-supervisor-event-body";
+
+  const head = document.createElement("div");
+  head.className = "delegate-supervisor-event-head";
+
+  const title = document.createElement("div");
+  title.className = "delegate-supervisor-event-title";
+  title.textContent = delegateSupervisorEventLabel(event);
+
+  const at = document.createElement("div");
+  at.className = "delegate-supervisor-event-time";
+  at.textContent = formatTimestamp(event?.at || "") || "";
+
+  head.append(title, at);
+
+  const detail = document.createElement("div");
+  detail.className = "delegate-supervisor-event-detail";
+  detail.textContent = shortDelegateRunText(delegateSupervisorEventDetail(event), "", 220);
+
+  const fields = document.createElement("div");
+  fields.className = "delegate-supervisor-event-fields";
+  appendDelegateSupervisorEventRow(fields, "state", event?.state);
+  appendDelegateSupervisorEventRow(fields, "run", event?.runId ? sessionFingerprint(event.runId) : "");
+  appendDelegateSupervisorEventRow(fields, "restarts", event?.restartCount ? String(event.restartCount) : "");
+  appendDelegateSupervisorEventRow(fields, "next", event?.nextAction);
+  appendDelegateSupervisorEventRow(
+    fields,
+    "direction",
+    event?.payload?.directionCheck?.decision || event?.payload?.gate?.directionCheck?.decision || "",
+  );
+
+  body.append(head);
+  if (detail.textContent) {
+    body.append(detail);
+  }
+  if (fields.childElementCount > 0) {
+    body.append(fields);
+  }
+  card.append(marker, body);
+  return card;
+}
+
 function delegateChecklistItem(id, label, stateValue, detail = "") {
   return {
     id,
@@ -4222,6 +4462,10 @@ function delegateLaunchChecklistItems(delegateState, runLog) {
   const gateOk = Boolean(gate?.ok || preview?.gate?.ok);
   const gateCode = String(gate?.code || preview?.gate?.code || "").trim();
   const gateReason = String(gate?.reason || preview?.gate?.reason || preview?.error || "").trim();
+  const directionCheck = delegateDirectionCheck(delegateState);
+  const directionMode = String(delegateState?.config?.directionCheckMode || "observe").trim();
+  const directionDecision = String(directionCheck?.decision || "").trim();
+  const directionBlocked = gateCode === "direction_check" || directionCheck?.enforceable;
   const supervisorPending = Boolean(state.delegateSupervisorPending);
 
   return [
@@ -4266,6 +4510,26 @@ function delegateLaunchChecklistItems(delegateState, runLog) {
           : delegateComputeInlineText(status) || "Reserve guard will run during preview/start.",
     ),
     delegateChecklistItem(
+      "direction",
+      "Direction check",
+      directionBlocked
+        ? "blocked"
+        : directionDecision
+          ? "done"
+          : directionMode === "off"
+            ? "done"
+            : supervisorPending
+              ? "current"
+              : "pending",
+      directionBlocked
+        ? directionCheck?.reason || gateReason || "Direction check blocked continuation."
+        : directionCheck
+          ? delegateDirectionCheckText(directionCheck)
+          : directionMode === "off"
+            ? "Off for this lane."
+            : "Compares outcome, objective, and nextAction before restart.",
+    ),
+    delegateChecklistItem(
       "worker",
       "Bounded worker run",
       running ? "done" : supervisorPending ? "current" : latestStep ? "done" : "pending",
@@ -4282,33 +4546,54 @@ function delegateRuntimeChecklistItems(delegateState, runLog) {
   const status = delegateState?.status || {};
   const supervisor = delegateState?.supervisor || {};
   const gate = delegateSupervisorGate(delegateState);
+  const directionCheck = delegateDirectionCheck(delegateState);
+  const supervisorEvent = delegateLatestSupervisorEvent(delegateState);
+  const supervisorEventText = delegateSupervisorEventText(supervisorEvent);
   const latestStep = delegateLatestStepSnapshot(runLog);
   const statusState = String(status.state || "idle").toLowerCase();
   const running = statusState === "running" || statusState === "planning";
   const terminal = ["completed", "blocked", "failed", "paused"].includes(statusState);
   const checkpointed = Boolean(latestStep?.checkpoint || status.lastOutcomeSummary);
   const supervisorActive = delegateSupervisorIsActive(delegateState);
+  const supervisorSeen = supervisorActive || Boolean(supervisor.restartCount) || Boolean(supervisorEvent);
+  const workerStateLabel = delegateRunStateLabel(statusState, { prefix: false }).toLowerCase();
 
   return [
     delegateChecklistItem(
       "supervisor",
       "Supervisor opted in",
-      supervisorActive ? "done" : state.delegateSupervisorPending ? "current" : "pending",
-      supervisorActive
-        ? `${supervisor.restartCount || 0} restart${supervisor.restartCount === 1 ? "" : "s"} recorded.`
+      supervisorSeen ? "done" : state.delegateSupervisorPending ? "current" : "pending",
+      supervisorSeen
+        ? supervisorEventText || `${supervisor.restartCount || 0} restart${supervisor.restartCount === 1 ? "" : "s"} recorded.`
         : "Start loop keeps this off by default until requested.",
     ),
     delegateChecklistItem(
       "gates",
       "Safety gates passed",
       gate?.ok ? "done" : gate?.reason ? "blocked" : running ? "current" : "pending",
-      gate?.reason || "Waiting for supervisor gate result.",
+      gate?.reason || supervisorEvent?.reason || "Waiting for supervisor gate result.",
+    ),
+    delegateChecklistItem(
+      "direction",
+      "Direction readback",
+      directionCheck?.enforceable
+        ? "blocked"
+        : directionCheck
+          ? "done"
+          : running
+            ? "current"
+            : "pending",
+      directionCheck
+        ? delegateDirectionCheckText(directionCheck)
+        : "Waiting for the supervisor direction check.",
     ),
     delegateChecklistItem(
       "run",
-      "Worker lane running",
+      "Worker lane",
       status.runId ? "done" : "pending",
-      status.runId ? `Run ${sessionFingerprint(status.runId)}` : "No worker run yet.",
+      status.runId
+        ? `${workerStateLabel ? `${workerStateLabel[0].toUpperCase()}${workerStateLabel.slice(1)} ` : ""}run ${sessionFingerprint(status.runId)}`
+        : "No worker run yet.",
     ),
     delegateChecklistItem(
       "step",
@@ -4531,27 +4816,28 @@ function buildDelegateRunCard(run, { selected = false } = {}) {
   return button;
 }
 
-function delegateRunStateLabel(state) {
+function delegateRunStateLabel(state, { prefix = true } = {}) {
   const value = String(state || "").trim().toLowerCase();
+  const withPrefix = (label) => prefix ? `Delegation ${label.toLowerCase()}` : label;
   switch (value) {
     case "running":
-      return "Delegation running";
+      return withPrefix("Running");
     case "paused":
-      return "Delegation paused";
+      return withPrefix("Paused");
     case "blocked":
-      return "Delegation blocked";
+      return withPrefix("Blocked");
     case "completed":
-      return "Delegation completed";
+      return withPrefix("Completed");
     case "failed":
-      return "Delegation failed";
+      return withPrefix("Failed");
     case "planning":
-      return "Delegation planning";
+      return withPrefix("Planning");
     case "idle":
-      return "Delegation idle";
+      return withPrefix("Idle");
     case "summary":
-      return "Delegation summary";
+      return withPrefix("Summary");
     default:
-      return "Delegation session";
+      return prefix ? "Delegation session" : "Session";
   }
 }
 
@@ -4581,7 +4867,7 @@ function delegateComputeInlineText(status) {
 }
 
 function activeRunCardMetaParts(status) {
-  const stateLabel = delegateRunStateLabel(status?.state || "");
+  const stateLabel = delegateRunStateLabel(status?.state || "", { prefix: false });
   const stepText = delegateRunStepText(status);
   const updatedAt = formatTimestamp(
     status?.updatedAt || status?.completedAt || status?.startedAt || "",
@@ -4669,6 +4955,7 @@ function buildDelegateOverview(project, delegateState, laneId, laneLabel) {
   const supervisorActive = delegateSupervisorIsActive(delegateState);
   const brief = String(delegateState?.brief || "").trim();
   const watchtowerMode = String(delegateState?.config?.watchtowerReviewMode || "off").trim() || "off";
+  const directionMode = String(delegateState?.config?.directionCheckMode || "observe").trim() || "observe";
   const projectLabel = project?.displayName || project?.slug || fallbackProjectLabel(project?.path);
   const runText = live
     ? "Live loop running"
@@ -4707,6 +4994,11 @@ function buildDelegateOverview(project, delegateState, laneId, laneLabel) {
   appendDelegateOverviewField(fields, "Preflight", "ORP hygiene and frontier checks must pass before delegate work starts.");
   appendDelegateOverviewField(fields, "Loop", "Delegate step, status readback, run log, then continue until done or blocked.");
   appendDelegateOverviewField(fields, "Stops", "Completion, hard stop, compute reserve, explicit pause, or failed preflight.");
+  appendDelegateOverviewField(
+    fields,
+    "Direction",
+    directionMode === "off" ? "Off for this lane." : `${directionMode}: checks outcome and nextAction before restart.`,
+  );
   appendDelegateOverviewField(fields, "Watchtower", watchtowerMode === "off" ? "Off unless explicitly enabled." : watchtowerMode);
 
   overview.append(head, fields);
@@ -4775,8 +5067,9 @@ function buildDelegateLaneCard(project, { showProject = false, compact = false }
 
   const meta = document.createElement("div");
   meta.className = "active-run-meta";
+  const laneMeta = card.dataset.laneId === "default" ? "default lane" : card.dataset.laneId;
   meta.textContent = [
-    showProject ? delegateLaneMetaLabel(project) : "",
+    showProject ? delegateLaneMetaLabel(project) : laneMeta,
     ...activeRunCardMetaParts(liveStatus),
   ].filter(Boolean).join(" • ") || "Delegate lane";
 
@@ -4955,7 +5248,7 @@ function renderSelectedProjectDelegateCard() {
       { empty: false },
     );
   } else {
-    setText(elements.selectedProjectDelegateState, "Paused and idle lanes for the selected project.", { empty: false });
+    setText(elements.selectedProjectDelegateState, "Saved lanes for the selected project.", { empty: false });
   }
 
   const renderKey = JSON.stringify(
@@ -5159,6 +5452,7 @@ function renderDelegateCarouselChrome() {
   const panelBySlide = {
     runs: elements.delegateRunsPanel,
     log: elements.delegateRunLogPanel,
+    supervisor: elements.delegateSupervisorPanel,
     review: elements.delegateReviewPanel,
     brief: elements.delegateBriefPanel,
   };
@@ -5203,6 +5497,50 @@ function renderDelegateCarouselChrome() {
     button.textContent = slide.label;
     elements.delegateCarouselTabs.append(button);
   }
+}
+
+function renderDelegateSupervisorTimeline(delegateState) {
+  if (!elements.delegateSupervisorList) {
+    return;
+  }
+
+  const events = Array.isArray(delegateState?.supervisorEvents)
+    ? delegateState.supervisorEvents
+    : [];
+  const renderKey = JSON.stringify(
+    events.map((event) => [
+      event.id,
+      event.at,
+      event.type,
+      event.action,
+      event.state,
+      event.reason,
+      event.nextAction,
+      event.runId,
+      event.restartCount,
+    ]),
+  );
+  if (elements.delegateSupervisorList.dataset.renderKey === renderKey) {
+    return;
+  }
+
+  clearNode(elements.delegateSupervisorList);
+  if (events.length === 0) {
+    const card = document.createElement("div");
+    card.className = "history-state-card";
+    card.textContent = "No supervisor transitions yet.";
+    elements.delegateSupervisorList.append(card);
+  } else {
+    const ordered = [...events].sort((left, right) => {
+      const leftMs = Date.parse(left.at || "");
+      const rightMs = Date.parse(right.at || "");
+      return (Number.isFinite(rightMs) ? rightMs : 0) - (Number.isFinite(leftMs) ? leftMs : 0);
+    });
+    ordered.forEach((event, index) => {
+      elements.delegateSupervisorList.append(buildDelegateSupervisorEventCard(event, { latest: index === 0 }));
+    });
+  }
+  elements.delegateSupervisorList.dataset.renderKey = renderKey;
 }
 
 function delegatePercentText(value) {
@@ -6175,6 +6513,10 @@ function renderDelegateModal() {
     }
     clearNode(elements.delegateRunCardList);
     clearNode(elements.delegateRunList);
+    if (elements.delegateSupervisorList) {
+      clearNode(elements.delegateSupervisorList);
+      delete elements.delegateSupervisorList.dataset.renderKey;
+    }
     if (elements.delegateReviewList) {
       clearNode(elements.delegateReviewList);
     }
@@ -6337,6 +6679,7 @@ function renderDelegateModal() {
   }
 
   renderDelegateCarouselChrome();
+  renderDelegateSupervisorTimeline(delegateState);
 
   const runKey = delegateRunKey(project.path, runId, laneId);
   const renderKey = delegateRunRenderSignature(runLog, { logMode: delegateLogMode });
@@ -7250,7 +7593,7 @@ async function refreshForegroundState() {
     if (modalThread?.projectPath && modalThread?.sessionId) {
       await loadSessionHistory(modalThread.projectPath, modalThread.sessionId, {
         reset: true,
-        stickToBottom: !modalThread.focusRequestId,
+        stickToBottom: false,
       });
     }
 

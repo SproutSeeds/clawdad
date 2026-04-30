@@ -165,3 +165,79 @@ session_json=$(registry_session_json "$PROJECT_PATH" "Global Mind Delegate")
     );
   });
 });
+
+test("registry sync preserves existing session dispatch status", async () => {
+  await withTempProject(async ({ root, projectPath, homePath }) => {
+    const { stdout } = await runRegistryScript({
+      root,
+      projectPath,
+      homePath,
+      script: `
+state_ensure_project "$PROJECT_PATH"
+state_register_session "$PROJECT_PATH" "main-session" "main mind" "codex" "true"
+state_update_session "$PROJECT_PATH" "main-session" "status" "failed"
+state_update_session "$PROJECT_PATH" "main-session" "dispatch_count" "7"
+state_update_session "$PROJECT_PATH" "main-session" "last_dispatch" "2026-04-30T00:05:15Z"
+state_update_session "$PROJECT_PATH" "main-session" "last_response" "2026-04-30T00:07:09Z"
+registry_sync_sessions_for_project "$PROJECT_PATH"
+sessions_json=$(registry_list_sessions_json "$PROJECT_PATH")
+"$CLAWDAD_JQ" -n --argjson sessions "$sessions_json" '{ sessions: $sessions }'
+`,
+    });
+
+    const result = JSON.parse(stdout);
+    const session = result.sessions.find((entry) => entry.sessionId === "main-session");
+    assert.ok(session);
+    assert.equal(session.status, "failed");
+    assert.equal(session.dispatchCount, 7);
+    assert.equal(session.lastDispatch, "2026-04-30T00:05:15Z");
+    assert.equal(session.lastResponse, "2026-04-30T00:07:09Z");
+
+    const state = await readState(homePath);
+    const sessionState = state.projects[projectPath].sessions["main-session"];
+    assert.equal(sessionState.status, "failed");
+    assert.equal(sessionState.dispatch_count, 7);
+    assert.equal(sessionState.last_dispatch, "2026-04-30T00:05:15Z");
+    assert.equal(sessionState.last_response, "2026-04-30T00:07:09Z");
+  });
+});
+
+test("quarantined Codex sessions stay excluded from future session adoption", async () => {
+  await withTempProject(async ({ root, projectPath, homePath }) => {
+    const { stdout } = await runRegistryScript({
+      root,
+      projectPath,
+      homePath,
+      script: `
+state_ensure_project "$PROJECT_PATH"
+state_register_session "$PROJECT_PATH" "bad-session" "old failed thread" "codex" "true"
+state_update_session "$PROJECT_PATH" "bad-session" "status" "failed"
+state_quarantine_session "$PROJECT_PATH" "bad-session" "repeated_codex_transport_disconnect" "stream disconnected before completion"
+selected_after_quarantine=false
+if registry_session_json "$PROJECT_PATH" "bad-session" >/dev/null 2>&1; then
+  selected_after_quarantine=true
+fi
+registry_remove "$PROJECT_PATH" "bad-session" "old failed thread"
+registry_sync_sessions_for_project "$PROJECT_PATH"
+excluded=$(registry_codex_tracked_session_ids_for_path "$PROJECT_PATH" | sort | tr '\\n' ' ')
+is_quarantined=false
+if state_session_is_quarantined "$PROJECT_PATH" "bad-session"; then
+  is_quarantined=true
+fi
+"$CLAWDAD_JQ" -n --arg excluded "$excluded" --argjson isQuarantined "$is_quarantined" --argjson selectedAfterQuarantine "$selected_after_quarantine" '{ excluded: $excluded, isQuarantined: $isQuarantined, selectedAfterQuarantine: $selectedAfterQuarantine }'
+`,
+    });
+
+    const result = JSON.parse(stdout);
+    assert.equal(result.isQuarantined, true);
+    assert.equal(result.selectedAfterQuarantine, false);
+    assert.match(result.excluded, /\bbad-session\b/u);
+
+    const state = await readState(homePath);
+    assert.equal(state.projects[projectPath].sessions["bad-session"], undefined);
+    assert.equal(
+      state.projects[projectPath].quarantined_sessions["bad-session"].reason,
+      "repeated_codex_transport_disconnect",
+    );
+  });
+});

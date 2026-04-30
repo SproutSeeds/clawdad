@@ -8,6 +8,7 @@ import {
   delegatePauseDecision,
   delegatePlanRefreshDecision,
   delegatePostStepPlanRefreshDecision,
+  delegateDispatchStallDecision,
   delegateRunListState,
   delegateStrategyBreakoutDecision,
   delegateStatusStepText,
@@ -234,6 +235,99 @@ test("delegatePauseDecision requests a safe-point pause for active planning jobs
       waitForSafePoint: true,
     },
   );
+});
+
+test("delegateDispatchStallDecision fails heartbeat-only delegate dispatches after live progress stops", () => {
+  const nowMs = Date.parse("2026-04-30T08:00:00Z");
+  const decision = delegateDispatchStallDecision({
+    nowMs,
+    staleTimeoutMs: 30 * 60 * 1000,
+    mailboxStatus: {
+      state: "running",
+      request_id: "request-1",
+      dispatched_at: "2026-04-30T07:00:00Z",
+      heartbeat_at: "2026-04-30T07:59:55Z",
+    },
+    delegateStatus: {
+      activeRequestId: "request-1",
+      activeStep: 3,
+    },
+    events: [
+      {
+        type: "dispatch_started",
+        requestId: "request-1",
+        step: 3,
+        at: "2026-04-30T07:00:05Z",
+      },
+      {
+        type: "agent_live",
+        step: 3,
+        at: "2026-04-30T07:10:00Z",
+      },
+    ],
+  });
+
+  assert.equal(decision.stalled, true);
+  assert.equal(decision.reason, "no_live_progress");
+  assert.equal(decision.progressAt, "2026-04-30T07:10:00.000Z");
+  assert.equal(decision.progressType, "agent_live");
+});
+
+test("delegateDispatchStallDecision uses shorter safety window after pause is requested", () => {
+  const decision = delegateDispatchStallDecision({
+    nowMs: Date.parse("2026-04-30T08:00:00Z"),
+    staleTimeoutMs: 60 * 60 * 1000,
+    pauseStaleTimeoutMs: 5 * 60 * 1000,
+    mailboxStatus: {
+      state: "running",
+      request_id: "request-2",
+      dispatched_at: "2026-04-30T07:30:00Z",
+      heartbeat_at: "2026-04-30T07:59:50Z",
+    },
+    delegateStatus: {
+      activeRequestId: "request-2",
+      activeStep: 1,
+      pauseRequested: true,
+    },
+    events: [
+      {
+        type: "agent_live",
+        step: 1,
+        at: "2026-04-30T07:50:00Z",
+      },
+    ],
+  });
+
+  assert.equal(decision.stalled, true);
+  assert.equal(decision.reason, "pause_requested_stalled");
+  assert.equal(decision.pauseRequested, true);
+});
+
+test("delegateDispatchStallDecision ignores stale events from another active step", () => {
+  const decision = delegateDispatchStallDecision({
+    nowMs: Date.parse("2026-04-30T08:00:00Z"),
+    staleTimeoutMs: 30 * 60 * 1000,
+    mailboxStatus: {
+      state: "running",
+      request_id: "request-3",
+      dispatched_at: "2026-04-30T07:55:00Z",
+    },
+    delegateStatus: {
+      activeRequestId: "request-3",
+      activeStep: 2,
+    },
+    events: [
+      {
+        type: "agent_live",
+        step: 1,
+        at: "2026-04-30T06:00:00Z",
+      },
+    ],
+  });
+
+  assert.equal(decision.stalled, false);
+  assert.equal(decision.reason, "within_limit");
+  assert.equal(decision.progressSource, "dispatch_start");
 });
 
 test("delegateWatchtowerReviewDecision treats clean large diffs as checkpoint-only", () => {

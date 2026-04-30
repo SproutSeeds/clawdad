@@ -41,6 +41,21 @@ Telegram / iMessage / web / CLI = replaceable transports into Clawdad
   sandboxed backends, and explicit approval boundaries for anything reachable
   from a phone or public messaging service.
 
+## Current Clawdad Direction
+
+The first production direction is a Clawdad-owned supervisor loop with
+Hermes-style runtime ergonomics:
+
+- Clawdad owns project, lane, brief, run, summary, and supervisor state.
+- Bounded worker runs stay separate from continuity orchestration.
+- Supervisor transitions are persisted as lane-scoped events.
+- Direction checks read compact objective/outcome/next-action packets before a
+  restart instead of passing full transcripts between model roles.
+- The app shows launch checks before Auto-Claw starts and a Loop timeline while
+  the supervisor advances, waits, blocks, stops, or completes.
+- Watchtower remains optional review/feed behavior and is not the continuity
+  engine.
+
 ## Non-Goals
 
 - Do not make Hermes, OpenClaw, or any other runtime the canonical workspace.

@@ -127,11 +127,12 @@ clawdad read my-project
 | `clawdad list` | List registered projects (from ORP) |
 | `clawdad read <slug>` | Read latest response from a spoke |
 | `clawdad delegate <slug>` | Show the saved delegate brief, plan, status, and guardrails |
-| `clawdad delegate-set <slug> ...` | Update the delegate brief or guardrails such as `--compute-reserve-percent 10`; Watchtower is off by default and only runs in delegation with `--watchtower-review-mode log` or `--watchtower-review-mode enforce` |
+| `clawdad delegate-set <slug> ...` | Update the delegate brief or guardrails such as `--compute-reserve-percent 10`, `--direction-check-mode enforce`, or opt-in Watchtower with `--watchtower-review-mode log` |
 | `clawdad go <slug>` | Friendly autonomous delegation entrypoint after ORP confirms a safe continuation |
 | `clawdad delegate-run <slug>` | Start autonomous Codex delegate mode for a project |
-| `clawdad supervise <slug> --lane <laneId>` | Opt into continuity orchestration that restarts bounded delegate runs only after ORP and compute gates pass |
+| `clawdad supervise <slug> --lane <laneId>` | Opt into continuity orchestration that restarts bounded delegate runs only after ORP, compute, and direction gates pass |
 | `clawdad delegate-pause <slug>` | Pause autonomous delegate mode after the current step |
+| `clawdad sessions-doctor [slug]` | Audit stale/quarantined sessions and delegate lanes; add `--repair` for non-destructive cleanup |
 | `clawdad watchtower <slug>` | Run the read-only delegation observer sidecar |
 | `clawdad watch <slug>` | Friendly alias for `watchtower` when a project is supplied |
 | `clawdad feed tail <slug>` | Show recent Watchtower feed events |
@@ -180,11 +181,27 @@ the delegate loop stopped.
 `clawdad supervise <slug> --lane <laneId>` is an explicit continuity loop, not
 Watchtower and not a replacement for bounded delegate runs. It watches the target
 lane status, consumes a completed run's `nextAction`, refreshes the lane
-objective, reruns the ORP and compute gates, and starts exactly one new bounded
-delegate run when safe. Use `--once` for a single supervisor tick, `--daemon` for
-a background supervisor, `--interval <seconds>` for polling, `--max-runs <n>` for
-a per-invocation cap, and `--dry-run` to inspect the next decision without
-starting a worker.
+objective, reruns the ORP and compute gates, checks whether the proposed
+continuation still matches the lane objective and latest readback, and starts
+exactly one new bounded delegate run when safe. Use `--once` for a single
+supervisor tick, `--daemon` for a background supervisor, `--interval <seconds>`
+for polling, `--max-runs <n>` for a per-invocation cap, and `--dry-run` to
+inspect the next decision without starting a worker.
+
+The direction check is the first Hermes-inspired supervisor layer. It uses a
+compact readback of objective, latest outcome, previous `nextAction`, proposed
+`nextAction`, and gate state instead of hydrating another full project transcript.
+The default mode is `observe`, which records aligned/caution/pause decisions
+without blocking. Set `--direction-check-mode enforce` on a lane when a pause
+decision should block restart, or `--direction-check-mode off` when the lane does
+not need this readback.
+
+The web app exposes the same control path as **Auto-Claw**. Open a project, click
+Auto-Claw, preview the launch checks, then start or stop the supervisor loop from
+the project lane. The modal keeps Clawdad as the control plane: launch checks show
+the ORP and compute gates before work starts, runtime checks update from worker
+status and supervisor events, and the Loop tab shows continuity transitions such
+as restart, wait, stop, blocker, and completion.
 
 Watchtower is an optional read-only delegation review sidecar. It watches
 delegate run events, ORP continuation/hygiene state, and git status, then appends
@@ -302,6 +319,8 @@ Clawdad now treats each directory as a project bucket with one active tracked se
 - Chimera follows the same bucket/session model as it matures.
 
 The main mobile flow stays simple: pick the project bucket, write the message, send. Session switching is a secondary control.
+
+If a Codex transport or delegate worker dies mid-dispatch, Clawdad quarantines the bad session instead of reusing it. `clawdad sessions-doctor --json` audits every tracked project for stale active pointers, quarantined session bindings, and orphaned delegate lanes; `clawdad sessions-doctor --repair` clears those pointers and marks orphaned delegate runs failed without deleting project files or unknown state.
 
 For mobile project setup, Clawdad now supports two safe paths under allowed top-level roots:
 

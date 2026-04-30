@@ -61,6 +61,27 @@ async function stopServer(child) {
   });
 }
 
+async function runServerCli(args, { cwd = repoRoot, env = {} } = {}) {
+  const child = spawn(process.execPath, [serverScript, ...args], {
+    cwd,
+    env: {
+      ...process.env,
+      ...env,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk) => {
+    stdout += chunk.toString();
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk.toString();
+  });
+  const exitCode = await new Promise((resolve) => child.once("exit", resolve));
+  return { exitCode, stdout, stderr };
+}
+
 test("app shell injects a fresh build fingerprint for frontend assets", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-app-shell-"));
   const home = path.join(root, "home");
@@ -119,6 +140,7 @@ test("app shell injects a fresh build fingerprint for frontend assets", async ()
     assert.match(html, /id="projectDelegateButton"/u);
     assert.match(html, /Auto-Claw/u);
     assert.match(html, /id="delegateOverview"/u);
+    assert.match(html, /id="delegateSupervisorPanel"/u);
   } finally {
     await stopServer(child);
     await rm(root, { recursive: true, force: true });
@@ -288,6 +310,276 @@ sleep 10
     await assert.rejects(readFile(invokedPath, "utf8"), { code: "ENOENT" });
   } finally {
     await stopServer(child);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("projects endpoint hides quarantined sessions from the app catalog", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-quarantine-catalog-"));
+  const home = path.join(root, "home");
+  const projectPath = path.join(root, "AI-summer-camp");
+  const configPath = path.join(root, "server.json");
+  const mockBinPath = path.join(root, "clawdad-mock");
+  await mkdir(path.join(projectPath, ".clawdad", "mailbox"), { recursive: true });
+  await mkdir(home, { recursive: true });
+  await writeFile(
+    path.join(home, "state.json"),
+    JSON.stringify(
+      {
+        version: 3,
+        projects: {
+          [projectPath]: {
+            status: "failed",
+            active_session_id: "bad-session",
+            quarantined_sessions: {
+              "bad-session": {
+                slug: "Stale Delegate",
+                provider: "codex",
+                reason: "stale_delegate_dispatch",
+                detail: "No live progress.",
+                quarantined_at: "2026-04-30T08:00:00Z",
+              },
+            },
+            sessions: {
+              "bad-session": {
+                slug: "Stale Delegate",
+                provider: "codex",
+                status: "failed",
+                local_only: "false",
+                quarantined: "true",
+              },
+              "good-session": {
+                slug: "AI-summer-camp",
+                provider: "codex",
+                status: "completed",
+                dispatch_count: 1,
+                last_dispatch: "2026-04-30T07:00:00Z",
+                last_response: "2026-04-30T07:01:00Z",
+                local_only: "false",
+              },
+            },
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    path.join(projectPath, ".clawdad", "mailbox", "status.json"),
+    JSON.stringify({ state: "idle", request_id: null, session_id: "good-session" }, null, 2),
+    "utf8",
+  );
+  await writeFile(mockBinPath, "#!/bin/sh\nexit 1\n", "utf8");
+  await chmod(mockBinPath, 0o755);
+
+  const port = await freePort();
+  await writeFile(
+    configPath,
+    JSON.stringify(
+      {
+        host: "127.0.0.1",
+        port,
+        defaultProject: projectPath,
+        authMode: "tailscale",
+        allowedUsers: ["tester@example.com"],
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  const child = spawn(process.execPath, [serverScript, "serve", "--config", configPath], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      CLAWDAD_HOME: home,
+      CLAWDAD_BIN_PATH: mockBinPath,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  try {
+    const baseUrl = `http://127.0.0.1:${port}`;
+    await waitForHealth(baseUrl, child);
+    const response = await fetch(`${baseUrl}/v1/projects`, {
+      headers: {
+        "tailscale-user-login": "tester@example.com",
+      },
+    });
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.ok, true);
+    assert.equal(payload.projects.length, 1);
+    assert.deepEqual(payload.projects[0].sessions.map((session) => session.sessionId), ["good-session"]);
+    assert.equal(payload.projects[0].activeSessionId, "good-session");
+  } finally {
+    await stopServer(child);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("sessions-doctor repairs quarantined pointers and orphaned delegate lanes", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-sessions-doctor-"));
+  const home = path.join(root, "home");
+  const projectPath = path.join(root, "life-ops");
+  const defaultDelegateDir = path.join(projectPath, ".clawdad", "delegate");
+  const staleLaneDir = path.join(defaultDelegateDir, "lanes", "stale-lane");
+  await mkdir(defaultDelegateDir, { recursive: true });
+  await mkdir(staleLaneDir, { recursive: true });
+  await mkdir(home, { recursive: true });
+
+  await writeFile(
+    path.join(home, "state.json"),
+    JSON.stringify(
+      {
+        version: 3,
+        projects: {
+          [projectPath]: {
+            status: "failed",
+            active_session_id: "bad-session",
+            quarantined_sessions: {
+              "bad-session": {
+                slug: "Delegate",
+                provider: "codex",
+                reason: "stale_delegate_dispatch",
+                detail: "No live progress.",
+                quarantined_at: "2026-04-30T08:00:00Z",
+              },
+            },
+            sessions: {
+              "bad-session": {
+                slug: "Delegate",
+                provider: "codex",
+                status: "failed",
+                quarantined: "true",
+              },
+              "good-session": {
+                slug: "life-ops",
+                provider: "codex",
+                status: "completed",
+              },
+            },
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    path.join(defaultDelegateDir, "delegate-config.json"),
+    JSON.stringify(
+      {
+        version: 2,
+        projectPath,
+        laneId: "default",
+        enabled: true,
+        delegateSessionId: "bad-session",
+        delegateSessionSlug: "Delegate",
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    path.join(defaultDelegateDir, "delegate-status.json"),
+    JSON.stringify(
+      {
+        version: 1,
+        projectPath,
+        laneId: "default",
+        state: "failed",
+        runId: "run-default",
+        activeRequestId: "request-stale",
+        activeStep: 2,
+        lastRequestId: null,
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    path.join(staleLaneDir, "delegate-status.json"),
+    JSON.stringify(
+      {
+        version: 1,
+        projectPath,
+        laneId: "stale-lane",
+        state: "running",
+        runId: "run-stale-lane",
+        supervisorPid: 999999,
+        activeRequestId: "request-orphaned",
+        activeStep: 3,
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  try {
+    const result = await runServerCli([
+      "sessions-doctor",
+      projectPath,
+      "--repair",
+      "--json",
+    ], {
+      env: {
+        CLAWDAD_HOME: home,
+      },
+    });
+    assert.equal(result.exitCode, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.projectCount, 1);
+    assert.equal(payload.unresolvedIssueCount, 0);
+    assert.ok(payload.issueCount >= 3);
+    assert.ok(payload.repairCount >= 3);
+
+    const state = JSON.parse(await readFile(path.join(home, "state.json"), "utf8"));
+    assert.equal(state.projects[projectPath].active_session_id, "good-session");
+
+    const repairedConfig = JSON.parse(
+      await readFile(path.join(defaultDelegateDir, "delegate-config.json"), "utf8"),
+    );
+    assert.equal(repairedConfig.enabled, false);
+    assert.equal(repairedConfig.delegateSessionId, null);
+
+    const repairedDefaultStatus = JSON.parse(
+      await readFile(path.join(defaultDelegateDir, "delegate-status.json"), "utf8"),
+    );
+    assert.equal(repairedDefaultStatus.state, "failed");
+    assert.equal(repairedDefaultStatus.activeRequestId, null);
+    assert.equal(repairedDefaultStatus.activeStep, null);
+    assert.equal(repairedDefaultStatus.lastRequestId, "request-stale");
+
+    const repairedLaneStatus = JSON.parse(
+      await readFile(path.join(staleLaneDir, "delegate-status.json"), "utf8"),
+    );
+    assert.equal(repairedLaneStatus.state, "failed");
+    assert.equal(repairedLaneStatus.activeRequestId, null);
+    assert.equal(repairedLaneStatus.activeStep, null);
+
+    const cleanResult = await runServerCli([
+      "sessions-doctor",
+      projectPath,
+      "--json",
+    ], {
+      env: {
+        CLAWDAD_HOME: home,
+      },
+    });
+    assert.equal(cleanResult.exitCode, 0, cleanResult.stderr);
+    const cleanPayload = JSON.parse(cleanResult.stdout);
+    assert.equal(cleanPayload.ok, true);
+    assert.equal(cleanPayload.issueCount, 0);
+  } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -610,6 +902,299 @@ test("projects endpoint does not keep serving a cached busy session after comple
     const completedPayload = await completedResponse.json();
     assert.equal(completedPayload.projects[0].sessions[0].status, "completed");
     assert.equal(completedPayload.projects[0].sessions[0].lastResponse, completedAt);
+  } finally {
+    await stopServer(child);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("status endpoint does not stale-fail a dead child pid during recent heartbeat finalization grace", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-stale-grace-"));
+  const home = path.join(root, "home");
+  const projectPath = path.join(root, "global-mind");
+  const configPath = path.join(root, "server.json");
+  const mockBinPath = path.join(root, "clawdad-mock");
+  const sessionId = "019d64ef-0f73-7423-9406-5266d6f7efee";
+  const requestId = "45017928-ad44-4a91-a7b4-6d8fb6e2e1dc";
+  const now = new Date().toISOString();
+
+  await mkdir(path.join(projectPath, ".clawdad", "mailbox"), { recursive: true });
+  await mkdir(home, { recursive: true });
+  await writeFile(
+    path.join(home, "state.json"),
+    JSON.stringify(
+      {
+        version: 3,
+        projects: {
+          [projectPath]: {
+            status: "running",
+            last_dispatch: now,
+            last_response: null,
+            dispatch_count: 1,
+            registered_at: now,
+            active_session_id: sessionId,
+            sessions: {
+              [sessionId]: {
+                slug: "main mind",
+                provider: "codex",
+                provider_session_seeded: "true",
+                tracked_at: now,
+                dispatch_count: 1,
+                last_dispatch: now,
+                last_response: null,
+                status: "running",
+                local_only: "false",
+              },
+            },
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    path.join(projectPath, ".clawdad", "mailbox", "status.json"),
+    JSON.stringify(
+      {
+        state: "running",
+        request_id: requestId,
+        session_id: sessionId,
+        dispatched_at: now,
+        heartbeat_at: now,
+        pid: 999999,
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(mockBinPath, "#!/bin/sh\nexit 1\n", "utf8");
+  await chmod(mockBinPath, 0o755);
+
+  const port = await freePort();
+  await writeFile(
+    configPath,
+    JSON.stringify(
+      {
+        host: "127.0.0.1",
+        port,
+        defaultProject: projectPath,
+        authMode: "tailscale",
+        allowedUsers: ["tester@example.com"],
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  const child = spawn(process.execPath, [serverScript, "serve", "--config", configPath], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      CLAWDAD_HOME: home,
+      CLAWDAD_BIN_PATH: mockBinPath,
+      CLAWDAD_STALE_DISPATCH_DEAD_WORKER_GRACE_MS: "120000",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  try {
+    const baseUrl = `http://127.0.0.1:${port}`;
+    await waitForHealth(baseUrl, child);
+    const response = await fetch(
+      `${baseUrl}/v1/status?project=${encodeURIComponent(projectPath)}`,
+      {
+        headers: {
+          "tailscale-user-login": "tester@example.com",
+        },
+      },
+    );
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.mailboxStatus.state, "running");
+
+    const statusAfter = JSON.parse(
+      await readFile(path.join(projectPath, ".clawdad", "mailbox", "status.json"), "utf8"),
+    );
+    assert.equal(statusAfter.state, "running");
+  } finally {
+    await stopServer(child);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("read endpoint heals a stale mailbox response from answered history", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-read-heal-"));
+  const home = path.join(root, "home");
+  const projectPath = path.join(root, "global-mind");
+  const configPath = path.join(root, "server.json");
+  const mockBinPath = path.join(root, "clawdad-mock");
+  const sessionId = "019d64ef-0f73-7423-9406-5266d6f7efee";
+  const requestId = "45017928-ad44-4a91-a7b4-6d8fb6e2e1dc";
+  const sentAt = "2026-04-29T00:00:34Z";
+  const answeredAt = "2026-04-29T00:01:15Z";
+  const staleText = "Clawdad marked this dispatch failed because it went stale. Dispatch worker 25888 is no longer running.";
+  const realAnswer = "Actual Verizon networking answer.";
+  const recordFile = path.join(
+    projectPath,
+    ".clawdad",
+    "history",
+    "sessions",
+    sessionId,
+    `20260429T000034Z--${requestId}.json`,
+  );
+
+  await mkdir(path.join(projectPath, ".clawdad", "mailbox"), { recursive: true });
+  await mkdir(path.dirname(recordFile), { recursive: true });
+  await mkdir(path.join(projectPath, ".clawdad", "history", "requests"), { recursive: true });
+  await mkdir(home, { recursive: true });
+  await writeFile(
+    path.join(home, "state.json"),
+    JSON.stringify(
+      {
+        version: 3,
+        projects: {
+          [projectPath]: {
+            status: "completed",
+            last_dispatch: sentAt,
+            last_response: answeredAt,
+            dispatch_count: 1,
+            registered_at: sentAt,
+            active_session_id: sessionId,
+            sessions: {
+              [sessionId]: {
+                slug: "main mind",
+                provider: "codex",
+                provider_session_seeded: "true",
+                tracked_at: sentAt,
+                dispatch_count: 1,
+                last_dispatch: sentAt,
+                last_response: answeredAt,
+                status: "completed",
+                local_only: "false",
+              },
+            },
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    path.join(projectPath, ".clawdad", "mailbox", "status.json"),
+    JSON.stringify(
+      {
+        state: "completed",
+        request_id: requestId,
+        session_id: sessionId,
+        dispatched_at: sentAt,
+        completed_at: answeredAt,
+        heartbeat_at: "2026-04-29T00:01:06Z",
+        error: null,
+        pid: null,
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    path.join(projectPath, ".clawdad", "mailbox", "response.md"),
+    [
+      `# Response: ${requestId}`,
+      "",
+      `Completed: ${answeredAt}`,
+      `Session: ${sessionId}`,
+      "Exit code: 124",
+      "",
+      "---",
+      "",
+      staleText,
+    ].join("\n"),
+    "utf8",
+  );
+  await writeFile(
+    path.join(projectPath, ".clawdad", "history", "requests", `${requestId}.json`),
+    JSON.stringify({ requestId, sessionId, sentAt, file: recordFile }, null, 2),
+    "utf8",
+  );
+  await writeFile(
+    recordFile,
+    JSON.stringify(
+      {
+        requestId,
+        projectPath,
+        sessionId,
+        sessionSlug: "main mind",
+        provider: "codex",
+        message: "How does Verizon wireless internet affect hosting?",
+        sentAt,
+        answeredAt,
+        status: "answered",
+        exitCode: 0,
+        response: realAnswer,
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(mockBinPath, "#!/bin/sh\nexit 1\n", "utf8");
+  await chmod(mockBinPath, 0o755);
+
+  const port = await freePort();
+  await writeFile(
+    configPath,
+    JSON.stringify(
+      {
+        host: "127.0.0.1",
+        port,
+        defaultProject: projectPath,
+        authMode: "tailscale",
+        allowedUsers: ["tester@example.com"],
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  const child = spawn(process.execPath, [serverScript, "serve", "--config", configPath], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      CLAWDAD_HOME: home,
+      CLAWDAD_BIN_PATH: mockBinPath,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  try {
+    const baseUrl = `http://127.0.0.1:${port}`;
+    await waitForHealth(baseUrl, child);
+    const response = await fetch(
+      `${baseUrl}/v1/read?project=${encodeURIComponent(projectPath)}&raw=1`,
+      {
+        headers: {
+          "tailscale-user-login": "tester@example.com",
+        },
+      },
+    );
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.output, realAnswer);
+
+    const healedResponse = await readFile(
+      path.join(projectPath, ".clawdad", "mailbox", "response.md"),
+      "utf8",
+    );
+    assert.match(healedResponse, /Actual Verizon networking answer\./u);
+    assert.doesNotMatch(healedResponse, /went stale/u);
   } finally {
     await stopServer(child);
     await rm(root, { recursive: true, force: true });

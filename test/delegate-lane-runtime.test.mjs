@@ -335,6 +335,11 @@ writeFileSync(
   "utf8",
 );
 
+if (process.env.CLAWDAD_FAKE_DISPATCH_MODE === "stall") {
+  setInterval(() => {}, 1000);
+  await new Promise(() => {});
+}
+
 await new Promise((resolve) => setTimeout(resolve, ${sleepMs}));
 
 const content = [
@@ -533,6 +538,7 @@ async function seedLane(fixture, laneId, {
   objective,
   scopeGlobs,
   delegateSessionId,
+  directionCheckMode,
 } = {}) {
   if (laneId !== "default") {
     const laneArgs = [
@@ -566,6 +572,7 @@ async function seedLane(fixture, laneId, {
     enabled: true,
     hardStops: ["needs_human"],
     computeReservePercent: 20,
+    directionCheckMode: directionCheckMode || "observe",
     maxStepsPerRun: 1,
     createdAt: now,
     updatedAt: now,
@@ -982,6 +989,54 @@ test("default delegate-run stays on default delegate storage and leaves shared m
   }
 });
 
+test("delegate-run stale-fails heartbeat-only lane dispatches instead of leaving running sessions", async () => {
+  const fixture = await createFixture("clawdad-stalled-lane-runtime-");
+  try {
+    await seedLane(fixture, "lane-a", {
+      displayName: "Lane A",
+      objective: "Work only in src/lane-a.",
+      scopeGlobs: ["src/lane-a/**"],
+      delegateSessionId: "lane-a-session",
+    });
+
+    const started = await runServerCommand(fixture, [
+      "delegate-run",
+      fixture.projectPath,
+      "--lane",
+      "lane-a",
+    ], {
+      env: {
+        CLAWDAD_FAKE_DISPATCH_MODE: "stall",
+        CLAWDAD_DELEGATE_DISPATCH_STALL_TIMEOUT_MS: "100",
+      },
+    });
+    assert.equal(started.exitCode, 0, started.stderr || started.stdout);
+    const startPayload = JSON.parse(started.stdout);
+    assert.equal(startPayload.accepted, true);
+
+    const statusFile = path.join(laneDir(fixture.projectPath, "lane-a"), "delegate-status.json");
+    const failedStatus = await waitForValue(
+      () => readJson(statusFile),
+      (status) => status.state === "failed",
+      "stalled lane failure",
+      8_000,
+    );
+    assert.match(failedStatus.error, /no live progress/u);
+    assert.equal(failedStatus.activeRequestId, null);
+    assert.equal(failedStatus.activeStep, null);
+    assert.equal(failedStatus.pauseRequested, false);
+
+    const mailboxStatus = await readJson(path.join(laneDir(fixture.projectPath, "lane-a"), "mailbox", "status.json"));
+    assert.equal(mailboxStatus.state, "failed");
+    assert.match(mailboxStatus.error, /no live progress/u);
+
+    const sharedMailbox = await readJson(path.join(fixture.projectPath, ".clawdad", "mailbox", "status.json"));
+    assert.equal(sharedMailbox.state, "idle");
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
 test("supervise retargets a completed lane with nextAction and restarts after clean gates", async () => {
   const fixture = await createFixture("clawdad-supervise-restart-");
   try {
@@ -1017,20 +1072,130 @@ test("supervise retargets a completed lane with nextAction and restarts after cl
     assert.equal(result.supervisor.restartCount, 1);
     assert.equal(result.supervisor.lastConsumedNextAction, nextAction);
     assert.equal(result.gate.lastGateResult.code, "safe_to_continue");
+    assert.equal(result.gate.directionCheck.decision, "aligned");
+    assert.equal(result.supervisor.lastDirectionCheck.decision, "aligned");
 
     const config = await readJson(path.join(laneDir(fixture.projectPath, "lane-a"), "delegate-config.json"));
     assert.equal(config.objective, nextAction);
     assert.equal(config.watchtowerReviewMode, "off");
+    assert.equal(config.directionCheckMode, "observe");
     const brief = await readFile(path.join(laneDir(fixture.projectPath, "lane-a"), "delegate-brief.md"), "utf8");
     assert.match(brief, /# Supervisor Continuation/u);
     assert.match(brief, /Patched lane A and verified/u);
     assert.match(brief, /Refresh the lane A report/u);
+
+    const delegatePayload = await runJsonCommand(fixture, [
+      "delegate",
+      fixture.projectPath,
+      "--lane",
+      "lane-a",
+    ]);
+    assert.ok(Array.isArray(delegatePayload.supervisorEvents));
+    const restartEvent = delegatePayload.supervisorEvents.at(-1);
+    assert.equal(restartEvent.type, "supervisor_restarted_lane");
+    assert.equal(restartEvent.action, "restart");
+    assert.equal(restartEvent.restartCount, 1);
+    assert.equal(restartEvent.nextAction, nextAction);
 
     await waitForValue(
       () => readJson(path.join(laneDir(fixture.projectPath, "lane-a"), "delegate-status.json")),
       (status) => status.state === "completed",
       "supervised lane completion",
     );
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("supervise observes direction caution without blocking in observe mode", async () => {
+  const fixture = await createFixture("clawdad-supervise-direction-observe-");
+  try {
+    await seedLane(fixture, "lane-a", {
+      displayName: "Lane A",
+      objective: "Maintain the lane A report.",
+      scopeGlobs: ["src/lane-a/**"],
+      delegateSessionId: "lane-a-session",
+      directionCheckMode: "observe",
+    });
+    const repeatedNextAction = "Refresh the lane A report after the next checkpoint.";
+    await writeCompletedLaneStatus(fixture, "lane-a", {
+      runId: "lane-a-finished-repeat",
+      nextAction: repeatedNextAction,
+      lastOutcomeSummary: "No progress: still waiting for the next checkpoint.",
+    });
+    await writeJson(path.join(laneDir(fixture.projectPath, "lane-a"), "delegate-supervisor.json"), {
+      version: 1,
+      laneId: "lane-a",
+      projectPath: fixture.projectPath,
+      enabled: false,
+      state: "stopped",
+      restartCount: 1,
+      lastConsumedNextAction: repeatedNextAction,
+      lastOutcome: "No progress: still waiting for the next checkpoint.",
+    });
+
+    const result = await runJsonCommand(fixture, [
+      "supervise",
+      fixture.projectPath,
+      "--lane",
+      "lane-a",
+      "--once",
+    ]);
+
+    assert.equal(result.ok, true);
+    assert.equal(result.started, true);
+    assert.equal(result.gate.directionCheck.mode, "observe");
+    assert.equal(result.gate.directionCheck.decision, "caution");
+    assert.match(result.gate.directionCheck.reason, /repeats|waiting|little progress/u);
+    assert.equal(result.supervisor.lastDirectionCheck.decision, "caution");
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("supervise enforces direction pause before widening against the handoff", async () => {
+  const fixture = await createFixture("clawdad-supervise-direction-enforce-");
+  try {
+    await seedLane(fixture, "lane-a", {
+      displayName: "Lane A",
+      objective: "Hold the standing handoff and do not widen.",
+      scopeGlobs: ["src/lane-a/**"],
+      delegateSessionId: "lane-a-session",
+      directionCheckMode: "enforce",
+    });
+    await writeFile(
+      path.join(laneDir(fixture.projectPath, "lane-a"), "delegate-brief.md"),
+      "# North Star\n\nHold the standing handoff. Do not widen until the boundary fires.\n",
+      "utf8",
+    );
+    await writeCompletedLaneStatus(fixture, "lane-a", {
+      runId: "lane-a-finished-widen",
+      nextAction: "Expand into a new feature implementation and broaden the lane.",
+      lastOutcomeSummary: "Standing handoff says do not widen until the boundary fires.",
+    });
+
+    const result = await runServerCommand(fixture, [
+      "supervise",
+      fixture.projectPath,
+      "--lane",
+      "lane-a",
+      "--once",
+    ]);
+
+    assert.equal(result.exitCode, 1);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.action, "blocked");
+    assert.equal(payload.started, false);
+    assert.equal(payload.gate.code, "direction_check");
+    assert.equal(payload.gate.directionCheck.mode, "enforce");
+    assert.equal(payload.gate.directionCheck.decision, "pause");
+    assert.match(payload.error, /widens work/u);
+    assert.equal(payload.supervisor.state, "blocked");
+    assert.equal(payload.supervisor.lastDirectionCheck.decision, "pause");
+
+    const status = await readJson(path.join(laneDir(fixture.projectPath, "lane-a"), "delegate-status.json"));
+    assert.equal(status.runId, "lane-a-finished-widen");
+    assert.equal(status.state, "completed");
   } finally {
     await cleanupFixture(fixture);
   }
