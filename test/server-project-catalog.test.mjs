@@ -82,6 +82,38 @@ async function runServerCli(args, { cwd = repoRoot, env = {} } = {}) {
   return { exitCode, stdout, stderr };
 }
 
+async function writeCodexSession(codexHome, projectPath, sessionId, {
+  source = "cli",
+  timestamp = "2026-04-30T12:00:00.000Z",
+} = {}) {
+  const sessionDir = path.join(codexHome, "sessions", "2026", "04", "30");
+  await mkdir(sessionDir, { recursive: true });
+  await writeFile(
+    path.join(sessionDir, `rollout-2026-04-30T12-00-00-${sessionId}.jsonl`),
+    [
+      JSON.stringify({
+        timestamp,
+        type: "session_meta",
+        payload: {
+          id: sessionId,
+          timestamp,
+          cwd: projectPath,
+          source,
+        },
+      }),
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Keep working in this project." }],
+        },
+      }),
+    ].join("\n"),
+    "utf8",
+  );
+}
+
 test("app shell injects a fresh build fingerprint for frontend assets", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-app-shell-"));
   const home = path.join(root, "home");
@@ -459,6 +491,7 @@ test("sessions-doctor repairs quarantined pointers and orphaned delegate lanes",
               "good-session": {
                 slug: "life-ops",
                 provider: "codex",
+                provider_session_seeded: "false",
                 status: "completed",
               },
             },
@@ -580,6 +613,225 @@ test("sessions-doctor repairs quarantined pointers and orphaned delegate lanes",
     assert.equal(cleanPayload.ok, true);
     assert.equal(cleanPayload.issueCount, 0);
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("sessions-doctor quarantines Codex sessions that do not belong to the project", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-session-binding-doctor-"));
+  const home = path.join(root, "home");
+  const codexHome = path.join(root, "codex-home");
+  const projectPath = path.join(root, "nvidia");
+  const otherProjectPath = path.join(root, "cairn");
+  const goodSessionId = "019d7a52-13ef-7e21-9432-a0d3303a9641";
+  const wrongCwdSessionId = "019d8bcc-8a39-7531-adf9-69a63a7d7f02";
+  const placeholderSessionId = "placeholder-session";
+
+  await mkdir(path.join(projectPath, ".clawdad", "mailbox"), { recursive: true });
+  await mkdir(otherProjectPath, { recursive: true });
+  await mkdir(home, { recursive: true });
+  await writeCodexSession(codexHome, projectPath, goodSessionId);
+  await writeCodexSession(codexHome, otherProjectPath, wrongCwdSessionId);
+  await writeFile(
+    path.join(home, "state.json"),
+    JSON.stringify(
+      {
+        version: 3,
+        projects: {
+          [projectPath]: {
+            status: "idle",
+            active_session_id: wrongCwdSessionId,
+            sessions: {
+              [goodSessionId]: {
+                slug: "NVIDIA good",
+                provider: "codex",
+                provider_session_seeded: "true",
+                status: "idle",
+              },
+              [wrongCwdSessionId]: {
+                slug: "Cairn copied id",
+                provider: "codex",
+                provider_session_seeded: "true",
+                status: "idle",
+              },
+              [placeholderSessionId]: {
+                slug: "Fresh placeholder",
+                provider: "codex",
+                provider_session_seeded: "false",
+                status: "idle",
+              },
+              "title-not-id": {
+                slug: "Title accidentally saved as an id",
+                provider: "",
+                provider_session_seeded: "true",
+                status: "idle",
+              },
+            },
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  try {
+    const audit = await runServerCli([
+      "sessions-doctor",
+      projectPath,
+      "--json",
+    ], {
+      env: {
+        CLAWDAD_HOME: home,
+        CLAWDAD_CODEX_HOME: codexHome,
+      },
+    });
+    assert.equal(audit.exitCode, 1, audit.stderr);
+    const auditPayload = JSON.parse(audit.stdout);
+    assert.equal(auditPayload.ok, false);
+    const issueTypes = auditPayload.projects[0].issues.map((issue) => issue.type).sort();
+    assert.deepEqual(issueTypes, ["codex_session_unbound", "session_provider_missing"]);
+
+    const repair = await runServerCli([
+      "sessions-doctor",
+      projectPath,
+      "--repair",
+      "--json",
+    ], {
+      env: {
+        CLAWDAD_HOME: home,
+        CLAWDAD_CODEX_HOME: codexHome,
+      },
+    });
+    assert.equal(repair.exitCode, 0, repair.stderr);
+    const repairPayload = JSON.parse(repair.stdout);
+    assert.equal(repairPayload.ok, true);
+    assert.equal(repairPayload.unresolvedIssueCount, 0);
+
+    const state = JSON.parse(await readFile(path.join(home, "state.json"), "utf8"));
+    const projectState = state.projects[projectPath];
+    assert.equal(projectState.active_session_id, goodSessionId);
+    assert.equal(
+      projectState.quarantined_sessions[wrongCwdSessionId].reason,
+      "codex_session_not_found_for_project",
+    );
+    assert.equal(
+      projectState.quarantined_sessions["title-not-id"].reason,
+      "missing_session_provider",
+    );
+    assert.equal(projectState.sessions[placeholderSessionId].quarantined, undefined);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("dispatch rejects a seeded Codex session whose transcript belongs to another project", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-dispatch-binding-"));
+  const home = path.join(root, "home");
+  const codexHome = path.join(root, "codex-home");
+  const projectPath = path.join(root, "nvidia");
+  const otherProjectPath = path.join(root, "cairn");
+  const configPath = path.join(root, "server.json");
+  const mockBinPath = path.join(root, "clawdad-mock");
+  const invokedPath = path.join(root, "clawdad-invoked");
+  const sessionId = "019d8bcc-8a39-7531-adf9-69a63a7d7f02";
+
+  await mkdir(path.join(projectPath, ".clawdad", "mailbox"), { recursive: true });
+  await mkdir(otherProjectPath, { recursive: true });
+  await mkdir(home, { recursive: true });
+  await writeCodexSession(codexHome, otherProjectPath, sessionId);
+  await writeFile(
+    path.join(home, "state.json"),
+    JSON.stringify(
+      {
+        version: 3,
+        projects: {
+          [projectPath]: {
+            status: "idle",
+            active_session_id: sessionId,
+            sessions: {
+              [sessionId]: {
+                slug: "NVIDIA copied id",
+                provider: "codex",
+                provider_session_seeded: "true",
+                status: "idle",
+              },
+            },
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    path.join(projectPath, ".clawdad", "mailbox", "status.json"),
+    JSON.stringify({ state: "idle", request_id: null, session_id: null }, null, 2),
+    "utf8",
+  );
+  await writeFile(
+    mockBinPath,
+    `#!/bin/sh
+printf invoked > ${JSON.stringify(invokedPath)}
+exit 0
+`,
+    "utf8",
+  );
+  await chmod(mockBinPath, 0o755);
+
+  const port = await freePort();
+  await writeFile(
+    configPath,
+    JSON.stringify(
+      {
+        host: "127.0.0.1",
+        port,
+        defaultProject: projectPath,
+        authMode: "tailscale",
+        allowedUsers: ["tester@example.com"],
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  const child = spawn(process.execPath, [serverScript, "serve", "--config", configPath], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      CLAWDAD_HOME: home,
+      CLAWDAD_CODEX_HOME: codexHome,
+      CLAWDAD_BIN_PATH: mockBinPath,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  try {
+    const baseUrl = `http://127.0.0.1:${port}`;
+    await waitForHealth(baseUrl, child);
+    const response = await fetch(`${baseUrl}/v1/dispatch`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "tailscale-user-login": "tester@example.com",
+      },
+      body: JSON.stringify({
+        project: projectPath,
+        sessionId,
+        message: "Run the next step.",
+      }),
+    });
+    assert.equal(response.status, 409);
+    const payload = await response.json();
+    assert.equal(payload.ok, false);
+    assert.equal(payload.reason, "cwd_mismatch");
+    assert.match(payload.error, /belongs to/u);
+    await assert.rejects(readFile(invokedPath, "utf8"), { code: "ENOENT" });
+  } finally {
+    await stopServer(child);
     await rm(root, { recursive: true, force: true });
   }
 });

@@ -113,6 +113,36 @@ _codex_error_is_transport_disconnect() {
     [[ "$error_text" == *"websocket closed by server before response.completed"* ]]
 }
 
+_validate_codex_session_binding() {
+  local project_path="$1" session_id="$2" session_seeded="$3"
+  if [[ "$session_seeded" != "true" ]]; then
+    return 0
+  fi
+
+  require_node
+
+  local result count
+  if ! result=$(
+    "$CLAWDAD_NODE" "$CLAWDAD_ROOT/lib/codex-session-discovery.mjs" \
+      "--cwd" "$project_path" \
+      "--codex-home" "$CLAWDAD_CODEX_HOME" \
+      "--list" \
+      "--limit" "0" \
+      "--session-id" "$session_id" 2>&1
+  ); then
+    clawdad_error "Could not validate Codex session '$session_id' for $project_path: $result"
+    return 1
+  fi
+
+  count=$(printf '%s' "$result" | "$CLAWDAD_JQ" -r '(.sessions // []) | length' 2>/dev/null || echo "0")
+  if [[ "$count" =~ ^[0-9]+$ ]] && (( count > 0 )); then
+    return 0
+  fi
+
+  clawdad_error "Codex session '$session_id' is not a saved Codex session for $project_path. Select or import a session saved from this project, or run 'clawdad sessions-doctor --repair' to quarantine stale bindings."
+  return 1
+}
+
 _record_codex_transport_failure() {
   local project_path="$1" session_id="$2" error_text="$3"
   local count
@@ -204,6 +234,9 @@ dispatch_to_spoke() {
 
   # Validate provider is available
   require_provider "$provider"
+  if [[ "$provider" == "codex" ]]; then
+    _validate_codex_session_binding "$project_path" "$session_id" "$session_seeded" || return 1
+  fi
 
   # Check if already running
   local current_status
