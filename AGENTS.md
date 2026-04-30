@@ -1,0 +1,9 @@
+<!-- BEGIN CLAWDAD CODEX INTEGRATION -->
+## Clawdad + Codex
+
+- Treat Clawdad as the orchestration layer: one supervisor process steers one delegate session, while Watchtower supplies review signals.
+- Use Clawdad skills for Clawdad-specific workflows instead of packing long workflow rules into every prompt.
+- Use hooks as deterministic guardrails and telemetry. They should record context, enrich approvals, and block only hard-risk tool actions.
+- Soft Watchtower findings should become corrective next-step prompts. Only hard stops should pause the work: patient data, medical advice, outreach, money, credentials, legal/regulatory/human gates, and compute exhaustion.
+- When Clawdad state looks wrong, run `clawdad codex doctor .` and `clawdad sessions-doctor --repair` before inventing a new session model.
+<!-- END CLAWDAD CODEX INTEGRATION -->

@@ -1,0 +1,4 @@
+# Managed by Clawdad Codex Integration.
+# Project-scoped Codex config. Codex loads this only after the project is trusted.
+[features]
+codex_hooks = true

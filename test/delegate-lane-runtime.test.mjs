@@ -301,6 +301,7 @@ if (args[0] !== "dispatch") {
   console.error("unexpected fake clawdad command: " + args.join(" "));
   process.exit(64);
 }
+const prompt = args[2] || "";
 
 const mailboxDir = process.env.CLAWDAD_MAILBOX_DIR || "";
 if (!mailboxDir) {
@@ -342,23 +343,44 @@ if (process.env.CLAWDAD_FAKE_DISPATCH_MODE === "stall") {
 
 await new Promise((resolve) => setTimeout(resolve, ${sleepMs}));
 
+const mode = process.env.CLAWDAD_FAKE_DISPATCH_MODE || "";
+const isWatchtowerRepairStep = prompt.includes("repair failing validation") || prompt.includes("repair validation");
+const decision = mode === "watchtower_validation_soft" && !isWatchtowerRepairStep
+  ? {
+      state: "continue",
+      stop_reason: "none",
+      next_action: "continue " + laneId + " after fixing validation",
+      summary: "Implemented the first slice, but npm test failed in the validation gate.",
+      checkpoint: {
+        progress_signal: "medium",
+        breakthroughs: laneId + " first slice is in place",
+        blockers: "validation failed",
+        next_probe: "repair failing validation",
+        confidence: "medium"
+      }
+    }
+  : {
+      state: "completed",
+      stop_reason: "none",
+      next_action: "archive " + laneId + " lane result",
+      summary: mode === "watchtower_validation_soft"
+        ? "Repaired validation and completed " + laneId + "."
+        : "Completed " + laneId + " lane without collisions.",
+      checkpoint: {
+        progress_signal: "medium",
+        breakthroughs: laneId + " mailbox and status stayed isolated",
+        blockers: "none",
+        next_probe: "archive " + laneId + " lane result",
+        confidence: "high"
+      }
+    };
 const content = [
-  "Completed lane " + laneId + ".",
+  mode === "watchtower_validation_soft" && !isWatchtowerRepairStep
+    ? "npm test failed in the validation gate."
+    : "Completed lane " + laneId + ".",
   "",
   "\`\`\`json",
-  JSON.stringify({
-    state: "completed",
-    stop_reason: "none",
-    next_action: "archive " + laneId + " lane result",
-    summary: "Completed " + laneId + " lane without collisions.",
-    checkpoint: {
-      progress_signal: "medium",
-      breakthroughs: laneId + " mailbox and status stayed isolated",
-      blockers: "none",
-      next_probe: "archive " + laneId + " lane result",
-      confidence: "high"
-    }
-  }, null, 2),
+  JSON.stringify(decision, null, 2),
   "\`\`\`"
 ].join("\\n");
 const completedAt = new Date().toISOString();
@@ -539,6 +561,8 @@ async function seedLane(fixture, laneId, {
   scopeGlobs,
   delegateSessionId,
   directionCheckMode,
+  watchtowerReviewMode,
+  maxStepsPerRun,
 } = {}) {
   if (laneId !== "default") {
     const laneArgs = [
@@ -573,7 +597,8 @@ async function seedLane(fixture, laneId, {
     hardStops: ["needs_human"],
     computeReservePercent: 20,
     directionCheckMode: directionCheckMode || "observe",
-    maxStepsPerRun: 1,
+    watchtowerReviewMode: watchtowerReviewMode || "off",
+    maxStepsPerRun: maxStepsPerRun || 1,
     createdAt: now,
     updatedAt: now,
   };
@@ -1493,6 +1518,54 @@ test("delegate-run remains bounded and does not enable continuity supervisor", a
     const supervisor = await readJson(path.join(laneDir(fixture.projectPath, "lane-a"), "delegate-supervisor.json"));
     assert.equal(supervisor.state, "stopped");
     assert.equal(supervisor.restartCount, 0);
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("watchtower enforce queues validation repair instead of pausing the delegate", async () => {
+  const fixture = await createFixture("clawdad-watchtower-enforce-soft-");
+  try {
+    await seedLane(fixture, "lane-a", {
+      displayName: "Lane A",
+      objective: "Finish lane A while repairing validation locally.",
+      scopeGlobs: ["src/lane-a/**"],
+      delegateSessionId: "lane-a-session",
+      watchtowerReviewMode: "enforce",
+      maxStepsPerRun: 3,
+    });
+
+    const result = await runServerCommand(
+      fixture,
+      ["delegate-run", fixture.projectPath, "--lane", "lane-a"],
+      { env: { CLAWDAD_FAKE_DISPATCH_MODE: "watchtower_validation_soft" } },
+    );
+    assert.equal(result.exitCode, 0, result.stderr || result.stdout);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.config.watchtowerReviewMode, "enforce");
+
+    const finalStatus = await waitForValue(
+      () => readJson(path.join(laneDir(fixture.projectPath, "lane-a"), "delegate-status.json")),
+      (status) => status.state === "completed",
+      "watchtower soft enforcement completion",
+    );
+    assert.equal(finalStatus.stepCount, 2);
+    assert.equal(finalStatus.stopReason, null);
+
+    const eventsText = await readFile(
+      path.join(laneDir(fixture.projectPath, "lane-a"), "runs", `${finalStatus.runId}.jsonl`),
+      "utf8",
+    );
+    const events = eventsText
+      .trim()
+      .split(/\r?\n/u)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+    const corrective = events.find((event) => event.type === "watchtower_corrective_step_queued");
+    assert.ok(corrective, eventsText);
+    assert.match(corrective.nextAction, /repair failing validation/u);
+    assert.equal(events.some((event) => event.type === "run_paused" && event.stopReason === "review_recommended"), false);
   } finally {
     await cleanupFixture(fixture);
   }

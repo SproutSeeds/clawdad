@@ -1,0 +1,38 @@
+{
+  "name": "clawdad-codex-integration",
+  "version": "0.6.50",
+  "description": "Clawdad workflows, hooks, and guardrails for Codex projects.",
+  "x-clawdadManaged": true,
+  "author": {
+    "name": "SproutSeeds",
+    "url": "https://github.com/SproutSeeds/clawdad"
+  },
+  "repository": "https://github.com/SproutSeeds/clawdad",
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "clawdad",
+    "delegation",
+    "hooks",
+    "skills"
+  ],
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.json",
+  "interface": {
+    "displayName": "Clawdad Codex Integration",
+    "shortDescription": "Clawdad delegation skills and Codex hook guardrails.",
+    "longDescription": "Adds Clawdad delegate, supervisor, Watchtower, session doctor, release, and incident triage workflows to Codex.",
+    "developerName": "SproutSeeds",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/SproutSeeds/clawdad",
+    "brandColor": "#C73433",
+    "defaultPrompt": [
+      "Use Clawdad to triage this delegate failure.",
+      "Use Clawdad to supervise this Watchtower finding."
+    ]
+  }
+}

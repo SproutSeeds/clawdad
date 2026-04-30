@@ -340,6 +340,39 @@ test("watchtower still flags actual paid API blockers outside guardrails", async
   }
 });
 
+test("watchtower flags patient-data boundaries as hard stops", async () => {
+  const fixture = await createFixture("clawdad-watchtower-patient-data-");
+  try {
+    const events = [
+      {
+        id: "evt-patient-data",
+        at: "2026-04-23T12:01:00Z",
+        type: "agent_response",
+        runId: fixture.runId,
+        step: 1,
+        title: "Boundary finding",
+        text: "Found patient data/PHI in a local fixture and stopped for review.",
+      },
+    ];
+    await writeFile(
+      path.join(fixture.projectPath, ".clawdad", "delegate", "runs", `${fixture.runId}.jsonl`),
+      `${events.map((event) => JSON.stringify(event)).join("\n")}\n`,
+      "utf8",
+    );
+
+    const scanResult = await runServer(fixture, ["watchtower", fixture.projectPath, "--once", "--json"]);
+    assert.equal(scanResult.exitCode, 0, scanResult.stderr || scanResult.stdout);
+    const reviewResult = await runServer(fixture, ["feed", "review", fixture.projectPath, "--json"]);
+    assert.equal(reviewResult.exitCode, 0, reviewResult.stderr || reviewResult.stdout);
+    const reviewPayload = JSON.parse(reviewResult.stdout);
+    const card = reviewPayload.cards.find((entry) => entry.trigger === "patient_data_boundary");
+    assert.ok(card);
+    assert.equal(card.reviewStatus, "hard_stop");
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("watchtower current-state output hides stale cards from older runs", async () => {
   const fixture = await createFixture("clawdad-watchtower-current-scope-");
   try {

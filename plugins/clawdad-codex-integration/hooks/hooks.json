@@ -1,0 +1,56 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "clawdad codex hook",
+            "timeout": 10,
+            "statusMessage": "Loading Clawdad context"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|apply_patch|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "clawdad codex hook",
+            "timeout": 15,
+            "statusMessage": "Checking Clawdad guardrails"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "Bash|apply_patch|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "clawdad codex hook",
+            "timeout": 15,
+            "statusMessage": "Adding Clawdad approval context"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|apply_patch|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "clawdad codex hook",
+            "timeout": 15,
+            "statusMessage": "Recording Clawdad tool signal"
+          }
+        ]
+      }
+    ]
+  }
+}

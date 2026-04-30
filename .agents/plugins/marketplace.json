@@ -1,0 +1,20 @@
+{
+  "name": "clawdad-local-plugins",
+  "interface": {
+    "displayName": "Clawdad Local Plugins"
+  },
+  "plugins": [
+    {
+      "name": "clawdad-codex-integration",
+      "source": {
+        "source": "local",
+        "path": "./plugins/clawdad-codex-integration"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

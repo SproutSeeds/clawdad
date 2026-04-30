@@ -133,6 +133,8 @@ clawdad read my-project
 | `clawdad supervise <slug> --lane <laneId>` | Opt into continuity orchestration that restarts bounded delegate runs only after ORP, compute, and direction gates pass |
 | `clawdad delegate-pause <slug>` | Pause autonomous delegate mode after the current step |
 | `clawdad sessions-doctor [slug]` | Audit stale/quarantined sessions and delegate lanes; add `--repair` for non-destructive cleanup |
+| `clawdad codex install [slug|path]` | Install the project-local Codex hooks, skills, plugin, marketplace entry, and AGENTS guidance |
+| `clawdad codex doctor [slug|path]` | Audit the Codex integration pack for drift |
 | `clawdad watchtower <slug>` | Run the read-only delegation observer sidecar |
 | `clawdad watch <slug>` | Friendly alias for `watchtower` when a project is supplied |
 | `clawdad feed tail <slug>` | Show recent Watchtower feed events |
@@ -208,6 +210,31 @@ delegate run events, ORP continuation/hygiene state, and git status, then append
 structured updates and review cards to `.clawdad/feed/watchtower.sqlite`. It does
 not edit, approve, or advance the project unless a delegate lane explicitly opts
 into `--watchtower-review-mode enforce`.
+
+In enforce mode, Watchtower hard stops still block the lane, including
+credentials, paid/live-order boundaries, patient data, medical advice, outreach,
+legal/regulatory gates, explicit human approval, and compute exhaustion. Softer
+findings such as failing validation, ORP/catalog drift, hygiene repair, and large
+diff checkpoints are converted into the supervisor's next delegate prompt so the
+same delegate session repairs or checkpoints the work instead of pausing.
+
+`clawdad codex install <project>` makes the Codex side of a project explicit and
+repairable. It writes project-local Codex lifecycle hooks, a small hook runner,
+repo-scoped Clawdad skills, a local `clawdad-codex-integration` plugin package,
+a repo marketplace entry, and a managed Clawdad block in `AGENTS.md`.
+
+The generated hooks are intentionally narrow: they add compact Clawdad context
+on session start, annotate release/publish/privilege actions for review, log
+compact tool signals to `.clawdad/codex-hooks/events.jsonl`, and deny only
+hard-risk commands such as destructive resets or credential exposure. The
+generated skills cover delegate, supervisor, Watchtower review, session doctor,
+release, and incident triage workflows so Codex can load those instructions only
+when the task calls for them.
+
+Run `clawdad codex doctor <project> --json` to verify hooks, skills, plugin
+packaging, marketplace state, `AGENTS.md`, and whether project-local Codex
+configuration may still need trust in the user Codex config. The web app exposes
+the same check/install flow from the project Codex action.
 
 ```bash
 clawdad watchtower my-project --once

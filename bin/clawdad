@@ -37,6 +37,7 @@ Commands:
   delegate-pause <project>      Pause autonomous delegate mode for a project
   delegate-reset <project>      Reset the delegate brief to the default template
   sessions-doctor [project]     Audit/repair stale sessions and delegate lanes
+  codex <install|doctor> [proj] Install or audit Codex hooks, skills, plugin, and AGENTS integration
   watchtower <project>          Observe delegation read-only and index review cards
   feed <tail|search|review>     Read the delegation review feed
   track-session <project> <session-id>
@@ -57,6 +58,7 @@ Commands:
   secure-bootstrap [options]    Write a Tailscale-first secure server setup
   secure-doctor [options]       Verify the secure self-hosted setup
   chimera-doctor [options]      Verify the local Chimera/Ollama provider lane
+  codex-hook                    Internal Codex hook entrypoint
   gen-token [options]           Generate a bearer token for the listener
   print-launch-agent [opts]     Print a macOS launchd plist for clawdad serve
   install-launch-agent [opts]   Install a macOS launchd plist for clawdad serve
@@ -971,6 +973,14 @@ cmd_sessions_doctor() {
   run_server_helper sessions-doctor "$@"
 }
 
+cmd_codex() {
+  run_server_helper codex "$@"
+}
+
+cmd_codex_hook() {
+  run_server_helper codex-hook "$@"
+}
+
 cmd_print_launch_agent() {
   run_server_helper print-launch-agent "$@"
 }
@@ -1004,6 +1014,8 @@ main() {
     delegate-pause|delegate-stop) cmd_delegate_pause "$@" ;;
     delegate-reset) cmd_delegate_reset "$@" ;;
     sessions-doctor|session-doctor) cmd_sessions_doctor "$@" ;;
+    codex)      cmd_codex "$@" ;;
+    codex-hook) cmd_codex_hook "$@" ;;
     watchtower) cmd_watchtower "$@" ;;
     feed)       cmd_feed "$@" ;;
     track-session) cmd_track_session "$@" ;;

@@ -348,7 +348,7 @@ body::-webkit-scrollbar {
 
 .project-subtabs {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 4px;
   padding: 3px;
   border: 1px solid rgba(255, 218, 185, 0.1);
@@ -2328,6 +2328,63 @@ textarea:disabled {
 
 .session-title-form .detail-action-button {
   width: 100%;
+}
+
+.codex-integration-list {
+  gap: 8px;
+}
+
+.codex-check-card {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 218, 185, 0.12);
+  border-radius: 12px;
+  background: rgba(48, 7, 10, 0.42);
+}
+
+.codex-check-card.is-pass {
+  border-color: rgba(129, 199, 132, 0.34);
+}
+
+.codex-check-card.is-warn {
+  border-color: rgba(255, 209, 128, 0.42);
+}
+
+.codex-check-card.is-fail {
+  border-color: rgba(255, 124, 124, 0.46);
+}
+
+.codex-check-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.codex-check-title {
+  min-width: 0;
+  color: rgba(255, 248, 238, 0.98);
+  font-size: 0.9rem;
+  font-weight: 850;
+}
+
+.codex-check-status {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.codex-check-detail {
+  color: rgba(255, 232, 205, 0.8);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .project-mode-tabs {

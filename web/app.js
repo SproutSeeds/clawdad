@@ -18,6 +18,9 @@ const state = {
   modalThread: null,
   summaryModalProject: "",
   projectSummaries: {},
+  codexIntegrationModalProject: "",
+  codexIntegrationByProject: {},
+  codexIntegrationPending: false,
   artifactModalProject: "",
   artifactsByProject: {},
   artifactDownloadPendingId: "",
@@ -111,6 +114,16 @@ const elements = {
   detailHistoryState: document.querySelector("#detailHistoryState"),
   detailHistoryList: document.querySelector("#detailHistoryList"),
   projectSummaryButton: document.querySelector("#projectSummaryButton"),
+  projectCodexButton: document.querySelector("#projectCodexButton"),
+  codexIntegrationModal: document.querySelector("#codexIntegrationModal"),
+  codexIntegrationBackdrop: document.querySelector("#codexIntegrationBackdrop"),
+  codexIntegrationClose: document.querySelector("#codexIntegrationClose"),
+  codexIntegrationProject: document.querySelector("#codexIntegrationProject"),
+  codexIntegrationStatus: document.querySelector("#codexIntegrationStatus"),
+  codexIntegrationState: document.querySelector("#codexIntegrationState"),
+  codexIntegrationList: document.querySelector("#codexIntegrationList"),
+  codexIntegrationRefreshButton: document.querySelector("#codexIntegrationRefreshButton"),
+  codexIntegrationInstallButton: document.querySelector("#codexIntegrationInstallButton"),
   activeRunsButton: document.querySelector("#activeRunsButton"),
   activeRunsOrb: document.querySelector("#activeRunsOrb"),
   projectArtifactsButton: document.querySelector("#projectArtifactsButton"),
@@ -1642,6 +1655,10 @@ function currentSummaryProject() {
   return projectByPath(state.summaryModalProject) || null;
 }
 
+function currentCodexIntegrationProject() {
+  return projectByPath(state.codexIntegrationModalProject) || null;
+}
+
 function currentArtifactsProject() {
   return projectByPath(state.artifactModalProject) || null;
 }
@@ -1984,6 +2001,26 @@ function projectSummaryStateFor(projectPath) {
 function setProjectSummaryState(projectPath, nextState) {
   state.projectSummaries[projectPath] = {
     ...projectSummaryStateFor(projectPath),
+    ...nextState,
+  };
+}
+
+function codexIntegrationStateFor(projectPath) {
+  return (
+    state.codexIntegrationByProject[projectPath] || {
+      report: null,
+      operations: [],
+      loading: false,
+      installing: false,
+      initialized: false,
+      error: "",
+    }
+  );
+}
+
+function setCodexIntegrationState(projectPath, nextState) {
+  state.codexIntegrationByProject[projectPath] = {
+    ...codexIntegrationStateFor(projectPath),
     ...nextState,
   };
 }
@@ -2889,6 +2926,7 @@ function pruneTrackedArtifacts(projectPath, sessionId = "") {
   }
 
   delete state.projectSummaries[normalizedProjectPath];
+  delete state.codexIntegrationByProject[normalizedProjectPath];
   delete state.artifactsByProject[normalizedProjectPath];
   for (const [key, delegateState] of Object.entries(state.delegatesByProject)) {
     if (delegateStateProjectPathFromKey(key, delegateState) === normalizedProjectPath) {
@@ -2916,6 +2954,9 @@ function pruneTrackedArtifacts(projectPath, sessionId = "") {
   }
   if (state.summaryModalProject === normalizedProjectPath) {
     state.summaryModalProject = "";
+  }
+  if (state.codexIntegrationModalProject === normalizedProjectPath) {
+    state.codexIntegrationModalProject = "";
   }
   if (state.artifactModalProject === normalizedProjectPath) {
     state.artifactModalProject = "";
@@ -3571,6 +3612,7 @@ function updateBodyModalState() {
       Boolean(state.sessionImportModalProject) ||
       state.projectModalOpen ||
       Boolean(state.summaryModalProject) ||
+      Boolean(state.codexIntegrationModalProject) ||
       Boolean(state.activeRunsModalOpen) ||
       Boolean(state.artifactModalProject) ||
       Boolean(state.delegateModalProject) ||
@@ -6504,6 +6546,94 @@ function renderSummaryModal() {
   elements.summaryModal.hidden = false;
 }
 
+function buildCodexCheckCard(check) {
+  const status = String(check?.status || "warn").toLowerCase();
+  const card = document.createElement("article");
+  card.className = `codex-check-card is-${status}`;
+
+  const head = document.createElement("div");
+  head.className = "codex-check-head";
+
+  const title = document.createElement("div");
+  title.className = "codex-check-title";
+  title.textContent = String(check?.label || "Check");
+
+  const badge = document.createElement("div");
+  badge.className = "codex-check-status";
+  badge.textContent = status;
+
+  const detail = document.createElement("div");
+  detail.className = "codex-check-detail";
+  detail.textContent = String(check?.detail || "");
+
+  head.append(title, badge);
+  card.append(head, detail);
+  return card;
+}
+
+function renderCodexIntegrationModal() {
+  const project = currentCodexIntegrationProject();
+  if (!project) {
+    setText(elements.codexIntegrationState, "", { empty: true });
+    clearNode(elements.codexIntegrationList);
+    elements.codexIntegrationModal.hidden = true;
+    return;
+  }
+
+  const integrationState = codexIntegrationStateFor(project.path);
+  const report = integrationState.report || {};
+  const checks = Array.isArray(report.checks) ? report.checks : [];
+  const failCount = Number(report.failCount || 0);
+  const warnCount = Number(report.warnCount || 0);
+  const ready = report.ok === true;
+
+  elements.codexIntegrationProject.textContent = project.displayName || project.slug || fallbackProjectLabel(project.path);
+  elements.codexIntegrationStatus.textContent = ready
+    ? warnCount > 0
+      ? `${warnCount} warning${warnCount === 1 ? "" : "s"}`
+      : "Codex integration ready"
+    : integrationState.initialized
+      ? `${failCount} issue${failCount === 1 ? "" : "s"}`
+      : "Codex integration";
+
+  const installLabel = elements.codexIntegrationInstallButton.querySelector(".button-text");
+  if (installLabel) {
+    installLabel.textContent = integrationState.installing ? "Installing…" : ready ? "Update" : "Install";
+  }
+  elements.codexIntegrationInstallButton.disabled = integrationState.installing || integrationState.loading;
+  elements.codexIntegrationRefreshButton.disabled = integrationState.installing || integrationState.loading;
+
+  if (integrationState.installing) {
+    setText(elements.codexIntegrationState, "Installing Codex pack", { empty: false });
+  } else if (integrationState.loading && !integrationState.initialized) {
+    setText(elements.codexIntegrationState, "Checking Codex pack", { empty: false });
+  } else if (integrationState.error) {
+    setText(elements.codexIntegrationState, integrationState.error, { empty: false });
+  } else if (ready && warnCount === 0) {
+    setText(elements.codexIntegrationState, "Hooks, skills, plugin, and AGENTS guidance are installed", { empty: false });
+  } else if (ready) {
+    setText(elements.codexIntegrationState, "Installed with warnings", { empty: false });
+  } else if (integrationState.initialized) {
+    setText(elements.codexIntegrationState, "Install or update the Codex pack", { empty: false });
+  } else {
+    setText(elements.codexIntegrationState, "", { empty: true });
+  }
+
+  clearNode(elements.codexIntegrationList);
+  if (checks.length === 0) {
+    const card = document.createElement("div");
+    card.className = "history-state-card";
+    card.textContent = integrationState.loading ? "Checking…" : "No Codex integration checks loaded yet.";
+    elements.codexIntegrationList.append(card);
+  } else {
+    for (const entry of checks) {
+      elements.codexIntegrationList.append(buildCodexCheckCard(entry));
+    }
+  }
+
+  elements.codexIntegrationModal.hidden = false;
+}
+
 function renderDelegateModal() {
   const project = currentDelegateProject();
   if (!project) {
@@ -6884,6 +7014,9 @@ function updateSummaryButtonAvailability() {
   if (elements.projectSummaryButton) {
     elements.projectSummaryButton.disabled = disabled;
   }
+  if (elements.projectCodexButton) {
+    elements.projectCodexButton.disabled = disabled;
+  }
   if (elements.summaryWorkspaceTab) {
     elements.summaryWorkspaceTab.disabled = disabled;
     elements.summaryWorkspaceTab.setAttribute("aria-disabled", String(disabled));
@@ -7005,6 +7138,7 @@ function renderAll() {
   renderSessionImportModal();
   renderSessionTitleModal();
   renderSummaryModal();
+  renderCodexIntegrationModal();
   renderActiveRunsModal();
   renderArtifactsModal();
   renderDelegateModal();
@@ -7647,6 +7781,7 @@ async function openSessionThread(projectPath = state.selectedProject, sessionId 
 
   state.sessionImportModalProject = "";
   state.summaryModalProject = "";
+  state.codexIntegrationModalProject = "";
   state.artifactModalProject = "";
   state.delegateModalProject = "";
   state.sessionTitleModalProject = "";
@@ -7749,6 +7884,7 @@ async function openProjectSummary(projectPath = state.selectedProject) {
   state.activeRunsModalOpen = false;
   state.artifactModalProject = "";
   state.delegateModalProject = "";
+  state.codexIntegrationModalProject = "";
   state.sessionTitleModalProject = "";
   state.sessionTitleModalSessionId = "";
   state.summaryModalProject = projectPath;
@@ -7758,6 +7894,113 @@ async function openProjectSummary(projectPath = state.selectedProject) {
 
 function closeProjectSummary() {
   state.summaryModalProject = "";
+  renderAll();
+}
+
+async function loadCodexIntegration(projectPath, { force = false } = {}) {
+  if (!projectPath) {
+    return codexIntegrationStateFor(projectPath);
+  }
+  const existing = codexIntegrationStateFor(projectPath);
+  if (existing.loading || existing.installing) {
+    return existing;
+  }
+  if (!force && existing.initialized) {
+    return existing;
+  }
+
+  setCodexIntegrationState(projectPath, {
+    loading: true,
+    error: "",
+  });
+  renderAll();
+
+  try {
+    const payload = await fetchJson(
+      `/v1/codex-integration?project=${encodeURIComponent(projectPath)}`,
+    );
+    setCodexIntegrationState(projectPath, {
+      report: payload,
+      operations: [],
+      loading: false,
+      initialized: true,
+      error: "",
+    });
+  } catch (error) {
+    setCodexIntegrationState(projectPath, {
+      loading: false,
+      initialized: true,
+      error: error.message,
+      report: error.payload && Array.isArray(error.payload.checks) ? error.payload : existing.report,
+    });
+  }
+
+  renderAll();
+  return codexIntegrationStateFor(projectPath);
+}
+
+async function openCodexIntegration(projectPath = state.selectedProject) {
+  if (!projectPath) {
+    return;
+  }
+
+  state.modalThread = null;
+  state.projectModalOpen = false;
+  state.sessionImportModalProject = "";
+  state.activeRunsModalOpen = false;
+  state.artifactModalProject = "";
+  state.delegateModalProject = "";
+  state.sessionTitleModalProject = "";
+  state.sessionTitleModalSessionId = "";
+  state.summaryModalProject = "";
+  state.codexIntegrationModalProject = projectPath;
+  renderAll();
+  await loadCodexIntegration(projectPath);
+}
+
+function closeCodexIntegration() {
+  state.codexIntegrationModalProject = "";
+  renderAll();
+}
+
+async function installCodexIntegrationForCurrentProject() {
+  const project = currentCodexIntegrationProject();
+  if (!project?.path) {
+    return;
+  }
+  const projectPath = project.path;
+  setCodexIntegrationState(projectPath, {
+    installing: true,
+    error: "",
+  });
+  renderAll();
+
+  try {
+    const payload = await fetchJson("/v1/codex-integration/install", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        project: projectPath,
+      }),
+    });
+    setCodexIntegrationState(projectPath, {
+      report: payload.report || payload,
+      operations: Array.isArray(payload.operations) ? payload.operations : [],
+      installing: false,
+      initialized: true,
+      error: "",
+    });
+  } catch (error) {
+    setCodexIntegrationState(projectPath, {
+      installing: false,
+      initialized: true,
+      error: error.message,
+      report: error.payload?.report || error.payload || codexIntegrationStateFor(projectPath).report,
+    });
+  }
+
   renderAll();
 }
 
@@ -7828,6 +8071,7 @@ async function openArtifactsModal(projectPath = state.selectedProject) {
   state.projectModalOpen = false;
   state.sessionImportModalProject = "";
   state.summaryModalProject = "";
+  state.codexIntegrationModalProject = "";
   state.activeRunsModalOpen = false;
   state.delegateModalProject = "";
   state.sessionTitleModalProject = "";
@@ -7867,6 +8111,7 @@ async function openSessionImportModal(projectPath = state.selectedProject) {
   state.modalThread = null;
   state.projectModalOpen = false;
   state.summaryModalProject = "";
+  state.codexIntegrationModalProject = "";
   state.artifactModalProject = "";
   state.delegateModalProject = "";
   state.sessionTitleModalProject = "";
@@ -7894,6 +8139,7 @@ function openSessionTitleModal(projectPath = state.selectedProject, sessionId = 
   state.projectModalOpen = false;
   state.sessionImportModalProject = "";
   state.summaryModalProject = "";
+  state.codexIntegrationModalProject = "";
   state.artifactModalProject = "";
   state.delegateModalProject = "";
   state.sessionTitleModalProject = project.path;
@@ -8428,6 +8674,7 @@ async function openDelegateModal(projectPath = state.selectedProject, laneId = "
   state.projectModalOpen = false;
   state.sessionImportModalProject = "";
   state.summaryModalProject = "";
+  state.codexIntegrationModalProject = "";
   state.activeRunsModalOpen = false;
   state.artifactModalProject = "";
   state.sessionTitleModalProject = "";
@@ -8471,6 +8718,7 @@ async function openActiveRunsModal() {
   state.projectModalOpen = false;
   state.sessionImportModalProject = "";
   state.summaryModalProject = "";
+  state.codexIntegrationModalProject = "";
   state.artifactModalProject = "";
   state.sessionTitleModalProject = "";
   state.sessionTitleModalSessionId = "";
@@ -8863,6 +9111,7 @@ function setProjectModalMode(mode) {
 
 async function openProjectModal() {
   state.summaryModalProject = "";
+  state.codexIntegrationModalProject = "";
   state.sessionImportModalProject = "";
   state.activeRunsModalOpen = false;
   state.artifactModalProject = "";
@@ -9202,6 +9451,20 @@ function bindEvents() {
   elements.projectSummaryButton?.addEventListener("click", () => {
     void openProjectSummary();
   });
+  elements.projectCodexButton?.addEventListener("click", () => {
+    void openCodexIntegration();
+  });
+  elements.codexIntegrationBackdrop?.addEventListener("click", closeCodexIntegration);
+  elements.codexIntegrationClose?.addEventListener("click", closeCodexIntegration);
+  elements.codexIntegrationRefreshButton?.addEventListener("click", () => {
+    const project = currentCodexIntegrationProject();
+    if (project?.path) {
+      void loadCodexIntegration(project.path, { force: true });
+    }
+  });
+  elements.codexIntegrationInstallButton?.addEventListener("click", () => {
+    void installCodexIntegrationForCurrentProject();
+  });
   elements.activeRunsButton?.addEventListener("click", () => {
     void openActiveRunsModal();
   });
@@ -9527,6 +9790,10 @@ function bindEvents() {
     }
     if (event.key === "Escape" && state.summaryModalProject) {
       closeProjectSummary();
+      return;
+    }
+    if (event.key === "Escape" && state.codexIntegrationModalProject) {
+      closeCodexIntegration();
       return;
     }
     if (event.key === "Escape" && state.activeRunsModalOpen) {

@@ -352,6 +352,7 @@ test("delegateWatchtowerReviewDecision treats clean large diffs as checkpoint-on
   assert.equal(decision.hardStop, false);
   assert.equal(decision.pauseRecommended, false);
   assert.equal(decision.repairRecommended, false);
+  assert.equal(decision.correctiveRecommended, false);
   assert.equal(decision.checkpointRecommended, true);
   assert.equal(decision.reason, "large_diff_checkpoint");
 });
@@ -375,6 +376,7 @@ test("delegateWatchtowerReviewDecision routes unclassified hygiene to repair ins
   assert.equal(decision.hardStop, false);
   assert.equal(decision.pauseRecommended, false);
   assert.equal(decision.repairRecommended, true);
+  assert.equal(decision.correctiveRecommended, true);
   assert.equal(decision.checkpointRecommended, false);
   assert.equal(decision.reason, "worktree_hygiene_unclassified");
   assert.match(decision.nextAction, /hygiene repair\/checkpoint/u);
@@ -402,11 +404,12 @@ test("delegateWatchtowerReviewDecision blocks on sensitive file changes", () => 
 
   assert.equal(decision.hardStop, true);
   assert.equal(decision.pauseRecommended, false);
+  assert.equal(decision.correctiveRecommended, false);
   assert.equal(decision.reason, "sensitive_files");
   assert.match(decision.nextAction, /sensitive file/u);
 });
 
-test("delegateWatchtowerReviewDecision pauses on validation failure even with a large diff", () => {
+test("delegateWatchtowerReviewDecision converts validation failure into a corrective step", () => {
   const decision = delegateWatchtowerReviewDecision({
     signals: [
       {
@@ -426,10 +429,82 @@ test("delegateWatchtowerReviewDecision pauses on validation failure even with a 
   });
 
   assert.equal(decision.hardStop, false);
-  assert.equal(decision.pauseRecommended, true);
+  assert.equal(decision.pauseRecommended, false);
+  assert.equal(decision.correctiveRecommended, true);
   assert.equal(decision.checkpointRecommended, false);
   assert.equal(decision.reason, "tests_failed");
   assert.match(decision.nextAction, /validation/u);
+});
+
+test("delegateWatchtowerReviewDecision converts unknown review pauses into corrective next actions", () => {
+  const decision = delegateWatchtowerReviewDecision({
+    signals: [
+      {
+        reviewStatus: "pause_recommended",
+        trigger: "readiness_strengthened",
+        title: "Readiness claim strengthened",
+        summary: "Delegate said the feature is production ready after a narrow smoke check.",
+      },
+    ],
+    delegateDecision: {
+      state: "continue",
+      stopReason: "none",
+    },
+  });
+
+  assert.equal(decision.hardStop, false);
+  assert.equal(decision.pauseRecommended, false);
+  assert.equal(decision.correctiveRecommended, true);
+  assert.equal(decision.reason, "readiness_strengthened");
+  assert.match(decision.nextAction, /review\/checkpoint/u);
+});
+
+test("delegateWatchtowerReviewDecision converts unvalidated large diffs into corrective validation", () => {
+  const decision = delegateWatchtowerReviewDecision({
+    signals: [
+      {
+        reviewStatus: "pause_recommended",
+        trigger: "large_diff",
+        title: "Large diff checkpoint",
+      },
+    ],
+    delegateDecision: {
+      state: "continue",
+      stopReason: "none",
+      checkpoint: {
+        blockers: "validation still pending",
+      },
+    },
+  });
+
+  assert.equal(decision.hardStop, false);
+  assert.equal(decision.pauseRecommended, false);
+  assert.equal(decision.correctiveRecommended, true);
+  assert.equal(decision.checkpointRecommended, false);
+  assert.equal(decision.reason, "large_diff_unvalidated");
+  assert.match(decision.nextAction, /validate and checkpoint/u);
+});
+
+test("delegateWatchtowerReviewDecision keeps explicit safety boundaries as hard stops", () => {
+  const decision = delegateWatchtowerReviewDecision({
+    signals: [
+      {
+        reviewStatus: "hard_stop",
+        trigger: "patient_data_boundary",
+        title: "Patient-data boundary touched",
+        summary: "Delegate found PHI in a fixture.",
+      },
+    ],
+    delegateDecision: {
+      state: "continue",
+      stopReason: "none",
+    },
+  });
+
+  assert.equal(decision.hardStop, true);
+  assert.equal(decision.pauseRecommended, false);
+  assert.equal(decision.correctiveRecommended, false);
+  assert.equal(decision.reason, "patient_data_boundary");
 });
 
 test("recoverableCodexStreamDisconnect detects retryable websocket drops", () => {
