@@ -106,6 +106,36 @@ _extract_codex_error_text() {
   printf '%s' "$output" | "$CLAWDAD_JQ" -r '.error_text // ""' 2>/dev/null
 }
 
+_codex_error_is_transport_disconnect() {
+  local error_text="$1"
+  [[ "$error_text" == *"responseStreamDisconnected"* ]] ||
+    [[ "$error_text" == *"stream disconnected before completion"* ]] ||
+    [[ "$error_text" == *"websocket closed by server before response.completed"* ]]
+}
+
+_record_codex_transport_failure() {
+  local project_path="$1" session_id="$2" error_text="$3"
+  local count
+  count=$(state_session_field "$project_path" "$session_id" "transport_failure_count")
+  if [[ ! "$count" =~ ^[0-9]+$ ]]; then
+    count=0
+  fi
+  count=$((count + 1))
+  state_update_session "$project_path" "$session_id" "transport_failure_count" "$count" || true
+  state_update_session "$project_path" "$session_id" "last_error_kind" "codex_transport_disconnect" || true
+  state_update_session "$project_path" "$session_id" "last_error_text" "$error_text" || true
+  if (( count >= 2 )); then
+    state_quarantine_session "$project_path" "$session_id" "repeated_codex_transport_disconnect" "$error_text" || true
+  fi
+}
+
+_clear_codex_transport_failure() {
+  local project_path="$1" session_id="$2"
+  state_update_session "$project_path" "$session_id" "transport_failure_count" "0" || true
+  state_update_session "$project_path" "$session_id" "last_error_kind" "" || true
+  state_update_session "$project_path" "$session_id" "last_error_text" "" || true
+}
+
 _extract_result_chimera() {
   local output="$1"
   printf '%s' "$output" | "$CLAWDAD_JQ" -r '.result_text // ""' 2>/dev/null
@@ -146,6 +176,13 @@ dispatch_to_spoke() {
   # Validate session_id
   if [[ -z "$session_id" || "$session_id" == "null" ]]; then
     clawdad_error "No session ID found for project. Register it first: clawdad register $project_path"
+    return 1
+  fi
+
+  if state_session_is_quarantined "$project_path" "$session_id"; then
+    local quarantine_reason
+    quarantine_reason=$(state_session_quarantine_reason "$project_path" "$session_id")
+    clawdad_error "Session '$slug' ($session_id) is quarantined: ${quarantine_reason:-quarantined}. Add or select a fresh session before dispatching."
     return 1
   fi
 
@@ -376,6 +413,9 @@ _dispatch_background() {
     state_update_session "$project_path" "$effective_session_id" "status" "completed"
     state_update_session "$project_path" "$effective_session_id" "last_response" "$(iso_timestamp)"
     state_increment_session "$project_path" "$effective_session_id" "dispatch_count"
+    if [[ "$provider" == "codex" ]]; then
+      _clear_codex_transport_failure "$project_path" "$effective_session_id"
+    fi
     if [[ "$persist_active" == "true" ]]; then
       state_set_active_session "$project_path" "$effective_session_id"
     fi
@@ -417,6 +457,9 @@ _dispatch_background() {
     state_update_session "$project_path" "$effective_session_id" "status" "failed"
     state_update_session "$project_path" "$effective_session_id" "last_response" "$(iso_timestamp)"
     state_increment_session "$project_path" "$effective_session_id" "dispatch_count"
+    if [[ "$provider" == "codex" ]] && _codex_error_is_transport_disconnect "${error_msg:-$output}"; then
+      _record_codex_transport_failure "$project_path" "$effective_session_id" "${error_msg:-$output}"
+    fi
     if [[ "$persist_active" == "true" ]]; then
       state_set_active_session "$project_path" "$effective_session_id"
     fi

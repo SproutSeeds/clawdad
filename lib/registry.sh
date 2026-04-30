@@ -134,6 +134,7 @@ _state_upgrade_schema() {
           | .dispatch_count = (.dispatch_count // 0)
           | .registered_at = (.registered_at // null)
           | .active_session_id = (.active_session_id // "")
+          | .quarantined_sessions = (.quarantined_sessions // {})
           | .sessions = (.sessions // {})
           | .sessions |= with_entries(
               .value |= (
@@ -194,6 +195,7 @@ state_ensure_project() {
         dispatch_count: 0,
         registered_at: $ts,
         active_session_id: "",
+        quarantined_sessions: {},
         sessions: {}
       }' "$CLAWDAD_STATE")
     _state_write "$updated" || {
@@ -261,22 +263,23 @@ state_register_session() {
     --arg seeded "$session_seeded" \
     --arg ts "$ts" '
       .projects[$path].sessions = (.projects[$path].sessions // {})
+      | (.projects[$path].sessions[$session] // {}) as $prior
       | .projects[$path].sessions[$session] = (
-          (.projects[$path].sessions[$session] // {})
+          $prior
           | (if $provider == "codex" and (((.provider // "") == "chimera") or ((.provider_override // "") == "chimera")) then "chimera" else $provider end) as $effective_provider
-          | . + {
+          | $prior + {
               slug: $slug,
               provider: $effective_provider,
-              provider_override: (if $provider == "chimera" or ((.provider_override // "") == "chimera") then "chimera" else (.provider_override // "") end),
-              provider_session_seeded: ((.projects[$path].sessions[$session].provider_session_seeded // $seeded)),
-              tracked_at: ((.projects[$path].sessions[$session].tracked_at // $ts)),
-              last_selected_at: (.projects[$path].sessions[$session].last_selected_at // null),
-              dispatch_count: ((.projects[$path].sessions[$session].dispatch_count // 0) | tonumber? // 0),
-              last_dispatch: (.projects[$path].sessions[$session].last_dispatch // null),
-              last_response: (.projects[$path].sessions[$session].last_response // null),
-              status: (.projects[$path].sessions[$session].status // "idle"),
-              local_only: (.projects[$path].sessions[$session].local_only // "false"),
-              orp_error: (.projects[$path].sessions[$session].orp_error // "")
+              provider_override: (if $provider == "chimera" or (($prior.provider_override // "") == "chimera") then "chimera" else ($prior.provider_override // "") end),
+              provider_session_seeded: ($prior.provider_session_seeded // $seeded),
+              tracked_at: ($prior.tracked_at // $ts),
+              last_selected_at: ($prior.last_selected_at // null),
+              dispatch_count: (($prior.dispatch_count // 0) | tonumber? // 0),
+              last_dispatch: ($prior.last_dispatch // null),
+              last_response: ($prior.last_response // null),
+              status: ($prior.status // "idle"),
+              local_only: ($prior.local_only // "false"),
+              orp_error: ($prior.orp_error // "")
             }
         )
     ' "$CLAWDAD_STATE")
@@ -354,6 +357,79 @@ state_update_session() {
   fi
   _state_lock_release
   return $exit_code
+}
+
+state_quarantine_session() {
+  local project_path="$1" session_id="$2" reason="${3:-quarantined}" detail="${4:-}"
+  state_init
+  _state_lock_acquire || return 1
+  state_ensure_project "$project_path" || {
+    _state_lock_release
+    return 1
+  }
+
+  local updated ts
+  ts="$(iso_timestamp)"
+  updated=$("$CLAWDAD_JQ" \
+    --arg path "$project_path" \
+    --arg session "$session_id" \
+    --arg reason "$reason" \
+    --arg detail "$detail" \
+    --arg ts "$ts" '
+      .projects[$path].quarantined_sessions = (.projects[$path].quarantined_sessions // {})
+      | (.projects[$path].sessions[$session] // .projects[$path].quarantined_sessions[$session] // {}) as $prior
+      | .projects[$path].quarantined_sessions[$session] = (
+          $prior + {
+            slug: ($prior.slug // ""),
+            provider: ($prior.provider // "codex"),
+            status: ($prior.status // "failed"),
+            dispatch_count: (($prior.dispatch_count // 0) | tonumber? // 0),
+            last_dispatch: ($prior.last_dispatch // null),
+            last_response: ($prior.last_response // null),
+            reason: $reason,
+            detail: $detail,
+            quarantined_at: $ts
+          }
+        )
+      | if (.projects[$path].sessions[$session] // null) != null then
+          .projects[$path].sessions[$session].quarantined = "true"
+          | .projects[$path].sessions[$session].quarantine_reason = $reason
+          | .projects[$path].sessions[$session].quarantine_detail = $detail
+          | .projects[$path].sessions[$session].quarantined_at = $ts
+        else
+          .
+        end
+    ' "$CLAWDAD_STATE")
+  local exit_code=$?
+  if (( exit_code == 0 )); then
+    _state_write "$updated" || exit_code=$?
+  fi
+  _state_lock_release
+  return $exit_code
+}
+
+state_session_is_quarantined() {
+  local project_path="$1" session_id="$2"
+  [[ -f "$CLAWDAD_STATE" ]] || return 1
+  "$CLAWDAD_JQ" -e \
+    --arg path "$project_path" \
+    --arg session "$session_id" '
+      ((.projects[$path].quarantined_sessions[$session] // null) != null)
+      or ((.projects[$path].sessions[$session].quarantined // "false") == "true")
+    ' "$CLAWDAD_STATE" >/dev/null 2>&1
+}
+
+state_session_quarantine_reason() {
+  local project_path="$1" session_id="$2"
+  if [[ -f "$CLAWDAD_STATE" ]]; then
+    "$CLAWDAD_JQ" -r \
+      --arg path "$project_path" \
+      --arg session "$session_id" '
+        .projects[$path].quarantined_sessions[$session].reason
+        // .projects[$path].sessions[$session].quarantine_reason
+        // "quarantined"
+      ' "$CLAWDAD_STATE" 2>/dev/null
+  fi
 }
 
 state_increment_session() {
@@ -550,10 +626,18 @@ registry_codex_tracked_session_ids_for_path() {
   if [[ -f "$CLAWDAD_STATE" ]]; then
     "$CLAWDAD_JQ" -r \
       --arg path "$project_path" '
-        (.projects[$path].sessions // {})
-        | to_entries[]?
-        | select((.value.provider // "codex") == "codex")
-        | .key
+        (
+          (.projects[$path].sessions // {})
+          | to_entries[]?
+          | select((.value.provider // "codex") == "codex")
+          | .key
+        ),
+        (
+          (.projects[$path].quarantined_sessions // {})
+          | to_entries[]?
+          | select((.value.provider // "codex") == "codex")
+          | .key
+        )
       ' "$CLAWDAD_STATE" 2>/dev/null
   fi
 }
@@ -612,7 +696,15 @@ registry_remove() {
   fi
   orp_cmd+=("--json")
 
-  "${orp_cmd[@]}" &>/dev/null
+  local remove_result remove_exit
+  if remove_result=$("${orp_cmd[@]}" 2>&1); then
+    remove_exit=0
+  else
+    remove_exit=$?
+  fi
+  if (( remove_exit != 0 )); then
+    clawdad_warn "Failed to remove session from ORP workspace; removing local state only: $remove_result"
+  fi
 
   # Clean up local state
   if [[ -f "$CLAWDAD_STATE" ]]; then
@@ -625,7 +717,7 @@ registry_remove() {
             .
           else
             .projects[$path].sessions |= del(.[$session])
-            | if ((.projects[$path].sessions // {}) | length) == 0 then
+            | if (((.projects[$path].sessions // {}) | length) == 0 and ((.projects[$path].quarantined_sessions // {}) | length) == 0) then
                 .projects |= del(.[$path])
               elif .projects[$path].active_session_id == $session then
                 .projects[$path].active_session_id = ""
