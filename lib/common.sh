@@ -120,6 +120,34 @@ _orp_tabs_json() {
   "$CLAWDAD_ORP" workspace tabs "$CLAWDAD_ORP_WORKSPACE" --json 2>/dev/null
 }
 
+_orp_tabs_json_safe() {
+  local tabs_json
+  tabs_json=$(_orp_tabs_json 2>/dev/null || true)
+  if [[ -n "$tabs_json" ]] && echo "$tabs_json" | "$CLAWDAD_JQ" -e '.tabs | arrays' >/dev/null 2>&1; then
+    echo "$tabs_json"
+    return 0
+  fi
+  printf '{"tabs":[],"tabCount":0}\n'
+  return 0
+}
+
+_state_project_match() {
+  local input="$1"
+  [[ -n "$input" && -f "$CLAWDAD_STATE" ]] || return 1
+
+  "$CLAWDAD_JQ" -r \
+    --arg input "$input" '
+      (.projects // {})
+      | to_entries[]?
+      | select(
+          .key == $input
+          or ((.key | split("/") | last) == $input)
+          or any((.value.sessions // {}) | to_entries[]?; (.value.slug // "") == $input)
+        )
+      | .key
+    ' "$CLAWDAD_STATE" 2>/dev/null | head -1
+}
+
 # Resolve a slug (title) or path to the project path from ORP tabs.
 resolve_project() {
   local input="$1"
@@ -135,11 +163,15 @@ resolve_project() {
     fi
   fi
 
+  local state_match
+  state_match=$(_state_project_match "$input" || true)
+  if [[ -n "$state_match" && -d "$state_match" ]]; then
+    echo "$state_match"
+    return 0
+  fi
+
   local tabs_json
-  tabs_json=$(_orp_tabs_json) || {
-    echo "error: failed to read ORP workspace '$CLAWDAD_ORP_WORKSPACE'" >&2
-    return 1
-  }
+  tabs_json=$(_orp_tabs_json_safe || true)
 
   # Try as absolute path first
   if [[ "$input" == /* ]]; then
@@ -176,6 +208,11 @@ resolve_project() {
   local resolved
   resolved="$(cd "$input" 2>/dev/null && pwd -P)" || true
   if [[ -n "$resolved" ]]; then
+    state_match=$(_state_project_match "$resolved" || true)
+    if [[ -n "$state_match" && -d "$state_match" ]]; then
+      echo "$state_match"
+      return 0
+    fi
     match=$(echo "$tabs_json" | "$CLAWDAD_JQ" -r \
       --arg path "$resolved" \
       '.tabs[] | select(.path == $path) | .path' | head -1)

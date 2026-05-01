@@ -7093,6 +7093,8 @@ function updateArtifactsButtonAvailability() {
 function updateImportButtonAvailability() {
   const projectPath = state.selectedProject;
   const importState = importableSessionsStateFor(projectPath);
+  elements.sessionImportButton.hidden = true;
+  elements.sessionImportButton.setAttribute("aria-hidden", "true");
   elements.sessionImportButton.disabled =
     state.projectsLoading ||
     state.sessionSwitchPending ||

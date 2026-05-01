@@ -618,7 +618,7 @@ registry_add() {
 
 registry_codex_tracked_session_ids_for_path() {
   local project_path="$1"
-  _orp_tabs_json | "$CLAWDAD_JQ" -r \
+  _orp_tabs_json_safe | "$CLAWDAD_JQ" -r \
     --arg path "$project_path" \
     '.tabs[]
       | select(.path == $path and (.resumeTool // "") == "codex" and (.resumeSessionId // "") != "")
@@ -919,7 +919,7 @@ registry_rename_session() {
 
 _registry_tabs_for_path_tsv() {
   local project_path="$1"
-  _orp_tabs_json | "$CLAWDAD_JQ" -r \
+  _orp_tabs_json_safe | "$CLAWDAD_JQ" -r \
     --arg path "$project_path" \
     '.tabs[]
       | select(
@@ -937,7 +937,7 @@ registry_session_exists() {
     return 1
   fi
   local match
-  match=$(_orp_tabs_json | "$CLAWDAD_JQ" -r \
+  match=$(_orp_tabs_json_safe | "$CLAWDAD_JQ" -r \
     --arg path "$project_path" \
     --arg session "$session_id" \
     '.tabs[]
@@ -965,7 +965,7 @@ registry_session_exists() {
 registry_has_slug_in_project() {
   local project_path="$1" slug="$2" exclude_session_id="${3:-}"
   local match
-  match=$(_orp_tabs_json | "$CLAWDAD_JQ" -r \
+  match=$(_orp_tabs_json_safe | "$CLAWDAD_JQ" -r \
     --arg path "$project_path" \
     --arg title "$slug" \
     --arg exclude "$exclude_session_id" \
@@ -1011,7 +1011,7 @@ registry_has_slug_in_project() {
 _registry_default_session_id() {
   local project_path="$1"
   local base_slug="${project_path:t}"
-  _orp_tabs_json | "$CLAWDAD_JQ" -r \
+  _orp_tabs_json_safe | "$CLAWDAD_JQ" -r \
     --arg path "$project_path" \
     --arg base_slug "$base_slug" \
     --slurpfile state "$CLAWDAD_STATE" '
@@ -1202,7 +1202,7 @@ registry_session_json() {
   fi
 
   local session_json
-  session_json=$(_orp_tabs_json | "$CLAWDAD_JQ" -c \
+  session_json=$(_orp_tabs_json_safe | "$CLAWDAD_JQ" -c \
     --arg path "$project_path" \
     --arg selector "$selector" \
     --slurpfile state "$CLAWDAD_STATE" '
@@ -1246,7 +1246,7 @@ registry_list_sessions_json() {
   local active_session
   active_session=$(registry_active_session_id "$project_path")
 
-  _orp_tabs_json | "$CLAWDAD_JQ" \
+  _orp_tabs_json_safe | "$CLAWDAD_JQ" \
     --arg path "$project_path" \
     --arg active "$active_session" \
     --arg defaultProvider "$CLAWDAD_DEFAULT_PROVIDER" \
@@ -1397,7 +1397,7 @@ registry_list() {
 registry_has_path() {
   local project_path="$1"
   local match
-  match=$(_orp_tabs_json | "$CLAWDAD_JQ" -r \
+  match=$(_orp_tabs_json_safe | "$CLAWDAD_JQ" -r \
     --arg path "$project_path" \
     '.tabs[] | select(.path == $path) | .path' | head -1)
   [[ -n "$match" ]]
@@ -1406,7 +1406,7 @@ registry_has_path() {
 registry_has_tracked_session_for_path() {
   local project_path="$1"
   local match
-  match=$(_orp_tabs_json | "$CLAWDAD_JQ" -r \
+  match=$(_orp_tabs_json_safe | "$CLAWDAD_JQ" -r \
     --arg path "$project_path" \
     '.tabs[]
       | select(
@@ -1435,7 +1435,7 @@ registry_has_tracked_session_for_path() {
 registry_has_slug() {
   local slug="$1"
   local match
-  match=$(_orp_tabs_json | "$CLAWDAD_JQ" -r \
+  match=$(_orp_tabs_json_safe | "$CLAWDAD_JQ" -r \
     --arg title "$slug" \
     '.tabs[] | select(.title == $title) | .title' | head -1)
   if [[ -n "$match" ]]; then
@@ -1460,7 +1460,7 @@ registry_has_slug() {
 registry_has_untracked_slug_for_path() {
   local project_path="$1" slug="$2"
   local match
-  match=$(_orp_tabs_json | "$CLAWDAD_JQ" -r \
+  match=$(_orp_tabs_json_safe | "$CLAWDAD_JQ" -r \
     --arg path "$project_path" \
     --arg title "$slug" \
     '.tabs[]

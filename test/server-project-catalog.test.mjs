@@ -9,6 +9,7 @@ import test from "node:test";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const serverScript = path.join(repoRoot, "lib", "server.mjs");
+const cliScript = path.join(repoRoot, "bin", "clawdad");
 
 async function freePort() {
   const server = net.createServer();
@@ -66,6 +67,28 @@ async function runServerCli(args, { cwd = repoRoot, env = {} } = {}) {
     cwd,
     env: {
       ...process.env,
+      ...env,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk) => {
+    stdout += chunk.toString();
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk.toString();
+  });
+  const exitCode = await new Promise((resolve) => child.once("exit", resolve));
+  return { exitCode, stdout, stderr };
+}
+
+async function runClawdadCli(args, { cwd = repoRoot, env = {} } = {}) {
+  const child = spawn(cliScript, args, {
+    cwd,
+    env: {
+      ...process.env,
+      CLAWDAD_ROOT: repoRoot,
       ...env,
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -346,6 +369,61 @@ sleep 10
   }
 });
 
+test("CLI sessions command falls back to local state when ORP emits malformed JSON", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-cli-local-state-"));
+  const home = path.join(root, "home");
+  const projectPath = path.join(root, "fractal-research-group");
+  const mockOrpPath = path.join(root, "orp-mock");
+
+  await mkdir(path.join(projectPath, ".clawdad", "mailbox"), { recursive: true });
+  await mkdir(home, { recursive: true });
+  await writeFile(
+    path.join(home, "state.json"),
+    JSON.stringify(
+      {
+        version: 3,
+        projects: {
+          [projectPath]: {
+            status: "failed",
+            active_session_id: "019d57e8-8947-7dd1-ba76-55a23c4e6292",
+            sessions: {
+              "019d57e8-8947-7dd1-ba76-55a23c4e6292": {
+                slug: "Fractal Research Group",
+                provider: "codex",
+                provider_session_seeded: "true",
+                status: "failed",
+                local_only: "true",
+              },
+            },
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(mockOrpPath, "#!/bin/sh\nprintf '{malformed json'\n", "utf8");
+  await chmod(mockOrpPath, 0o755);
+
+  try {
+    const result = await runClawdadCli(["sessions", "fractal-research-group", "--json"], {
+      env: {
+        CLAWDAD_HOME: home,
+        CLAWDAD_ORP: mockOrpPath,
+      },
+    });
+    assert.equal(result.exitCode, 0, result.stderr);
+    assert.doesNotMatch(result.stderr, /parse error/u);
+    const sessions = JSON.parse(result.stdout);
+    assert.equal(sessions.length, 1);
+    assert.equal(sessions[0].sessionId, "019d57e8-8947-7dd1-ba76-55a23c4e6292");
+    assert.equal(sessions[0].active, true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("projects endpoint hides quarantined sessions from the app catalog", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-quarantine-catalog-"));
   const home = path.join(root, "home");
@@ -612,6 +690,203 @@ test("sessions-doctor repairs quarantined pointers and orphaned delegate lanes",
     const cleanPayload = JSON.parse(cleanResult.stdout);
     assert.equal(cleanPayload.ok, true);
     assert.equal(cleanPayload.issueCount, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("sessions-doctor flags and repairs a failed active session without quarantining a valid binding", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-active-failed-doctor-"));
+  const home = path.join(root, "home");
+  const codexHome = path.join(root, "codex-home");
+  const projectPath = path.join(root, "fractal-research-group");
+  const sessionId = "019d57e8-8947-7dd1-ba76-55a23c4e6292";
+
+  await mkdir(path.join(projectPath, ".clawdad", "mailbox"), { recursive: true });
+  await mkdir(home, { recursive: true });
+  await writeCodexSession(codexHome, projectPath, sessionId);
+  await writeFile(
+    path.join(projectPath, ".clawdad", "mailbox", "status.json"),
+    JSON.stringify(
+      {
+        state: "failed",
+        request_id: "request-timeout",
+        session_id: sessionId,
+        dispatched_at: "2026-05-01T00:03:42Z",
+        completed_at: "2026-05-01T00:33:48Z",
+        error: "codex turn did not complete within 1800s",
+        pid: null,
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    path.join(home, "state.json"),
+    JSON.stringify(
+      {
+        version: 3,
+        projects: {
+          [projectPath]: {
+            status: "failed",
+            active_session_id: sessionId,
+            last_response: "2026-05-01T00:33:48Z",
+            sessions: {
+              [sessionId]: {
+                slug: "Fractal Research Group",
+                provider: "codex",
+                provider_session_seeded: "true",
+                status: "failed",
+                last_response: "2026-05-01T00:33:48Z",
+              },
+            },
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  try {
+    const audit = await runServerCli([
+      "sessions-doctor",
+      projectPath,
+      "--json",
+    ], {
+      env: {
+        CLAWDAD_HOME: home,
+        CLAWDAD_CODEX_HOME: codexHome,
+      },
+    });
+    assert.equal(audit.exitCode, 1, audit.stderr);
+    const auditPayload = JSON.parse(audit.stdout);
+    assert.equal(auditPayload.projects[0].issues[0].type, "active_session_failed");
+    assert.equal(auditPayload.projects[0].sessions[0].quarantined, false);
+
+    const repair = await runServerCli([
+      "sessions-doctor",
+      projectPath,
+      "--repair",
+      "--json",
+    ], {
+      env: {
+        CLAWDAD_HOME: home,
+        CLAWDAD_CODEX_HOME: codexHome,
+      },
+    });
+    assert.equal(repair.exitCode, 0, repair.stderr);
+    const repairPayload = JSON.parse(repair.stdout);
+    assert.equal(repairPayload.ok, true);
+    assert.equal(repairPayload.projects[0].repairs[0].type, "active_failed_session_reset");
+    assert.equal(repairPayload.projects[0].sessions[0].status, "idle");
+
+    const state = JSON.parse(await readFile(path.join(home, "state.json"), "utf8"));
+    assert.equal(state.projects[projectPath].active_session_id, sessionId);
+    assert.equal(state.projects[projectPath].sessions[sessionId].status, "idle");
+    assert.equal(state.projects[projectPath].quarantined_sessions, undefined);
+    const mailboxStatus = JSON.parse(
+      await readFile(path.join(projectPath, ".clawdad", "mailbox", "status.json"), "utf8"),
+    );
+    assert.equal(mailboxStatus.state, "idle");
+    assert.equal(mailboxStatus.request_id, null);
+    assert.equal(mailboxStatus.error, null);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("sessions-doctor repairs a stale failed mailbox for an otherwise idle active session", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-stale-failed-mailbox-"));
+  const home = path.join(root, "home");
+  const codexHome = path.join(root, "codex-home");
+  const projectPath = path.join(root, "fractal-research-group");
+  const sessionId = "019d57e8-8947-7dd1-ba76-55a23c4e6292";
+
+  await mkdir(path.join(projectPath, ".clawdad", "mailbox"), { recursive: true });
+  await mkdir(home, { recursive: true });
+  await writeCodexSession(codexHome, projectPath, sessionId);
+  await writeFile(
+    path.join(projectPath, ".clawdad", "mailbox", "status.json"),
+    JSON.stringify(
+      {
+        state: "failed",
+        request_id: "request-timeout",
+        session_id: sessionId,
+        dispatched_at: "2026-05-01T00:03:42Z",
+        completed_at: "2026-05-01T00:33:48Z",
+        error: "codex turn did not complete within 1800s",
+        pid: null,
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    path.join(home, "state.json"),
+    JSON.stringify(
+      {
+        version: 3,
+        projects: {
+          [projectPath]: {
+            status: "idle",
+            active_session_id: sessionId,
+            sessions: {
+              [sessionId]: {
+                slug: "Fractal Research Group",
+                provider: "codex",
+                provider_session_seeded: "true",
+                status: "idle",
+              },
+            },
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  try {
+    const audit = await runServerCli([
+      "sessions-doctor",
+      projectPath,
+      "--json",
+    ], {
+      env: {
+        CLAWDAD_HOME: home,
+        CLAWDAD_CODEX_HOME: codexHome,
+      },
+    });
+    assert.equal(audit.exitCode, 1, audit.stderr);
+    const auditPayload = JSON.parse(audit.stdout);
+    assert.equal(auditPayload.projects[0].issues[0].type, "stale_failed_mailbox");
+
+    const repair = await runServerCli([
+      "sessions-doctor",
+      projectPath,
+      "--repair",
+      "--json",
+    ], {
+      env: {
+        CLAWDAD_HOME: home,
+        CLAWDAD_CODEX_HOME: codexHome,
+      },
+    });
+    assert.equal(repair.exitCode, 0, repair.stderr);
+    const repairPayload = JSON.parse(repair.stdout);
+    assert.equal(repairPayload.projects[0].repairs[0].type, "stale_failed_mailbox_reset");
+
+    const mailboxStatus = JSON.parse(
+      await readFile(path.join(projectPath, ".clawdad", "mailbox", "status.json"), "utf8"),
+    );
+    assert.equal(mailboxStatus.state, "idle");
+    assert.equal(mailboxStatus.request_id, null);
+    assert.equal(mailboxStatus.error, null);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -1775,6 +2050,108 @@ sleep 10
     assert.equal(state.projects[projectPath].sessions[importSessionId].local_only, "true");
 
     await assert.rejects(readFile(invokedPath, "utf8"), { code: "ENOENT" });
+  } finally {
+    await stopServer(child);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("projects endpoint auto-registers local Codex sessions for the project dropdown", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-auto-import-"));
+  const home = path.join(root, "home");
+  const codexHome = path.join(root, "codex-home");
+  const projectPath = path.join(root, "fractal-research-group");
+  const configPath = path.join(root, "server.json");
+  const sessionId = "019d57e8-8947-7dd1-ba76-55a23c4e6292";
+
+  await mkdir(path.join(projectPath, ".clawdad", "mailbox"), { recursive: true });
+  await mkdir(home, { recursive: true });
+  await writeCodexSession(codexHome, projectPath, sessionId, {
+    timestamp: "2026-05-01T00:03:51.000Z",
+  });
+  await writeFile(
+    path.join(home, "state.json"),
+    JSON.stringify(
+      {
+        version: 3,
+        orp_workspace: "main",
+        projects: {
+          [projectPath]: {
+            status: "idle",
+            last_dispatch: null,
+            last_response: null,
+            dispatch_count: 0,
+            registered_at: "2026-05-01T00:00:00Z",
+            active_session_id: "placeholder-session",
+            sessions: {
+              "placeholder-session": {
+                slug: "fractal-research-group",
+                provider: "codex",
+                provider_session_seeded: "false",
+                tracked_at: "2026-05-01T00:00:00Z",
+                last_selected_at: null,
+                dispatch_count: 0,
+                last_dispatch: null,
+                last_response: null,
+                status: "idle",
+                local_only: "true",
+                orp_error: "",
+              },
+            },
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  const port = await freePort();
+  await writeFile(
+    configPath,
+    JSON.stringify(
+      {
+        host: "127.0.0.1",
+        port,
+        defaultProject: projectPath,
+        authMode: "tailscale",
+        allowedUsers: ["tester@example.com"],
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  const child = spawn(process.execPath, [serverScript, "serve", "--config", configPath], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      CLAWDAD_HOME: home,
+      CLAWDAD_CODEX_HOME: codexHome,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  try {
+    const baseUrl = `http://127.0.0.1:${port}`;
+    await waitForHealth(baseUrl, child);
+    const response = await fetch(`${baseUrl}/v1/projects`, {
+      headers: {
+        "tailscale-user-login": "tester@example.com",
+      },
+    });
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.ok, true);
+    assert.equal(payload.autoImportedSessionCount, 1);
+    assert.ok(payload.projects[0].sessions.some((session) => session.sessionId === sessionId));
+    assert.equal(payload.projects[0].activeSessionId, "placeholder-session");
+
+    const state = JSON.parse(await readFile(path.join(home, "state.json"), "utf8"));
+    assert.equal(state.projects[projectPath].active_session_id, "placeholder-session");
+    assert.equal(state.projects[projectPath].sessions[sessionId].provider_session_seeded, "true");
   } finally {
     await stopServer(child);
     await rm(root, { recursive: true, force: true });
