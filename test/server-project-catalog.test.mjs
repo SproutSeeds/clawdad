@@ -192,10 +192,22 @@ test("app shell injects a fresh build fingerprint for frontend assets", async ()
     assert.match(html, /window\.__CLAWDAD_APP_BUILD__ = "[^"]+"/u);
     assert.match(html, /\/app\.js\?v=[^"]+"/u);
     assert.match(html, /\/app\.css\?v=[^"]+"/u);
+    assert.match(html, /id="sessionImportButton"[\s\S]*?hidden/u);
     assert.match(html, /id="projectDelegateButton"/u);
     assert.match(html, /Auto-Claw/u);
     assert.match(html, /id="delegateOverview"/u);
     assert.match(html, /id="delegateSupervisorPanel"/u);
+
+    const cssPath = html.match(/href="([^"]*\/app\.css\?v=[^"]+)"/u)?.[1];
+    assert.ok(cssPath, "expected app shell to reference versioned app.css");
+    const cssResponse = await fetch(new URL(cssPath, baseUrl), {
+      headers: {
+        "tailscale-user-login": "tester@example.com",
+      },
+    });
+    assert.equal(cssResponse.status, 200);
+    const css = await cssResponse.text();
+    assert.match(css, /\[hidden\]\s*\{[^}]*display:\s*none\s*!important/u);
   } finally {
     await stopServer(child);
     await rm(root, { recursive: true, force: true });
