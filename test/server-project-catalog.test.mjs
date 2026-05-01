@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, utimes, writeFile } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +10,7 @@ import test from "node:test";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const serverScript = path.join(repoRoot, "lib", "server.mjs");
 const cliScript = path.join(repoRoot, "bin", "clawdad");
+const codexSessionDiscoveryScript = path.join(repoRoot, "lib", "codex-session-discovery.mjs");
 
 async function freePort() {
   const server = net.createServer();
@@ -105,14 +106,36 @@ async function runClawdadCli(args, { cwd = repoRoot, env = {} } = {}) {
   return { exitCode, stdout, stderr };
 }
 
+async function runCodexSessionDiscovery(args, { cwd = repoRoot, env = {} } = {}) {
+  const child = spawn(process.execPath, [codexSessionDiscoveryScript, ...args], {
+    cwd,
+    env: {
+      ...process.env,
+      ...env,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk) => {
+    stdout += chunk.toString();
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk.toString();
+  });
+  const exitCode = await new Promise((resolve) => child.once("exit", resolve));
+  return { exitCode, stdout, stderr };
+}
+
 async function writeCodexSession(codexHome, projectPath, sessionId, {
   source = "cli",
   timestamp = "2026-04-30T12:00:00.000Z",
 } = {}) {
   const sessionDir = path.join(codexHome, "sessions", "2026", "04", "30");
+  const sessionFile = path.join(sessionDir, `rollout-2026-04-30T12-00-00-${sessionId}.jsonl`);
   await mkdir(sessionDir, { recursive: true });
   await writeFile(
-    path.join(sessionDir, `rollout-2026-04-30T12-00-00-${sessionId}.jsonl`),
+    sessionFile,
     [
       JSON.stringify({
         timestamp,
@@ -135,6 +158,7 @@ async function writeCodexSession(codexHome, projectPath, sessionId, {
     ].join("\n"),
     "utf8",
   );
+  return sessionFile;
 }
 
 test("app shell injects a fresh build fingerprint for frontend assets", async () => {
@@ -381,6 +405,106 @@ sleep 10
   }
 });
 
+test("projects endpoint orders sessions by latest provider activity while preserving active selection", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-session-order-"));
+  const home = path.join(root, "home");
+  const codexHome = path.join(root, "codex-home");
+  const projectPath = path.join(root, "clawdad");
+  const configPath = path.join(root, "server.json");
+  const activeSessionId = "019d564e-ec8d-7d80-8303-ed4f17090c35";
+  const externallyActiveSessionId = "019d887f-33f0-7692-aef5-8a414c1a14f8";
+
+  await mkdir(path.join(projectPath, ".clawdad", "mailbox"), { recursive: true });
+  await mkdir(home, { recursive: true });
+  await mkdir(codexHome, { recursive: true });
+  await writeFile(
+    path.join(home, "state.json"),
+    JSON.stringify(
+      {
+        version: 3,
+        projects: {
+          [projectPath]: {
+            status: "idle",
+            active_session_id: activeSessionId,
+            sessions: {
+              [activeSessionId]: {
+                slug: "Main-claw",
+                provider: "codex",
+                provider_session_seeded: "true",
+                status: "idle",
+                provider_last_activity: "2026-04-30T12:00:00.000Z",
+              },
+              [externallyActiveSessionId]: {
+                slug: "All right, Codex",
+                provider: "codex",
+                provider_session_seeded: "true",
+                status: "idle",
+                provider_last_activity: "2026-05-01T02:30:00.000Z",
+              },
+            },
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    path.join(projectPath, ".clawdad", "mailbox", "status.json"),
+    JSON.stringify({ state: "idle", request_id: null, session_id: activeSessionId }, null, 2),
+    "utf8",
+  );
+
+  const port = await freePort();
+  await writeFile(
+    configPath,
+    JSON.stringify(
+      {
+        host: "127.0.0.1",
+        port,
+        defaultProject: projectPath,
+        authMode: "tailscale",
+        allowedUsers: ["tester@example.com"],
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  const child = spawn(process.execPath, [serverScript, "serve", "--config", configPath], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      CLAWDAD_HOME: home,
+      CLAWDAD_CODEX_HOME: codexHome,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  try {
+    const baseUrl = `http://127.0.0.1:${port}`;
+    await waitForHealth(baseUrl, child);
+    const response = await fetch(`${baseUrl}/v1/projects`, {
+      headers: {
+        "tailscale-user-login": "tester@example.com",
+      },
+    });
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.ok, true);
+    const project = payload.projects[0];
+    assert.equal(project.activeSessionId, activeSessionId);
+    assert.equal(project.activeSession.sessionId, activeSessionId);
+    assert.equal(project.sessions[0].sessionId, externallyActiveSessionId);
+    assert.equal(project.sessions[0].lastActivityAt, "2026-05-01T02:30:00.000Z");
+  } finally {
+    await stopServer(child);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("CLI sessions command falls back to local state when ORP emits malformed JSON", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-cli-local-state-"));
   const home = path.join(root, "home");
@@ -431,6 +555,43 @@ test("CLI sessions command falls back to local state when ORP emits malformed JS
     assert.equal(sessions.length, 1);
     assert.equal(sessions[0].sessionId, "019d57e8-8947-7dd1-ba76-55a23c4e6292");
     assert.equal(sessions[0].active, true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Codex session discovery ranks externally touched transcripts before newer created sessions", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-codex-session-activity-"));
+  const codexHome = path.join(root, "codex-home");
+  const projectPath = path.join(root, "clawdad");
+  const olderActiveSessionId = "019d564e-ec8d-7d80-8303-ed4f17090c35";
+  const newerInactiveSessionId = "019d882d-3772-70f2-8287-a2d4b014197d";
+
+  await mkdir(projectPath, { recursive: true });
+  const olderFile = await writeCodexSession(codexHome, projectPath, olderActiveSessionId, {
+    timestamp: "2026-04-01T12:00:00.000Z",
+  });
+  const newerFile = await writeCodexSession(codexHome, projectPath, newerInactiveSessionId, {
+    timestamp: "2026-04-30T12:00:00.000Z",
+  });
+  await utimes(newerFile, new Date("2026-04-30T12:00:00.000Z"), new Date("2026-04-30T12:00:00.000Z"));
+  await utimes(olderFile, new Date("2026-05-01T02:30:00.000Z"), new Date("2026-05-01T02:30:00.000Z"));
+
+  try {
+    const result = await runCodexSessionDiscovery([
+      "--cwd",
+      projectPath,
+      "--codex-home",
+      codexHome,
+      "--list",
+      "--limit",
+      "2",
+    ]);
+    assert.equal(result.exitCode, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.sessions[0].sessionId, olderActiveSessionId);
+    assert.equal(payload.sessions[0].lastUpdatedAt, "2026-05-01T02:30:00.000Z");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

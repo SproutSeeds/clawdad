@@ -1568,6 +1568,17 @@ function sessionFixedSuffix(session) {
   return `${providerLabel(session?.provider)} • ${sessionFingerprint(session?.sessionId)}`;
 }
 
+function sessionActivityTimestamp(session) {
+  return (
+    session?.lastActivityAt ||
+    session?.providerLastActivity ||
+    session?.lastResponse ||
+    session?.lastDispatch ||
+    session?.providerSessionTimestamp ||
+    ""
+  );
+}
+
 function sessionRenameKey(projectPath, sessionId) {
   return `${String(projectPath || "").trim()}::${String(sessionId || "").trim()}`;
 }
@@ -1611,7 +1622,8 @@ function sessionOptionLabel(session, projectPath = "") {
     return session.loadingLabel;
   }
   const title = sessionDisplayTitle(session, projectPath);
-  return `${title} • ${sessionFixedSuffix(session)}`;
+  const timestamp = formatTimestamp(sessionActivityTimestamp(session));
+  return `${title} • ${sessionFixedSuffix(session)}${timestamp ? ` • ${timestamp}` : ""}`;
 }
 
 function importableSessionLabel(session) {
@@ -3541,6 +3553,9 @@ function renderSessionOptions() {
       session.status || "",
       session.lastDispatch || "",
       session.lastResponse || "",
+      session.providerLastActivity || "",
+      session.providerSessionTimestamp || "",
+      session.lastActivityAt || "",
       Boolean(session.pendingCreation),
       sessionRenamePending(project?.path, session.sessionId),
     ]),
