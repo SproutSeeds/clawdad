@@ -57,6 +57,7 @@ const state = {
   sessionSwitchPending: false,
   projectModalPending: false,
   projectsRefreshPromise: null,
+  projectAutoImportRefreshTimer: null,
   projectRootsRefreshPromise: null,
   threadRefreshPromise: null,
   summaryRefreshPromise: null,
@@ -7382,6 +7383,12 @@ async function refreshProjects() {
       syncSelectedProject(payload.defaultProject || state.selectedProject);
       syncSelectedSession(state.selectedSessionId);
       cacheProjects(payload);
+      if (payload.autoImportScheduled && !state.projectAutoImportRefreshTimer) {
+        state.projectAutoImportRefreshTimer = window.setTimeout(() => {
+          state.projectAutoImportRefreshTimer = null;
+          void refreshProjects().catch(() => {});
+        }, 2500);
+      }
       await reconcileThreadEntries();
       hydrateReturnedThreadEntries({ prefetch: true });
       if (state.selectedProject) {

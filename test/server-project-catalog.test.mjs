@@ -2149,19 +2149,32 @@ test("projects endpoint auto-registers local Codex sessions for the project drop
   try {
     const baseUrl = `http://127.0.0.1:${port}`;
     await waitForHealth(baseUrl, child);
+    const startedAt = Date.now();
     const response = await fetch(`${baseUrl}/v1/projects`, {
       headers: {
         "tailscale-user-login": "tester@example.com",
       },
     });
+    const elapsedMs = Date.now() - startedAt;
     assert.equal(response.status, 200);
+    assert.ok(elapsedMs < 1_000, `expected projects response not to wait on session discovery, got ${elapsedMs}ms`);
     const payload = await response.json();
     assert.equal(payload.ok, true);
-    assert.equal(payload.autoImportedSessionCount, 1);
-    assert.ok(payload.projects[0].sessions.some((session) => session.sessionId === sessionId));
+    assert.equal(payload.autoImportScheduled, true);
+    assert.equal(payload.autoImportedSessionCount, 0);
+    assert.equal(payload.projects[0].sessions.some((session) => session.sessionId === sessionId), false);
     assert.equal(payload.projects[0].activeSessionId, "placeholder-session");
 
-    const state = JSON.parse(await readFile(path.join(home, "state.json"), "utf8"));
+    let state = null;
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      state = JSON.parse(await readFile(path.join(home, "state.json"), "utf8"));
+      if (state.projects[projectPath].sessions[sessionId]) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.ok(state.projects[projectPath].sessions[sessionId], "expected background auto-import to register the session");
     assert.equal(state.projects[projectPath].active_session_id, "placeholder-session");
     assert.equal(state.projects[projectPath].sessions[sessionId].provider_session_seeded, "true");
   } finally {
