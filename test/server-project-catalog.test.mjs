@@ -505,6 +505,103 @@ test("projects endpoint orders sessions by latest provider activity while preser
   }
 });
 
+test("projects endpoint does not let import tracking time outrank real session activity", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-session-tracked-at-"));
+  const home = path.join(root, "home");
+  const projectPath = path.join(root, "fractal-research-group");
+  const configPath = path.join(root, "server.json");
+  const activeSessionId = "019d57e8-8947-7dd1-ba76-55a23c4e6292";
+  const importedSessionId = "019db236-7068-71c3-8c01-15785e7396be";
+
+  await mkdir(path.join(projectPath, ".clawdad", "mailbox"), { recursive: true });
+  await mkdir(home, { recursive: true });
+  await writeFile(
+    path.join(home, "state.json"),
+    JSON.stringify(
+      {
+        version: 3,
+        projects: {
+          [projectPath]: {
+            status: "idle",
+            active_session_id: activeSessionId,
+            sessions: {
+              [activeSessionId]: {
+                slug: "Fractal Research Group",
+                provider: "codex",
+                provider_session_seeded: "true",
+                status: "idle",
+                provider_last_activity: "2026-05-01T00:04:12.624Z",
+                last_response: "2026-05-01T00:33:48Z",
+                tracked_at: "2026-04-04T09:52:30.539Z",
+              },
+              [importedSessionId]: {
+                slug: "yo, should I get a business line?",
+                provider: "codex",
+                provider_session_seeded: "true",
+                status: "idle",
+                provider_last_activity: "2026-04-24T03:31:12.333Z",
+                provider_session_timestamp: "2026-04-21T22:43:25.422Z",
+                tracked_at: "2026-05-01T00:51:06.926Z",
+                local_only: "true",
+              },
+            },
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  const port = await freePort();
+  await writeFile(
+    configPath,
+    JSON.stringify(
+      {
+        host: "127.0.0.1",
+        port,
+        defaultProject: projectPath,
+        authMode: "tailscale",
+        allowedUsers: ["tester@example.com"],
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  const child = spawn(process.execPath, [serverScript, "serve", "--config", configPath], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      CLAWDAD_HOME: home,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  try {
+    const baseUrl = `http://127.0.0.1:${port}`;
+    await waitForHealth(baseUrl, child);
+    const response = await fetch(`${baseUrl}/v1/projects`, {
+      headers: {
+        "tailscale-user-login": "tester@example.com",
+      },
+    });
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.ok, true);
+    const project = payload.projects[0];
+    const importedSession = project.sessions.find((session) => session.sessionId === importedSessionId);
+    assert.equal(project.sessions[0].sessionId, activeSessionId);
+    assert.equal(project.sessions[0].lastActivityAt, "2026-05-01T00:33:48.000Z");
+    assert.equal(importedSession.lastActivityAt, "2026-04-24T03:31:12.333Z");
+  } finally {
+    await stopServer(child);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("CLI sessions command falls back to local state when ORP emits malformed JSON", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-cli-local-state-"));
   const home = path.join(root, "home");
