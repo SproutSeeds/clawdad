@@ -31,7 +31,7 @@ Commands:
   delegate <project> [--json]   Show the saved delegate brief/status for a project
   delegate-set <project> ...    Update the delegate brief text for a project
   go <project>                  Start autonomous delegate mode after ORP preflight
-  delegate-run <project>        Start autonomous delegate mode for a project
+  delegate-run <project>        Start autonomous delegate mode for a project (--dry-run previews)
   supervise <project> --lane <laneId>
                                 Opt into continuity orchestration for a delegate lane
   delegate-pause <project>      Pause autonomous delegate mode for a project

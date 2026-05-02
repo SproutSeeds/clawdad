@@ -42,6 +42,20 @@ _mailbox_json_pid_or_null() {
   printf 'null'
 }
 
+mailbox_request_is_completed() {
+  local project_path="$1" request_id="$2"
+  [[ -n "$request_id" && "$request_id" != "null" ]] || return 1
+
+  local mbox status_file current_state current_request
+  mbox="$(mailbox_dir "$project_path")"
+  status_file="$mbox/status.json"
+  [[ -f "$status_file" ]] || return 1
+
+  current_state=$("$CLAWDAD_JQ" -r '.state // ""' "$status_file" 2>/dev/null || printf '')
+  current_request=$("$CLAWDAD_JQ" -r '.request_id // ""' "$status_file" 2>/dev/null || printf '')
+  [[ "$current_state" == "completed" && "$current_request" == "$request_id" ]]
+}
+
 mailbox_init() {
   local project_path="$1"
   local mbox
@@ -91,6 +105,11 @@ EOF
 
 mailbox_write_response() {
   local project_path="$1" request_id="$2" session_id="$3" exit_code="$4" content="$5"
+  if [[ "$exit_code" != "0" ]] && mailbox_request_is_completed "$project_path" "$request_id"; then
+    clawdad_log "Skipped late failed response for completed request $request_id"
+    return 0
+  fi
+
   local mbox
   mbox="$(mailbox_dir "$project_path")"
   mkdir -p "$mbox"
@@ -122,6 +141,11 @@ mailbox_update_status() {
   local pid="${4:-null}"
   local error="${5:-null}"
   local session_id="${6:-null}"
+  if [[ "$state" == "failed" ]] && mailbox_request_is_completed "$project_path" "$request_id"; then
+    clawdad_log "Skipped late failed status for completed request $request_id"
+    return 0
+  fi
+
   local mbox
   mbox="$(mailbox_dir "$project_path")"
   mkdir -p "$mbox"

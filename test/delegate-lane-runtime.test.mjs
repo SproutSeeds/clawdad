@@ -99,6 +99,19 @@ async function waitForValue(readValue, predicate, label, timeoutMs = 8_000) {
   throw new Error(`${label} did not settle in time: ${JSON.stringify(lastValue)}`);
 }
 
+function processIsLive(pid) {
+  const normalizedPid = Number.parseInt(String(pid || "0"), 10);
+  if (!Number.isFinite(normalizedPid) || normalizedPid <= 0) {
+    return false;
+  }
+  try {
+    process.kill(normalizedPid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
 async function cleanupFixture(fixture) {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     try {
@@ -351,14 +364,82 @@ writeFileSync(
   "utf8",
 );
 
-if (process.env.CLAWDAD_FAKE_DISPATCH_MODE === "stall") {
+const mode = process.env.CLAWDAD_FAKE_DISPATCH_MODE || "";
+
+if (mode === "codex_events_complete_mailbox_stays_running") {
+  const codexEventLogFile = process.env.CLAWDAD_CODEX_EVENT_LOG_FILE || "";
+  const turnId = "turn-recovered-" + process.pid;
+  const content = [
+    "Recovered from Codex app-server events.",
+    "",
+    "\`\`\`json",
+    JSON.stringify({
+      state: "completed",
+      stop_reason: "none",
+      next_action: "archive " + laneId + " lane result",
+      summary: "Completed " + laneId + " lane from Codex app-server events.",
+      checkpoint: {
+        progress_signal: "high",
+        breakthroughs: "codex events carried the completed decision",
+        blockers: "none",
+        next_probe: "archive " + laneId + " lane result",
+        confidence: "high"
+      }
+    }, null, 2),
+    "\`\`\`"
+  ].join("\\n");
+  if (codexEventLogFile) {
+    mkdirSync(path.dirname(codexEventLogFile), { recursive: true });
+    const at = new Date().toISOString();
+    for (const event of [
+      {
+        at,
+        type: "codex_goal_sync",
+        method: "clawdad/goal/sync",
+        threadId: sessionId,
+        turnId: null,
+        payload: {
+          mode: "required",
+          supported: true,
+          synced: true,
+          skipped: false,
+          error: "",
+          goal: { threadId: sessionId, objective: "fake synced goal", status: "active" }
+        }
+      },
+      {
+        at,
+        type: "codex_agent_message",
+        method: "item/completed",
+        threadId: sessionId,
+        turnId,
+        itemType: "agentMessage",
+        payload: { phase: "final_answer", text: content }
+      },
+      {
+        at,
+        type: "codex_turn_completed",
+        method: "turn/completed",
+        threadId: sessionId,
+        turnId,
+        status: "completed",
+        payload: { status: "completed", error: null }
+      }
+    ]) {
+      writeFileSync(codexEventLogFile, JSON.stringify(event) + "\\n", { flag: "a" });
+    }
+  }
+  setInterval(() => {}, 1000);
+  await new Promise(() => {});
+}
+
+if (mode === "stall") {
   setInterval(() => {}, 1000);
   await new Promise(() => {});
 }
 
 await new Promise((resolve) => setTimeout(resolve, ${sleepMs}));
 
-const mode = process.env.CLAWDAD_FAKE_DISPATCH_MODE || "";
 const isWatchtowerRepairStep = prompt.includes("repair failing validation") || prompt.includes("repair validation");
 const decision = mode === "watchtower_validation_soft" && !isWatchtowerRepairStep
   ? {
@@ -1073,6 +1154,77 @@ test("delegate-run stale-fails heartbeat-only lane dispatches instead of leaving
     const sharedMailbox = await readJson(path.join(fixture.projectPath, ".clawdad", "mailbox", "status.json"));
     assert.equal(sharedMailbox.state, "idle");
   } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("delegate-run recovers completed Codex app-server events when mailbox stays running", async () => {
+  const fixture = await createFixture("clawdad-codex-events-recovery-");
+  let recoveredWorkerPid = null;
+  try {
+    await seedLane(fixture, "lane-a", {
+      displayName: "Lane A",
+      objective: "Finish lane A from Codex app-server completion events.",
+      scopeGlobs: ["src/lane-a/**"],
+      delegateSessionId: "lane-a-session",
+    });
+
+    const started = await runServerCommand(fixture, [
+      "delegate-run",
+      fixture.projectPath,
+      "--lane",
+      "lane-a",
+    ], {
+      env: {
+        CLAWDAD_FAKE_DISPATCH_MODE: "codex_events_complete_mailbox_stays_running",
+        CLAWDAD_CODEX_GOALS: "required",
+      },
+    });
+    assert.equal(started.exitCode, 0, started.stderr || started.stdout);
+    const startPayload = JSON.parse(started.stdout);
+    assert.equal(startPayload.accepted, true);
+
+    const statusFile = path.join(laneDir(fixture.projectPath, "lane-a"), "delegate-status.json");
+    const finalStatus = await waitForValue(
+      () => readJson(statusFile),
+      (status) => status.state === "completed",
+      "codex event recovered completion",
+      8_000,
+    );
+    assert.equal(finalStatus.codexGoal.synced, true);
+    assert.equal(finalStatus.codexGoal.status, "complete");
+    assert.equal(finalStatus.codexGoal.error, null);
+
+    const mailboxStatus = await readJson(path.join(laneDir(fixture.projectPath, "lane-a"), "mailbox", "status.json"));
+    assert.equal(mailboxStatus.state, "completed");
+
+    const response = await readFile(path.join(laneDir(fixture.projectPath, "lane-a"), "mailbox", "response.md"), "utf8");
+    assert.match(response, /Recovered from Codex app-server events/u);
+
+    const runEvents = await readFile(
+      path.join(laneDir(fixture.projectPath, "lane-a"), "runs", `${finalStatus.runId}.jsonl`),
+      "utf8",
+    );
+    assert.match(runEvents, /agent_response_recovered/u);
+    assert.match(runEvents, /step_completed/u);
+    assert.match(runEvents, /run_completed/u);
+    const workerPidMatch = runEvents.match(/Worker pid (?<pid>\d+)/u);
+    assert.ok(workerPidMatch?.groups?.pid);
+    recoveredWorkerPid = Number.parseInt(workerPidMatch.groups.pid, 10);
+    await waitForValue(
+      () => Promise.resolve(processIsLive(recoveredWorkerPid)),
+      (live) => live === false,
+      "recovered dispatch worker termination",
+      5_000,
+    );
+  } finally {
+    if (recoveredWorkerPid && processIsLive(recoveredWorkerPid)) {
+      try {
+        process.kill(recoveredWorkerPid, "SIGKILL");
+      } catch (_error) {
+        // Best-effort cleanup for a failed assertion path.
+      }
+    }
     await cleanupFixture(fixture);
   }
 });

@@ -331,6 +331,10 @@ _dispatch_background() {
     if [[ -n "${_CLAWDAD_DISPATCH_HEARTBEAT_PID:-}" ]] && kill -0 "$_CLAWDAD_DISPATCH_HEARTBEAT_PID" 2>/dev/null; then
       kill -TERM "$_CLAWDAD_DISPATCH_HEARTBEAT_PID" 2>/dev/null || true
     fi
+    if mailbox_request_is_completed "$_CLAWDAD_DISPATCH_PROJECT_PATH" "$_CLAWDAD_DISPATCH_REQUEST_ID"; then
+      clawdad_log "dispatch failure ignored after completed recovery: slug=$_CLAWDAD_DISPATCH_SLUG provider=$_CLAWDAD_DISPATCH_PROVIDER request_id=$_CLAWDAD_DISPATCH_REQUEST_ID exit=${exit_code:-1}"
+      return 0
+    fi
     local error_msg="${_CLAWDAD_DISPATCH_ERROR:-dispatch worker exited before completing (exit ${exit_code})}"
     local completed_at
     completed_at="$(iso_timestamp)"
@@ -461,6 +465,12 @@ _dispatch_background() {
     _CLAWDAD_DISPATCH_FINALIZED=true
     clawdad_log "dispatch completed: slug=$slug provider=$provider request_id=$request_id exit=$exit_code"
   else
+    if mailbox_request_is_completed "$project_path" "$request_id"; then
+      _CLAWDAD_DISPATCH_FINALIZED=true
+      clawdad_log "dispatch failed child ignored after completed recovery: slug=$slug provider=$provider request_id=$request_id exit=$exit_code"
+      return 0
+    fi
+
     local error_msg
     case "$provider" in
       chimera)

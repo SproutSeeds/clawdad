@@ -303,6 +303,42 @@ test("delegateDispatchStallDecision uses shorter safety window after pause is re
   assert.equal(decision.pauseRequested, true);
 });
 
+test("delegateDispatchStallDecision treats Codex app-server events as live progress", () => {
+  const decision = delegateDispatchStallDecision({
+    nowMs: Date.parse("2026-05-02T09:57:04Z"),
+    staleTimeoutMs: 60 * 60 * 1000,
+    pauseStaleTimeoutMs: 5 * 60 * 1000,
+    mailboxStatus: {
+      state: "running",
+      request_id: "request-codex",
+      dispatched_at: "2026-05-02T09:50:20Z",
+      heartbeat_at: "2026-05-02T09:57:00Z",
+    },
+    delegateStatus: {
+      activeRequestId: "request-codex",
+      activeStep: 1,
+      pauseRequested: true,
+    },
+    events: [
+      {
+        type: "dispatch_started",
+        requestId: "request-codex",
+        step: 1,
+        at: "2026-05-02T09:50:20Z",
+      },
+      {
+        type: "codex_turn_completed",
+        turnId: "turn-1",
+        at: "2026-05-02T09:52:25Z",
+      },
+    ],
+  });
+
+  assert.equal(decision.stalled, false);
+  assert.equal(decision.reason, "within_limit");
+  assert.equal(decision.progressType, "codex_turn_completed");
+});
+
 test("delegateDispatchStallDecision ignores stale events from another active step", () => {
   const decision = delegateDispatchStallDecision({
     nowMs: Date.parse("2026-04-30T08:00:00Z"),

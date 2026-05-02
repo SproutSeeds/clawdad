@@ -128,6 +128,16 @@ history_update_result() {
     existing_file=$("$CLAWDAD_JQ" -r '.file // empty' "$index_file" 2>/dev/null || echo "")
   fi
 
+  if [[ "$outcome" == "failed" && -n "$existing_file" && -f "$existing_file" ]]; then
+    local existing_status existing_response
+    existing_status=$("$CLAWDAD_JQ" -r '.status // ""' "$existing_file" 2>/dev/null || echo "")
+    existing_response=$("$CLAWDAD_JQ" -r '.response // ""' "$existing_file" 2>/dev/null || echo "")
+    if [[ "$existing_status" == "answered" && -n "$existing_response" ]]; then
+      clawdad_log "history skipped late failed result for answered request_id=$request_id"
+      return 0
+    fi
+  fi
+
   [[ -z "$sent_at" ]] && sent_at="$answered_at"
   target_file="$(history_request_file "$project_path" "$session_id" "$request_id" "$sent_at")"
 

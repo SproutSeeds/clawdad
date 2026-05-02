@@ -126,7 +126,13 @@ function handle(message) {
   }
   if (message.method === "turn/start") {
     send({ id: message.id, result: { turn: { id: "turn-test" } } });
-    if (behavior === "complete" || behavior === "delta" || behavior === "delta-json" || behavior === "goal-unsupported") {
+    if (
+      behavior === "complete" ||
+      behavior === "delta" ||
+      behavior === "delta-json" ||
+      behavior === "goal-unsupported" ||
+      behavior === "turn-id-param"
+    ) {
       setTimeout(() => {
         if (behavior === "delta" || behavior === "delta-json") {
           send({
@@ -149,10 +155,16 @@ function handle(message) {
         });
         send({
           method: "turn/completed",
-          params: {
-            threadId: "thread-test",
-            turn: { id: "turn-test", status: "completed" },
-          },
+          params: behavior === "turn-id-param"
+            ? {
+                threadId: "thread-test",
+                turnId: "turn-test",
+                turn: { status: "completed" },
+              }
+            : {
+                threadId: "thread-test",
+                turn: { id: "turn-test", status: "completed" },
+              },
         });
       }, 10);
     }
@@ -287,6 +299,34 @@ test("codex app-server dispatch keeps fast RPC responses attached to pending req
     const initialize = requests.find((entry) => entry.method === "initialize");
     assert.equal(initialize.params.capabilities.experimentalApi, false);
     assert.equal(requests.some((entry) => String(entry.method || "").startsWith("thread/goal/")), false);
+  });
+});
+
+test("codex app-server dispatch accepts turn/completed events keyed by params.turnId", async () => {
+  await withTempDir(async (root) => {
+    const fakeCodex = await writeFakeCodexBinary(root, "turn-id-param");
+    const result = await execFileCapture(process.execPath, [
+      dispatchScript,
+      "--project-path",
+      root,
+      "--message",
+      "hello",
+      "--session-id",
+      "thread-test",
+      "--session-seeded",
+      "--codex-binary",
+      fakeCodex,
+      "--turn-timeout-ms",
+      "1000",
+      "--request-timeout-ms",
+      "2000",
+    ], { timeout: 10000 });
+
+    assert.equal(result.stderr, "");
+    assert.equal(result.exitCode, 0);
+    const payload = JSON.parse(result.stdout.trim());
+    assert.equal(payload.ok, true);
+    assert.equal(payload.result_text, "fake response");
   });
 });
 

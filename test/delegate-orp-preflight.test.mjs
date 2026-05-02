@@ -200,8 +200,8 @@ async function readOrpLog(logPath) {
   return JSON.parse(raw);
 }
 
-async function runServerCommand(fixture, command, { scenario = "success" } = {}) {
-  const args = [serverScript, command, fixture.projectPath, "--json"];
+async function runServerCommand(fixture, command, { scenario = "success", extraArgs = [] } = {}) {
+  const args = [serverScript, command, fixture.projectPath, ...extraArgs, "--json"];
   const env = {
     ...process.env,
     HOME: fixture.home,
@@ -259,6 +259,46 @@ test("delegate-run preflight success allows delegation", async () => {
     assert.equal(payload.action, "start");
     assert.equal(payload.accepted, false);
     assert.equal(payload.status.runId, "already-running");
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("delegate-run --dry-run previews without starting delegation", async () => {
+  const fixture = await createProjectFixture("clawdad-delegate-dry-run-");
+  try {
+    const statusFile = path.join(fixture.projectPath, ".clawdad", "delegate", "delegate-status.json");
+    await writeFile(
+      statusFile,
+      JSON.stringify(
+        {
+          version: 1,
+          state: "idle",
+          runId: null,
+          startedAt: null,
+          delegateSessionId: "delegate-session-1",
+          delegateSessionLabel: "Delegate",
+          supervisorPid: null,
+          pauseRequested: false,
+          error: "",
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const result = await runServerCommand(fixture, "delegate-run", { extraArgs: ["--dry-run"] });
+    assert.equal(result.exitCode, 0, result.stderr || result.stdout);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.action, "dry_run");
+    assert.equal(payload.accepted, false);
+    assert.equal(payload.status.state, "idle");
+
+    const persisted = JSON.parse(await readFile(statusFile, "utf8"));
+    assert.equal(persisted.state, "idle");
+    assert.equal(persisted.runId, null);
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
   }
