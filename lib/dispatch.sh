@@ -270,6 +270,11 @@ dispatch_to_spoke() {
   local agent_message
   agent_message=$(_artifact_augmented_message "$project_path" "$message")
   _build_dispatch_command "$project_path" "$agent_message" "$session_id" "$dispatch_count" "$provider" "$session_seeded" "$permission_mode" "$model" || return 1
+  if [[ "$provider" == "codex" && -z "${CLAWDAD_CODEX_EVENT_LOG_FILE:-}" ]]; then
+    local codex_event_dir="$project_path/.clawdad/history/events"
+    mkdir -p "$codex_event_dir" 2>/dev/null || true
+    export CLAWDAD_CODEX_EVENT_LOG_FILE="$codex_event_dir/$request_id.codex-events.jsonl"
+  fi
 
   # Launch a detached worker process so the dispatch survives after this CLI exits.
   nohup "$CLAWDAD_ROOT/lib/dispatch-worker.sh" \

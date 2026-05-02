@@ -2647,6 +2647,29 @@ function normalizeDelegateComputeBudget(budget) {
   };
 }
 
+function normalizeDelegateCodexGoal(goal) {
+  if (!goal || typeof goal !== "object") {
+    return null;
+  }
+  const status = String(goal.status || "").trim();
+  const mode = String(goal.mode || "auto").trim() || "auto";
+  const supported = goal.supported === true ? true : goal.supported === false ? false : null;
+  return {
+    mode,
+    supported,
+    synced: Boolean(goal.synced),
+    skipped: Boolean(goal.skipped),
+    threadId: String(goal.threadId || goal.thread_id || "").trim() || null,
+    objective: String(goal.objective || "").trim(),
+    status: ["active", "paused", "budgetLimited", "complete"].includes(status) ? status : "",
+    tokenBudget: Number.isFinite(Number(goal.tokenBudget)) ? Number(goal.tokenBudget) : null,
+    tokensUsed: Number.isFinite(Number(goal.tokensUsed)) ? Number(goal.tokensUsed) : null,
+    timeUsedSeconds: Number.isFinite(Number(goal.timeUsedSeconds)) ? Number(goal.timeUsedSeconds) : null,
+    updatedAt: String(goal.updatedAt || goal.updated_at || "").trim() || null,
+    error: String(goal.error || "").trim(),
+  };
+}
+
 function normalizeDelegateStatus(status) {
   const normalizedState = String(status?.state || "idle").trim().toLowerCase();
   const stepCount = Number.parseInt(String(status?.stepCount || "0"), 10) || 0;
@@ -2677,6 +2700,7 @@ function normalizeDelegateStatus(status) {
     hygieneReason: String(status?.hygieneReason || status?.hygiene_reason || "").trim(),
     stopReason: String(status?.stopReason || "").trim(),
     pauseRequested: Boolean(status?.pauseRequested),
+    codexGoal: normalizeDelegateCodexGoal(status?.codexGoal || status?.codex_goal),
     error: String(status?.error || "").trim(),
   };
 }
@@ -4615,6 +4639,8 @@ function delegateRuntimeChecklistItems(delegateState, runLog) {
   const supervisorActive = delegateSupervisorIsActive(delegateState);
   const supervisorSeen = supervisorActive || Boolean(supervisor.restartCount) || Boolean(supervisorEvent);
   const workerStateLabel = delegateRunStateLabel(statusState, { prefix: false }).toLowerCase();
+  const codexGoal = normalizeDelegateCodexGoal(status.codexGoal);
+  const codexGoalBlocked = Boolean(codexGoal?.error) || codexGoal?.supported === false;
 
   return [
     delegateChecklistItem(
@@ -4651,7 +4677,13 @@ function delegateRuntimeChecklistItems(delegateState, runLog) {
       status.runId ? "done" : "pending",
       status.runId
         ? `${workerStateLabel ? `${workerStateLabel[0].toUpperCase()}${workerStateLabel.slice(1)} ` : ""}run ${sessionFingerprint(status.runId)}`
-        : "No worker run yet.",
+          : "No worker run yet.",
+    ),
+    delegateChecklistItem(
+      "codex-goal",
+      "Codex goal",
+      codexGoalBlocked ? "blocked" : codexGoal?.synced || codexGoal?.status ? "done" : running ? "current" : "pending",
+      delegateCodexGoalText(codexGoal),
     ),
     delegateChecklistItem(
       "step",
@@ -5002,6 +5034,35 @@ function appendDelegateOverviewField(container, label, value) {
   container.append(item);
 }
 
+function delegateCodexGoalText(goal) {
+  const normalized = normalizeDelegateCodexGoal(goal);
+  if (!normalized) {
+    return "Not synced yet.";
+  }
+  if (normalized.mode === "off") {
+    return "Off for this service.";
+  }
+  const pieces = [];
+  if (normalized.status) {
+    pieces.push(normalized.status === "budgetLimited" ? "budget-limited" : normalized.status);
+  } else {
+    pieces.push(normalized.synced ? "synced" : "pending");
+  }
+  if (normalized.supported === false) {
+    pieces.push("unsupported");
+  } else if (normalized.synced) {
+    pieces.push("synced");
+  } else if (normalized.skipped) {
+    pieces.push("skipped");
+  }
+  if (normalized.updatedAt) {
+    pieces.push(formatTimestamp(normalized.updatedAt));
+  }
+  const objective = shortDelegateRunText(normalized.objective, "", 140);
+  const base = pieces.filter(Boolean).join(" • ");
+  return [base, normalized.error || objective].filter(Boolean).join(" — ") || "Not synced yet.";
+}
+
 function buildDelegateOverview(project, delegateState, laneId, laneLabel) {
   const overview = document.createElement("section");
   overview.className = "delegate-overview-card";
@@ -5058,6 +5119,7 @@ function buildDelegateOverview(project, delegateState, laneId, laneLabel) {
     directionMode === "off" ? "Off for this lane." : `${directionMode}: checks outcome and nextAction before restart.`,
   );
   appendDelegateOverviewField(fields, "Watchtower", watchtowerMode === "off" ? "Off unless explicitly enabled." : watchtowerMode);
+  appendDelegateOverviewField(fields, "Codex goal", delegateCodexGoalText(delegateState?.status?.codexGoal));
 
   overview.append(head, fields);
   return overview;

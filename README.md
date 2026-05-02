@@ -233,8 +233,11 @@ when the task calls for them.
 
 Run `clawdad codex doctor <project> --json` to verify hooks, skills, plugin
 packaging, marketplace state, `AGENTS.md`, and whether project-local Codex
-configuration may still need trust in the user Codex config. The web app exposes
-the same check/install flow from the project Codex action.
+configuration may still need trust in the user Codex config. On Codex 0.128.0
+or newer, delegate lanes also sync a concise app-server thread goal by default;
+set `CLAWDAD_CODEX_GOALS=off` to fall back to prompt-only behavior or
+`CLAWDAD_CODEX_GOALS=required` to fail dispatch when goal sync is unavailable.
+The web app exposes the same check/install flow from the project Codex action.
 
 ```bash
 clawdad watchtower my-project --once

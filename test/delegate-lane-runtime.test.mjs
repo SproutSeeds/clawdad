@@ -302,6 +302,21 @@ if (args[0] !== "dispatch") {
   process.exit(64);
 }
 const prompt = args[2] || "";
+const envLogFile = process.env.CLAWDAD_FAKE_DISPATCH_ENV_LOG || "";
+if (envLogFile) {
+  mkdirSync(path.dirname(envLogFile), { recursive: true });
+  writeFileSync(
+    envLogFile,
+    JSON.stringify({
+      threadGoal: process.env.CLAWDAD_CODEX_THREAD_GOAL || "",
+      threadGoalStatus: process.env.CLAWDAD_CODEX_THREAD_GOAL_STATUS || "",
+      goalMode: process.env.CLAWDAD_CODEX_GOALS || "",
+      eventLogFile: process.env.CLAWDAD_CODEX_EVENT_LOG_FILE || "",
+      liveEventFile: process.env.CLAWDAD_CODEX_LIVE_EVENT_FILE || ""
+    }) + "\\n",
+    { flag: "a" }
+  );
+}
 
 const mailboxDir = process.env.CLAWDAD_MAILBOX_DIR || "";
 if (!mailboxDir) {
@@ -1523,6 +1538,45 @@ test("delegate-run remains bounded and does not enable continuity supervisor", a
   }
 });
 
+test("delegate-run passes a Codex thread goal and mirrors terminal goal status", async () => {
+  const fixture = await createFixture("clawdad-delegate-codex-goal-");
+  try {
+    await seedLane(fixture, "lane-a", {
+      displayName: "Lane A",
+      objective: "Finish lane A with a synced Codex goal.",
+      scopeGlobs: ["src/lane-a/**"],
+      delegateSessionId: "lane-a-session",
+    });
+    const envLog = path.join(fixture.root, "dispatch-env.jsonl");
+
+    const started = await runServerCommand(
+      fixture,
+      ["delegate-run", fixture.projectPath, "--lane", "lane-a"],
+      { env: { CLAWDAD_FAKE_DISPATCH_ENV_LOG: envLog } },
+    );
+    assert.equal(started.exitCode, 0, started.stderr || started.stdout);
+
+    const finalStatus = await waitForValue(
+      () => readJson(path.join(laneDir(fixture.projectPath, "lane-a"), "delegate-status.json")),
+      (status) => status.state === "completed",
+      "codex goal delegate-run completion",
+    );
+    assert.equal(finalStatus.codexGoal.status, "complete");
+    assert.match(finalStatus.codexGoal.objective, /Finish lane A with a synced Codex goal/u);
+
+    const envEntries = (await readFile(envLog, "utf8"))
+      .trim()
+      .split(/\r?\n/u)
+      .map((line) => JSON.parse(line));
+    assert.ok(envEntries.some((entry) => entry.goalMode === "auto"));
+    assert.ok(envEntries.some((entry) => entry.threadGoalStatus === "active"));
+    assert.ok(envEntries.some((entry) => /Clawdad delegate lane goal/u.test(entry.threadGoal)));
+    assert.ok(envEntries.some((entry) => /Lane A/u.test(entry.threadGoal)));
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
 test("watchtower enforce queues validation repair instead of pausing the delegate", async () => {
   const fixture = await createFixture("clawdad-watchtower-enforce-soft-");
   try {
@@ -1549,6 +1603,7 @@ test("watchtower enforce queues validation repair instead of pausing the delegat
       () => readJson(path.join(laneDir(fixture.projectPath, "lane-a"), "delegate-status.json")),
       (status) => status.state === "completed",
       "watchtower soft enforcement completion",
+      20_000,
     );
     assert.equal(finalStatus.stepCount, 2);
     assert.equal(finalStatus.stopReason, null);

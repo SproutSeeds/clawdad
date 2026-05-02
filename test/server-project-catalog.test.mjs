@@ -965,6 +965,85 @@ test("sessions-doctor repairs quarantined pointers and orphaned delegate lanes",
   }
 });
 
+test("sessions-doctor repairs stale active mirrored Codex goals on terminal lanes", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-goal-doctor-"));
+  const home = path.join(root, "home");
+  const projectPath = path.join(root, "goal-project");
+  const delegateDir = path.join(projectPath, ".clawdad", "delegate");
+  await mkdir(delegateDir, { recursive: true });
+  await mkdir(home, { recursive: true });
+
+  await writeFile(
+    path.join(home, "state.json"),
+    JSON.stringify(
+      {
+        version: 3,
+        projects: {
+          [projectPath]: {
+            status: "completed",
+            active_session_id: "goal-session",
+            sessions: {
+              "goal-session": {
+                slug: "goal-project",
+                provider: "codex",
+                provider_session_seeded: "false",
+                status: "completed",
+              },
+            },
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    path.join(delegateDir, "delegate-status.json"),
+    JSON.stringify(
+      {
+        version: 1,
+        laneId: "default",
+        state: "completed",
+        runId: "goal-run",
+        delegateSessionId: "goal-session",
+        stepCount: 1,
+        activeRequestId: null,
+        activeStep: null,
+        stopReason: null,
+        codexGoal: {
+          mode: "auto",
+          supported: true,
+          synced: true,
+          status: "active",
+          objective: "Finish goal project.",
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  try {
+    const doctor = await runServerCli(["sessions-doctor", projectPath, "--json"], {
+      env: { CLAWDAD_HOME: home },
+    });
+    assert.equal(doctor.exitCode, 1, doctor.stderr || doctor.stdout);
+    const report = JSON.parse(doctor.stdout);
+    assert.equal(report.projects[0].issues.some((issue) => issue.type === "stale_codex_goal_active"), true);
+
+    const repaired = await runServerCli(["sessions-doctor", projectPath, "--repair", "--json"], {
+      env: { CLAWDAD_HOME: home },
+    });
+    assert.equal(repaired.exitCode, 0, repaired.stderr || repaired.stdout);
+    const status = JSON.parse(await readFile(path.join(delegateDir, "delegate-status.json"), "utf8"));
+    assert.equal(status.codexGoal.status, "complete");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("sessions-doctor flags and repairs a failed active session without quarantining a valid binding", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-active-failed-doctor-"));
   const home = path.join(root, "home");
