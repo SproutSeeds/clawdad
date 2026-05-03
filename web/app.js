@@ -3699,32 +3699,6 @@ function prepareResponseAudioForEntry(entry) {
   );
 }
 
-function prepareRecentResponseAudio(limit = 4) {
-  if (!state.audioAutoDownload) {
-    return;
-  }
-
-  let prepared = 0;
-  for (const entry of [...state.threadEntries].reverse()) {
-    if (prepared >= limit) {
-      return;
-    }
-    if (entry?.status !== "answered" || !String(entry?.response || "").trim()) {
-      continue;
-    }
-    const audioKey = messageAudioKey(entry, "response");
-    if (!audioKey || audioPartsFromAvailability(audioKey).length > 0) {
-      continue;
-    }
-    prepared += 1;
-    void prepareMessageAudio(
-      audioKey,
-      messageAudioPayload(entry, "response", entry.response),
-      { autoplay: false },
-    );
-  }
-}
-
 function audioPlaybackStatus(audioKey) {
   return state.audioPlayback.key === audioKey ? state.audioPlayback.status || "idle" : "idle";
 }
@@ -10183,7 +10157,6 @@ function bindEvents() {
     state.audioAutoDownload = !state.audioAutoDownload;
     persistAudioAutoDownload();
     renderAll();
-    prepareRecentResponseAudio();
   });
   elements.sessionImportButton.addEventListener("click", () => {
     void openSessionImportModal();
