@@ -71,6 +71,7 @@ const state = {
     key: "",
     status: "idle",
   },
+  audioAvailability: {},
 };
 
 const elements = {
@@ -382,6 +383,8 @@ const headerCatchphrases = {
 let detailHistoryRenderSnapshot = null;
 let delegateRunRenderSnapshot = null;
 let activeMessageAudio = null;
+const audioPreparePromises = new Map();
+const audioPrepareTimers = new Map();
 const pendingSessionCycle = {
   order: [],
   cursor: 0,
@@ -408,6 +411,7 @@ const fullDateTimeFormatter = new Intl.DateTimeFormat([], {
   minute: "2-digit",
 });
 const controlLockMs = 2600;
+const ttsPreparePollMs = 3500;
 
 function copyIconMarkup() {
   return `
@@ -3354,6 +3358,7 @@ function completeThreadEntry(entry, patch) {
   if (entryHasReturned(completedEntry)) {
     void prefetchSessionHistory(completedEntry.projectPath, completedEntry.sessionId, { force: true });
   }
+  prepareResponseAudioForEntry(completedEntry);
 }
 
 function sessionStatusLabel(entry) {
@@ -3460,6 +3465,128 @@ function buildCopyButton({ copyKey, label, text }) {
   return button;
 }
 
+function audioAvailability(audioKey) {
+  return state.audioAvailability[audioKey] || { status: "idle" };
+}
+
+function setAudioAvailability(audioKey, patch = {}, { render = true } = {}) {
+  if (!audioKey) {
+    return;
+  }
+
+  const current = audioAvailability(audioKey);
+  const next = {
+    ...current,
+    ...patch,
+    updatedAt: new Date().toISOString(),
+  };
+  state.audioAvailability = {
+    ...state.audioAvailability,
+    [audioKey]: next,
+  };
+  if (render) {
+    renderAll();
+  }
+}
+
+function audioPartsFromAvailability(audioKey) {
+  const availability = audioAvailability(audioKey);
+  const parts = Array.isArray(availability?.audio?.parts)
+    ? availability.audio.parts.filter((part) => part?.url)
+    : [];
+  return availability.status === "ready" && parts.length > 0 ? parts : [];
+}
+
+function clearAudioPrepareTimer(audioKey) {
+  const timer = audioPrepareTimers.get(audioKey);
+  if (timer) {
+    window.clearTimeout(timer);
+    audioPrepareTimers.delete(audioKey);
+  }
+}
+
+function scheduleAudioPreparePoll(audioKey, payload) {
+  if (!audioKey || audioPrepareTimers.has(audioKey)) {
+    return;
+  }
+  const timer = window.setTimeout(() => {
+    audioPrepareTimers.delete(audioKey);
+    void prepareMessageAudio(audioKey, payload, { poll: true });
+  }, ttsPreparePollMs);
+  audioPrepareTimers.set(audioKey, timer);
+}
+
+async function prepareMessageAudio(audioKey, payload, { poll = false } = {}) {
+  if (!audioKey || !payload?.project) {
+    return;
+  }
+
+  const current = audioAvailability(audioKey);
+  if (!poll && (current.status === "ready" || current.status === "preparing")) {
+    return;
+  }
+
+  if (audioPreparePromises.has(audioKey)) {
+    return audioPreparePromises.get(audioKey);
+  }
+
+  setAudioAvailability(audioKey, { status: "preparing", error: "" });
+  const promise = (async () => {
+    try {
+      const response = await fetchJson("/v1/tts/message", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          ...payload,
+          async: true,
+        }),
+      });
+      const parts = Array.isArray(response?.audio?.parts)
+        ? response.audio.parts.filter((part) => part?.url)
+        : [];
+      if (response?.audio?.state === "ready" && parts.length > 0) {
+        clearAudioPrepareTimer(audioKey);
+        setAudioAvailability(audioKey, {
+          status: "ready",
+          audio: response.audio,
+          error: "",
+        });
+        return;
+      }
+
+      setAudioAvailability(audioKey, {
+        status: "preparing",
+        audio: response?.audio || current.audio || null,
+        error: "",
+      });
+      scheduleAudioPreparePoll(audioKey, payload);
+    } catch (error) {
+      clearAudioPrepareTimer(audioKey);
+      setAudioAvailability(audioKey, {
+        status: "error",
+        error: error.message || "Audio is not available.",
+      });
+    } finally {
+      audioPreparePromises.delete(audioKey);
+    }
+  })();
+  audioPreparePromises.set(audioKey, promise);
+  return promise;
+}
+
+function prepareResponseAudioForEntry(entry) {
+  if (entry?.status !== "answered" || !String(entry?.response || "").trim()) {
+    return;
+  }
+  const audioKey = messageAudioKey(entry, "response");
+  void prepareMessageAudio(
+    audioKey,
+    messageAudioPayload(entry, "response", entry.response),
+  );
+}
+
 function audioPlaybackStatus(audioKey) {
   return state.audioPlayback.key === audioKey ? state.audioPlayback.status || "idle" : "idle";
 }
@@ -3474,6 +3601,10 @@ function setAudioPlaybackStatus(audioKey = "", status = "idle") {
 
 function decorateAudioButton(button, audioKey) {
   const status = audioPlaybackStatus(audioKey);
+  const availability = audioAvailability(audioKey);
+  button.disabled = false;
+  button.classList.toggle("is-preparing", availability.status === "preparing");
+  button.classList.toggle("is-unavailable", availability.status === "error");
   button.classList.toggle("is-loading", status === "loading");
   button.classList.toggle("is-playing", status === "playing");
   if (status === "loading") {
@@ -3486,7 +3617,15 @@ function decorateAudioButton(button, audioKey) {
     button.setAttribute("aria-label", "Stop audio");
     return;
   }
+  if (availability.status === "preparing") {
+    button.disabled = true;
+    button.innerHTML = audioLoadingMarkup();
+    button.setAttribute("aria-label", "Preparing audio");
+    button.title = "Preparing audio";
+    return;
+  }
   button.innerHTML = speakerIconMarkup();
+  button.title = availability.status === "error" ? availability.error || "Audio is not available yet" : "";
 }
 
 function ttsFallbackText(text) {
@@ -3572,16 +3711,26 @@ async function playMessageAudio(audioKey, payload) {
   stopActiveMessageAudio();
   setAudioPlaybackStatus(audioKey, "loading");
   try {
-    const response = await fetchJson("/v1/tts/message", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
-    const parts = Array.isArray(response?.audio?.parts)
-      ? response.audio.parts.filter((part) => part?.url)
-      : [];
+    let parts = audioPartsFromAvailability(audioKey);
+    if (parts.length === 0) {
+      const response = await fetchJson("/v1/tts/message", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+      parts = Array.isArray(response?.audio?.parts)
+        ? response.audio.parts.filter((part) => part?.url)
+        : [];
+      if (parts.length > 0) {
+        setAudioAvailability(audioKey, {
+          status: "ready",
+          audio: response.audio,
+          error: "",
+        }, { render: false });
+      }
+    }
     if (parts.length === 0) {
       throw new Error("No audio was returned for this message.");
     }

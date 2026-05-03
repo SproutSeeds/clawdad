@@ -50,6 +50,19 @@ async function waitForHealth(baseUrl, child) {
   throw lastError || new Error("server did not become healthy");
 }
 
+async function waitForCondition(check, { timeoutMs = 5_000, intervalMs = 50 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  let lastValue;
+  while (Date.now() < deadline) {
+    lastValue = await check();
+    if (lastValue) {
+      return lastValue;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  throw new Error("condition did not become true before timeout");
+}
+
 async function stopServer(child) {
   if (child.exitCode != null) {
     return;
@@ -279,6 +292,143 @@ test("TTS message endpoint synthesizes, caches, and serves message audio", async
     assert.equal(secondResponse.status, 200);
     const secondPayload = await secondResponse.json();
     assert.equal(secondPayload.cached, true);
+    assert.equal(fakeElevenLabs.calls.length, 1);
+  } finally {
+    await stopServer(child);
+    await fakeElevenLabs.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("TTS message endpoint prepares response audio asynchronously", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-tts-async-"));
+  const home = path.join(root, "home");
+  const projectPath = path.join(root, "project");
+  const sessionId = "session-async";
+  const requestId = "request-async";
+  const configPath = path.join(root, "server.json");
+  const fakeElevenLabs = await startFakeElevenLabs();
+  await mkdir(home, { recursive: true });
+  await mkdir(projectPath, { recursive: true });
+
+  const historyRecordFile = path.join(
+    projectPath,
+    ".clawdad",
+    "history",
+    "sessions",
+    sessionId,
+    `${requestId}.json`,
+  );
+  await writeJson(historyRecordFile, {
+    requestId,
+    projectPath,
+    sessionId,
+    provider: "codex",
+    message: "Give me the latest.",
+    sentAt: "2026-05-02T11:00:00.000Z",
+    answeredAt: "2026-05-02T11:02:00.000Z",
+    status: "answered",
+    response: "This response should become playable after background preparation.",
+  });
+  await writeJson(path.join(projectPath, ".clawdad", "history", "requests", `${requestId}.json`), {
+    requestId,
+    sessionId,
+    sentAt: "2026-05-02T11:00:00.000Z",
+    file: historyRecordFile,
+  });
+  await writeJson(path.join(home, "state.json"), {
+    version: 3,
+    projects: {
+      [projectPath]: {
+        status: "idle",
+        active_session_id: sessionId,
+        sessions: {
+          [sessionId]: {
+            slug: "Main",
+            provider: "codex",
+            status: "idle",
+          },
+        },
+      },
+    },
+  });
+
+  const port = await freePort();
+  await writeJson(configPath, {
+    host: "127.0.0.1",
+    port,
+    authMode: "tailscale",
+    allowedUsers: ["tester@example.com"],
+  });
+
+  const child = spawn(process.execPath, [serverScript, "serve", "--config", configPath], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      HOME: home,
+      CLAWDAD_HOME: home,
+      CLAWDAD_ELEVENLABS_API_KEY: "server-key",
+      CLAWDAD_ELEVENLABS_BASE_URL: fakeElevenLabs.baseUrl,
+      CLAWDAD_ELEVENLABS_VOICE_ID: "voice-id",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  try {
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const headers = {
+      "content-type": "application/json",
+      "tailscale-user-login": "tester@example.com",
+    };
+    await waitForHealth(baseUrl, child);
+
+    const firstResponse = await fetch(`${baseUrl}/v1/tts/message`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        project: projectPath,
+        sessionId,
+        requestId,
+        kind: "response",
+        async: true,
+      }),
+    });
+    assert.equal(firstResponse.status, 202);
+    const firstPayload = await firstResponse.json();
+    assert.equal(firstPayload.ok, true);
+    assert.equal(firstPayload.audio.state, "generating");
+
+    const readyPayload = await waitForCondition(async () => {
+      const response = await fetch(`${baseUrl}/v1/tts/message`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          project: projectPath,
+          sessionId,
+          requestId,
+          kind: "response",
+          async: true,
+        }),
+      });
+      const payload = await response.json();
+      return response.status === 200 && payload.audio?.state === "ready" ? payload : null;
+    });
+    assert.equal(readyPayload.cached, true);
+    assert.equal(readyPayload.audio.parts.length, 1);
+    assert.equal(fakeElevenLabs.calls.length, 1);
+
+    const thirdResponse = await fetch(`${baseUrl}/v1/tts/message`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        project: projectPath,
+        sessionId,
+        requestId,
+        kind: "response",
+        async: true,
+      }),
+    });
+    assert.equal(thirdResponse.status, 200);
     assert.equal(fakeElevenLabs.calls.length, 1);
   } finally {
     await stopServer(child);
