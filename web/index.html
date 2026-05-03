@@ -236,18 +236,31 @@
             <div id="mailboxState" class="mailbox-state is-empty"></div>
             <span id="queueUnreadOrb" class="queue-unread-orb" hidden aria-hidden="true"></span>
           </div>
-          <button
-            id="queueToggle"
-            class="queue-toggle"
-            type="button"
-            aria-expanded="true"
-            aria-controls="queueBody"
-            aria-label="Collapse queue"
-          >
-            <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <path d="M3.5 6 8 10l4.5-4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"></path>
-            </svg>
-          </button>
+          <div class="queue-actions">
+            <button
+              id="audioAutoDownloadButton"
+              class="queue-toggle audio-auto-download-button"
+              type="button"
+              aria-pressed="false"
+              aria-label="Enable automatic audio downloads"
+            >
+              <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M8 3.2v5.6m0 0 2.5-2.5M8 8.8 5.5 6.3M3.4 11.8h9.2" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"></path>
+              </svg>
+            </button>
+            <button
+              id="queueToggle"
+              class="queue-toggle"
+              type="button"
+              aria-expanded="true"
+              aria-controls="queueBody"
+              aria-label="Collapse queue"
+            >
+              <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M3.5 6 8 10l4.5-4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"></path>
+              </svg>
+            </button>
+          </div>
         </div>
         <div id="queueBody" class="queue-body">
           <div id="queueList" class="queue-list"></div>

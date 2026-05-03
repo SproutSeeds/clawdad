@@ -74,6 +74,7 @@ const state = {
     status: "idle",
   },
   audioAvailability: {},
+  audioAutoDownload: false,
 };
 
 const elements = {
@@ -105,6 +106,7 @@ const elements = {
   sessionImportButton: document.querySelector("#sessionImportButton"),
   sessionImportOrb: document.querySelector("#sessionImportOrb"),
   sessionThreadButton: document.querySelector("#sessionThreadButton"),
+  audioAutoDownloadButton: document.querySelector("#audioAutoDownloadButton"),
   messageInput: document.querySelector("#messageInput"),
   dispatchForm: document.querySelector("#dispatchForm"),
   dispatchButton: document.querySelector("#dispatchButton"),
@@ -237,6 +239,7 @@ const projectCacheKey = `clawdad-project-catalog-v4${cacheVersionSuffix}`;
 const threadCacheKey = `clawdad-thread-log-v1${cacheVersionSuffix}`;
 const queueCollapsedKey = "clawdad-queue-collapsed-v1";
 const artifactShelfCollapsedKey = "clawdad-artifact-shelf-collapsed-v1";
+const audioAutoDownloadKey = "clawdad-audio-auto-download-v1";
 const queuedDispatchGraceMs = 15000;
 // Dispatch startup can lag behind refreshes; do not mark optimistic queue cards failed too early.
 const queuedDispatchAttachGraceMs = 2 * 60 * 1000;
@@ -435,6 +438,14 @@ function speakerIconMarkup() {
       <path d="M2.5 6.1h2.2l3.1-2.65v9.1L4.7 9.9H2.5z" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round"></path>
       <path d="M10.2 5.25c.75.7 1.15 1.6 1.15 2.75s-.4 2.05-1.15 2.75" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"></path>
       <path d="M12.1 3.7c1.16 1.12 1.75 2.55 1.75 4.3s-.59 3.18-1.75 4.3" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" opacity=".75"></path>
+    </svg>
+  `;
+}
+
+function downloadIconMarkup() {
+  return `
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M8 3.2v5.6m0 0 2.5-2.5M8 8.8 5.5 6.3M3.4 11.8h9.2" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"></path>
     </svg>
   `;
 }
@@ -2228,6 +2239,22 @@ function restoreArtifactShelfCollapsed() {
   }
 }
 
+function persistAudioAutoDownload() {
+  try {
+    localStorage.setItem(audioAutoDownloadKey, JSON.stringify(state.audioAutoDownload));
+  } catch (_error) {
+    // Ignore storage failures.
+  }
+}
+
+function restoreAudioAutoDownload() {
+  try {
+    state.audioAutoDownload = JSON.parse(localStorage.getItem(audioAutoDownloadKey) || "false") === true;
+  } catch (_error) {
+    state.audioAutoDownload = false;
+  }
+}
+
 function entryById(entryId) {
   return state.threadEntries.find((entry) => entry.id === entryId) || null;
 }
@@ -3590,7 +3617,8 @@ async function prepareMessageAudio(audioKey, payload, { poll = false, autoplay =
   }
 
   const current = audioAvailability(audioKey);
-  if (!poll && (current.status === "ready" || current.status === "preparing")) {
+  const currentReady = audioPartsFromAvailability(audioKey).length > 0;
+  if (!poll && ((current.status === "ready" && currentReady) || current.status === "preparing")) {
     return;
   }
 
@@ -3648,6 +3676,9 @@ async function prepareMessageAudio(audioKey, payload, { poll = false, autoplay =
 }
 
 function prepareResponseAudioForEntry(entry) {
+  if (!state.audioAutoDownload) {
+    return;
+  }
   if (entry?.status !== "answered" || !String(entry?.response || "").trim()) {
     return;
   }
@@ -3655,8 +3686,34 @@ function prepareResponseAudioForEntry(entry) {
   void prepareMessageAudio(
     audioKey,
     messageAudioPayload(entry, "response", entry.response),
-    { autoplay: true },
+    { autoplay: false },
   );
+}
+
+function prepareRecentResponseAudio(limit = 4) {
+  if (!state.audioAutoDownload) {
+    return;
+  }
+
+  let prepared = 0;
+  for (const entry of [...state.threadEntries].reverse()) {
+    if (prepared >= limit) {
+      return;
+    }
+    if (entry?.status !== "answered" || !String(entry?.response || "").trim()) {
+      continue;
+    }
+    const audioKey = messageAudioKey(entry, "response");
+    if (!audioKey || audioPartsFromAvailability(audioKey).length > 0) {
+      continue;
+    }
+    prepared += 1;
+    void prepareMessageAudio(
+      audioKey,
+      messageAudioPayload(entry, "response", entry.response),
+      { autoplay: false },
+    );
+  }
 }
 
 function audioPlaybackStatus(audioKey) {
@@ -3675,15 +3732,19 @@ function decorateAudioButton(button, audioKey) {
   const status = audioPlaybackStatus(audioKey);
   const availability = audioAvailability(audioKey);
   const preparing = availability.status === "preparing";
+  const ready = audioPartsFromAvailability(audioKey).length > 0;
   const loading = status === "loading" || preparing;
   button.disabled = false;
+  button.classList.toggle("is-ready", ready);
   button.classList.toggle("is-preparing", preparing);
-  button.classList.toggle("is-unavailable", availability.status === "error");
+  button.classList.toggle("is-unavailable", availability.status === "error" && !ready);
+  button.classList.toggle("is-download", !ready && !loading && status !== "playing");
   button.classList.toggle("is-loading", loading);
   button.classList.toggle("is-playing", status === "playing");
   if (status === "loading") {
     button.innerHTML = audioLoadingMarkup();
     button.setAttribute("aria-label", "Preparing audio");
+    button.title = "Preparing audio";
     return;
   }
   if (status === "playing") {
@@ -3699,8 +3760,18 @@ function decorateAudioButton(button, audioKey) {
     button.title = "Preparing audio";
     return;
   }
+  if (!ready) {
+    const label = button.dataset.audioDownloadLabel || "Download audio";
+    button.innerHTML = downloadIconMarkup();
+    button.setAttribute("aria-label", label);
+    button.title = availability.status === "error"
+      ? `${availability.error || "Audio is not available yet"} Click to retry.`
+      : label;
+    return;
+  }
   button.innerHTML = speakerIconMarkup();
-  button.title = availability.status === "error" ? availability.error || "Audio is not available yet" : "";
+  button.setAttribute("aria-label", button.dataset.audioPlayLabel || "Play audio");
+  button.title = button.dataset.audioPlayLabel || "Play audio";
 }
 
 function ttsFallbackText(text) {
@@ -3786,28 +3857,11 @@ async function playMessageAudio(audioKey, payload) {
   stopActiveMessageAudio();
   setAudioPlaybackStatus(audioKey, "loading");
   try {
-    let parts = audioPartsFromAvailability(audioKey);
+    const parts = audioPartsFromAvailability(audioKey);
     if (parts.length === 0) {
-      const response = await fetchJson("/v1/tts/message", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
-      });
-      parts = Array.isArray(response?.audio?.parts)
-        ? response.audio.parts.filter((part) => part?.url)
-        : [];
-      if (parts.length > 0) {
-        setAudioAvailability(audioKey, {
-          status: "ready",
-          audio: response.audio,
-          error: "",
-        }, { render: false });
-      }
-    }
-    if (parts.length === 0) {
-      throw new Error("No audio was returned for this message.");
+      setAudioPlaybackStatus("", "idle");
+      await prepareMessageAudio(audioKey, payload, { autoplay: false });
+      return;
     }
     if (state.audioPlayback.key !== audioKey) {
       return;
@@ -3829,12 +3883,23 @@ function buildAudioButton({ audioKey, label, payload }) {
   button.type = "button";
   button.className = "copy-button copy-button-floating message-audio-button";
   button.dataset.audioKey = audioKey;
+  button.dataset.audioPlayLabel = label || "Play audio";
+  button.dataset.audioDownloadLabel = String(label || "Play audio").replace(/^Play\b/u, "Download");
   button.setAttribute("aria-label", label);
   decorateAudioButton(button, audioKey);
   button.addEventListener("click", async (event) => {
     event.preventDefault();
     event.stopPropagation();
     try {
+      const status = audioPlaybackStatus(audioKey);
+      if (status === "loading" || status === "playing") {
+        stopActiveMessageAudio();
+        return;
+      }
+      if (audioPartsFromAvailability(audioKey).length === 0) {
+        await prepareMessageAudio(audioKey, payload, { autoplay: false });
+        return;
+      }
       await playMessageAudio(audioKey, payload);
     } catch (error) {
       stopActiveMessageAudio();
@@ -7670,6 +7735,23 @@ function updateQueueChrome() {
   );
 }
 
+function updateAudioAutoDownloadButton() {
+  const button = elements.audioAutoDownloadButton;
+  if (!button) {
+    return;
+  }
+
+  const enabled = Boolean(state.audioAutoDownload);
+  button.classList.toggle("is-active", enabled);
+  button.setAttribute("aria-pressed", String(enabled));
+  button.setAttribute(
+    "aria-label",
+    enabled ? "Disable automatic audio downloads" : "Enable automatic audio downloads",
+  );
+  button.title = enabled ? "Auto-download audio is on" : "Auto-download audio is off";
+  button.innerHTML = downloadIconMarkup();
+}
+
 function renderAll() {
   pruneCopyFeedback();
   renderWorkspaceTabs();
@@ -7701,6 +7783,7 @@ function renderAll() {
   updateDelegateButtonAvailability();
   updateActiveRunsButtonAvailability();
   updateQueueChrome();
+  updateAudioAutoDownloadButton();
   updateBodyModalState();
   refreshCopyButtons();
 }
@@ -10082,6 +10165,12 @@ function bindEvents() {
     persistArtifactShelfCollapsed();
     renderAll();
   });
+  elements.audioAutoDownloadButton?.addEventListener("click", () => {
+    state.audioAutoDownload = !state.audioAutoDownload;
+    persistAudioAutoDownload();
+    renderAll();
+    prepareRecentResponseAudio();
+  });
   elements.sessionImportButton.addEventListener("click", () => {
     void openSessionImportModal();
   });
@@ -10421,6 +10510,7 @@ async function boot() {
   hydrateReturnedThreadEntries();
   restoreQueueCollapsed();
   restoreArtifactShelfCollapsed();
+  restoreAudioAutoDownload();
   restoreCachedProjects();
   renderAll();
 

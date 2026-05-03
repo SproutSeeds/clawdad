@@ -751,6 +751,23 @@ textarea:disabled {
   gap: 8px;
 }
 
+.queue-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.audio-auto-download-button.is-active,
+.message-audio-button.is-ready {
+  color: #fff4e3;
+  border-color: rgba(240, 208, 109, 0.46);
+}
+
+.audio-auto-download-button.is-active {
+  background: rgba(94, 28, 18, 0.94);
+}
+
 .queue-unread-orb {
   width: 7px;
   height: 7px;
@@ -764,7 +781,7 @@ textarea:disabled {
   transition: transform 160ms ease;
 }
 
-.queue.is-collapsed .queue-toggle svg {
+.queue.is-collapsed #queueToggle svg {
   transform: rotate(-90deg);
 }
 
@@ -1078,6 +1095,15 @@ textarea:disabled {
   color: #fff4e3;
   border-color: rgba(240, 208, 109, 0.46);
   background: rgba(94, 28, 18, 0.94);
+}
+
+.message-audio-button.is-download {
+  color: rgba(255, 218, 185, 0.74);
+}
+
+.message-audio-button.is-unavailable {
+  color: rgba(255, 177, 159, 0.92);
+  border-color: rgba(255, 177, 159, 0.42);
 }
 
 .message-audio-button.is-loading {
