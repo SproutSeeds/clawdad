@@ -444,7 +444,8 @@ function audioLoadingMarkup() {
 function stopAudioIconMarkup() {
   return `
     <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <rect x="4.7" y="4.7" width="6.6" height="6.6" rx="1.2" fill="currentColor"></rect>
+      <rect x="4.6" y="4" width="2.4" height="8" rx=".8" fill="currentColor"></rect>
+      <rect x="9" y="4" width="2.4" height="8" rx=".8" fill="currentColor"></rect>
     </svg>
   `;
 }
@@ -3505,18 +3506,18 @@ function clearAudioPrepareTimer(audioKey) {
   }
 }
 
-function scheduleAudioPreparePoll(audioKey, payload) {
+function scheduleAudioPreparePoll(audioKey, payload, { autoplay = false } = {}) {
   if (!audioKey || audioPrepareTimers.has(audioKey)) {
     return;
   }
   const timer = window.setTimeout(() => {
     audioPrepareTimers.delete(audioKey);
-    void prepareMessageAudio(audioKey, payload, { poll: true });
+    void prepareMessageAudio(audioKey, payload, { poll: true, autoplay });
   }, ttsPreparePollMs);
   audioPrepareTimers.set(audioKey, timer);
 }
 
-async function prepareMessageAudio(audioKey, payload, { poll = false } = {}) {
+async function prepareMessageAudio(audioKey, payload, { poll = false, autoplay = false } = {}) {
   if (!audioKey || !payload?.project) {
     return;
   }
@@ -3553,6 +3554,9 @@ async function prepareMessageAudio(audioKey, payload, { poll = false } = {}) {
           audio: response.audio,
           error: "",
         });
+        if (autoplay && audioPlaybackStatus(audioKey) === "idle") {
+          void playMessageAudio(audioKey, payload).catch(() => {});
+        }
         return;
       }
 
@@ -3561,7 +3565,7 @@ async function prepareMessageAudio(audioKey, payload, { poll = false } = {}) {
         audio: response?.audio || current.audio || null,
         error: "",
       });
-      scheduleAudioPreparePoll(audioKey, payload);
+      scheduleAudioPreparePoll(audioKey, payload, { autoplay });
     } catch (error) {
       clearAudioPrepareTimer(audioKey);
       setAudioAvailability(audioKey, {
@@ -3584,6 +3588,7 @@ function prepareResponseAudioForEntry(entry) {
   void prepareMessageAudio(
     audioKey,
     messageAudioPayload(entry, "response", entry.response),
+    { autoplay: true },
   );
 }
 
@@ -3602,10 +3607,12 @@ function setAudioPlaybackStatus(audioKey = "", status = "idle") {
 function decorateAudioButton(button, audioKey) {
   const status = audioPlaybackStatus(audioKey);
   const availability = audioAvailability(audioKey);
+  const preparing = availability.status === "preparing";
+  const loading = status === "loading" || preparing;
   button.disabled = false;
-  button.classList.toggle("is-preparing", availability.status === "preparing");
+  button.classList.toggle("is-preparing", preparing);
   button.classList.toggle("is-unavailable", availability.status === "error");
-  button.classList.toggle("is-loading", status === "loading");
+  button.classList.toggle("is-loading", loading);
   button.classList.toggle("is-playing", status === "playing");
   if (status === "loading") {
     button.innerHTML = audioLoadingMarkup();
@@ -3614,10 +3621,11 @@ function decorateAudioButton(button, audioKey) {
   }
   if (status === "playing") {
     button.innerHTML = stopAudioIconMarkup();
-    button.setAttribute("aria-label", "Stop audio");
+    button.setAttribute("aria-label", "Pause audio");
+    button.title = "Pause audio";
     return;
   }
-  if (availability.status === "preparing") {
+  if (preparing) {
     button.disabled = true;
     button.innerHTML = audioLoadingMarkup();
     button.setAttribute("aria-label", "Preparing audio");
