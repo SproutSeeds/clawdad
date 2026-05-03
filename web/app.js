@@ -60,6 +60,8 @@ const state = {
   projectAutoImportRefreshTimer: null,
   projectRootsRefreshPromise: null,
   threadRefreshPromise: null,
+  recentHistoryRefreshPromise: null,
+  recentHistoryLoadedAt: 0,
   summaryRefreshPromise: null,
   delegateRefreshPromise: null,
   historyPrefetchPromises: {},
@@ -244,6 +246,11 @@ const copiedFeedbackMs = 1400;
 const historyPageSize = 20;
 const historyPrefetchFreshMs = 5 * 60 * 1000;
 const historyPrefetchEntryLimit = 8;
+const recentHistoryRefreshMs = 60 * 1000;
+const recentHistoryLimit = 24;
+const recentHistorySessionLimit = 10;
+const recentHistoryPerSessionLimit = 4;
+const threadEntryCacheLimit = 80;
 const ttsInlineTextLimit = 50_000;
 const headerCarouselIntervalMs = 11000;
 const headerCarouselVersion = "20260406m";
@@ -2400,6 +2407,7 @@ function mergeHistoryItem(existing, incoming) {
   return {
     ...existing,
     ...incoming,
+    id: firstNonEmpty(existing?.id, incoming?.id) || makeEntryId(),
     requestId: requestId || makeEntryId(),
     projectPath,
     sessionId,
@@ -2444,6 +2452,38 @@ function mergeHistoryItems(existingItems = [], incomingItems = []) {
     const rightMs = new Date(right.sentAt || 0).getTime();
     return (Number.isFinite(leftMs) ? leftMs : 0) - (Number.isFinite(rightMs) ? rightMs : 0);
   });
+}
+
+function trimThreadEntries(items = []) {
+  const normalizedItems = Array.isArray(items) ? items : [];
+  const queued = normalizedItems.filter((entry) => entry.status === "queued");
+  const returned = normalizedItems
+    .filter((entry) => entry.status !== "queued")
+    .sort((left, right) => {
+      const leftMs = new Date(left.answeredAt || left.sentAt || 0).getTime();
+      const rightMs = new Date(right.answeredAt || right.sentAt || 0).getTime();
+      return (Number.isFinite(rightMs) ? rightMs : 0) - (Number.isFinite(leftMs) ? leftMs : 0);
+    })
+    .slice(0, Math.max(0, threadEntryCacheLimit - queued.length));
+
+  return mergeHistoryItems([], [...queued, ...returned]);
+}
+
+function threadEntryFromHistoryItem(item) {
+  const normalized = normalizeHistoryItem(item);
+  if (!normalized.projectPath || !normalized.sessionId) {
+    return null;
+  }
+
+  const requestId = String(normalized.requestId || "").trim();
+  return {
+    ...normalized,
+    id: requestId ? `history:${requestId}` : makeEntryId(),
+    seenAt:
+      normalized.status === "queued"
+        ? normalized.seenAt || null
+        : normalized.seenAt || normalized.answeredAt || normalized.sentAt || new Date().toISOString(),
+  };
 }
 
 function historyItemFromThreadEntry(entry) {
@@ -3138,10 +3178,37 @@ function restoreThreadEntries() {
       return;
     }
     const parsed = JSON.parse(raw);
-    state.threadEntries = Array.isArray(parsed) ? parsed : [];
+    state.threadEntries = Array.isArray(parsed) ? trimThreadEntries(parsed) : [];
   } catch (_error) {
     state.threadEntries = [];
   }
+}
+
+function hydrateThreadEntriesFromHistoryItems(items = []) {
+  const incoming = (Array.isArray(items) ? items : [])
+    .map(threadEntryFromHistoryItem)
+    .filter(Boolean);
+  if (incoming.length === 0) {
+    return false;
+  }
+
+  const beforeSignature = state.threadEntries
+    .map((entry) => `${entry.id || ""}:${entry.requestId || ""}:${entry.status || ""}:${entry.answeredAt || ""}:${String(entry.response || "").length}`)
+    .join("|");
+  state.threadEntries = trimThreadEntries(mergeHistoryItems(state.threadEntries, incoming));
+  const afterSignature = state.threadEntries
+    .map((entry) => `${entry.id || ""}:${entry.requestId || ""}:${entry.status || ""}:${entry.answeredAt || ""}:${String(entry.response || "").length}`)
+    .join("|");
+
+  for (const entry of incoming) {
+    hydrateHistoryFromThreadEntry(entry);
+  }
+
+  if (beforeSignature !== afterSignature) {
+    persistThreadEntries();
+    return true;
+  }
+  return false;
 }
 
 function cacheProjects(payload) {
@@ -7868,6 +7935,9 @@ async function refreshProjects() {
       }
       await reconcileThreadEntries();
       hydrateReturnedThreadEntries({ prefetch: true });
+      void refreshRecentHistory({
+        force: state.threadEntries.length === 0,
+      });
       if (state.selectedProject) {
         void refreshImportableSessions(state.selectedProject).catch(() => {});
         void loadProjectArtifacts(state.selectedProject, { quiet: true }).catch(() => {});
@@ -7900,6 +7970,44 @@ async function refreshThreads() {
     state.threadRefreshPromise = null;
   });
   return state.threadRefreshPromise;
+}
+
+async function refreshRecentHistory({ force = false, project = "" } = {}) {
+  if (state.recentHistoryRefreshPromise) {
+    return state.recentHistoryRefreshPromise;
+  }
+
+  const now = Date.now();
+  if (!force && state.recentHistoryLoadedAt > 0 && now - state.recentHistoryLoadedAt < recentHistoryRefreshMs) {
+    return;
+  }
+
+  const params = new URLSearchParams({
+    limit: String(recentHistoryLimit),
+    sessionLimit: String(recentHistorySessionLimit),
+    perSessionLimit: String(recentHistoryPerSessionLimit),
+  });
+  const normalizedProject = String(project || "").trim();
+  if (normalizedProject) {
+    params.set("project", normalizedProject);
+  }
+
+  state.recentHistoryRefreshPromise = (async () => {
+    const payload = await fetchJson(`/v1/history/recent?${params.toString()}`);
+    state.recentHistoryLoadedAt = Date.now();
+    const changed = hydrateThreadEntriesFromHistoryItems(payload.items || []);
+    if (changed) {
+      renderAll();
+    }
+  })()
+    .catch((error) => {
+      console.warn("[clawdad] recent history refresh failed", error);
+    })
+    .finally(() => {
+      state.recentHistoryRefreshPromise = null;
+    });
+
+  return state.recentHistoryRefreshPromise;
 }
 
 function summaryProjectsNeedingRefresh() {
@@ -10174,6 +10282,7 @@ function bindEvents() {
     syncSelectedSession("", { preferCurrent: false });
     renderAll();
     void refreshImportableSessions(state.selectedProject, { force: true }).catch(() => {});
+    void refreshRecentHistory({ force: true, project: state.selectedProject }).catch(() => {});
     try {
       await refreshThreads();
     } catch (error) {

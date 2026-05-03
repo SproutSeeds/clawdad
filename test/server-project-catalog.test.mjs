@@ -2251,6 +2251,204 @@ test("history endpoint merges mirrored requests with provider transcript handoff
   }
 });
 
+test("recent history endpoint returns server-backed prompt cards across tracked sessions", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-recent-history-"));
+  const home = path.join(root, "home");
+  const projectAlpha = path.join(root, "alpha");
+  const projectBeta = path.join(root, "beta");
+  const configPath = path.join(root, "server.json");
+  const mockBinPath = path.join(root, "clawdad-mock");
+  const alphaSessionId = "019e0000-0000-7000-8000-000000000001";
+  const betaSessionId = "019e0000-0000-7000-8000-000000000002";
+
+  await mkdir(path.join(projectAlpha, ".clawdad", "mailbox"), { recursive: true });
+  await mkdir(path.join(projectBeta, ".clawdad", "mailbox"), { recursive: true });
+  await mkdir(path.join(projectAlpha, ".clawdad", "history", "sessions", alphaSessionId), { recursive: true });
+  await mkdir(path.join(projectBeta, ".clawdad", "history", "sessions", betaSessionId), { recursive: true });
+  await mkdir(home, { recursive: true });
+  await writeFile(
+    path.join(home, "state.json"),
+    JSON.stringify(
+      {
+        version: 3,
+        projects: {
+          [projectAlpha]: {
+            status: "completed",
+            last_dispatch: "2026-05-02T10:00:00Z",
+            last_response: "2026-05-02T10:12:00Z",
+            dispatch_count: 2,
+            registered_at: "2026-05-02T00:00:00Z",
+            active_session_id: alphaSessionId,
+            sessions: {
+              [alphaSessionId]: {
+                slug: "Alpha",
+                provider: "codex",
+                provider_session_seeded: "true",
+                tracked_at: "2026-05-02T00:00:00Z",
+                dispatch_count: 2,
+                last_dispatch: "2026-05-02T10:00:00Z",
+                last_response: "2026-05-02T10:12:00Z",
+                status: "completed",
+              },
+            },
+          },
+          [projectBeta]: {
+            status: "completed",
+            last_dispatch: "2026-05-02T10:05:00Z",
+            last_response: "2026-05-02T10:08:00Z",
+            dispatch_count: 1,
+            registered_at: "2026-05-02T00:00:00Z",
+            active_session_id: betaSessionId,
+            sessions: {
+              [betaSessionId]: {
+                slug: "Beta",
+                provider: "codex",
+                provider_session_seeded: "true",
+                tracked_at: "2026-05-02T00:00:00Z",
+                dispatch_count: 1,
+                last_dispatch: "2026-05-02T10:05:00Z",
+                last_response: "2026-05-02T10:08:00Z",
+                status: "completed",
+              },
+            },
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  await writeFile(
+    path.join(projectAlpha, ".clawdad", "history", "sessions", alphaSessionId, "20260502T100000Z--alpha-old.json"),
+    JSON.stringify(
+      {
+        requestId: "alpha-old",
+        projectPath: projectAlpha,
+        sessionId: alphaSessionId,
+        sessionSlug: "Alpha",
+        provider: "codex",
+        message: "older alpha prompt",
+        sentAt: "2026-05-02T10:00:00Z",
+        answeredAt: "2026-05-02T10:01:00Z",
+        status: "answered",
+        response: "older alpha answer",
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    path.join(projectAlpha, ".clawdad", "history", "sessions", alphaSessionId, "20260502T101000Z--alpha-new.json"),
+    JSON.stringify(
+      {
+        requestId: "alpha-new",
+        projectPath: projectAlpha,
+        sessionId: alphaSessionId,
+        sessionSlug: "Alpha",
+        provider: "codex",
+        message: "newest alpha prompt",
+        sentAt: "2026-05-02T10:10:00Z",
+        answeredAt: "2026-05-02T10:12:00Z",
+        status: "answered",
+        response: "newest alpha answer",
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    path.join(projectBeta, ".clawdad", "history", "sessions", betaSessionId, "20260502T100500Z--beta.json"),
+    JSON.stringify(
+      {
+        requestId: "beta",
+        projectPath: projectBeta,
+        sessionId: betaSessionId,
+        sessionSlug: "Beta",
+        provider: "codex",
+        message: "middle beta prompt",
+        sentAt: "2026-05-02T10:05:00Z",
+        answeredAt: "2026-05-02T10:08:00Z",
+        status: "answered",
+        response: "middle beta answer",
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  await writeFile(mockBinPath, "#!/bin/sh\nexit 1\n", "utf8");
+  await chmod(mockBinPath, 0o755);
+
+  const port = await freePort();
+  await writeFile(
+    configPath,
+    JSON.stringify(
+      {
+        host: "127.0.0.1",
+        port,
+        defaultProject: projectAlpha,
+        authMode: "tailscale",
+        allowedUsers: ["tester@example.com"],
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  const child = spawn(process.execPath, [serverScript, "serve", "--config", configPath], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      HOME: home,
+      CLAWDAD_HOME: home,
+      CLAWDAD_BIN_PATH: mockBinPath,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const stderr = [];
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => stderr.push(chunk));
+
+  try {
+    const baseUrl = `http://127.0.0.1:${port}`;
+    await waitForHealth(baseUrl, child);
+    const response = await fetch(
+      `${baseUrl}/v1/history/recent?limit=2&sessionLimit=2&perSessionLimit=2`,
+      {
+        headers: {
+          "tailscale-user-login": "tester@example.com",
+        },
+      },
+    );
+    assert.equal(response.status, 200, stderr.join(""));
+    const payload = await response.json();
+    assert.equal(payload.ok, true);
+    assert.deepEqual(payload.items.map((item) => item.requestId), ["alpha-new", "beta"]);
+
+    const projectResponse = await fetch(
+      `${baseUrl}/v1/history/recent?project=${encodeURIComponent(projectBeta)}&limit=5`,
+      {
+        headers: {
+          "tailscale-user-login": "tester@example.com",
+        },
+      },
+    );
+    assert.equal(projectResponse.status, 200);
+    const projectPayload = await projectResponse.json();
+    assert.equal(projectPayload.ok, true);
+    assert.deepEqual(projectPayload.items.map((item) => item.requestId), ["beta"]);
+  } finally {
+    await stopServer(child);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("import-session registers a local Codex session without invoking the ORP-backed CLI", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-import-"));
   const home = path.join(root, "home");
