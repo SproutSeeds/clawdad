@@ -89,10 +89,15 @@ If you ever just want the local CLI and not the phone app yet, you can stop afte
 - per-session thread viewer with lazy-loaded history
 - cross-project queue for in-flight and completed work
 - saved project summary snapshots with manual refresh
+- server-backed quick prompts that append reusable text into the composer
 - cached message audio via ElevenLabs, with manual download/play controls and optional auto-download
 - Codex delegate mode with semantic hard stops and a weekly compute reserve guard
 
 Tap the summary icon beside the project picker to open the latest saved snapshot or request a fresh one.
+
+The quick prompt button beside Send opens editable preset prompts. Selecting a
+prompt appends its text to the current composer message instead of replacing it;
+custom prompts are saved in Clawdad state and can be edited later.
 
 Message audio starts as a download icon. Tapping it prepares and caches the MP3;
 after it is ready the control becomes a speaker icon for playback. The queue

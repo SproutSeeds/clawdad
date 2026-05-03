@@ -221,6 +221,8 @@ test("app shell injects a fresh build fingerprint for frontend assets", async ()
     assert.match(html, /Auto-Claw/u);
     assert.match(html, /id="delegateOverview"/u);
     assert.match(html, /id="delegateSupervisorPanel"/u);
+    assert.match(html, /id="quickPromptButton"/u);
+    assert.match(html, /id="quickPromptModal"/u);
 
     const cssPath = html.match(/href="([^"]*\/app\.css\?v=[^"]+)"/u)?.[1];
     assert.ok(cssPath, "expected app shell to reference versioned app.css");

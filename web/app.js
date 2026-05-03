@@ -75,6 +75,17 @@ const state = {
   },
   audioAvailability: {},
   audioAutoDownload: false,
+  quickPrompts: [],
+  quickPromptsLoaded: false,
+  quickPromptsLoading: false,
+  quickPromptsSaving: false,
+  quickPromptModalOpen: false,
+  quickPromptDraftMode: "",
+  quickPromptDraftId: "",
+  quickPromptDraftTitle: "",
+  quickPromptDraftText: "",
+  quickPromptResetConfirm: false,
+  quickPromptError: "",
 };
 
 const elements = {
@@ -108,8 +119,23 @@ const elements = {
   sessionThreadButton: document.querySelector("#sessionThreadButton"),
   audioAutoDownloadButton: document.querySelector("#audioAutoDownloadButton"),
   messageInput: document.querySelector("#messageInput"),
+  quickPromptButton: document.querySelector("#quickPromptButton"),
   dispatchForm: document.querySelector("#dispatchForm"),
   dispatchButton: document.querySelector("#dispatchButton"),
+  quickPromptModal: document.querySelector("#quickPromptModal"),
+  quickPromptBackdrop: document.querySelector("#quickPromptBackdrop"),
+  quickPromptClose: document.querySelector("#quickPromptClose"),
+  quickPromptSubtitle: document.querySelector("#quickPromptSubtitle"),
+  quickPromptState: document.querySelector("#quickPromptState"),
+  quickPromptList: document.querySelector("#quickPromptList"),
+  quickPromptNewButton: document.querySelector("#quickPromptNewButton"),
+  quickPromptResetButton: document.querySelector("#quickPromptResetButton"),
+  quickPromptForm: document.querySelector("#quickPromptForm"),
+  quickPromptTitleInput: document.querySelector("#quickPromptTitleInput"),
+  quickPromptTextInput: document.querySelector("#quickPromptTextInput"),
+  quickPromptDeleteButton: document.querySelector("#quickPromptDeleteButton"),
+  quickPromptCancelButton: document.querySelector("#quickPromptCancelButton"),
+  quickPromptSaveButton: document.querySelector("#quickPromptSaveButton"),
   mailboxState: document.querySelector("#mailboxState"),
   queueUnreadOrb: document.querySelector("#queueUnreadOrb"),
   queueSection: document.querySelector(".queue"),
@@ -240,6 +266,8 @@ const threadCacheKey = `clawdad-thread-log-v1${cacheVersionSuffix}`;
 const queueCollapsedKey = "clawdad-queue-collapsed-v1";
 const artifactShelfCollapsedKey = "clawdad-artifact-shelf-collapsed-v1";
 const audioAutoDownloadKey = "clawdad-audio-auto-download-v1";
+const quickPromptTitleMax = 80;
+const quickPromptTextMax = 12_000;
 const queuedDispatchGraceMs = 15000;
 // Dispatch startup can lag behind refreshes; do not mark optimistic queue cards failed too early.
 const queuedDispatchAttachGraceMs = 2 * 60 * 1000;
@@ -428,6 +456,14 @@ function copyIconMarkup() {
     <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
       <rect x="5.25" y="3.25" width="7.5" height="9.5" rx="1.6" stroke="currentColor" stroke-width="1.3"></rect>
       <path d="M3.25 10.25V4.9c0-.91.74-1.65 1.65-1.65h4.35" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"></path>
+    </svg>
+  `;
+}
+
+function editIconMarkup() {
+  return `
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M10.95 3.05 12.95 5.05M3.75 12.25l2.55-.45 5.8-5.8a1.41 1.41 0 0 0-2-2l-5.8 5.8-.45 2.45Z" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"></path>
     </svg>
   `;
 }
@@ -1603,6 +1639,63 @@ async function fetchJson(url, options = {}) {
   }
 
   return payload;
+}
+
+function normalizeQuickPromptId(value = "") {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_.:-]+/gu, "-")
+    .replace(/^-+|-+$/gu, "")
+    .slice(0, 96);
+}
+
+function newQuickPromptId() {
+  return `custom-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function normalizeQuickPrompt(prompt) {
+  if (!prompt || typeof prompt !== "object") {
+    return null;
+  }
+  const title = String(prompt.title || prompt.name || "")
+    .trim()
+    .slice(0, quickPromptTitleMax);
+  const text = String(prompt.text || prompt.prompt || "")
+    .trim()
+    .slice(0, quickPromptTextMax);
+  const id = normalizeQuickPromptId(prompt.id) || newQuickPromptId();
+  if (!title || !text) {
+    return null;
+  }
+  return {
+    id,
+    title,
+    text,
+    builtIn: prompt.builtIn === true || prompt.builtin === true,
+  };
+}
+
+function normalizeQuickPrompts(prompts) {
+  const usedIds = new Set();
+  const normalized = [];
+  for (const prompt of Array.isArray(prompts) ? prompts : []) {
+    const entry = normalizeQuickPrompt(prompt);
+    if (!entry) {
+      continue;
+    }
+    let id = entry.id;
+    if (usedIds.has(id)) {
+      let suffix = 2;
+      while (usedIds.has(`${id}-${suffix}`)) {
+        suffix += 1;
+      }
+      id = `${id}-${suffix}`;
+    }
+    usedIds.add(id);
+    normalized.push({ ...entry, id });
+  }
+  return normalized;
 }
 
 function providerLabel(provider) {
@@ -4129,6 +4222,7 @@ function updateBodyModalState() {
       Boolean(state.activeRunsModalOpen) ||
       Boolean(state.artifactModalProject) ||
       Boolean(state.delegateModalProject) ||
+      Boolean(state.quickPromptModalOpen) ||
       Boolean(state.sessionTitleModalProject),
   );
 }
@@ -4711,6 +4805,107 @@ function renderModal() {
   elements.detailHistoryList.dataset.renderKey = renderKey;
   elements.detailModal.hidden = false;
   applyDetailHistorySnapshot(scrollSnapshot);
+}
+
+function buildQuickPromptCard(prompt) {
+  const card = document.createElement("article");
+  card.className = "quick-prompt-card";
+  card.dataset.quickPromptId = prompt.id;
+
+  const useButton = document.createElement("button");
+  useButton.className = "quick-prompt-use";
+  useButton.type = "button";
+  useButton.dataset.quickPromptInsert = prompt.id;
+
+  const title = document.createElement("div");
+  title.className = "quick-prompt-title";
+  title.textContent = prompt.title;
+
+  const preview = document.createElement("div");
+  preview.className = "quick-prompt-preview";
+  preview.textContent = prompt.text;
+
+  useButton.append(title, preview);
+
+  const editButton = document.createElement("button");
+  editButton.className = "thread-button quick-prompt-edit";
+  editButton.type = "button";
+  editButton.dataset.quickPromptEdit = prompt.id;
+  editButton.setAttribute("aria-label", `Edit ${prompt.title}`);
+  editButton.innerHTML = editIconMarkup();
+
+  card.append(useButton, editButton);
+  return card;
+}
+
+function renderQuickPromptModal() {
+  if (!state.quickPromptModalOpen) {
+    elements.quickPromptModal.hidden = true;
+    return;
+  }
+
+  const promptCount = state.quickPrompts.length;
+  elements.quickPromptSubtitle.textContent =
+    promptCount === 1 ? "1 reusable composer insert" : `${promptCount} reusable composer inserts`;
+  elements.quickPromptNewButton.disabled = state.quickPromptsSaving;
+  elements.quickPromptResetButton.disabled = state.quickPromptsSaving || state.quickPromptsLoading;
+  const resetButtonLabel = elements.quickPromptResetButton.querySelector(".button-text");
+  if (resetButtonLabel) {
+    resetButtonLabel.textContent = state.quickPromptResetConfirm ? "Confirm" : "Defaults";
+  }
+
+  if (state.quickPromptsLoading && !state.quickPromptsLoaded) {
+    setText(elements.quickPromptState, "Loading quick prompts", { empty: false });
+  } else if (state.quickPromptsSaving) {
+    setText(elements.quickPromptState, "Saving quick prompts", { empty: false });
+  } else if (state.quickPromptResetConfirm) {
+    setText(elements.quickPromptState, "Tap Confirm to restore preset prompts", { empty: false });
+  } else if (state.quickPromptError) {
+    setText(elements.quickPromptState, state.quickPromptError, { empty: false });
+  } else {
+    setText(elements.quickPromptState, "", { empty: true });
+  }
+
+  clearNode(elements.quickPromptList);
+  if (state.quickPromptsLoading && !state.quickPromptsLoaded) {
+    const card = document.createElement("div");
+    card.className = "history-state-card";
+    card.textContent = "Loading quick prompts…";
+    elements.quickPromptList.append(card);
+  } else if (state.quickPrompts.length === 0) {
+    const card = document.createElement("div");
+    card.className = "history-state-card";
+    card.textContent = "No quick prompts yet.";
+    elements.quickPromptList.append(card);
+  } else {
+    for (const prompt of state.quickPrompts) {
+      elements.quickPromptList.append(buildQuickPromptCard(prompt));
+    }
+  }
+
+  const editing = Boolean(state.quickPromptDraftMode);
+  elements.quickPromptForm.hidden = !editing;
+  if (editing) {
+    if (elements.quickPromptTitleInput.value !== state.quickPromptDraftTitle) {
+      elements.quickPromptTitleInput.value = state.quickPromptDraftTitle;
+    }
+    if (elements.quickPromptTextInput.value !== state.quickPromptDraftText) {
+      elements.quickPromptTextInput.value = state.quickPromptDraftText;
+    }
+    elements.quickPromptTitleInput.disabled = state.quickPromptsSaving;
+    elements.quickPromptTextInput.disabled = state.quickPromptsSaving;
+    elements.quickPromptCancelButton.disabled = state.quickPromptsSaving;
+    elements.quickPromptDeleteButton.disabled =
+      state.quickPromptsSaving || state.quickPromptDraftMode !== "edit";
+    elements.quickPromptSaveButton.disabled =
+      state.quickPromptsSaving ||
+      !state.quickPromptDraftTitle.trim() ||
+      !state.quickPromptDraftText.trim();
+    elements.quickPromptSaveButton.querySelector(".button-text").textContent =
+      state.quickPromptsSaving ? "Saving…" : "Save";
+  }
+
+  elements.quickPromptModal.hidden = false;
 }
 
 function buildSummaryCard(snapshot) {
@@ -7752,6 +7947,7 @@ function renderAll() {
   renderArtifactShelf();
   renderFilesWorkspace();
   renderModal();
+  renderQuickPromptModal();
   renderSessionImportModal();
   renderSessionTitleModal();
   renderSummaryModal();
@@ -8041,6 +8237,59 @@ async function refreshThreads() {
     state.threadRefreshPromise = null;
   });
   return state.threadRefreshPromise;
+}
+
+async function loadQuickPrompts({ force = false } = {}) {
+  if (state.quickPromptsLoading && !force) {
+    return;
+  }
+  if (state.quickPromptsLoaded && !force) {
+    return;
+  }
+
+  state.quickPromptsLoading = true;
+  state.quickPromptError = "";
+  renderAll();
+  try {
+    const payload = await fetchJson("/v1/quick-prompts");
+    state.quickPrompts = normalizeQuickPrompts(payload.prompts);
+    state.quickPromptsLoaded = true;
+    state.quickPromptResetConfirm = false;
+  } catch (error) {
+    state.quickPromptError = error.message;
+    showError(error);
+  } finally {
+    state.quickPromptsLoading = false;
+    renderAll();
+  }
+}
+
+async function saveQuickPrompts(prompts, { reset = false } = {}) {
+  state.quickPromptsSaving = true;
+  state.quickPromptError = "";
+  renderAll();
+  try {
+    const payload = await fetchJson("/v1/quick-prompts", {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(reset ? { reset: true } : { prompts }),
+    });
+    state.quickPrompts = normalizeQuickPrompts(payload.prompts);
+    state.quickPromptsLoaded = true;
+    state.quickPromptDraftMode = "";
+    state.quickPromptDraftId = "";
+    state.quickPromptDraftTitle = "";
+    state.quickPromptDraftText = "";
+    state.quickPromptResetConfirm = false;
+  } catch (error) {
+    state.quickPromptError = error.message;
+    showError(error);
+  } finally {
+    state.quickPromptsSaving = false;
+    renderAll();
+  }
 }
 
 async function refreshRecentHistory({ force = false, project = "" } = {}) {
@@ -9774,6 +10023,90 @@ function setProjectModalMode(mode) {
   renderAll();
 }
 
+function closeQuickPromptEditor() {
+  state.quickPromptDraftMode = "";
+  state.quickPromptDraftId = "";
+  state.quickPromptDraftTitle = "";
+  state.quickPromptDraftText = "";
+  state.quickPromptResetConfirm = false;
+}
+
+function openQuickPromptCreate() {
+  state.quickPromptDraftMode = "new";
+  state.quickPromptDraftId = "";
+  state.quickPromptDraftTitle = "";
+  state.quickPromptDraftText = "";
+  state.quickPromptError = "";
+  state.quickPromptResetConfirm = false;
+  renderAll();
+  window.setTimeout(() => elements.quickPromptTitleInput?.focus(), 0);
+}
+
+function openQuickPromptEdit(promptId) {
+  const prompt = state.quickPrompts.find((entry) => entry.id === promptId);
+  if (!prompt) {
+    return;
+  }
+  state.quickPromptDraftMode = "edit";
+  state.quickPromptDraftId = prompt.id;
+  state.quickPromptDraftTitle = prompt.title;
+  state.quickPromptDraftText = prompt.text;
+  state.quickPromptError = "";
+  state.quickPromptResetConfirm = false;
+  renderAll();
+  window.setTimeout(() => elements.quickPromptTitleInput?.focus(), 0);
+}
+
+function openQuickPromptModal() {
+  state.summaryModalProject = "";
+  state.codexIntegrationModalProject = "";
+  state.sessionImportModalProject = "";
+  state.activeRunsModalOpen = false;
+  state.artifactModalProject = "";
+  state.delegateModalProject = "";
+  state.sessionTitleModalProject = "";
+  state.sessionTitleModalSessionId = "";
+  state.projectModalOpen = false;
+  state.modalThread = null;
+  state.quickPromptModalOpen = true;
+  state.quickPromptError = "";
+  state.quickPromptResetConfirm = false;
+  renderAll();
+  void loadQuickPrompts();
+}
+
+function closeQuickPromptModal() {
+  state.quickPromptModalOpen = false;
+  state.quickPromptError = "";
+  state.quickPromptResetConfirm = false;
+  closeQuickPromptEditor();
+  renderAll();
+  window.setTimeout(() => elements.messageInput?.focus(), 0);
+}
+
+function appendQuickPromptToComposer(text) {
+  const promptText = String(text || "").trim();
+  if (!promptText) {
+    return;
+  }
+  const current = String(elements.messageInput.value || "");
+  elements.messageInput.value = current.trim()
+    ? `${current.trimEnd()}\n\n${promptText}`
+    : promptText;
+  elements.messageInput.focus();
+  elements.messageInput.setSelectionRange(elements.messageInput.value.length, elements.messageInput.value.length);
+  updateSendAvailability();
+}
+
+function insertQuickPrompt(promptId) {
+  const prompt = state.quickPrompts.find((entry) => entry.id === promptId);
+  if (!prompt) {
+    return;
+  }
+  appendQuickPromptToComposer(prompt.text);
+  closeQuickPromptModal();
+}
+
 async function openProjectModal() {
   state.summaryModalProject = "";
   state.codexIntegrationModalProject = "";
@@ -9783,6 +10116,7 @@ async function openProjectModal() {
   state.delegateModalProject = "";
   state.sessionTitleModalProject = "";
   state.sessionTitleModalSessionId = "";
+  state.quickPromptModalOpen = false;
   state.modalThread = null;
   state.projectModalOpen = true;
   state.projectModalStatus = "";
@@ -10136,6 +10470,79 @@ function bindEvents() {
   elements.projectAddButton.addEventListener("click", () => {
     void openProjectModal();
   });
+  elements.quickPromptButton?.addEventListener("click", () => {
+    openQuickPromptModal();
+  });
+  elements.quickPromptBackdrop?.addEventListener("click", closeQuickPromptModal);
+  elements.quickPromptClose?.addEventListener("click", closeQuickPromptModal);
+  elements.quickPromptNewButton?.addEventListener("click", openQuickPromptCreate);
+  elements.quickPromptCancelButton?.addEventListener("click", () => {
+    closeQuickPromptEditor();
+    renderAll();
+  });
+  elements.quickPromptResetButton?.addEventListener("click", () => {
+    if (!state.quickPromptResetConfirm) {
+      closeQuickPromptEditor();
+      state.quickPromptResetConfirm = true;
+      state.quickPromptError = "";
+      renderAll();
+      return;
+    }
+    void saveQuickPrompts([], { reset: true });
+  });
+  elements.quickPromptList?.addEventListener("click", (event) => {
+    const insertButton =
+      event.target instanceof Element ? event.target.closest("[data-quick-prompt-insert]") : null;
+    const editButton =
+      event.target instanceof Element ? event.target.closest("[data-quick-prompt-edit]") : null;
+    if (editButton) {
+      openQuickPromptEdit(String(editButton.dataset.quickPromptEdit || ""));
+      return;
+    }
+    if (insertButton) {
+      insertQuickPrompt(String(insertButton.dataset.quickPromptInsert || ""));
+    }
+  });
+  elements.quickPromptForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const title = String(elements.quickPromptTitleInput.value || "").trim();
+    const text = String(elements.quickPromptTextInput.value || "").trim();
+    if (!title || !text) {
+      state.quickPromptError = "Quick prompts need a title and prompt text.";
+      renderAll();
+      return;
+    }
+    const prompt = {
+      id: state.quickPromptDraftMode === "edit" ? state.quickPromptDraftId : newQuickPromptId(),
+      title,
+      text,
+      builtIn: state.quickPrompts.find((entry) => entry.id === state.quickPromptDraftId)?.builtIn === true,
+    };
+    const prompts =
+      state.quickPromptDraftMode === "edit"
+        ? state.quickPrompts.map((entry) => (entry.id === state.quickPromptDraftId ? prompt : entry))
+        : [...state.quickPrompts, prompt];
+    void saveQuickPrompts(prompts);
+  });
+  elements.quickPromptTitleInput?.addEventListener("input", (event) => {
+    state.quickPromptDraftTitle = String(event.target.value || "");
+    state.quickPromptError = "";
+    state.quickPromptResetConfirm = false;
+    renderAll();
+  });
+  elements.quickPromptTextInput?.addEventListener("input", (event) => {
+    state.quickPromptDraftText = String(event.target.value || "");
+    state.quickPromptError = "";
+    state.quickPromptResetConfirm = false;
+    renderAll();
+  });
+  elements.quickPromptDeleteButton?.addEventListener("click", () => {
+    if (state.quickPromptDraftMode !== "edit" || !state.quickPromptDraftId) {
+      return;
+    }
+    const prompts = state.quickPrompts.filter((entry) => entry.id !== state.quickPromptDraftId);
+    void saveQuickPrompts(prompts);
+  });
   elements.projectDelegateButton?.addEventListener("click", () => {
     if (elements.projectDelegateButton.disabled || !state.selectedProject) {
       return;
@@ -10481,6 +10888,10 @@ function bindEvents() {
     }
     if (event.key === "Escape" && state.sessionTitleModalProject) {
       closeSessionTitleModal();
+      return;
+    }
+    if (event.key === "Escape" && state.quickPromptModalOpen) {
+      closeQuickPromptModal();
       return;
     }
     if (event.key === "Escape" && state.projectModalOpen) {
