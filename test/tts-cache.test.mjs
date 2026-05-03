@@ -172,6 +172,38 @@ test("resolves ElevenLabs key from environment before Keychain", async () => {
   assert.equal(key, "env-key");
 });
 
+test("resolves ElevenLabs key from ORP secrets when env and Keychain are absent", async () => {
+  const calls = [];
+  const key = await resolveElevenLabsApiKey({
+    env: {
+      CLAWDAD_ORP: "orp",
+      CLAWDAD_ELEVENLABS_ORP_SECRET_REF: "elevenlabs-api-key",
+    },
+    platform: "linux",
+    projectPath: "/tmp/clawdad-tts-project",
+    execFileImpl: async (command, args) => {
+      calls.push([command, args]);
+      assert.equal(command, "orp");
+      assert.deepEqual(
+        args,
+        [
+          "--repo-root",
+          "/tmp/clawdad-tts-project",
+          "secrets",
+          "resolve",
+          "elevenlabs-api-key",
+          "--local-only",
+          "--reveal",
+          "--json",
+        ],
+      );
+      return { stdout: JSON.stringify({ ok: true, value: "orp-key" }) };
+    },
+  });
+  assert.equal(key, "orp-key");
+  assert.equal(calls.length, 1);
+});
+
 test("TTS message endpoint synthesizes, caches, and serves message audio", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-tts-server-"));
   const home = path.join(root, "home");

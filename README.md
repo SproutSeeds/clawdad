@@ -100,8 +100,11 @@ header has an `Auto audio` toggle for preloading recent and future response
 audio without autoplay. The API key stays on the Clawdad server: set
 `ELEVENLABS_API_KEY` or
 `CLAWDAD_ELEVENLABS_API_KEY`, or store a macOS Keychain generic password named
-`clawdad-elevenlabs`. Generated MP3 parts are cached under the project at
-`.clawdad/audio/messages/` for replay.
+`clawdad-elevenlabs`. Clawdad also falls back to ORP secrets aliases such as
+`elevenlabs`, `elevenlabs-api-key`, `elevenlabs-primary`, or
+`ELEVENLABS_API_KEY`, and project-scoped `--provider elevenlabs` resolution.
+Generated MP3 parts are cached under the project at `.clawdad/audio/messages/`
+for replay.
 
 ## CLI Quick Start
 
