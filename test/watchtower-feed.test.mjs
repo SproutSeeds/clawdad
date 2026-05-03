@@ -280,6 +280,10 @@ test("watchtower ignores paid and credential terms inside guardrail sections", a
           "- Paid service, paid API, remote GPU, or other paid compute is required.",
           "- Credentials, MFA, billing, account decisions, external approval, or another human decision is required.",
           "",
+          "**Hard Boundaries**",
+          "- Do not perform live order routing.",
+          "- Broker credentials stay outside the delegate lane.",
+          "",
           "**Next Steps**",
           "1. Continue the local proof packet.",
           "2. Do not spend money or use credentials.",
@@ -300,6 +304,7 @@ test("watchtower ignores paid and credential terms inside guardrail sections", a
     const triggers = new Set(reviewPayload.cards.map((card) => card.trigger));
     assert.equal(triggers.has("paid_data_or_api"), false);
     assert.equal(triggers.has("credential_boundary"), false);
+    assert.equal(triggers.has("broker_payment_live_order_boundary"), false);
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
   }

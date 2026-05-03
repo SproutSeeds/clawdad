@@ -336,6 +336,11 @@ if (!mailboxDir) {
   console.error("missing CLAWDAD_MAILBOX_DIR");
   process.exit(64);
 }
+const mode = process.env.CLAWDAD_FAKE_DISPATCH_MODE || "";
+if (mode === "early_exit_before_mailbox") {
+  console.error("mktemp: mkstemp failed on /Users/codymitchell/.clawdad/state.json.tmp.XXXXXX: Operation not permitted");
+  process.exit(73);
+}
 
 const sessionIndex = args.indexOf("--session");
 const sessionId = sessionIndex >= 0 ? args[sessionIndex + 1] || "" : "";
@@ -363,8 +368,6 @@ writeFileSync(
   }, null, 2),
   "utf8",
 );
-
-const mode = process.env.CLAWDAD_FAKE_DISPATCH_MODE || "";
 
 if (mode === "codex_events_complete_mailbox_stays_running") {
   const codexEventLogFile = process.env.CLAWDAD_CODEX_EVENT_LOG_FILE || "";
@@ -618,6 +621,7 @@ function testEnv(fixture, overrides = {}) {
     ...process.env,
     HOME: fixture.home,
     CLAWDAD_HOME: fixture.home,
+    CLAWDAD_CODEX_HOME: path.join(fixture.home, ".codex"),
     CLAWDAD_ORP: fixture.fakeOrp,
     CLAWDAD_CODEX: fixture.fakeCodex,
     CLAWDAD_BIN_PATH: fixture.fakeClawdad,
@@ -658,6 +662,7 @@ async function seedLane(fixture, laneId, {
   delegateSessionId,
   directionCheckMode,
   watchtowerReviewMode,
+  computeReservePercent,
   maxStepsPerRun,
 } = {}) {
   if (laneId !== "default") {
@@ -691,7 +696,7 @@ async function seedLane(fixture, laneId, {
     delegateSessionSlug: displayName || laneId,
     enabled: true,
     hardStops: ["needs_human"],
-    computeReservePercent: 20,
+    computeReservePercent: computeReservePercent ?? 20,
     directionCheckMode: directionCheckMode || "observe",
     watchtowerReviewMode: watchtowerReviewMode || "off",
     maxStepsPerRun: maxStepsPerRun || 1,
@@ -1154,6 +1159,114 @@ test("delegate-run stale-fails heartbeat-only lane dispatches instead of leaving
     const sharedMailbox = await readJson(path.join(fixture.projectPath, ".clawdad", "mailbox", "status.json"));
     assert.equal(sharedMailbox.state, "idle");
   } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("delegate-run captures detached worker stderr when it exits before mailbox request", async () => {
+  const fixture = await createFixture("clawdad-dispatch-early-exit-");
+  try {
+    await seedLane(fixture, "lane-a", {
+      displayName: "Lane A",
+      objective: "Work only in src/lane-a.",
+      scopeGlobs: ["src/lane-a/**"],
+      delegateSessionId: "lane-a-session",
+    });
+
+    const started = await runServerCommand(fixture, [
+      "delegate-run",
+      fixture.projectPath,
+      "--lane",
+      "lane-a",
+    ], {
+      env: {
+        CLAWDAD_FAKE_DISPATCH_MODE: "early_exit_before_mailbox",
+        CLAWDAD_DELEGATE_DISPATCH_START_TIMEOUT_MS: "500",
+        CLAWDAD_DELEGATE_DISPATCH_START_RECONCILE_MS: "100",
+      },
+    });
+    assert.equal(started.exitCode, 0, started.stderr || started.stdout);
+    const startPayload = JSON.parse(started.stdout);
+    assert.equal(startPayload.accepted, true);
+
+    const statusFile = path.join(laneDir(fixture.projectPath, "lane-a"), "delegate-status.json");
+    const failedStatus = await waitForValue(
+      () => readJson(statusFile),
+      (status) => status.state === "failed",
+      "early dispatch exit failure",
+      8_000,
+    );
+    assert.match(failedStatus.error, /Detached worker exited before creating the mailbox request/u);
+    assert.match(failedStatus.error, /Operation not permitted/u);
+
+    const runEvents = await readFile(
+      path.join(laneDir(fixture.projectPath, "lane-a"), "runs", `${failedStatus.runId}.jsonl`),
+      "utf8",
+    );
+    assert.match(runEvents, /dispatch_process_failed/u);
+    assert.match(runEvents, /mktemp: mkstemp failed/u);
+    assert.match(runEvents, /startupLogFile/u);
+
+    const startupLog = await readFile(
+      path.join(laneDir(fixture.projectPath, "lane-a"), "runs", `${failedStatus.runId}.dispatch-start.log`),
+      "utf8",
+    );
+    assert.match(startupLog, /Operation not permitted/u);
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("delegate-run preflights host state access before detached dispatch", async () => {
+  const fixture = await createFixture("clawdad-dispatch-preflight-");
+  try {
+    await seedLane(fixture, "lane-a", {
+      displayName: "Lane A",
+      objective: "Work only in src/lane-a.",
+      scopeGlobs: ["src/lane-a/**"],
+      delegateSessionId: "lane-a-session",
+    });
+    await chmod(fixture.home, 0o500);
+
+    const doctor = await runServerCommand(fixture, ["sessions-doctor", fixture.projectPath]);
+    assert.equal(doctor.exitCode, 1);
+    const doctorPayload = JSON.parse(doctor.stdout);
+    assert.equal(doctorPayload.ok, false);
+    assert.ok(doctorPayload.environment.issues.some((issue) => issue.type === "sandbox_host_access"));
+    assert.ok(
+      doctorPayload.environment.issues.some((issue) =>
+        /Atomic write Clawdad state file|Write Codex sessions directory/u.test(issue.message),
+      ),
+    );
+
+    const started = await runServerCommand(fixture, [
+      "delegate-run",
+      fixture.projectPath,
+      "--lane",
+      "lane-a",
+    ]);
+    assert.equal(started.exitCode, 0, started.stderr || started.stdout);
+    const startPayload = JSON.parse(started.stdout);
+    assert.equal(startPayload.accepted, true);
+
+    const statusFile = path.join(laneDir(fixture.projectPath, "lane-a"), "delegate-status.json");
+    const failedStatus = await waitForValue(
+      () => readJson(statusFile),
+      (status) => status.state === "failed",
+      "host access preflight failure",
+      8_000,
+    );
+    assert.match(failedStatus.error, /host-level access to ~\/\.clawdad and ~\/\.codex/u);
+    assert.match(failedStatus.error, /Atomic write Clawdad state file|Write Codex sessions directory/u);
+
+    const runEvents = await readFile(
+      path.join(laneDir(fixture.projectPath, "lane-a"), "runs", `${failedStatus.runId}.jsonl`),
+      "utf8",
+    );
+    assert.match(runEvents, /dispatch_preflight_failed/u);
+    assert.doesNotMatch(runEvents, /dispatch_process_started/u);
+  } finally {
+    await chmod(fixture.home, 0o700).catch(() => {});
     await cleanupFixture(fixture);
   }
 });
@@ -1724,6 +1837,44 @@ test("delegate-run passes a Codex thread goal and mirrors terminal goal status",
     assert.ok(envEntries.some((entry) => entry.threadGoalStatus === "active"));
     assert.ok(envEntries.some((entry) => /Clawdad delegate lane goal/u.test(entry.threadGoal)));
     assert.ok(envEntries.some((entry) => /Lane A/u.test(entry.threadGoal)));
+    assert.ok(envEntries.some((entry) => /Current brief:/u.test(entry.threadGoal)));
+    assert.ok(envEntries.some((entry) => /Cycle: bounded delegate-run step/u.test(entry.threadGoal)));
+    assert.ok(envEntries.some((entry) => /Compute reserve: 20%/u.test(entry.threadGoal)));
+    assert.ok(envEntries.some((entry) => /Hard boundaries: .*needs human/u.test(entry.threadGoal)));
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("delegate-run explains zero compute reserve as exhaustion-or-hard-stop", async () => {
+  const fixture = await createFixture("clawdad-zero-reserve-runtime-");
+  try {
+    await seedLane(fixture, "lane-a", {
+      displayName: "Lane A",
+      objective: "Finish lane A with zero compute reserve.",
+      scopeGlobs: ["src/lane-a/**"],
+      delegateSessionId: "lane-a-session",
+      computeReservePercent: 0,
+    });
+    await writeTightComputeTelemetry(fixture);
+
+    const started = await runServerCommand(
+      fixture,
+      ["delegate-run", fixture.projectPath, "--lane", "lane-a"],
+    );
+    assert.equal(started.exitCode, 0, started.stderr || started.stdout);
+
+    const finalStatus = await waitForValue(
+      () => readJson(path.join(laneDir(fixture.projectPath, "lane-a"), "delegate-status.json")),
+      (status) => status.state === "completed",
+      "zero reserve delegate-run completion",
+    );
+    const runEvents = await readFile(
+      path.join(laneDir(fixture.projectPath, "lane-a"), "runs", `${finalStatus.runId}.jsonl`),
+      "utf8",
+    );
+    assert.match(runEvents, /reserve is 0%; continue until compute exhaustion or hard stop/u);
+    assert.doesNotMatch(runEvents, /0% reserve still protected/u);
   } finally {
     await cleanupFixture(fixture);
   }
