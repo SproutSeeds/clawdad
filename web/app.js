@@ -2527,6 +2527,11 @@ function mergeHistoryItem(existing, incoming) {
     historyItemHasSyntheticRequestId(existing) &&
     historyItemHasSyntheticRequestId(incoming) &&
     !historyItemHasAnsweredResponse(incoming);
+  const replaceCachedSyntheticAnswer =
+    historyItemsHaveSameSyntheticRequestId(existing, incoming) &&
+    historyItemHasAnsweredResponse(incoming) &&
+    historyItemHasSyntheticRequestId(existing) &&
+    historyItemHasSyntheticRequestId(incoming);
   const status = clearCachedSyntheticAnswer
     ? incoming?.status || "queued"
     : incomingRank >= existingRank
@@ -2548,6 +2553,9 @@ function mergeHistoryItem(existing, incoming) {
   const response = (() => {
     if (clearCachedSyntheticAnswer) {
       return String(incoming?.response || "");
+    }
+    if (replaceCachedSyntheticAnswer) {
+      return String(incoming.response || "");
     }
     if (historyItemHasAnsweredResponse(existing) && historyItemLooksLikeStaleDispatchFailure(incoming)) {
       return String(existing.response || "");

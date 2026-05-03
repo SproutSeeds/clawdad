@@ -67,6 +67,35 @@ test("web history merge clears stale cached synthetic answered transcript cards"
   assert.equal(merged[0].exitCode, null);
 });
 
+test("web history merge replaces stale cached synthetic answer with fresh synthetic final answer", async () => {
+  const { mergeHistoryItems } = await loadHistoryMergeHelpers();
+  const staleCached = {
+    requestId: "codex:019ddf17-7e93-7840-a89b-cc2702c32a02:54",
+    projectPath: "/repo/clawdad",
+    sessionId: "019ddf17-7e93-7840-a89b-cc2702c32a02",
+    provider: "codex",
+    message: "Please compare OpenClaw and Clawdad.",
+    sentAt: "2026-05-03T15:35:13.537Z",
+    answeredAt: "2026-05-03T15:35:16.000Z",
+    status: "answered",
+    exitCode: 0,
+    response: "I will verify public docs first.",
+  };
+  const freshSyntheticFinal = {
+    ...staleCached,
+    answeredAt: "2026-05-03T15:40:14.000Z",
+    response: "Detailed final comparison.",
+  };
+
+  const merged = mergeHistoryItems([staleCached], [freshSyntheticFinal]);
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].requestId, freshSyntheticFinal.requestId);
+  assert.equal(merged[0].status, "answered");
+  assert.equal(merged[0].response, freshSyntheticFinal.response);
+  assert.equal(merged[0].answeredAt, freshSyntheticFinal.answeredAt);
+});
+
 test("web history merge prefers concrete answered request over synthetic transcript answer", async () => {
   const { mergeHistoryItems } = await loadHistoryMergeHelpers();
   const synthetic = {
