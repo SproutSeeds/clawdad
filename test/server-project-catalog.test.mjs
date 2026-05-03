@@ -2253,6 +2253,166 @@ test("history endpoint merges mirrored requests with provider transcript handoff
   }
 });
 
+test("history endpoint ignores Codex commentary when building provider transcript turns", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-history-phase-"));
+  const home = path.join(root, "home");
+  const projectPath = path.join(root, "clawdad");
+  const configPath = path.join(root, "server.json");
+  const mockBinPath = path.join(root, "clawdad-mock");
+  const sessionId = "019e0000-1111-7000-8000-000000000003";
+  const completedMessage = "Please compare OpenClaw and Clawdad.";
+  const liveMessage = "Are you still there?";
+
+  await mkdir(path.join(projectPath, ".clawdad", "mailbox"), { recursive: true });
+  await mkdir(path.join(home, ".codex", "sessions", "2026", "05", "03"), { recursive: true });
+  await writeFile(
+    path.join(home, "state.json"),
+    JSON.stringify(
+      {
+        version: 3,
+        projects: {
+          [projectPath]: {
+            status: "completed",
+            last_dispatch: "2026-05-03T15:00:00Z",
+            last_response: "2026-05-03T15:05:00Z",
+            dispatch_count: 2,
+            registered_at: "2026-05-03T00:00:00Z",
+            active_session_id: sessionId,
+            sessions: {
+              [sessionId]: {
+                slug: "Main-claw",
+                provider: "codex",
+                provider_session_seeded: "true",
+                tracked_at: "2026-05-03T00:00:00Z",
+                dispatch_count: 2,
+                last_dispatch: "2026-05-03T15:00:00Z",
+                last_response: "2026-05-03T15:05:00Z",
+                status: "completed",
+              },
+            },
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    path.join(home, ".codex", "sessions", "2026", "05", "03", `rollout-${sessionId}.jsonl`),
+    [
+      JSON.stringify({
+        type: "response_item",
+        timestamp: "2026-05-03T15:00:00.000Z",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: completedMessage }],
+        },
+      }),
+      JSON.stringify({
+        type: "response_item",
+        timestamp: "2026-05-03T15:00:03.000Z",
+        payload: {
+          type: "message",
+          role: "assistant",
+          phase: "commentary",
+          content: [{ type: "output_text", text: "I’ll verify public docs first." }],
+        },
+      }),
+      JSON.stringify({
+        type: "response_item",
+        timestamp: "2026-05-03T15:05:00.000Z",
+        payload: {
+          type: "message",
+          role: "assistant",
+          phase: "final_answer",
+          content: [{ type: "output_text", text: "Detailed comparison result." }],
+        },
+      }),
+      JSON.stringify({
+        type: "response_item",
+        timestamp: "2026-05-03T15:10:00.000Z",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: liveMessage }],
+        },
+      }),
+      JSON.stringify({
+        type: "response_item",
+        timestamp: "2026-05-03T15:10:03.000Z",
+        payload: {
+          type: "message",
+          role: "assistant",
+          phase: "commentary",
+          content: [{ type: "output_text", text: "I’m checking the app path now." }],
+        },
+      }),
+    ].join("\n") + "\n",
+    "utf8",
+  );
+  await writeFile(mockBinPath, "#!/bin/sh\nexit 1\n", "utf8");
+  await chmod(mockBinPath, 0o755);
+
+  const port = await freePort();
+  await writeFile(
+    configPath,
+    JSON.stringify(
+      {
+        host: "127.0.0.1",
+        port,
+        defaultProject: projectPath,
+        authMode: "tailscale",
+        allowedUsers: ["tester@example.com"],
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  const child = spawn(process.execPath, [serverScript, "serve", "--config", configPath], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      HOME: home,
+      CLAWDAD_HOME: home,
+      CLAWDAD_BIN_PATH: mockBinPath,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  try {
+    const baseUrl = `http://127.0.0.1:${port}`;
+    await waitForHealth(baseUrl, child);
+    const response = await fetch(
+      `${baseUrl}/v1/history?project=${encodeURIComponent(projectPath)}&sessionId=${encodeURIComponent(sessionId)}&cursor=0&limit=10`,
+      {
+        headers: {
+          "tailscale-user-login": "tester@example.com",
+        },
+      },
+    );
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.ok, true);
+
+    const completed = payload.items.find((item) => item.message === completedMessage);
+    assert.equal(completed?.status, "answered");
+    assert.equal(completed.response, "Detailed comparison result.");
+    assert.doesNotMatch(completed.response, /verify public docs/u);
+
+    const live = payload.items.find((item) => item.message === liveMessage);
+    assert.equal(live?.status, "queued");
+    assert.equal(live.response, "");
+    assert.equal(live.answeredAt, null);
+  } finally {
+    await stopServer(child);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("recent history endpoint returns server-backed prompt cards across tracked sessions", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-recent-history-"));
   const home = path.join(root, "home");

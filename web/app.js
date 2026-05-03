@@ -2438,6 +2438,11 @@ function historyItemLooksLikeStaleDispatchFailure(item) {
   );
 }
 
+function historyItemHasConcreteRequestId(item) {
+  const requestId = String(item?.requestId || "").trim();
+  return Boolean(requestId) && !isSyntheticHistoryRequestId(requestId);
+}
+
 function isSyntheticHistoryRequestId(value) {
   const requestId = String(value || "").trim();
   return requestId.startsWith("codex:") || requestId.startsWith("chimera:");
@@ -2503,6 +2508,10 @@ function mergeHistoryItem(existing, incoming) {
   const existingRank = historyItemStatusRank(existing?.status);
   const incomingRank = historyItemStatusRank(incoming?.status);
   const status = incomingRank >= existingRank ? incoming?.status : existing?.status;
+  const existingConcreteAnswered =
+    historyItemHasAnsweredResponse(existing) && historyItemHasConcreteRequestId(existing);
+  const incomingConcreteAnswered =
+    historyItemHasAnsweredResponse(incoming) && historyItemHasConcreteRequestId(incoming);
   const firstNonEmpty = (...values) => {
     for (const value of values) {
       const normalized = String(value || "").trim();
@@ -2512,17 +2521,27 @@ function mergeHistoryItem(existing, incoming) {
     }
     return "";
   };
-  const response =
-    historyItemHasAnsweredResponse(existing) && historyItemLooksLikeStaleDispatchFailure(incoming)
-      ? String(existing.response || "")
-      : historyItemHasAnsweredResponse(incoming) && historyItemLooksLikeStaleDispatchFailure(existing)
-        ? String(incoming.response || "")
-        : status === "answered" && historyItemHasAnsweredResponse(existing)
-          ? String(existing.response || "")
-          : status === "answered" && historyItemHasAnsweredResponse(incoming)
-            ? String(incoming.response || "")
-            : String(incoming?.response || "").trim() ||
-              String(existing?.response || "");
+  const response = (() => {
+    if (historyItemHasAnsweredResponse(existing) && historyItemLooksLikeStaleDispatchFailure(incoming)) {
+      return String(existing.response || "");
+    }
+    if (historyItemHasAnsweredResponse(incoming) && historyItemLooksLikeStaleDispatchFailure(existing)) {
+      return String(incoming.response || "");
+    }
+    if (status === "answered" && incomingConcreteAnswered && !existingConcreteAnswered) {
+      return String(incoming.response || "");
+    }
+    if (status === "answered" && existingConcreteAnswered && !incomingConcreteAnswered) {
+      return String(existing.response || "");
+    }
+    if (status === "answered" && historyItemHasAnsweredResponse(existing)) {
+      return String(existing.response || "");
+    }
+    if (status === "answered" && historyItemHasAnsweredResponse(incoming)) {
+      return String(incoming.response || "");
+    }
+    return String(incoming?.response || "").trim() || String(existing?.response || "");
+  })();
   const requestId =
     String(incoming?.requestId || "").trim() ||
     String(existing?.requestId || "").trim();
