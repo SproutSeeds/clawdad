@@ -2443,6 +2443,20 @@ function historyItemHasConcreteRequestId(item) {
   return Boolean(requestId) && !isSyntheticHistoryRequestId(requestId);
 }
 
+function historyItemHasSyntheticRequestId(item) {
+  return isSyntheticHistoryRequestId(item?.requestId);
+}
+
+function historyItemsHaveSameSyntheticRequestId(left, right) {
+  const leftRequestId = String(left?.requestId || "").trim();
+  const rightRequestId = String(right?.requestId || "").trim();
+  return (
+    Boolean(leftRequestId) &&
+    leftRequestId === rightRequestId &&
+    isSyntheticHistoryRequestId(leftRequestId)
+  );
+}
+
 function isSyntheticHistoryRequestId(value) {
   const requestId = String(value || "").trim();
   return requestId.startsWith("codex:") || requestId.startsWith("chimera:");
@@ -2507,7 +2521,17 @@ function historyItemsLikelySame(left, right) {
 function mergeHistoryItem(existing, incoming) {
   const existingRank = historyItemStatusRank(existing?.status);
   const incomingRank = historyItemStatusRank(incoming?.status);
-  const status = incomingRank >= existingRank ? incoming?.status : existing?.status;
+  const clearCachedSyntheticAnswer =
+    historyItemsHaveSameSyntheticRequestId(existing, incoming) &&
+    historyItemHasAnsweredResponse(existing) &&
+    historyItemHasSyntheticRequestId(existing) &&
+    historyItemHasSyntheticRequestId(incoming) &&
+    !historyItemHasAnsweredResponse(incoming);
+  const status = clearCachedSyntheticAnswer
+    ? incoming?.status || "queued"
+    : incomingRank >= existingRank
+      ? incoming?.status
+      : existing?.status;
   const existingConcreteAnswered =
     historyItemHasAnsweredResponse(existing) && historyItemHasConcreteRequestId(existing);
   const incomingConcreteAnswered =
@@ -2522,6 +2546,9 @@ function mergeHistoryItem(existing, incoming) {
     return "";
   };
   const response = (() => {
+    if (clearCachedSyntheticAnswer) {
+      return String(incoming?.response || "");
+    }
     if (historyItemHasAnsweredResponse(existing) && historyItemLooksLikeStaleDispatchFailure(incoming)) {
       return String(existing.response || "");
     }
@@ -2548,7 +2575,18 @@ function mergeHistoryItem(existing, incoming) {
   const projectPath = firstNonEmpty(incoming?.projectPath, existing?.projectPath);
   const sessionId = firstNonEmpty(incoming?.sessionId, existing?.sessionId);
   const sentAt = firstNonEmpty(existing?.sentAt, incoming?.sentAt);
-  const answeredAt = firstNonEmpty(incoming?.answeredAt, existing?.answeredAt);
+  const answeredAt = clearCachedSyntheticAnswer
+    ? firstNonEmpty(incoming?.answeredAt) || null
+    : firstNonEmpty(incoming?.answeredAt, existing?.answeredAt);
+  const exitCode = (() => {
+    if (clearCachedSyntheticAnswer) {
+      return typeof incoming?.exitCode === "number" ? incoming.exitCode : null;
+    }
+    if (typeof incoming?.exitCode === "number") {
+      return incoming.exitCode;
+    }
+    return typeof existing?.exitCode === "number" ? existing.exitCode : null;
+  })();
   const incomingMessage = String(incoming?.message || "");
   const existingMessage = String(existing?.message || "");
 
@@ -2569,12 +2607,7 @@ function mergeHistoryItem(existing, incoming) {
     answeredAt: answeredAt || null,
     status: status || incoming?.status || existing?.status || "queued",
     response,
-    exitCode:
-      typeof incoming?.exitCode === "number"
-        ? incoming.exitCode
-        : typeof existing?.exitCode === "number"
-          ? existing.exitCode
-          : null,
+    exitCode,
     seenAt:
       String(existing?.seenAt || "").trim() ||
       String(incoming?.seenAt || "").trim() ||
