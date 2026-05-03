@@ -67,6 +67,10 @@ const state = {
   lastForegroundRefreshAt: 0,
   controlLockTarget: "",
   controlLockUntil: 0,
+  audioPlayback: {
+    key: "",
+    status: "idle",
+  },
 };
 
 const elements = {
@@ -239,6 +243,7 @@ const copiedFeedbackMs = 1400;
 const historyPageSize = 20;
 const historyPrefetchFreshMs = 5 * 60 * 1000;
 const historyPrefetchEntryLimit = 8;
+const ttsInlineTextLimit = 50_000;
 const headerCarouselIntervalMs = 11000;
 const headerCarouselVersion = "20260406m";
 const headerCatchphraseSwapMs = 150;
@@ -376,6 +381,7 @@ const headerCatchphrases = {
 };
 let detailHistoryRenderSnapshot = null;
 let delegateRunRenderSnapshot = null;
+let activeMessageAudio = null;
 const pendingSessionCycle = {
   order: [],
   cursor: 0,
@@ -408,6 +414,33 @@ function copyIconMarkup() {
     <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
       <rect x="5.25" y="3.25" width="7.5" height="9.5" rx="1.6" stroke="currentColor" stroke-width="1.3"></rect>
       <path d="M3.25 10.25V4.9c0-.91.74-1.65 1.65-1.65h4.35" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"></path>
+    </svg>
+  `;
+}
+
+function speakerIconMarkup() {
+  return `
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M2.5 6.1h2.2l3.1-2.65v9.1L4.7 9.9H2.5z" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round"></path>
+      <path d="M10.2 5.25c.75.7 1.15 1.6 1.15 2.75s-.4 2.05-1.15 2.75" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"></path>
+      <path d="M12.1 3.7c1.16 1.12 1.75 2.55 1.75 4.3s-.59 3.18-1.75 4.3" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" opacity=".75"></path>
+    </svg>
+  `;
+}
+
+function audioLoadingMarkup() {
+  return `
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <circle cx="8" cy="8" r="5.2" stroke="currentColor" stroke-width="1.4" opacity=".25"></circle>
+      <path d="M13.2 8A5.2 5.2 0 0 0 8 2.8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"></path>
+    </svg>
+  `;
+}
+
+function stopAudioIconMarkup() {
+  return `
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <rect x="4.7" y="4.7" width="6.6" height="6.6" rx="1.2" fill="currentColor"></rect>
     </svg>
   `;
 }
@@ -3427,9 +3460,172 @@ function buildCopyButton({ copyKey, label, text }) {
   return button;
 }
 
+function audioPlaybackStatus(audioKey) {
+  return state.audioPlayback.key === audioKey ? state.audioPlayback.status || "idle" : "idle";
+}
+
+function setAudioPlaybackStatus(audioKey = "", status = "idle") {
+  state.audioPlayback = {
+    key: status === "idle" ? "" : audioKey,
+    status,
+  };
+  renderAll();
+}
+
+function decorateAudioButton(button, audioKey) {
+  const status = audioPlaybackStatus(audioKey);
+  button.classList.toggle("is-loading", status === "loading");
+  button.classList.toggle("is-playing", status === "playing");
+  if (status === "loading") {
+    button.innerHTML = audioLoadingMarkup();
+    button.setAttribute("aria-label", "Preparing audio");
+    return;
+  }
+  if (status === "playing") {
+    button.innerHTML = stopAudioIconMarkup();
+    button.setAttribute("aria-label", "Stop audio");
+    return;
+  }
+  button.innerHTML = speakerIconMarkup();
+}
+
+function ttsFallbackText(text) {
+  const value = String(text || "");
+  return value.length <= ttsInlineTextLimit ? value : "";
+}
+
+function stopActiveMessageAudio() {
+  if (activeMessageAudio) {
+    activeMessageAudio.stopped = true;
+  }
+  if (activeMessageAudio?.audio) {
+    try {
+      activeMessageAudio.audio.pause();
+      activeMessageAudio.audio.removeAttribute("src");
+      activeMessageAudio.audio.load();
+    } catch (_error) {
+      // Best effort cleanup for mobile browsers.
+    }
+  }
+  activeMessageAudio = null;
+  if (state.audioPlayback.status !== "idle") {
+    setAudioPlaybackStatus("", "idle");
+  }
+}
+
+function playAudioElement(playback, url) {
+  return new Promise((resolve, reject) => {
+    const audio = playback.audio;
+    const cleanup = () => {
+      audio.removeEventListener("ended", onEnded);
+      audio.removeEventListener("error", onError);
+    };
+    const onEnded = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = () => {
+      cleanup();
+      if (playback.stopped) {
+        resolve();
+        return;
+      }
+      reject(new Error("Audio playback failed"));
+    };
+    audio.addEventListener("ended", onEnded, { once: true });
+    audio.addEventListener("error", onError, { once: true });
+    audio.src = url;
+    audio.play().catch((error) => {
+      cleanup();
+      if (playback.stopped) {
+        resolve();
+        return;
+      }
+      reject(error);
+    });
+  });
+}
+
+async function playAudioParts(audioKey, parts) {
+  const playback = {
+    key: audioKey,
+    audio: new Audio(),
+    stopped: false,
+  };
+  activeMessageAudio = playback;
+
+  for (const part of parts) {
+    if (activeMessageAudio !== playback || playback.stopped) {
+      return;
+    }
+    await playAudioElement(playback, part.url);
+  }
+}
+
+async function playMessageAudio(audioKey, payload) {
+  const status = audioPlaybackStatus(audioKey);
+  if (status === "loading" || status === "playing") {
+    stopActiveMessageAudio();
+    return;
+  }
+
+  stopActiveMessageAudio();
+  setAudioPlaybackStatus(audioKey, "loading");
+  try {
+    const response = await fetchJson("/v1/tts/message", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+    const parts = Array.isArray(response?.audio?.parts)
+      ? response.audio.parts.filter((part) => part?.url)
+      : [];
+    if (parts.length === 0) {
+      throw new Error("No audio was returned for this message.");
+    }
+    if (state.audioPlayback.key !== audioKey) {
+      return;
+    }
+    setAudioPlaybackStatus(audioKey, "playing");
+    await playAudioParts(audioKey, parts);
+  } finally {
+    if (state.audioPlayback.key === audioKey) {
+      setAudioPlaybackStatus("", "idle");
+    }
+    if (activeMessageAudio?.key === audioKey) {
+      activeMessageAudio = null;
+    }
+  }
+}
+
+function buildAudioButton({ audioKey, label, payload }) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "copy-button copy-button-floating message-audio-button";
+  button.dataset.audioKey = audioKey;
+  button.setAttribute("aria-label", label);
+  decorateAudioButton(button, audioKey);
+  button.addEventListener("click", async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    try {
+      await playMessageAudio(audioKey, payload);
+    } catch (error) {
+      stopActiveMessageAudio();
+      showError(error);
+    }
+  });
+  return button;
+}
+
 function refreshCopyButtons(root = document) {
   for (const button of root.querySelectorAll(".copy-button[data-copy-key]")) {
     decorateCopyButton(button, button.dataset.copyKey || "");
+  }
+  for (const button of root.querySelectorAll(".message-audio-button[data-audio-key]")) {
+    decorateAudioButton(button, button.dataset.audioKey || "");
   }
 }
 
@@ -3762,6 +3958,23 @@ function renderProjectModal() {
   elements.projectModal.hidden = false;
 }
 
+function messageAudioKey(entry, kind) {
+  const projectPath = String(entry?.projectPath || "").trim();
+  const sessionId = String(entry?.sessionId || "").trim();
+  const requestId = String(entry?.requestId || entry?.id || entry?.sentAt || "").trim();
+  return `tts:${projectPath}:${sessionId}:${requestId}:${kind}`;
+}
+
+function messageAudioPayload(entry, kind, text) {
+  return {
+    project: String(entry?.projectPath || "").trim(),
+    sessionId: String(entry?.sessionId || "").trim(),
+    requestId: String(entry?.requestId || "").trim(),
+    kind,
+    text: ttsFallbackText(text),
+  };
+}
+
 function renderSessionTitleModal() {
   const { project, session } = currentSessionTitleTarget();
   if (!project || !session) {
@@ -4042,14 +4255,30 @@ function renderQueueList() {
       label: "Copy message",
       text: entry.message,
     });
+    const audioButton = buildAudioButton({
+      audioKey: messageAudioKey(entry, "message"),
+      label: "Play message audio",
+      payload: messageAudioPayload(entry, "message", entry.message),
+    });
 
-    card.append(copyButton, head, meta, message);
+    card.append(copyButton, audioButton, head, meta, message);
 
     elements.queueList.append(card);
   }
 }
 
-function buildThreadCard({ entry, direction, copyKey, copyLabel, text, copyTextValue, metaText, failed = false }) {
+function buildThreadCard({
+  entry,
+  direction,
+  copyKey,
+  copyLabel,
+  text,
+  copyTextValue,
+  metaText,
+  failed = false,
+  audioKind = "",
+  audioText = "",
+}) {
   const card = document.createElement("article");
   card.className = `thread-card ${direction} detail-card${failed ? " failed" : ""}`;
 
@@ -4060,6 +4289,16 @@ function buildThreadCard({ entry, direction, copyKey, copyLabel, text, copyTextV
       text: copyTextValue,
     });
     card.append(copyButton);
+  }
+
+  if (audioKind && audioText) {
+    card.append(
+      buildAudioButton({
+        audioKey: messageAudioKey(entry, audioKind),
+        label: audioKind === "response" ? "Play response audio" : "Play message audio",
+        payload: messageAudioPayload(entry, audioKind, audioText),
+      }),
+    );
   }
 
   const meta = document.createElement("div");
@@ -4089,6 +4328,8 @@ function buildHistoryGroup(entry) {
       text: entry.message,
       copyTextValue: entry.message,
       metaText: formatTimestamp(entry.sentAt),
+      audioKind: "message",
+      audioText: entry.message,
     }),
   );
 
@@ -4111,6 +4352,8 @@ function buildHistoryGroup(entry) {
       copyTextValue: entry.status === "queued" ? "" : inboundText,
       metaText: inboundMeta,
       failed: entry.status === "failed",
+      audioKind: entry.status === "queued" ? "" : "response",
+      audioText: entry.status === "queued" ? "" : inboundText,
     }),
   );
 

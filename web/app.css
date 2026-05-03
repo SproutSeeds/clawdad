@@ -795,7 +795,7 @@ textarea:disabled {
   width: 100%;
   display: grid;
   gap: 8px;
-  padding: 12px 48px 12px 14px;
+  padding: 12px 84px 12px 14px;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: linear-gradient(180deg, rgba(80, 11, 15, 0.92), rgba(59, 8, 11, 0.96));
@@ -922,7 +922,7 @@ textarea:disabled {
   position: relative;
   display: grid;
   gap: 8px;
-  padding: 12px 48px 12px 14px;
+  padding: 12px 84px 12px 14px;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: linear-gradient(180deg, rgba(80, 11, 15, 0.92), rgba(59, 8, 11, 0.96));
@@ -1057,6 +1057,10 @@ textarea:disabled {
   right: 10px;
 }
 
+.message-audio-button.copy-button-floating {
+  right: 44px;
+}
+
 .copy-button svg {
   width: 14px;
   height: 14px;
@@ -1068,6 +1072,27 @@ textarea:disabled {
   border-color: rgba(132, 188, 126, 0.42);
   background: rgba(17, 40, 22, 0.92);
   transform: scale(0.96);
+}
+
+.message-audio-button.is-playing {
+  color: #fff4e3;
+  border-color: rgba(240, 208, 109, 0.46);
+  background: rgba(94, 28, 18, 0.94);
+}
+
+.message-audio-button.is-loading {
+  color: #f0d06d;
+  border-color: rgba(240, 208, 109, 0.38);
+}
+
+.message-audio-button.is-loading svg {
+  animation: audio-spin 820ms linear infinite;
+}
+
+@keyframes audio-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .detail-modal[hidden] {

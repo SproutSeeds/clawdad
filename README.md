@@ -89,9 +89,15 @@ If you ever just want the local CLI and not the phone app yet, you can stop afte
 - per-session thread viewer with lazy-loaded history
 - cross-project queue for in-flight and completed work
 - saved project summary snapshots with manual refresh
+- on-demand cached audio playback for saved messages via ElevenLabs
 - Codex delegate mode with semantic hard stops and a weekly compute reserve guard
 
 Tap the summary icon beside the project picker to open the latest saved snapshot or request a fresh one.
+
+Message audio is generated only when you tap a speaker icon. The API key stays on
+the Clawdad server: set `ELEVENLABS_API_KEY` or `CLAWDAD_ELEVENLABS_API_KEY`, or
+store a macOS Keychain generic password named `clawdad-elevenlabs`. Generated MP3
+parts are cached under the project at `.clawdad/audio/messages/` for replay.
 
 ## CLI Quick Start
 
