@@ -800,6 +800,79 @@ async function writeCompletedLaneStatus(fixture, laneId, {
   });
 }
 
+async function writeRunningLaneWithCompletedMailbox(fixture, laneId, {
+  runId = `${laneId}-running-run`,
+  requestId = `${laneId}-request-completed`,
+  nextAction = `Continue ${laneId} safely from the completed mailbox response.`,
+  summary = `Completed ${laneId} mailbox response while delegate status was still running.`,
+} = {}) {
+  const dir = laneDir(fixture.projectPath, laneId);
+  const dispatchedAt = "2026-04-27T13:55:00.000Z";
+  const completedAt = "2026-04-27T14:00:00.000Z";
+  await writeJson(path.join(dir, "delegate-status.json"), {
+    version: 1,
+    laneId,
+    state: "running",
+    runId,
+    startedAt: dispatchedAt,
+    completedAt: null,
+    delegateSessionId: `${laneId}-session`,
+    delegateSessionLabel: laneId,
+    stepCount: 0,
+    maxSteps: 1,
+    activeRequestId: requestId,
+    activeStep: 1,
+    lastRequestId: requestId,
+    supervisorPid: process.pid,
+    supervisorStartedAt: dispatchedAt,
+    pauseRequested: false,
+    lastOutcomeSummary: "",
+    nextAction: "",
+    stopReason: null,
+    error: "",
+  });
+  await writeJson(path.join(dir, "mailbox", "status.json"), {
+    state: "completed",
+    request_id: requestId,
+    session_id: `${laneId}-session`,
+    dispatched_at: dispatchedAt,
+    completed_at: completedAt,
+    pid: null,
+  });
+  const decision = {
+    state: "completed",
+    stop_reason: "none",
+    next_action: nextAction,
+    summary,
+    checkpoint: {
+      progress_signal: "high",
+      breakthroughs: "completed mailbox response was available",
+      blockers: "none",
+      next_probe: nextAction,
+      confidence: "high",
+    },
+  };
+  await writeFile(
+    path.join(dir, "mailbox", "response.md"),
+    [
+      `# Response: ${requestId}`,
+      "",
+      `Completed: ${completedAt}`,
+      `Session: ${laneId}-session`,
+      "Exit code: 0",
+      "",
+      "---",
+      "",
+      `Completed ${laneId} from mailbox state.`,
+      "",
+      "```json",
+      JSON.stringify(decision, null, 2),
+      "```",
+    ].join("\n"),
+    "utf8",
+  );
+}
+
 async function writeTightComputeTelemetry(fixture) {
   const sessionsDir = path.join(fixture.home, ".codex", "sessions", "2026", "04", "27");
   await mkdir(sessionsDir, { recursive: true });
@@ -1650,6 +1723,58 @@ test("supervise waits on a running lane and does not duplicate the worker run", 
     assert.equal(result.supervisor.restartCount, 0);
     const status = await readJson(path.join(laneDir(fixture.projectPath, "lane-a"), "delegate-status.json"));
     assert.equal(status.runId, "lane-a-live-run");
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("supervise consumes completed mailbox response before waiting on a running lane", async () => {
+  const fixture = await createFixture("clawdad-supervise-completed-mailbox-");
+  try {
+    await seedLane(fixture, "lane-a", {
+      displayName: "Lane A",
+      objective: "Finish lane A.",
+      scopeGlobs: ["src/lane-a/**"],
+      delegateSessionId: "lane-a-session",
+    });
+    const nextAction = "Refresh lane A from the reconciled mailbox decision.";
+    await writeRunningLaneWithCompletedMailbox(fixture, "lane-a", {
+      runId: "lane-a-running-but-mailbox-complete",
+      requestId: "lane-a-request-complete-before-status",
+      nextAction,
+      summary: "Mailbox completed before delegate status consumed the decision.",
+    });
+
+    const result = await runJsonCommand(fixture, [
+      "supervise",
+      fixture.projectPath,
+      "--lane",
+      "lane-a",
+      "--once",
+    ]);
+
+    assert.equal(result.ok, true);
+    assert.equal(result.action, "restart");
+    assert.equal(result.started, true);
+    assert.equal(result.accepted, true);
+    assert.equal(result.supervisor.restartCount, 1);
+    assert.equal(result.supervisor.lastConsumedNextAction, nextAction);
+
+    const config = await readJson(path.join(laneDir(fixture.projectPath, "lane-a"), "delegate-config.json"));
+    assert.equal(config.objective, nextAction);
+
+    const runEvents = await readFile(
+      path.join(laneDir(fixture.projectPath, "lane-a"), "runs", "lane-a-running-but-mailbox-complete.jsonl"),
+      "utf8",
+    );
+    assert.match(runEvents, /mailbox_completion_reconciled/u);
+    assert.match(runEvents, /step_completed/u);
+
+    await waitForValue(
+      () => readJson(path.join(laneDir(fixture.projectPath, "lane-a"), "delegate-status.json")),
+      (status) => status.state === "completed",
+      "restarted lane completion",
+    );
   } finally {
     await cleanupFixture(fixture);
   }
