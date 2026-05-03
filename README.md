@@ -96,8 +96,9 @@ Tap the summary icon beside the project picker to open the latest saved snapshot
 
 Message audio starts as a download icon. Tapping it prepares and caches the MP3;
 after it is ready the control becomes a speaker icon for playback. The queue
-header also has an optional auto-download toggle for new responses. The API key
-stays on the Clawdad server: set `ELEVENLABS_API_KEY` or
+header has an `Auto audio` toggle for preloading recent and future response
+audio without autoplay. The API key stays on the Clawdad server: set
+`ELEVENLABS_API_KEY` or
 `CLAWDAD_ELEVENLABS_API_KEY`, or store a macOS Keychain generic password named
 `clawdad-elevenlabs`. Generated MP3 parts are cached under the project at
 `.clawdad/audio/messages/` for replay.

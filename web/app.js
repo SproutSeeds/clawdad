@@ -450,6 +450,15 @@ function downloadIconMarkup() {
   `;
 }
 
+function audioErrorIconMarkup() {
+  return `
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M8 2.65 14 13H2L8 2.65Z" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round"></path>
+      <path d="M8 6.1v3.05M8 11.55h.01" stroke="currentColor" stroke-width="1.55" stroke-linecap="round"></path>
+    </svg>
+  `;
+}
+
 function audioLoadingMarkup() {
   return `
     <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -3733,12 +3742,13 @@ function decorateAudioButton(button, audioKey) {
   const availability = audioAvailability(audioKey);
   const preparing = availability.status === "preparing";
   const ready = audioPartsFromAvailability(audioKey).length > 0;
+  const failed = availability.status === "error" && !ready;
   const loading = status === "loading" || preparing;
   button.disabled = false;
   button.classList.toggle("is-ready", ready);
   button.classList.toggle("is-preparing", preparing);
-  button.classList.toggle("is-unavailable", availability.status === "error" && !ready);
-  button.classList.toggle("is-download", !ready && !loading && status !== "playing");
+  button.classList.toggle("is-unavailable", failed);
+  button.classList.toggle("is-download", !ready && !failed && !loading && status !== "playing");
   button.classList.toggle("is-loading", loading);
   button.classList.toggle("is-playing", status === "playing");
   if (status === "loading") {
@@ -3760,13 +3770,17 @@ function decorateAudioButton(button, audioKey) {
     button.title = "Preparing audio";
     return;
   }
+  if (failed) {
+    button.innerHTML = audioErrorIconMarkup();
+    button.setAttribute("aria-label", "Audio failed. Retry download");
+    button.title = availability.error || "Audio is not available. Click to retry.";
+    return;
+  }
   if (!ready) {
     const label = button.dataset.audioDownloadLabel || "Download audio";
     button.innerHTML = downloadIconMarkup();
     button.setAttribute("aria-label", label);
-    button.title = availability.status === "error"
-      ? `${availability.error || "Audio is not available yet"} Click to retry.`
-      : label;
+    button.title = label;
     return;
   }
   button.innerHTML = speakerIconMarkup();
@@ -7749,7 +7763,7 @@ function updateAudioAutoDownloadButton() {
     enabled ? "Disable automatic audio downloads" : "Enable automatic audio downloads",
   );
   button.title = enabled ? "Auto-download audio is on" : "Auto-download audio is off";
-  button.innerHTML = downloadIconMarkup();
+  button.innerHTML = `${downloadIconMarkup()}<span class="button-text">Auto audio</span>`;
 }
 
 function renderAll() {
