@@ -177,7 +177,13 @@ clawdad read my-project
 
 Each spoke agent accumulates context over time via session resume, so it develops deep knowledge of its project.
 
-Delegate mode is Codex-first and runs on the same machine as the Clawdad server. By default it keeps working indefinitely until the project is semantically complete, paused, blocked by a hard stop, or Codex compute reaches the saved weekly reserve. The default compute reserve is 10%, and you can change it per project:
+Delegate mode is Codex-first and runs on the same machine as the Clawdad server.
+`clawdad go` and `clawdad delegate-run` start one bounded delegate run. That run
+may have no step cap and may continue until semantic completion, pause, hard
+stop, or compute reserve, but the CLI invocation itself is still a bounded run:
+when it returns `completed` with a `nextAction`, continuity is not running unless
+a supervisor is active. The default compute reserve is 10%, and you can change it
+per project:
 
 ```bash
 clawdad delegate-set my-project --compute-reserve-percent 10
@@ -198,7 +204,7 @@ If ORP reports unclassified dirty state, no active safe continuation, paid or
 human-gated work, or another hard stop, Clawdad prints the ORP reason and leaves
 the delegate loop stopped.
 
-`clawdad supervise <slug> --lane <laneId>` is an explicit continuity loop, not
+`clawdad supervise <slug> --lane <laneId>` is the continuity loop, not
 Watchtower and not a replacement for bounded delegate runs. It watches the target
 lane status, consumes a completed run's `nextAction`, refreshes the lane
 objective, reruns the ORP and compute gates, checks whether the proposed
@@ -207,6 +213,15 @@ exactly one new bounded delegate run when safe. Use `--once` for a single
 supervisor tick, `--daemon` for a background supervisor, `--interval <seconds>`
 for polling, `--max-runs <n>` for a per-invocation cap, and `--dry-run` to
 inspect the next decision without starting a worker.
+
+Operational rule: when the desired behavior is "keep working," "run while I am
+away," or "continue this ecosystem," use `clawdad supervise <slug> --lane
+<laneId> --daemon`, optionally with `CLAWDAD_CODEX_GOALS=required`. Do not report
+that a lane is running merely because a bounded `delegate-run` completed. Verify
+lane `enabled:true`, lane state `running`, supervisor live, an active request ID,
+mailbox state `running`, fresh mailbox heartbeat, a live dispatch worker or
+`codex app-server`, and active/synced Codex goal state when goal sync is
+required.
 
 The direction check is the first Hermes-inspired supervisor layer. It uses a
 compact readback of objective, latest outcome, previous `nextAction`, proposed
