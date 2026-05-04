@@ -203,6 +203,25 @@ async function runBin(fixture, args) {
   return { stdout: result.stdout, stderr: result.stderr };
 }
 
+function sqlLiteral(value) {
+  return `'${String(value ?? "").replaceAll("'", "''")}'`;
+}
+
+async function sqliteExec(dbFile, sql) {
+  await execFileAsync("sqlite3", [dbFile, sql], {
+    cwd: repoRoot,
+    maxBuffer: 1024 * 1024,
+  });
+}
+
+async function sqliteScalar(dbFile, sql) {
+  const result = await execFileAsync("sqlite3", ["-readonly", dbFile, sql], {
+    cwd: repoRoot,
+    maxBuffer: 1024 * 1024,
+  });
+  return result.stdout.trim();
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -309,6 +328,100 @@ test("watchtower waits for transient sqlite writer locks", async () => {
     } finally {
       lock.kill();
     }
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("watchtower skips raw Codex sidecar streams and cleans legacy unknown delegate rows", async () => {
+  const fixture = await createFixture("clawdad-watchtower-codex-sidecar-");
+  try {
+    const firstScanResult = await runServer(fixture, ["watchtower", fixture.projectPath, "--once", "--json"]);
+    assert.equal(firstScanResult.exitCode, 0, firstScanResult.stderr || firstScanResult.stdout);
+    const dbFile = path.join(fixture.projectPath, ".clawdad", "feed", "watchtower.sqlite");
+    const now = "2026-04-23T12:03:00Z";
+    await sqliteExec(
+      dbFile,
+      `
+DELETE FROM feed_scan_state WHERE key = 'maintenance.unknown_delegate_events_cleaned.v1';
+INSERT INTO feed_events (
+  id, project_path, lane_id, run_id, at, source_type, source_ref, review_status,
+  content_hash, payload_json, created_at
+) VALUES (
+  'legacy-unknown-delegate-event',
+  ${sqlLiteral(fixture.projectPath)},
+  'default',
+  '',
+  ${sqlLiteral(now)},
+  'delegate_event',
+  'delegate-event:default:unknown:legacy-unknown',
+  'info',
+  'legacy',
+  '{}',
+  ${sqlLiteral(now)}
+);
+INSERT INTO feed_events_fts (
+  event_id, project_path, run_id, review_status, title, body, active_orp_item,
+  worker_summary, files_changed, tests_gates, current_decision, risk_flags
+) VALUES (
+  'legacy-unknown-delegate-event',
+  ${sqlLiteral(fixture.projectPath)},
+  '',
+  'info',
+  'Legacy unknown delegate event',
+  'legacy raw sidecar text',
+  '',
+  '',
+  '[]',
+  '[]',
+  '',
+  '[]'
+);
+`,
+    );
+    await writeFile(
+      path.join(fixture.projectPath, ".clawdad", "delegate", "runs", `${fixture.runId}.codex-events.jsonl`),
+      [
+        {
+          at: "2026-04-23T12:03:01Z",
+          type: "codex_event",
+          method: "thread/item/updated",
+          payload: { text: "raw sidecar text should not be indexed" },
+        },
+        {
+          at: "2026-04-23T12:03:02Z",
+          type: "codex_event",
+          method: "turn/completed",
+          payload: {},
+        },
+      ].map((event) => JSON.stringify(event)).join("\n") + "\n",
+      "utf8",
+    );
+
+    const scanResult = await runServer(fixture, ["watchtower", fixture.projectPath, "--once", "--json"]);
+    assert.equal(scanResult.exitCode, 0, scanResult.stderr || scanResult.stdout);
+    const scanPayload = JSON.parse(scanResult.stdout);
+    assert.equal(scanPayload.ok, true);
+    assert.ok(scanPayload.scan.skippedRuns >= 1);
+    assert.equal(
+      await sqliteScalar(
+        dbFile,
+        "SELECT COUNT(*) FROM feed_events WHERE source_type = 'delegate_event' AND (COALESCE(run_id, '') = '' OR source_ref LIKE 'delegate-event:%:unknown:%');",
+      ),
+      "0",
+    );
+
+    const searchResult = await runServer(fixture, [
+      "feed",
+      "search",
+      fixture.projectPath,
+      "raw sidecar text",
+      "--json",
+    ]);
+    assert.equal(searchResult.exitCode, 0, searchResult.stderr || searchResult.stdout);
+    const searchPayload = JSON.parse(searchResult.stdout);
+    assert.equal(searchPayload.ok, true);
+    assert.equal(searchPayload.events.length, 0);
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
   }
