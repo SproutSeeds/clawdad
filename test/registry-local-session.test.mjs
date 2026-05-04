@@ -166,6 +166,41 @@ session_json=$(registry_session_json "$PROJECT_PATH" "Global Mind Delegate")
   });
 });
 
+test("registry_set_resume_session preserves imported real Codex session metadata", async () => {
+  await withTempProject(async ({ root, projectPath, homePath }) => {
+    const { stdout } = await runRegistryScript({
+      root,
+      projectPath,
+      homePath,
+      script: `
+registry_add "$PROJECT_PATH" "placeholder-1" "Global Mind Delegate" "" "codex" "false"
+state_update_session "$PROJECT_PATH" "placeholder-1" "status" "running"
+state_update_session "$PROJECT_PATH" "placeholder-1" "dispatch_count" "2"
+state_update_session "$PROJECT_PATH" "placeholder-1" "last_dispatch" "2026-05-04T22:13:18Z"
+state_register_session "$PROJECT_PATH" "real-codex-session" "Imported Chubby transcript" "codex" "true"
+state_update_session "$PROJECT_PATH" "real-codex-session" "provider_transcript_path" "/tmp/codex/real.jsonl"
+state_update_session "$PROJECT_PATH" "real-codex-session" "provider_last_activity" "2026-05-04T22:20:49.771Z"
+registry_set_resume_session "$PROJECT_PATH" "Global Mind Delegate" "codex" "placeholder-1" "real-codex-session"
+session_json=$(registry_session_json "$PROJECT_PATH" "Global Mind Delegate")
+"$CLAWDAD_JQ" -n --argjson session "$session_json" '{ session: $session }'
+`,
+    });
+
+    const result = JSON.parse(stdout);
+    assert.equal(result.session.resumeSessionId, "real-codex-session");
+    assert.equal(result.session.localOnly, true);
+
+    const state = await readState(homePath);
+    const sessionState = state.projects[projectPath].sessions["real-codex-session"];
+    assert.equal(state.projects[projectPath].sessions["placeholder-1"], undefined);
+    assert.equal(sessionState.provider_transcript_path, "/tmp/codex/real.jsonl");
+    assert.equal(sessionState.provider_last_activity, "2026-05-04T22:20:49.771Z");
+    assert.equal(sessionState.dispatch_count, 2);
+    assert.equal(sessionState.last_dispatch, "2026-05-04T22:13:18Z");
+    assert.equal(sessionState.status, "running");
+  });
+});
+
 test("registry sync preserves existing session dispatch status", async () => {
   await withTempProject(async ({ root, projectPath, homePath }) => {
     const { stdout } = await runRegistryScript({

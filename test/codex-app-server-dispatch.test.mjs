@@ -70,7 +70,14 @@ function handle(message) {
     return;
   }
   if (message.method === "thread/resume" || message.method === "thread/start") {
-    send({ id: message.id, result: { thread: { id: message.params?.threadId || "thread-test" } } });
+    send({
+      id: message.id,
+      result: {
+        thread: {
+          id: behavior === "partial-stall" ? "thread-real" : message.params?.threadId || "thread-test",
+        },
+      },
+    });
     return;
   }
   if (message.method === "thread/goal/set") {
@@ -126,6 +133,27 @@ function handle(message) {
   }
   if (message.method === "turn/start") {
     send({ id: message.id, result: { turn: { id: "turn-test" } } });
+    if (behavior === "partial-stall") {
+      setTimeout(() => {
+        send({
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: "thread-real",
+            turnId: "turn-test",
+            itemId: "agent-live",
+            delta: "partial progress before stall",
+          },
+        });
+        send({
+          method: "item/started",
+          params: {
+            threadId: "thread-real",
+            turnId: "turn-test",
+            item: { id: "tool-stuck", type: "mcpToolCall", status: "in_progress" },
+          },
+        });
+      }, 10);
+    }
     if (
       behavior === "complete" ||
       behavior === "delta" ||
@@ -229,6 +257,40 @@ test("codex app-server dispatch times out a turn that never completes", async ()
     const payload = JSON.parse(result.stdout.trim());
     assert.equal(payload.ok, false);
     assert.match(payload.error_text, /codex turn did not complete within 1s/u);
+  });
+});
+
+test("codex app-server dispatch recovers partial text when a turn stops making progress", async () => {
+  await withTempDir(async (root) => {
+    const fakeCodex = await writeFakeCodexBinary(root, "partial-stall");
+    const result = await execFileCapture(process.execPath, [
+      dispatchScript,
+      "--project-path",
+      root,
+      "--message",
+      "hello",
+      "--session-id",
+      "thread-placeholder",
+      "--session-seeded",
+      "--codex-binary",
+      fakeCodex,
+      "--turn-timeout-ms",
+      "5000",
+      "--turn-idle-timeout-ms",
+      "50",
+      "--request-timeout-ms",
+      "2000",
+    ], { timeout: 10000 });
+
+    assert.equal(result.stderr, "");
+    assert.equal(result.exitCode, 0);
+    const payload = JSON.parse(result.stdout.trim());
+    assert.equal(payload.ok, true);
+    assert.equal(payload.recovered, true);
+    assert.equal(payload.recovery_reason, "turn_idle_timeout");
+    assert.equal(payload.session_id, "thread-real");
+    assert.match(payload.result_text, /no live progress/u);
+    assert.match(payload.result_text, /partial progress before stall/u);
   });
 });
 

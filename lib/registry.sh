@@ -480,7 +480,9 @@ state_rekey_session() {
     --arg seeded "$session_seeded" \
     --arg ts "$ts" '
       .projects[$path].sessions = (.projects[$path].sessions // {})
-      | (.projects[$path].sessions[$old] // .projects[$path].sessions[$new] // {}) as $prior
+      | (.projects[$path].sessions[$old] // {}) as $old_prior
+      | (.projects[$path].sessions[$new] // {}) as $new_prior
+      | ($new_prior + $old_prior) as $prior
       | .projects[$path].sessions[$new] = (
           $prior
           + {
@@ -488,12 +490,12 @@ state_rekey_session() {
               provider: $provider,
               provider_override: (if $provider == "chimera" or (($prior.provider_override // "") == "chimera") then "chimera" else ($prior.provider_override // "") end),
               provider_session_seeded: $seeded,
-              tracked_at: ($prior.tracked_at // $ts),
-              last_selected_at: ($prior.last_selected_at // null),
-              dispatch_count: (($prior.dispatch_count // 0) | tonumber? // 0),
-              last_dispatch: ($prior.last_dispatch // null),
-              last_response: ($prior.last_response // null),
-              status: ($prior.status // "idle"),
+              tracked_at: ($old_prior.tracked_at // $new_prior.tracked_at // $ts),
+              last_selected_at: ($old_prior.last_selected_at // $new_prior.last_selected_at // null),
+              dispatch_count: (($old_prior.dispatch_count // $new_prior.dispatch_count // 0) | tonumber? // 0),
+              last_dispatch: ($old_prior.last_dispatch // $new_prior.last_dispatch // null),
+              last_response: ($old_prior.last_response // $new_prior.last_response // null),
+              status: ($old_prior.status // $new_prior.status // "idle"),
               local_only: ($prior.local_only // "false"),
               orp_error: ($prior.orp_error // "")
             }
