@@ -39,7 +39,7 @@ globalThis.mergeHistoryItems = mergeHistoryItems;
 async function loadThreadCacheHelpers() {
   const source = await readFile(webAppPath, "utf8");
   const start = source.indexOf("function normalizeHistoryItem");
-  const end = source.indexOf("function cacheProjects");
+  const end = source.indexOf("function decorateCopyButton");
   assert.notEqual(start, -1);
   assert.notEqual(end, -1);
   assert.ok(end > start);
@@ -72,6 +72,9 @@ async function loadThreadCacheHelpers() {
     `
 const historyDuplicateWindowMs = 2 * 60 * 1000;
 const threadEntryCacheLimit = 80;
+const queuedDispatchGraceMs = 15000;
+const queuedDispatchAttachGraceMs = 2 * 60 * 1000;
+const staleLocalPendingBlockMs = queuedDispatchAttachGraceMs;
 function makeEntryId() { return "generated-id"; }
 function fallbackProjectLabel(projectPath) { return String(projectPath || "project").split("/").filter(Boolean).pop() || "project"; }
 function sessionForEntry() { return null; }
@@ -102,6 +105,7 @@ globalThis.restoreThreadEntries = restoreThreadEntries;
 globalThis.purgeLegacyThreadEntryCaches = purgeLegacyThreadEntryCaches;
 globalThis.hydrateThreadEntriesFromHistoryItems = hydrateThreadEntriesFromHistoryItems;
 globalThis.threadEntryVisibleInQueue = threadEntryVisibleInQueue;
+globalThis.queueEntries = queueEntries;
 `,
     context,
   );
@@ -168,6 +172,7 @@ test("web thread cache never persists or restores failed cards", async () => {
     sessionId: "session-queued",
     status: "queued",
     exitCode: null,
+    sentAt: new Date().toISOString(),
     answeredAt: null,
     response: "",
   };
@@ -222,11 +227,15 @@ test("web recent history hydration keeps failed cards out of the dashboard queue
 
   assert.deepEqual(
     JSON.parse(JSON.stringify(context.state.threadEntries.map((entry) => entry.status).sort())),
-    ["answered", "queued"],
+    ["answered"],
   );
   assert.equal(
     context.state.historyThreads["/repo/clawdad::session-failed"].items[0].status,
     "failed",
+  );
+  assert.equal(
+    context.state.historyThreads["/repo/clawdad::session-queued"].items[0].status,
+    "queued",
   );
 });
 
@@ -236,6 +245,59 @@ test("web dashboard queue visibility excludes failed cards still present in memo
   assert.equal(context.threadEntryVisibleInQueue({ status: "answered" }), true);
   assert.equal(context.threadEntryVisibleInQueue({ status: "failed" }), false);
   assert.equal(context.threadEntryVisibleInQueue({ status: "FAILED" }), false);
+});
+
+test("web dashboard queue visibility excludes stale history queued transcript rows", async () => {
+  const context = await loadThreadCacheHelpers();
+  const staleQueued = {
+    id: "history:codex:session-a:0",
+    requestId: "codex:session-a:0",
+    projectPath: "/repo/clawdad",
+    sessionId: "session-a",
+    status: "queued",
+    sentAt: "2026-05-04T12:00:00.000Z",
+    answeredAt: null,
+    response: "",
+  };
+  const laterAnswer = {
+    ...staleQueued,
+    id: "history:codex:session-a:1",
+    requestId: "codex:session-a:1",
+    status: "answered",
+    sentAt: "2026-05-04T12:01:00.000Z",
+    answeredAt: "2026-05-04T12:02:00.000Z",
+    response: "Done.",
+  };
+
+  context.state.threadEntries = [staleQueued, laterAnswer];
+
+  assert.equal(context.threadEntryVisibleInQueue(staleQueued), false);
+  assert.deepEqual(context.queueEntries().map((entry) => entry.requestId), [laterAnswer.requestId]);
+});
+
+test("web dashboard queue visibility only trusts local pending queue rows by default", async () => {
+  const context = await loadThreadCacheHelpers();
+  const historyQueued = {
+    id: "history:codex:session-a:2",
+    requestId: "codex:session-a:2",
+    projectPath: "/repo/clawdad",
+    sessionId: "session-a",
+    status: "queued",
+    sentAt: new Date().toISOString(),
+    answeredAt: null,
+    response: "",
+  };
+  const localQueued = {
+    ...historyQueued,
+    id: "local-pending",
+    requestId: "local-pending",
+  };
+
+  context.state.threadEntries = [historyQueued, localQueued];
+
+  assert.equal(context.threadEntryVisibleInQueue(historyQueued), false);
+  assert.equal(context.threadEntryVisibleInQueue(localQueued), true);
+  assert.deepEqual(context.queueEntries().map((entry) => entry.requestId), [localQueued.requestId]);
 });
 
 test("web boot purges legacy thread caches", async () => {

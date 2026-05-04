@@ -949,7 +949,11 @@ function advanceProcessingPhraseCycle() {
 }
 
 function processingCopyActive() {
-  if (state.threadEntries.some((entry) => entry.status === "queued")) {
+  if (
+    state.threadEntries.some(
+      (entry) => threadEntryStatus(entry) === "queued" && threadEntryVisibleInQueue(entry, state.threadEntries),
+    )
+  ) {
     return true;
   }
 
@@ -957,7 +961,9 @@ function processingCopyActive() {
     return true;
   }
 
-  return currentThreadEntries().some((entry) => entry.status === "queued");
+  return currentThreadEntries().some(
+    (entry) => threadEntryStatus(entry) === "queued" && threadEntryVisibleInQueue(entry, state.threadEntries),
+  );
 }
 
 function renderProcessingCopy() {
@@ -2469,9 +2475,62 @@ function threadEntryStatus(entry) {
   return String(entry?.status || "").trim().toLowerCase();
 }
 
-function threadEntryVisibleInQueue(entry) {
+function threadEntryIsHistoryBackfill(entry) {
+  return String(entry?.id || "").trim().startsWith("history:");
+}
+
+function threadEntryHasLaterSessionActivity(entry, items = state.threadEntries) {
+  const projectPath = String(entry?.projectPath || "").trim();
+  const sessionId = String(entry?.sessionId || "").trim();
+  const sentAtMs = entrySentAtMs(entry);
+  if (!projectPath || !sessionId || sentAtMs <= 0) {
+    return false;
+  }
+
+  return (Array.isArray(items) ? items : []).some((candidate) => {
+    if (candidate === entry) {
+      return false;
+    }
+    if (
+      String(candidate?.projectPath || "").trim() !== projectPath ||
+      String(candidate?.sessionId || "").trim() !== sessionId
+    ) {
+      return false;
+    }
+    const candidateMs = Math.max(
+      entrySentAtMs(candidate),
+      new Date(candidate?.answeredAt || 0).getTime() || 0,
+    );
+    return Number.isFinite(candidateMs) && candidateMs > sentAtMs;
+  });
+}
+
+function queuedThreadEntryVisibleInQueue(entry, items = state.threadEntries) {
+  if (threadEntryStatus(entry) !== "queued") {
+    return false;
+  }
+  if (threadEntryHasLaterSessionActivity(entry, items)) {
+    return false;
+  }
+
+  const session = sessionForEntry(entry);
+  if (sessionIsBusy(session)) {
+    return true;
+  }
+
+  if (threadEntryIsHistoryBackfill(entry)) {
+    return false;
+  }
+
+  return !entryAgePastAttachGraceWindow(entry);
+}
+
+function threadEntryVisibleInQueue(entry, items = state.threadEntries) {
   const status = threadEntryStatus(entry);
-  return status === "queued" || status === "answered";
+  if (status === "queued") {
+    return queuedThreadEntryVisibleInQueue(entry, items);
+  }
+  return status === "answered";
 }
 
 function historyItemStatusRank(status) {
@@ -2700,7 +2759,7 @@ function mergeHistoryItems(existingItems = [], incomingItems = []) {
 
 function trimThreadEntries(items = []) {
   const normalizedItems = Array.isArray(items) ? items : [];
-  const queued = normalizedItems.filter((entry) => threadEntryStatus(entry) === "queued");
+  const queued = normalizedItems.filter((entry) => queuedThreadEntryVisibleInQueue(entry, normalizedItems));
   const returned = normalizedItems
     .filter((entry) => threadEntryStatus(entry) === "answered")
     .sort((left, right) => {
@@ -3408,7 +3467,10 @@ function syncProjectRepoSelection(preferredPath = "", { preferCurrent = true } =
 }
 
 function cacheableThreadEntries(items = state.threadEntries) {
-  return (Array.isArray(items) ? items : []).filter((entry) => threadEntryStatus(entry) !== "failed");
+  return (Array.isArray(items) ? items : []).filter((entry) => {
+    const status = threadEntryStatus(entry);
+    return status !== "failed" && (status !== "queued" || !threadEntryIsHistoryBackfill(entry));
+  });
 }
 
 function persistThreadEntries() {
@@ -3542,16 +3604,18 @@ function queueEntries() {
     return 2;
   };
 
-  return state.threadEntries.filter(threadEntryVisibleInQueue).sort((left, right) => {
-    const rankDiff = rankForStatus(left.status) - rankForStatus(right.status);
-    if (rankDiff !== 0) {
-      return rankDiff;
-    }
+  return state.threadEntries
+    .filter((entry) => threadEntryVisibleInQueue(entry, state.threadEntries))
+    .sort((left, right) => {
+      const rankDiff = rankForStatus(left.status) - rankForStatus(right.status);
+      if (rankDiff !== 0) {
+        return rankDiff;
+      }
 
-    const leftTime = new Date(left.answeredAt || left.sentAt || 0).getTime();
-    const rightTime = new Date(right.answeredAt || right.sentAt || 0).getTime();
-    return rightTime - leftTime;
-  });
+      const leftTime = new Date(left.answeredAt || left.sentAt || 0).getTime();
+      const rightTime = new Date(right.answeredAt || right.sentAt || 0).getTime();
+      return rightTime - leftTime;
+    });
 }
 
 function pendingEntryForSession(projectPath, sessionId) {
@@ -3561,12 +3625,11 @@ function pendingEntryForSession(projectPath, sessionId) {
         if (
           entry.projectPath !== projectPath ||
           entry.sessionId !== sessionId ||
-          entry.status !== "queued"
+          threadEntryStatus(entry) !== "queued"
         ) {
           return false;
         }
-        const sentAtMs = new Date(entry.sentAt || 0).getTime();
-        return Number.isFinite(sentAtMs) && Date.now() - sentAtMs <= staleLocalPendingBlockMs;
+        return queuedThreadEntryVisibleInQueue(entry, state.threadEntries);
       },
     ) || null
   );
@@ -3753,7 +3816,9 @@ function entryIsUnread(entry) {
 }
 
 function hasUnreadQueueEntries() {
-  return state.threadEntries.filter(threadEntryVisibleInQueue).some((entry) => entryIsUnread(entry));
+  return state.threadEntries
+    .filter((entry) => threadEntryVisibleInQueue(entry, state.threadEntries))
+    .some((entry) => entryIsUnread(entry));
 }
 
 function markThreadEntriesSeen({ projectPath = "", sessionId = "", requestId = "" } = {}) {
@@ -8415,19 +8480,16 @@ function updateMailboxState() {
     return;
   }
 
-  const entries = currentThreadEntries();
+  const entries = currentThreadEntries().filter((entry) =>
+    threadEntryVisibleInQueue(entry, state.threadEntries),
+  );
   if (entries.length === 0) {
     setText(elements.mailboxState, "", { empty: true });
     return;
   }
 
   const latest = entries[entries.length - 1];
-  if (latest.status === "failed") {
-    setText(elements.mailboxState, "failed", { empty: false });
-    return;
-  }
-
-  if (latest.status === "answered") {
+  if (threadEntryStatus(latest) === "answered") {
     setText(elements.mailboxState, "cajun butter", { empty: false });
     return;
   }
@@ -8646,7 +8708,9 @@ function renderAll() {
 }
 
 async function reconcileThreadEntries() {
-  const pendingEntries = state.threadEntries.filter((entry) => entry.status === "queued");
+  const pendingEntries = state.threadEntries.filter(
+    (entry) => threadEntryStatus(entry) === "queued" && threadEntryVisibleInQueue(entry, state.threadEntries),
+  );
   if (pendingEntries.length === 0) {
     renderAll();
     return;
@@ -9168,7 +9232,11 @@ function artifactProjectsNeedingRefresh() {
   }
 
   for (const entry of state.threadEntries) {
-    if (entry.status === "queued" || entry.status === "answered") {
+    const status = threadEntryStatus(entry);
+    if (
+      status === "answered" ||
+      (status === "queued" && threadEntryVisibleInQueue(entry, state.threadEntries))
+    ) {
       targets.add(entry.projectPath);
     }
   }
