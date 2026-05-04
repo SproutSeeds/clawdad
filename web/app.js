@@ -262,7 +262,7 @@ const cacheVersionSuffix = appBuildVersion && appBuildVersion !== "__CLAWDAD_APP
   ? `-${appBuildVersion}`
   : "";
 const projectCacheKey = `clawdad-project-catalog-v4${cacheVersionSuffix}`;
-const threadCacheKey = `clawdad-thread-log-v1${cacheVersionSuffix}`;
+const threadCacheKey = `clawdad-thread-log-v2${cacheVersionSuffix}`;
 const queueCollapsedKey = "clawdad-queue-collapsed-v1";
 const artifactShelfCollapsedKey = "clawdad-artifact-shelf-collapsed-v1";
 const audioAutoDownloadKey = "clawdad-audio-auto-download-v1";
@@ -3352,9 +3352,15 @@ function syncProjectRepoSelection(preferredPath = "", { preferCurrent = true } =
   state.projectModalRepoPath = firstUntracked || choices[0] || "";
 }
 
+function cacheableThreadEntries(items = state.threadEntries) {
+  return (Array.isArray(items) ? items : []).filter(
+    (entry) => String(entry?.status || "").trim().toLowerCase() !== "failed",
+  );
+}
+
 function persistThreadEntries() {
   try {
-    localStorage.setItem(threadCacheKey, JSON.stringify(state.threadEntries));
+    localStorage.setItem(threadCacheKey, JSON.stringify(cacheableThreadEntries()));
   } catch (_error) {
     // Ignore storage failures.
   }
@@ -3367,9 +3373,26 @@ function restoreThreadEntries() {
       return;
     }
     const parsed = JSON.parse(raw);
-    state.threadEntries = Array.isArray(parsed) ? trimThreadEntries(parsed) : [];
+    state.threadEntries = Array.isArray(parsed) ? trimThreadEntries(cacheableThreadEntries(parsed)) : [];
   } catch (_error) {
     state.threadEntries = [];
+  }
+}
+
+function purgeLegacyThreadEntryCaches() {
+  try {
+    const keys = [];
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (key && key.startsWith("clawdad-thread-log-") && key !== threadCacheKey) {
+        keys.push(key);
+      }
+    }
+    for (const key of keys) {
+      localStorage.removeItem(key);
+    }
+  } catch (_error) {
+    // Ignore storage failures.
   }
 }
 
@@ -11063,6 +11086,7 @@ async function boot() {
   bindEvents();
   void initHeaderCarousel();
   resetProcessingPhraseCycle();
+  purgeLegacyThreadEntryCaches();
   restoreThreadEntries();
   hydrateReturnedThreadEntries();
   restoreQueueCollapsed();

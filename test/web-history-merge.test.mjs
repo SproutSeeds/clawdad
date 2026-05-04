@@ -22,6 +22,7 @@ async function loadHistoryMergeHelpers() {
   vm.runInContext(
     `
 const historyDuplicateWindowMs = 2 * 60 * 1000;
+const threadEntryCacheLimit = 80;
 function makeEntryId() { return "generated-id"; }
 function fallbackProjectLabel(projectPath) { return String(projectPath || "project").split("/").filter(Boolean).pop() || "project"; }
 function sessionForEntry() { return null; }
@@ -29,6 +30,57 @@ function providerLabel(provider) { return String(provider || "session"); }
 function sessionFingerprint(sessionId) { return String(sessionId || "").slice(-4); }
 ${source.slice(start, end)}
 globalThis.mergeHistoryItems = mergeHistoryItems;
+`,
+    context,
+  );
+  return context;
+}
+
+async function loadThreadCacheHelpers() {
+  const source = await readFile(webAppPath, "utf8");
+  const start = source.indexOf("function normalizeHistoryItem");
+  const end = source.indexOf("function hydrateThreadEntriesFromHistoryItems");
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  assert.ok(end > start);
+
+  const store = new Map();
+  const context = {
+    Date,
+    state: { threadEntries: [], historyByThread: {} },
+    threadCacheKey: "clawdad-thread-log-test",
+    localStorage: {
+      get length() {
+        return store.size;
+      },
+      getItem(key) {
+        return store.has(key) ? store.get(key) : null;
+      },
+      setItem(key, value) {
+        store.set(key, String(value));
+      },
+      removeItem(key) {
+        store.delete(key);
+      },
+      key(index) {
+        return [...store.keys()][index] || null;
+      },
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(
+    `
+const historyDuplicateWindowMs = 2 * 60 * 1000;
+const threadEntryCacheLimit = 80;
+function makeEntryId() { return "generated-id"; }
+function fallbackProjectLabel(projectPath) { return String(projectPath || "project").split("/").filter(Boolean).pop() || "project"; }
+function sessionForEntry() { return null; }
+function providerLabel(provider) { return String(provider || "session"); }
+function sessionFingerprint(sessionId) { return String(sessionId || "").slice(-4); }
+${source.slice(start, end)}
+globalThis.persistThreadEntries = persistThreadEntries;
+globalThis.restoreThreadEntries = restoreThreadEntries;
+globalThis.purgeLegacyThreadEntryCaches = purgeLegacyThreadEntryCaches;
 `,
     context,
   );
@@ -65,6 +117,65 @@ test("web history merge clears stale cached synthetic answered transcript cards"
   assert.equal(merged[0].response, "");
   assert.equal(merged[0].answeredAt, null);
   assert.equal(merged[0].exitCode, null);
+});
+
+test("web thread cache never persists or restores failed cards", async () => {
+  const context = await loadThreadCacheHelpers();
+  const failed = {
+    requestId: "failed-request",
+    projectPath: "/repo/clawdad",
+    sessionId: "session-failed",
+    provider: "codex",
+    message: "This stale local card should not survive reload.",
+    sentAt: "2026-05-04T12:00:00.000Z",
+    answeredAt: "2026-05-04T12:01:00.000Z",
+    status: "failed",
+    exitCode: 1,
+    response: "Failed.",
+  };
+  const answered = {
+    ...failed,
+    requestId: "answered-request",
+    sessionId: "session-answered",
+    status: "answered",
+    exitCode: 0,
+    response: "Answered.",
+  };
+  const queued = {
+    ...failed,
+    requestId: "queued-request",
+    sessionId: "session-queued",
+    status: "queued",
+    exitCode: null,
+    answeredAt: null,
+    response: "",
+  };
+
+  context.state.threadEntries = [failed, answered, queued];
+  context.persistThreadEntries();
+  const persisted = JSON.parse(context.localStorage.getItem(context.threadCacheKey));
+  assert.deepEqual(persisted.map((entry) => entry.status).sort(), ["answered", "queued"]);
+
+  context.localStorage.setItem(context.threadCacheKey, JSON.stringify([failed, answered, queued]));
+  context.state.threadEntries = [];
+  context.restoreThreadEntries();
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.state.threadEntries.map((entry) => entry.status).sort())),
+    ["answered", "queued"],
+  );
+});
+
+test("web boot purges legacy thread caches", async () => {
+  const context = await loadThreadCacheHelpers();
+  context.localStorage.setItem("clawdad-thread-log-v1-old", "[]");
+  context.localStorage.setItem("clawdad-thread-log-v2-old", "[]");
+  context.localStorage.setItem(context.threadCacheKey, "[]");
+
+  context.purgeLegacyThreadEntryCaches();
+
+  assert.equal(context.localStorage.getItem("clawdad-thread-log-v1-old"), null);
+  assert.equal(context.localStorage.getItem("clawdad-thread-log-v2-old"), null);
+  assert.equal(context.localStorage.getItem(context.threadCacheKey), "[]");
 });
 
 test("web history merge replaces stale cached synthetic answer with fresh synthetic final answer", async () => {
