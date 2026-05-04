@@ -2079,6 +2079,181 @@ test("read endpoint heals a stale mailbox response from answered history", async
   }
 });
 
+test("read endpoint can fetch an exact completed request while latest mailbox is running", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-read-exact-"));
+  const home = path.join(root, "home");
+  const projectPath = path.join(root, "global-mind");
+  const configPath = path.join(root, "server.json");
+  const mockBinPath = path.join(root, "clawdad-mock");
+  const completedSessionId = "019d64ef-0f73-7423-9406-5266d6f7efee";
+  const runningSessionId = "019d64ef-0f73-7423-9406-5266d6f7abcd";
+  const completedRequestId = "45017928-ad44-4a91-a7b4-6d8fb6e2e1dc";
+  const runningRequestId = "d57cdaaa-7371-447b-96e6-3af0992fc14a";
+  const sentAt = "2026-04-29T00:00:34Z";
+  const answeredAt = "2026-04-29T00:01:15Z";
+  const runningAt = new Date().toISOString();
+  const completedAnswer = "Exact completed answer.";
+  const recordFile = path.join(
+    projectPath,
+    ".clawdad",
+    "history",
+    "sessions",
+    completedSessionId,
+    `20260429T000034Z--${completedRequestId}.json`,
+  );
+
+  await mkdir(path.join(projectPath, ".clawdad", "mailbox"), { recursive: true });
+  await mkdir(path.dirname(recordFile), { recursive: true });
+  await mkdir(path.join(projectPath, ".clawdad", "history", "requests"), { recursive: true });
+  await mkdir(home, { recursive: true });
+  await writeFile(
+    path.join(home, "state.json"),
+    JSON.stringify(
+      {
+        version: 3,
+        projects: {
+          [projectPath]: {
+            status: "running",
+            last_dispatch: runningAt,
+            last_response: answeredAt,
+            dispatch_count: 2,
+            registered_at: sentAt,
+            active_session_id: runningSessionId,
+            sessions: {
+              [completedSessionId]: {
+                slug: "completed mind",
+                provider: "codex",
+                provider_session_seeded: "true",
+                tracked_at: sentAt,
+                dispatch_count: 1,
+                last_dispatch: sentAt,
+                last_response: answeredAt,
+                status: "completed",
+                local_only: "false",
+              },
+              [runningSessionId]: {
+                slug: "running mind",
+                provider: "codex",
+                provider_session_seeded: "true",
+                tracked_at: sentAt,
+                dispatch_count: 1,
+                last_dispatch: runningAt,
+                last_response: null,
+                status: "running",
+                local_only: "false",
+              },
+            },
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    path.join(projectPath, ".clawdad", "mailbox", "status.json"),
+    JSON.stringify(
+      {
+        state: "running",
+        request_id: runningRequestId,
+        session_id: runningSessionId,
+        dispatched_at: runningAt,
+        heartbeat_at: runningAt,
+        pid: null,
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    path.join(projectPath, ".clawdad", "history", "requests", `${completedRequestId}.json`),
+    JSON.stringify({ requestId: completedRequestId, sessionId: completedSessionId, sentAt, file: recordFile }, null, 2),
+    "utf8",
+  );
+  await writeFile(
+    recordFile,
+    JSON.stringify(
+      {
+        requestId: completedRequestId,
+        projectPath,
+        sessionId: completedSessionId,
+        sessionSlug: "completed mind",
+        provider: "codex",
+        message: "Give me the exact completed answer.",
+        sentAt,
+        answeredAt,
+        status: "answered",
+        exitCode: 0,
+        response: completedAnswer,
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(mockBinPath, "#!/bin/sh\nexit 1\n", "utf8");
+  await chmod(mockBinPath, 0o755);
+
+  const port = await freePort();
+  await writeFile(
+    configPath,
+    JSON.stringify(
+      {
+        host: "127.0.0.1",
+        port,
+        defaultProject: projectPath,
+        authMode: "tailscale",
+        allowedUsers: ["tester@example.com"],
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  const child = spawn(process.execPath, [serverScript, "serve", "--config", configPath], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      CLAWDAD_HOME: home,
+      CLAWDAD_BIN_PATH: mockBinPath,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  try {
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const headers = { "tailscale-user-login": "tester@example.com" };
+    await waitForHealth(baseUrl, child);
+
+    const latestResponse = await fetch(
+      `${baseUrl}/v1/read?project=${encodeURIComponent(projectPath)}&raw=1`,
+      { headers },
+    );
+    assert.equal(latestResponse.status, 200);
+    const latestPayload = await latestResponse.json();
+    assert.equal(latestPayload.output, "");
+    assert.equal(latestPayload.mailboxStatus.request_id, runningRequestId);
+
+    const exactResponse = await fetch(
+      `${baseUrl}/v1/read?project=${encodeURIComponent(projectPath)}&requestId=${encodeURIComponent(completedRequestId)}&raw=1`,
+      { headers },
+    );
+    assert.equal(exactResponse.status, 200);
+    const exactPayload = await exactResponse.json();
+    assert.equal(exactPayload.source, "history");
+    assert.equal(exactPayload.output, completedAnswer);
+    assert.equal(exactPayload.historyItem.requestId, completedRequestId);
+    assert.equal(exactPayload.historyItem.sessionId, completedSessionId);
+    assert.equal(exactPayload.mailboxStatus.request_id, runningRequestId);
+  } finally {
+    await stopServer(child);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("history endpoint merges mirrored requests with provider transcript handoff copies", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-history-"));
   const home = path.join(root, "home");

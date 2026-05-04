@@ -3558,6 +3558,45 @@ function completedSessionsMatchingEntry(project, entry) {
   });
 }
 
+function terminalHistoryStatus(status) {
+  const normalized = String(status || "").trim().toLowerCase();
+  return normalized === "answered" || normalized === "failed" || normalized === "completed";
+}
+
+function historyStatusFromLifecycle(status) {
+  const normalized = String(status || "").trim().toLowerCase();
+  if (normalized === "completed") {
+    return "answered";
+  }
+  if (normalized === "answered" || normalized === "failed") {
+    return normalized;
+  }
+  return "";
+}
+
+function sessionDetailsForHistoryResult(project, fallbackSession, historyItem, mailboxStatus, entry) {
+  const sessionId =
+    String(historyItem?.sessionId || "").trim() ||
+    String(mailboxStatus?.session_id || mailboxStatus?.sessionId || "").trim() ||
+    String(fallbackSession?.sessionId || "").trim() ||
+    String(entry?.sessionId || "").trim();
+  const matchedSession =
+    project?.sessions?.find((session) => session.sessionId === sessionId || session.slug === sessionId) ||
+    null;
+  return {
+    sessionId,
+    session:
+      matchedSession ||
+      fallbackSession ||
+      {
+        sessionId,
+        provider: historyItem?.provider || fallbackSession?.provider || "session",
+        slug: historyItem?.sessionSlug || entry?.sessionLabel || "",
+        path: entry?.projectPath || project?.path || "",
+      },
+  };
+}
+
 function updateThreadEntry(entryId, updater) {
   state.threadEntries = state.threadEntries.map((entry) => {
     if (entry.id !== entryId) {
@@ -4616,7 +4655,7 @@ function renderQueueList() {
   }
 
   for (const entry of entries) {
-    const clickable = entry.status === "answered" || entry.status === "failed";
+    const clickable = Boolean(entry.projectPath && entry.sessionId);
     const unread = entryIsUnread(entry);
     const card = document.createElement("article");
     card.className = `queue-card ${entry.status === "queued" ? "processing" : entry.status === "answered" ? "done" : "failed"}`;
@@ -8063,10 +8102,72 @@ async function reconcileThreadEntries() {
     )
       .trim()
       .toLowerCase();
+    const liveRequestId = String(mailboxStatus.request_id || "").trim();
+    const trackedRequestId = String(entry.requestId || "").trim();
     const matchingCompletedSessions = completedSessionsMatchingEntry(project, entry);
     const mailboxCompletionFallbackSession =
       session ||
       (matchingCompletedSessions.length === 1 ? matchingCompletedSessions[0] : null);
+
+    if (trackedRequestId) {
+      const exactReadKey = `${entry.projectPath}:${trackedRequestId}:exact`;
+      if (!readsByRequest.has(exactReadKey)) {
+        try {
+          const payload = await fetchJson(
+            `/v1/read?project=${encodeURIComponent(entry.projectPath)}&requestId=${encodeURIComponent(trackedRequestId)}&raw=1`,
+          );
+          readsByRequest.set(exactReadKey, payload);
+        } catch (error) {
+          readsByRequest.set(exactReadKey, { error });
+        }
+      }
+
+      const exactPayload = readsByRequest.get(exactReadKey) || {};
+      const exactHistoryItem = exactPayload.historyItem ? normalizeHistoryItem(exactPayload.historyItem) : null;
+      const exactMailboxStatus = exactPayload.mailboxStatus || {};
+      const exactMailboxRequestId = String(
+        exactMailboxStatus.request_id || exactMailboxStatus.requestId || "",
+      ).trim();
+      const exactMailboxMatches = exactMailboxRequestId === trackedRequestId;
+      const exactStatus =
+        historyStatusFromLifecycle(exactHistoryItem?.status) ||
+        (exactMailboxMatches ? historyStatusFromLifecycle(exactMailboxStatus.state) : "");
+
+      if (terminalHistoryStatus(exactStatus)) {
+        const sessionResult = sessionDetailsForHistoryResult(
+          project,
+          session,
+          exactHistoryItem,
+          exactMailboxStatus,
+          entry,
+        );
+        completeThreadEntry(entry, {
+          status: exactStatus,
+          sessionId: sessionResult.sessionId || entry.sessionId,
+          sessionLabel: sessionOptionLabel(sessionResult.session, entry.projectPath),
+          answeredAt:
+            exactHistoryItem?.answeredAt ||
+            exactMailboxStatus.completed_at ||
+            exactMailboxStatus.completedAt ||
+            sessionResult.session?.lastResponse ||
+            project?.lastResponse ||
+            new Date().toISOString(),
+          requestId: trackedRequestId,
+          response:
+            String(exactHistoryItem?.response || "").trim() ||
+            String(exactPayload.output || "").trim() ||
+            (exactStatus === "failed" ? "Failed." : ""),
+          exitCode:
+            typeof exactHistoryItem?.exitCode === "number"
+              ? exactHistoryItem.exitCode
+              : exactStatus === "failed"
+                ? 1
+                : 0,
+          seenAt: null,
+        });
+        continue;
+      }
+    }
 
     if (!project || !session) {
       if (
@@ -8114,10 +8215,8 @@ async function reconcileThreadEntries() {
       continue;
     }
 
-    const liveRequestId = String(mailboxStatus.request_id || "").trim();
     const sentAtMs = new Date(entry.sentAt || 0).getTime();
     const mailboxDispatchMs = new Date(mailboxStatus.dispatched_at || 0).getTime();
-    const trackedRequestId = String(entry.requestId || "").trim();
     const requestLooksFresh =
       Boolean(liveRequestId) &&
       Number.isFinite(sentAtMs) &&

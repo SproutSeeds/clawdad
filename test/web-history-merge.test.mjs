@@ -125,3 +125,38 @@ test("web history merge prefers concrete answered request over synthetic transcr
   assert.equal(merged[0].response, concrete.response);
   assert.equal(merged[0].answeredAt, concrete.answeredAt);
 });
+
+test("web history merge lets a real transcript answer replace a cached failed card", async () => {
+  const { mergeHistoryItems } = await loadHistoryMergeHelpers();
+  const cachedFailed = {
+    requestId: "2f66a266-6b05-441f-8e80-32d2e15224fd",
+    projectPath: "/repo/clawdad",
+    sessionId: "019ddf17-7e93-7840-a89b-cc2702c32a02",
+    provider: "codex",
+    message: "Please compare OpenClaw and Clawdad.",
+    sentAt: "2026-05-03T15:35:13.537Z",
+    answeredAt: "2026-05-03T15:37:16.000Z",
+    status: "failed",
+    exitCode: 1,
+    response: "Failed.",
+  };
+  const transcriptAnswer = {
+    requestId: "codex:019ddf17-7e93-7840-a89b-cc2702c32a02:54",
+    projectPath: "/repo/clawdad",
+    sessionId: cachedFailed.sessionId,
+    provider: "codex",
+    message: cachedFailed.message,
+    sentAt: "2026-05-03T15:35:18.000Z",
+    answeredAt: "2026-05-03T15:37:20.000Z",
+    status: "answered",
+    exitCode: 0,
+    response: "Detailed final comparison.",
+  };
+
+  const merged = mergeHistoryItems([cachedFailed], [transcriptAnswer]);
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].status, "answered");
+  assert.equal(merged[0].response, transcriptAnswer.response);
+  assert.equal(merged[0].answeredAt, transcriptAnswer.answeredAt);
+});
