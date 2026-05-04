@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -164,12 +164,13 @@ async function createFixture(prefix) {
   return { root, home, projectPath, fakeOrp, runId };
 }
 
-async function runServer(fixture, args) {
+async function runServer(fixture, args, extraEnv = {}) {
   const env = {
     ...process.env,
     HOME: fixture.home,
     CLAWDAD_HOME: fixture.home,
     CLAWDAD_ORP: fixture.fakeOrp,
+    ...extraEnv,
   };
   try {
     const result = await execFileAsync(process.execPath, [serverScript, ...args], {
@@ -202,6 +203,44 @@ async function runBin(fixture, args) {
   return { stdout: result.stdout, stderr: result.stderr };
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function holdSqliteWriteLock(dbFile) {
+  const child = spawn("sqlite3", ["-batch", dbFile], {
+    cwd: repoRoot,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk) => {
+    stdout += chunk;
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk;
+  });
+  child.stdin.write("PRAGMA busy_timeout=0;\nBEGIN IMMEDIATE;\nSELECT 'locked';\n");
+  const startedAt = Date.now();
+  while (!stdout.includes("locked")) {
+    if (Date.now() - startedAt > 3000) {
+      child.kill("SIGKILL");
+      throw new Error(`sqlite lock was not acquired: ${stderr || stdout}`);
+    }
+    await sleep(20);
+  }
+  return {
+    release() {
+      child.stdin.write("COMMIT;\n.quit\n");
+    },
+    kill() {
+      child.kill("SIGKILL");
+    },
+  };
+}
+
 test("watchtower indexes delegate events into a searchable review feed", async () => {
   const fixture = await createFixture("clawdad-watchtower-feed-");
   try {
@@ -212,6 +251,14 @@ test("watchtower indexes delegate events into a searchable review feed", async (
     assert.equal(scanPayload.scan.activeOrpItem, "sector-pressure-map");
     assert.ok(scanPayload.scan.indexedEvents >= 2);
     await stat(path.join(fixture.projectPath, ".clawdad", "feed", "watchtower.sqlite"));
+
+    const secondScanResult = await runServer(fixture, ["watchtower", fixture.projectPath, "--once", "--json"]);
+    assert.equal(secondScanResult.exitCode, 0, secondScanResult.stderr || secondScanResult.stdout);
+    const secondScanPayload = JSON.parse(secondScanResult.stdout);
+    assert.equal(secondScanPayload.ok, true);
+    assert.equal(secondScanPayload.scan.indexedEvents, 0);
+    assert.ok(secondScanPayload.scan.scannedEvents >= 2);
+    assert.ok(secondScanPayload.scan.skippedEvents >= 2);
 
     const searchResult = await runServer(fixture, [
       "feed",
@@ -232,6 +279,36 @@ test("watchtower indexes delegate events into a searchable review feed", async (
     assert.equal(reviewPayload.ok, true);
     assert.ok(triggers.has("tests_failed"));
     assert.ok(triggers.has("sensitive_files"));
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("watchtower waits for transient sqlite writer locks", async () => {
+  const fixture = await createFixture("clawdad-watchtower-sqlite-lock-");
+  try {
+    const firstScanResult = await runServer(fixture, ["watchtower", fixture.projectPath, "--once", "--json"]);
+    assert.equal(firstScanResult.exitCode, 0, firstScanResult.stderr || firstScanResult.stdout);
+    const dbFile = path.join(fixture.projectPath, ".clawdad", "feed", "watchtower.sqlite");
+    const lock = await holdSqliteWriteLock(dbFile);
+    try {
+      const scanPromise = runServer(
+        fixture,
+        ["watchtower", fixture.projectPath, "--once", "--json"],
+        {
+          CLAWDAD_WATCHTOWER_SQLITE_BUSY_TIMEOUT_MS: "3000",
+          CLAWDAD_WATCHTOWER_SQLITE_EXEC_TIMEOUT_MS: "8000",
+        },
+      );
+      await sleep(250);
+      lock.release();
+      const scanResult = await scanPromise;
+      assert.equal(scanResult.exitCode, 0, scanResult.stderr || scanResult.stdout);
+      const scanPayload = JSON.parse(scanResult.stdout);
+      assert.equal(scanPayload.ok, true);
+    } finally {
+      lock.kill();
+    }
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
   }
