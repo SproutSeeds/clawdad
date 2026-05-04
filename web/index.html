@@ -295,6 +295,17 @@
 
         <div id="detailHistoryState" class="detail-history-state is-empty"></div>
         <div id="detailHistoryList" class="detail-history-list"></div>
+        <button
+          id="detailScrollBottomButton"
+          class="detail-scroll-bottom-button"
+          type="button"
+          aria-label="Jump to most recent message"
+          hidden
+        >
+          <svg viewBox="0 0 18 18" fill="none" aria-hidden="true">
+            <path d="M9 3.8v9.1m0 0 3.7-3.7M9 12.9 5.3 9.2" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"></path>
+          </svg>
+        </button>
       </section>
     </div>
 
@@ -534,24 +545,41 @@
         <div class="delegate-carousel" aria-label="Delegate views">
           <div id="delegateCarouselTabs" class="delegate-carousel-tabs" role="tablist" aria-label="Delegate views"></div>
 
-          <section id="delegateRunsPanel" class="delegate-slide" data-delegate-slide="runs">
+          <section id="delegateProgressPanel" class="delegate-slide" data-delegate-slide="progress">
+            <div id="delegateProgressList" class="delegate-progress-list"></div>
+          </section>
+
+          <section id="delegateRunsPanel" class="delegate-slide" data-delegate-slide="history" hidden>
             <div id="delegateRunCardList" class="delegate-run-card-list"></div>
           </section>
 
-          <section id="delegateRunLogPanel" class="delegate-slide" data-delegate-slide="log" hidden>
-            <div id="delegateRunList" class="detail-history-list delegate-run-list"></div>
-          </section>
-
-          <section id="delegateSupervisorPanel" class="delegate-slide" data-delegate-slide="supervisor" hidden>
-            <div id="delegateSupervisorList" class="delegate-supervisor-timeline"></div>
-          </section>
-
-          <section id="delegateReviewPanel" class="delegate-slide" data-delegate-slide="review" hidden>
-            <div id="delegateReviewList" class="delegate-review-list"></div>
+          <section id="delegateRunLogPanel" class="delegate-slide" data-delegate-slide="details" hidden>
+            <div class="delegate-details-list">
+              <details class="delegate-detail-section">
+                <summary>Start checks</summary>
+                <div id="delegateDiagnosticsChecks" class="delegate-detail-section-body"></div>
+              </details>
+              <details id="delegateSupervisorPanel" class="delegate-detail-section">
+                <summary>Loop state</summary>
+                <div id="delegateSupervisorList" class="delegate-supervisor-timeline delegate-detail-section-body"></div>
+              </details>
+              <details class="delegate-detail-section">
+                <summary>IDs and goal sync</summary>
+                <div id="delegateDebugList" class="delegate-debug-list delegate-detail-section-body"></div>
+              </details>
+              <details id="delegateReviewPanel" class="delegate-detail-section">
+                <summary>Watchtower cards</summary>
+                <div id="delegateReviewList" class="delegate-review-list delegate-detail-section-body"></div>
+              </details>
+              <details class="delegate-detail-section">
+                <summary>Raw run log</summary>
+                <div id="delegateRunList" class="detail-history-list delegate-run-list delegate-detail-section-body"></div>
+              </details>
+            </div>
           </section>
 
           <section id="delegateBriefPanel" class="delegate-slide" data-delegate-slide="brief" hidden>
-            <textarea id="delegateBriefInput" class="delegate-brief-input" rows="14" placeholder="North star, objective, gates…"></textarea>
+            <textarea id="delegateBriefInput" class="delegate-brief-input" rows="14" placeholder="Goal, objective, gates…"></textarea>
           </section>
         </div>
       </section>

@@ -32,7 +32,7 @@ const state = {
   delegatesByProject: {},
   delegateSelectedRunIds: {},
   delegateLogModes: {},
-  delegateCarouselSlide: "runs",
+  delegateCarouselSlide: "progress",
   delegateBriefDraft: "",
   delegateBriefDirty: false,
   delegateBriefPending: false,
@@ -149,6 +149,7 @@ const elements = {
   detailSession: document.querySelector("#detailSession"),
   detailHistoryState: document.querySelector("#detailHistoryState"),
   detailHistoryList: document.querySelector("#detailHistoryList"),
+  detailScrollBottomButton: document.querySelector("#detailScrollBottomButton"),
   projectSummaryButton: document.querySelector("#projectSummaryButton"),
   projectCodexButton: document.querySelector("#projectCodexButton"),
   codexIntegrationModal: document.querySelector("#codexIntegrationModal"),
@@ -239,6 +240,7 @@ const elements = {
   delegateCarouselTitle: document.querySelector("#delegateCarouselTitle"),
   delegateCarouselMeta: document.querySelector("#delegateCarouselMeta"),
   delegateCarouselTabs: document.querySelector("#delegateCarouselTabs"),
+  delegateProgressPanel: document.querySelector("#delegateProgressPanel"),
   delegateRunsPanel: document.querySelector("#delegateRunsPanel"),
   delegateRunLogPanel: document.querySelector("#delegateRunLogPanel"),
   delegateSupervisorPanel: document.querySelector("#delegateSupervisorPanel"),
@@ -246,6 +248,9 @@ const elements = {
   delegateBriefPanel: document.querySelector("#delegateBriefPanel"),
   delegatePlanPanel: document.querySelector("#delegatePlanPanel"),
   delegateSummaryPanel: document.querySelector("#delegateSummaryPanel"),
+  delegateProgressList: document.querySelector("#delegateProgressList"),
+  delegateDiagnosticsChecks: document.querySelector("#delegateDiagnosticsChecks"),
+  delegateDebugList: document.querySelector("#delegateDebugList"),
   delegateRunCardList: document.querySelector("#delegateRunCardList"),
   delegateRunList: document.querySelector("#delegateRunList"),
   delegateSupervisorList: document.querySelector("#delegateSupervisorList"),
@@ -354,11 +359,10 @@ const processingStatusPhrases = [
   "cajun butter meltin'",
 ];
 const delegateCarouselSlides = Object.freeze([
-  { id: "runs", label: "History" },
-  { id: "log", label: "Log" },
-  { id: "supervisor", label: "Loop" },
-  { id: "review", label: "Review" },
-  { id: "brief", label: "Brief" },
+  { id: "progress", label: "Progress" },
+  { id: "history", label: "History" },
+  { id: "details", label: "Details" },
+  { id: "brief", label: "Goal" },
 ]);
 const delegateAutoIcon = "\u221e";
 const headerCatchphraseLeadIns = [
@@ -1966,8 +1970,40 @@ function queueDetailHistorySnapshot(snapshot) {
   detailHistoryRenderSnapshot = snapshot || null;
 }
 
+function detailHistoryDistanceFromBottom() {
+  if (!elements.detailHistoryList) {
+    return 0;
+  }
+  const { scrollTop, scrollHeight, clientHeight } = elements.detailHistoryList;
+  return Math.max(0, scrollHeight - clientHeight - scrollTop);
+}
+
+function updateDetailScrollBottomButton() {
+  if (!elements.detailScrollBottomButton || !elements.detailHistoryList) {
+    return;
+  }
+
+  const modalThread = currentModalThread();
+  const hasScrollableHistory =
+    elements.detailHistoryList.scrollHeight > elements.detailHistoryList.clientHeight + 8;
+  const showButton = Boolean(modalThread) && hasScrollableHistory && detailHistoryDistanceFromBottom() > 72;
+  elements.detailScrollBottomButton.hidden = !showButton;
+}
+
+function scrollDetailHistoryToBottom({ smooth = true } = {}) {
+  if (!elements.detailHistoryList) {
+    return;
+  }
+  elements.detailHistoryList.scrollTo({
+    top: elements.detailHistoryList.scrollHeight,
+    behavior: smooth ? "smooth" : "auto",
+  });
+  window.requestAnimationFrame(updateDetailScrollBottomButton);
+}
+
 function applyDetailHistorySnapshot(snapshot) {
   if (!snapshot || !elements.detailHistoryList) {
+    updateDetailScrollBottomButton();
     return;
   }
 
@@ -1979,11 +2015,13 @@ function applyDetailHistorySnapshot(snapshot) {
     if (snapshot.mode === "prepend-older") {
       elements.detailHistoryList.scrollTop =
         elements.detailHistoryList.scrollHeight - snapshot.previousHeight + snapshot.previousTop;
+      updateDetailScrollBottomButton();
       return;
     }
 
     if (snapshot.mode === "bottom" || snapshot.nearBottom) {
       elements.detailHistoryList.scrollTop = elements.detailHistoryList.scrollHeight;
+      updateDetailScrollBottomButton();
       return;
     }
 
@@ -1995,11 +2033,13 @@ function applyDetailHistorySnapshot(snapshot) {
         const containerRect = elements.detailHistoryList.getBoundingClientRect();
         const anchorRect = anchoredNode.getBoundingClientRect();
         elements.detailHistoryList.scrollTop += anchorRect.top - containerRect.top - snapshot.anchorOffset;
+        updateDetailScrollBottomButton();
         return;
       }
     }
 
     elements.detailHistoryList.scrollTop = snapshot.previousTop;
+    updateDetailScrollBottomButton();
   });
 }
 
@@ -2013,7 +2053,7 @@ function delegateCarouselSlideIndex(slideId = state.delegateCarouselSlide) {
 }
 
 function setDelegateCarouselSlide(slideId) {
-  const nextSlide = delegateCarouselSlides.find((slide) => slide.id === slideId)?.id || "runs";
+  const nextSlide = delegateCarouselSlides.find((slide) => slide.id === slideId)?.id || "progress";
   state.delegateCarouselSlide = nextSlide;
   renderAll();
 }
@@ -2027,12 +2067,18 @@ function advanceDelegateCarousel(direction) {
 
 function selectedDelegateRunId(projectPath, delegateState = delegateStateFor(projectPath), laneId = delegateState?.laneId || "default") {
   const key = delegateStateKey(projectPath, laneId);
+  const selectedRunIdValue = String(state.delegateSelectedRunIds[key] || "").trim();
+  const latestSummaryRunId = String(
+    delegateState?.runSummarySnapshots?.find((snapshot) => snapshot?.runId && !delegateRunIsSidecarRunId(snapshot.runId))?.runId || "",
+  ).trim();
   return (
-    String(state.delegateSelectedRunIds[key] || "").trim() ||
-    String(delegateState?.status?.runId || "").trim() ||
-    String(delegateState?.runLog?.runId || "").trim() ||
-    String(delegateState?.latestRunSummarySnapshot?.runId || "").trim() ||
-    String(delegateState?.runSummarySnapshots?.find((snapshot) => snapshot?.runId)?.runId || "").trim()
+    (delegateRunIsSidecarRunId(selectedRunIdValue) ? "" : selectedRunIdValue) ||
+    (delegateRunIsSidecarRunId(delegateState?.status?.runId) ? "" : String(delegateState?.status?.runId || "").trim()) ||
+    (delegateRunIsSidecarRunId(delegateState?.runLog?.runId) ? "" : String(delegateState?.runLog?.runId || "").trim()) ||
+    (delegateRunIsSidecarRunId(delegateState?.latestRunSummarySnapshot?.runId)
+      ? ""
+      : String(delegateState?.latestRunSummarySnapshot?.runId || "").trim()) ||
+    latestSummaryRunId
   );
 }
 
@@ -2396,7 +2442,7 @@ function entrySessionLabel(entry) {
 function normalizeHistoryItem(item) {
   const sessionId = String(item?.sessionId || "").trim();
   const provider = String(item?.provider || "").trim() || sessionForEntry(item)?.provider || "session";
-  const normalizedStatus = String(item?.status || "queued").trim() || "queued";
+  const normalizedStatus = String(item?.status || "queued").trim().toLowerCase() || "queued";
   const answeredAt = String(item?.answeredAt || "").trim() || null;
   return {
     requestId: String(item?.requestId || "").trim() || makeEntryId(),
@@ -2417,6 +2463,15 @@ function normalizeHistoryItem(item) {
       String(item?.seenAt || "").trim() ||
       (normalizedStatus === "queued" ? null : answeredAt || String(item?.sentAt || "").trim() || new Date().toISOString()),
   };
+}
+
+function threadEntryStatus(entry) {
+  return String(entry?.status || "").trim().toLowerCase();
+}
+
+function threadEntryVisibleInQueue(entry) {
+  const status = threadEntryStatus(entry);
+  return status === "queued" || status === "answered";
 }
 
 function historyItemStatusRank(status) {
@@ -2645,9 +2700,9 @@ function mergeHistoryItems(existingItems = [], incomingItems = []) {
 
 function trimThreadEntries(items = []) {
   const normalizedItems = Array.isArray(items) ? items : [];
-  const queued = normalizedItems.filter((entry) => entry.status === "queued");
+  const queued = normalizedItems.filter((entry) => threadEntryStatus(entry) === "queued");
   const returned = normalizedItems
-    .filter((entry) => entry.status !== "queued")
+    .filter((entry) => threadEntryStatus(entry) === "answered")
     .sort((left, right) => {
       const leftMs = new Date(left.answeredAt || left.sentAt || 0).getTime();
       const rightMs = new Date(right.answeredAt || right.sentAt || 0).getTime();
@@ -3353,9 +3408,7 @@ function syncProjectRepoSelection(preferredPath = "", { preferCurrent = true } =
 }
 
 function cacheableThreadEntries(items = state.threadEntries) {
-  return (Array.isArray(items) ? items : []).filter(
-    (entry) => String(entry?.status || "").trim().toLowerCase() !== "failed",
-  );
+  return (Array.isArray(items) ? items : []).filter((entry) => threadEntryStatus(entry) !== "failed");
 }
 
 function persistThreadEntries() {
@@ -3489,7 +3542,7 @@ function queueEntries() {
     return 2;
   };
 
-  return [...state.threadEntries].sort((left, right) => {
+  return state.threadEntries.filter(threadEntryVisibleInQueue).sort((left, right) => {
     const rankDiff = rankForStatus(left.status) - rankForStatus(right.status);
     if (rankDiff !== 0) {
       return rankDiff;
@@ -3681,17 +3734,18 @@ function completeThreadEntry(entry, patch) {
 }
 
 function sessionStatusLabel(entry) {
-  if (entry.status === "queued") {
+  if (threadEntryStatus(entry) === "queued") {
     return currentProcessingPhrase();
   }
-  if (entry.status === "failed") {
+  if (threadEntryStatus(entry) === "failed") {
     return "failed";
   }
   return "cajun butter";
 }
 
 function entryHasReturned(entry) {
-  return entry?.status === "answered" || entry?.status === "failed";
+  const status = threadEntryStatus(entry);
+  return status === "answered" || status === "failed";
 }
 
 function entryIsUnread(entry) {
@@ -3699,7 +3753,7 @@ function entryIsUnread(entry) {
 }
 
 function hasUnreadQueueEntries() {
-  return state.threadEntries.some((entry) => entryIsUnread(entry));
+  return state.threadEntries.filter(threadEntryVisibleInQueue).some((entry) => entryIsUnread(entry));
 }
 
 function markThreadEntriesSeen({ projectPath = "", sessionId = "", requestId = "" } = {}) {
@@ -4678,10 +4732,11 @@ function renderQueueList() {
   }
 
   for (const entry of entries) {
+    const status = threadEntryStatus(entry);
     const clickable = Boolean(entry.projectPath && entry.sessionId);
     const unread = entryIsUnread(entry);
     const card = document.createElement("article");
-    card.className = `queue-card ${entry.status === "queued" ? "processing" : entry.status === "answered" ? "done" : "failed"}`;
+    card.className = `queue-card ${status === "queued" ? "processing" : status === "answered" ? "done" : "failed"}`;
     card.classList.toggle("is-unread", unread);
     if (clickable) {
       card.classList.add("clickable");
@@ -4720,7 +4775,7 @@ function renderQueueList() {
     }
 
     const chip = document.createElement("div");
-    chip.className = `queue-chip ${entry.status === "queued" ? "processing" : entry.status === "answered" ? "done" : "failed"}`;
+    chip.className = `queue-chip ${status === "queued" ? "processing" : status === "answered" ? "done" : "failed"}`;
     chip.textContent = sessionStatusLabel(entry);
     headStatus.append(chip);
 
@@ -4861,6 +4916,7 @@ function renderModal() {
     delete elements.detailHistoryList.dataset.threadKey;
     delete elements.detailHistoryList.dataset.renderKey;
     detailHistoryRenderSnapshot = null;
+    updateDetailScrollBottomButton();
     elements.detailModal.hidden = true;
     return;
   }
@@ -4895,6 +4951,7 @@ function renderModal() {
 
   if (existingThreadKey === threadKey && existingRenderKey === renderKey) {
     elements.detailModal.hidden = false;
+    updateDetailScrollBottomButton();
     return;
   }
 
@@ -4927,6 +4984,7 @@ function renderModal() {
   elements.detailHistoryList.dataset.renderKey = renderKey;
   elements.detailModal.hidden = false;
   applyDetailHistorySnapshot(scrollSnapshot);
+  window.requestAnimationFrame(updateDetailScrollBottomButton);
 }
 
 function buildQuickPromptCard(prompt) {
@@ -5238,7 +5296,7 @@ function delegateSupervisorEventLabel(event) {
       return "Restart rejected";
     case "supervisor_direction_checked":
     case "direction_check":
-      return "Direction checked";
+      return "Next step checked";
     default:
       return action || type ? String(action || type).replace(/_/gu, " ") : "Supervisor event";
   }
@@ -5392,7 +5450,7 @@ function delegateLaunchChecklistItems(delegateState, runLog) {
       "objective",
       "Brief and objective",
       hasObjective ? "done" : "blocked",
-      hasObjective ? "Saved lane context is ready." : "Add a North Star or current objective before launch.",
+      hasObjective ? "Saved lane context is ready." : "Add a goal or current objective before launch.",
     ),
     delegateChecklistItem(
       "lane",
@@ -5450,7 +5508,7 @@ function delegateLaunchChecklistItems(delegateState, runLog) {
     ),
     delegateChecklistItem(
       "worker",
-      "Bounded worker run",
+      "Worker run",
       running ? "done" : supervisorPending ? "current" : latestStep ? "done" : "pending",
       running
         ? `Run ${sessionFingerprint(status.runId)} is active.`
@@ -5482,7 +5540,7 @@ function delegateRuntimeChecklistItems(delegateState, runLog) {
   return [
     delegateChecklistItem(
       "supervisor",
-      "Supervisor opted in",
+      "Loop is on",
       supervisorSeen ? "done" : state.delegateSupervisorPending ? "current" : "pending",
       supervisorSeen
         ? supervisorEventText || `${supervisor.restartCount || 0} restart${supervisor.restartCount === 1 ? "" : "s"} recorded.`
@@ -5496,7 +5554,7 @@ function delegateRuntimeChecklistItems(delegateState, runLog) {
     ),
     delegateChecklistItem(
       "direction",
-      "Direction readback",
+      "Next step checked",
       directionCheck?.enforceable
         ? "blocked"
         : directionCheck
@@ -5510,7 +5568,7 @@ function delegateRuntimeChecklistItems(delegateState, runLog) {
     ),
     delegateChecklistItem(
       "run",
-      "Worker lane",
+      "Worker run",
       status.runId ? "done" : "pending",
       status.runId
         ? `${workerStateLabel ? `${workerStateLabel[0].toUpperCase()}${workerStateLabel.slice(1)} ` : ""}run ${sessionFingerprint(status.runId)}`
@@ -5604,7 +5662,7 @@ function buildDelegateSupervisorChecklist(project, delegateState, laneId, runLog
 
   const title = document.createElement("div");
   title.className = "delegate-overview-title";
-  title.textContent = "Launch checks";
+  title.textContent = "Start checks";
 
   const meta = document.createElement("div");
   meta.className = "delegate-overview-meta";
@@ -5643,7 +5701,7 @@ function buildDelegateSupervisorChecklist(project, delegateState, laneId, runLog
   launch.className = "delegate-supervisor-section";
   const launchTitle = document.createElement("div");
   launchTitle.className = "delegate-check-section-title";
-  launchTitle.textContent = "Before launch";
+  launchTitle.textContent = "Before start";
   launch.append(launchTitle, buildDelegateChecklistList(delegateLaunchChecklistItems(delegateState, runLog)));
 
   const runtime = document.createElement("div");
@@ -5667,10 +5725,15 @@ function shortDelegateRunText(text, fallback = "", maxLength = 90) {
   return value.length > limit ? `${value.slice(0, limit - 3).trim()}...` : value;
 }
 
+function delegateRunIsSidecarRunId(runId) {
+  const value = String(runId || "").trim();
+  return /\.codex-events(?:\.jsonl)?$/u.test(value);
+}
+
 function delegateRunCardData(delegateState, runLog) {
   const runs = new Map();
   for (const run of delegateState?.runList || []) {
-    if (!run?.runId) {
+    if (!run?.runId || delegateRunIsSidecarRunId(run.runId)) {
       continue;
     }
     runs.set(run.runId, {
@@ -5683,7 +5746,7 @@ function delegateRunCardData(delegateState, runLog) {
   }
 
   const status = delegateState?.status || null;
-  if (status?.runId) {
+  if (status?.runId && !delegateRunIsSidecarRunId(status.runId)) {
     const existing = runs.get(status.runId) || {};
     runs.set(status.runId, {
       runId: status.runId,
@@ -5695,7 +5758,7 @@ function delegateRunCardData(delegateState, runLog) {
   }
 
   for (const snapshot of delegateState?.runSummarySnapshots || []) {
-    if (!snapshot?.runId) {
+    if (!snapshot?.runId || delegateRunIsSidecarRunId(snapshot.runId)) {
       continue;
     }
     const existing = runs.get(snapshot.runId) || {};
@@ -5708,7 +5771,7 @@ function delegateRunCardData(delegateState, runLog) {
     });
   }
 
-  if (runLog?.runId && !runs.has(runLog.runId)) {
+  if (runLog?.runId && !delegateRunIsSidecarRunId(runLog.runId) && !runs.has(runLog.runId)) {
     runs.set(runLog.runId, {
       runId: runLog.runId,
       state: "run",
@@ -5740,6 +5803,24 @@ function buildDelegateRunCard(run, { selected = false } = {}) {
 
   head.append(title);
   button.append(head);
+
+  const meta = document.createElement("div");
+  meta.className = "active-run-meta";
+  meta.textContent = [
+    formatTimestamp(run.at),
+    run.eventCount ? `${run.eventCount} event${run.eventCount === 1 ? "" : "s"}` : "",
+    run.runId ? `run ${sessionFingerprint(run.runId)}` : "",
+  ].filter(Boolean).join(" • ");
+  if (meta.textContent) {
+    button.append(meta);
+  }
+
+  const summary = document.createElement("div");
+  summary.className = "active-run-summary";
+  summary.textContent = shortDelegateRunText(run.summary, "", 180);
+  if (summary.textContent) {
+    button.append(summary);
+  }
   return button;
 }
 
@@ -5924,7 +6005,7 @@ function buildDelegateOverview(project, delegateState, laneId, laneLabel) {
         : "Ready to launch";
   const briefText = brief
     ? compactSingleLine(brief)
-    : "No saved North Star yet. Use Brief to set the objective before launch.";
+    : "No saved goal yet. Use Goal to set the objective before launch.";
 
   const head = document.createElement("div");
   head.className = "delegate-overview-head";
@@ -5945,9 +6026,9 @@ function buildDelegateOverview(project, delegateState, laneId, laneLabel) {
 
   const fields = document.createElement("div");
   fields.className = "delegate-overview-fields";
-  appendDelegateOverviewField(fields, "North Star", briefText);
+  appendDelegateOverviewField(fields, "Goal", briefText);
   appendDelegateOverviewField(fields, "Source", "ORP frontier plus the saved brief for this lane.");
-  appendDelegateOverviewField(fields, "Preflight", "ORP hygiene and frontier checks must pass before delegate work starts.");
+  appendDelegateOverviewField(fields, "Start checks", "ORP hygiene and frontier checks must pass before delegate work starts.");
   appendDelegateOverviewField(fields, "Loop", "Delegate step, status readback, run log, then continue until done or blocked.");
   appendDelegateOverviewField(fields, "Stops", "Completion, hard stop, compute reserve, explicit pause, or failed preflight.");
   appendDelegateOverviewField(
@@ -6404,13 +6485,12 @@ function renderActiveRunsModal() {
 }
 
 function renderDelegateCarouselChrome() {
-  const activeSlideId = delegateCarouselSlides[delegateCarouselSlideIndex()]?.id || "runs";
+  const activeSlideId = delegateCarouselSlides[delegateCarouselSlideIndex()]?.id || "progress";
   const activeSlide = delegateCarouselSlides.find((slide) => slide.id === activeSlideId) || delegateCarouselSlides[0];
   const panelBySlide = {
-    runs: elements.delegateRunsPanel,
-    log: elements.delegateRunLogPanel,
-    supervisor: elements.delegateSupervisorPanel,
-    review: elements.delegateReviewPanel,
+    progress: elements.delegateProgressPanel,
+    history: elements.delegateRunsPanel,
+    details: elements.delegateRunLogPanel,
     brief: elements.delegateBriefPanel,
   };
 
@@ -6498,6 +6578,113 @@ function renderDelegateSupervisorTimeline(delegateState) {
     });
   }
   elements.delegateSupervisorList.dataset.renderKey = renderKey;
+}
+
+function appendDelegateDebugRow(container, label, value) {
+  const cleanValue = String(value || "").trim();
+  if (!cleanValue) {
+    return;
+  }
+  const row = document.createElement("div");
+  row.className = "delegate-debug-row";
+
+  const key = document.createElement("div");
+  key.className = "delegate-overview-label";
+  key.textContent = label;
+
+  const text = document.createElement("div");
+  text.className = "delegate-overview-value";
+  text.textContent = cleanValue;
+
+  row.append(key, text);
+  container.append(row);
+}
+
+function renderDelegateDebugList(project, delegateState, laneId, runLog) {
+  if (!elements.delegateDebugList) {
+    return;
+  }
+
+  const status = delegateState?.status || {};
+  const supervisor = delegateState?.supervisor || {};
+  const delegateSession = delegateState?.delegateSession || {};
+  const codexGoal = normalizeDelegateCodexGoal(status.codexGoal);
+  const renderKey = JSON.stringify({
+    projectPath: project?.path || "",
+    laneId,
+    statusState: status.state || "",
+    runId: status.runId || runLog?.runId || "",
+    activeRequestId: status.activeRequestId || "",
+    delegateSessionId: status.delegateSessionId || delegateSession.sessionId || "",
+    supervisorState: supervisor.state || "",
+    supervisorPid: supervisor.pid || "",
+    codexGoal,
+    updatedAt: status.updatedAt || supervisor.updatedAt || "",
+  });
+  if (elements.delegateDebugList.dataset.renderKey === renderKey) {
+    return;
+  }
+
+  clearNode(elements.delegateDebugList);
+  appendDelegateDebugRow(elements.delegateDebugList, "Lane", laneId === "default" ? "Main lane" : laneId);
+  appendDelegateDebugRow(elements.delegateDebugList, "State", delegateRunStateLabel(status.state, { prefix: false }));
+  appendDelegateDebugRow(elements.delegateDebugList, "Run ID", status.runId || runLog?.runId || "");
+  appendDelegateDebugRow(elements.delegateDebugList, "Active request", status.activeRequestId || "");
+  appendDelegateDebugRow(
+    elements.delegateDebugList,
+    "Delegate session",
+    status.delegateSessionId || delegateSession.sessionId || "",
+  );
+  appendDelegateDebugRow(
+    elements.delegateDebugList,
+    "Session label",
+    status.delegateSessionLabel || delegateSession.label || "",
+  );
+  appendDelegateDebugRow(
+    elements.delegateDebugList,
+    "Loop",
+    [
+      supervisor.enabled ? "on" : "off",
+      supervisor.state || "",
+      supervisor.pid ? `pid ${supervisor.pid}` : "",
+    ].filter(Boolean).join(" • "),
+  );
+  appendDelegateDebugRow(elements.delegateDebugList, "Codex goal", delegateCodexGoalText(codexGoal));
+  appendDelegateDebugRow(elements.delegateDebugList, "Updated", formatTimestamp(status.updatedAt || supervisor.updatedAt || ""));
+
+  if (elements.delegateDebugList.childElementCount === 0) {
+    const card = document.createElement("div");
+    card.className = "history-state-card";
+    card.textContent = "No diagnostic IDs are available yet.";
+    elements.delegateDebugList.append(card);
+  }
+  elements.delegateDebugList.dataset.renderKey = renderKey;
+}
+
+function renderDelegateStartChecks(project, delegateState, laneId, runLog) {
+  if (!elements.delegateDiagnosticsChecks) {
+    return;
+  }
+
+  const latestStep = delegateLatestStepSnapshot(runLog);
+  const renderKey = JSON.stringify({
+    projectPath: project?.path || "",
+    laneId,
+    status: delegateState?.status || null,
+    supervisor: delegateState?.supervisor || null,
+    preview: delegateState?.supervisorPreview || null,
+    latestStep: latestStep
+      ? [latestStep.step, latestStep.completedAt, latestStep.latestAt, latestStep.summary, latestStep.nextAction, latestStep.state]
+      : null,
+    pending: state.delegateSupervisorPending || "",
+  });
+  if (elements.delegateDiagnosticsChecks.dataset.renderKey === renderKey) {
+    return;
+  }
+
+  clearNode(elements.delegateDiagnosticsChecks);
+  elements.delegateDiagnosticsChecks.append(buildDelegateSupervisorChecklist(project, delegateState, laneId, runLog));
+  elements.delegateDiagnosticsChecks.dataset.renderKey = renderKey;
 }
 
 function delegatePercentText(value) {
@@ -6813,6 +7000,357 @@ function delegateStepSnapshots(events = []) {
   }
 
   return [...steps.values()].sort((left, right) => left.step - right.step);
+}
+
+function delegateProgressCleanPlanStep(text) {
+  return String(text || "")
+    .replace(/\s+/gu, " ")
+    .replace(/^\*\*(.*?)\*\*\s*[:.-]?\s*/u, "$1 ")
+    .replace(/^[-*]\s+/u, "")
+    .trim();
+}
+
+function delegatePlanNextSteps(planMarkdown) {
+  const planText = typeof planMarkdown === "string" ? planMarkdown : String(planMarkdown?.plan || "");
+  const steps = [];
+  let inFence = false;
+  for (const line of planText.split(/\r?\n/u)) {
+    if (/^\s*```/u.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) {
+      continue;
+    }
+
+    const match = line.match(/^\s*(?:#{1,6}\s*)?(?:(\d{1,2})[.)]|step\s+(\d{1,2})\s*[:.)-])\s+(.+)$/iu);
+    const text = delegateProgressCleanPlanStep(match?.[3] || "");
+    if (!text) {
+      continue;
+    }
+    steps.push({
+      id: `plan-step:${match[1] || match[2] || steps.length + 1}`,
+      source: "Saved plan",
+      text,
+    });
+  }
+  return steps;
+}
+
+function delegateProgressTextKey(text) {
+  return String(text || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, " ")
+    .trim();
+}
+
+function delegateProgressUsefulCheckpointText(value) {
+  const clean = String(value || "").trim();
+  if (!clean || /^(none|n\/a|na|not applicable|no)$/iu.test(clean)) {
+    return "";
+  }
+  return clean;
+}
+
+function delegateProgressCheckpointText(checkpoint) {
+  if (!checkpoint) {
+    return "";
+  }
+  const pieces = [
+    delegateProgressUsefulCheckpointText(checkpoint.progressSignal),
+    delegateProgressUsefulCheckpointText(checkpoint.breakthroughs),
+    delegateProgressUsefulCheckpointText(checkpoint.blockers),
+  ].filter(Boolean);
+  return pieces.join(" • ");
+}
+
+function delegateProgressPriorityItems(delegateState, latestStep, latestPlan) {
+  const status = delegateState?.status || {};
+  const items = [];
+  const seen = new Set();
+  const addItem = (id, source, text, tone = "") => {
+    const cleanText = String(text || "").replace(/\s+/gu, " ").trim();
+    if (!cleanText) {
+      return;
+    }
+    const key = delegateProgressTextKey(cleanText);
+    if (key && seen.has(key)) {
+      return;
+    }
+    if (key) {
+      seen.add(key);
+    }
+    items.push({ id, source, text: cleanText, tone });
+  };
+
+  const nextAction = String(status.nextAction || "").trim();
+  if (nextAction) {
+    addItem("status-next-action", "Selected next action", nextAction, "primary");
+  } else {
+    addItem(
+      "delegate-will-choose",
+      "Delegate",
+      "The delegate will choose after this step.",
+      "fallback",
+    );
+  }
+
+  addItem(
+    "checkpoint-next-probe",
+    "Checkpoint next probe",
+    latestStep?.checkpoint?.nextProbe,
+    "checkpoint",
+  );
+
+  for (const [index, step] of delegatePlanNextSteps(latestPlan).entries()) {
+    addItem(`plan-step:${index + 1}`, step.source, step.text, "plan");
+    if (items.length >= 6) {
+      break;
+    }
+  }
+
+  return items;
+}
+
+function buildDelegateProgressModel(delegateState, runLog) {
+  const status = delegateState?.status || {};
+  const events = Array.isArray(runLog?.events) ? runLog.events : [];
+  const steps = delegateStepSnapshots(events);
+  const done = steps
+    .filter((snapshot) => snapshot.completedAt)
+    .map((snapshot) => {
+      const checkpointText = delegateProgressCheckpointText(snapshot.checkpoint);
+      return {
+        id: `done-step:${snapshot.step}`,
+        step: snapshot.step,
+        title: `Step ${snapshot.step}`,
+        timestamp: snapshot.completedAt,
+        outcome: shortDelegateRunText(
+          snapshot.error || snapshot.summary || snapshot.responseText,
+          "Completed step recorded.",
+          220,
+        ),
+        checkpoint: shortDelegateRunText(checkpointText, "", 180),
+        validation: shortDelegateRunText(
+          snapshot.error || snapshot.stopReason || snapshot.state || snapshot.checkpoint?.confidence,
+          "",
+          120,
+        ),
+      };
+    });
+
+  const latestStep = steps[steps.length - 1] || null;
+  const activeStep = steps.find((snapshot) => !snapshot.completedAt) || null;
+  const statusState = String(status.state || "idle").trim().toLowerCase();
+  const running = statusState === "running" || statusState === "planning";
+  const latestLive = latestDelegateEvent(events, (event) => event.type === "agent_live" && event.text);
+  const latestStarted = latestDelegateEvent(events, (event) => event.type === "step_started");
+  const activeStepNumber = activeStep?.step || status.activeStep || (running && status.stepCount ? status.stepCount + 1 : null);
+  const activeText =
+    latestLive?.text ||
+    activeStep?.liveText ||
+    status.nextAction ||
+    activeStep?.title ||
+    latestStarted?.text ||
+    (running
+      ? "The delegate is working on the current step. Live text appears here as the agent writes."
+      : "");
+  const workingNow = running || activeStep
+    ? [
+        {
+          id: "working-now",
+          title:
+            statusState === "planning"
+              ? "Planning"
+              : activeStepNumber
+                ? `Step ${activeStepNumber}`
+                : "Worker run",
+          timestamp: latestLive?.at || activeStep?.latestAt || status.updatedAt || status.startedAt || "",
+          meta: [
+            delegateRunStateLabel(statusState, { prefix: false }),
+            status.activeRequestId ? `request ${status.activeRequestId}` : "",
+          ].filter(Boolean).join(" • "),
+          text: shortDelegateRunText(activeText, "Waiting for live agent output.", 260),
+        },
+      ]
+    : [];
+
+  return {
+    done,
+    workingNow,
+    nextUp: delegateProgressPriorityItems(delegateState, latestStep, delegateState?.latestPlanSnapshot),
+    latestStep,
+  };
+}
+
+function appendDelegateProgressText(root, className, text, { rich = false, emptyText = "" } = {}) {
+  const value = String(text || "").trim();
+  if (!value && !emptyText) {
+    return;
+  }
+  const node = document.createElement("div");
+  node.className = className;
+  if (rich) {
+    renderRichText(node, value, { emptyText });
+  } else {
+    node.textContent = value || emptyText;
+  }
+  root.append(node);
+}
+
+function buildDelegateDoneCard(item) {
+  const card = document.createElement("article");
+  card.className = "delegate-progress-card is-done";
+
+  const marker = document.createElement("span");
+  marker.className = "delegate-progress-marker";
+  marker.setAttribute("aria-hidden", "true");
+
+  const body = document.createElement("div");
+  body.className = "delegate-progress-card-body";
+
+  const head = document.createElement("div");
+  head.className = "delegate-progress-card-head";
+
+  const title = document.createElement("div");
+  title.className = "delegate-progress-title";
+  title.textContent = item.title;
+
+  const time = document.createElement("div");
+  time.className = "delegate-progress-time";
+  time.textContent = formatTimestamp(item.timestamp) || "";
+
+  head.append(title, time);
+  body.append(head);
+  appendDelegateProgressText(body, "delegate-progress-body", item.outcome, { rich: true });
+  appendDelegateProgressText(body, "delegate-progress-note", item.checkpoint);
+  appendDelegateProgressText(body, "delegate-progress-note", item.validation);
+  card.append(marker, body);
+  return card;
+}
+
+function buildDelegateWorkingCard(item) {
+  const card = document.createElement("article");
+  card.className = "delegate-progress-card is-working";
+
+  const marker = document.createElement("span");
+  marker.className = "delegate-progress-spinner";
+  marker.setAttribute("aria-hidden", "true");
+
+  const body = document.createElement("div");
+  body.className = "delegate-progress-card-body";
+
+  const head = document.createElement("div");
+  head.className = "delegate-progress-card-head";
+
+  const title = document.createElement("div");
+  title.className = "delegate-progress-title";
+  title.textContent = item.title;
+
+  const time = document.createElement("div");
+  time.className = "delegate-progress-time";
+  time.textContent = formatTimestamp(item.timestamp) || "";
+
+  head.append(title, time);
+  body.append(head);
+  appendDelegateProgressText(body, "delegate-progress-meta", item.meta);
+  appendDelegateProgressText(body, "thread-text delegate-progress-body", item.text, { rich: true });
+  card.append(marker, body);
+  return card;
+}
+
+function buildDelegateNextCard(item, index) {
+  const card = document.createElement("article");
+  card.className = `delegate-next-card${item.tone ? ` is-${item.tone}` : ""}`;
+
+  const number = document.createElement("div");
+  number.className = "delegate-next-rank";
+  number.textContent = String(index + 1);
+
+  const body = document.createElement("div");
+  body.className = "delegate-next-body";
+
+  const source = document.createElement("div");
+  source.className = "delegate-progress-meta";
+  source.textContent = item.source;
+
+  const text = document.createElement("div");
+  text.className = "delegate-progress-body";
+  text.textContent = item.text;
+
+  body.append(source, text);
+  card.append(number, body);
+  return card;
+}
+
+function buildDelegateProgressSection(titleText, className, emptyText) {
+  const section = document.createElement("section");
+  section.className = `delegate-progress-section ${className}`;
+
+  const title = document.createElement("div");
+  title.className = "delegate-progress-section-title";
+  title.textContent = titleText;
+
+  const list = document.createElement("div");
+  list.className = "delegate-progress-section-list";
+
+  section.append(title, list);
+  if (emptyText) {
+    const empty = document.createElement("div");
+    empty.className = "history-state-card";
+    empty.textContent = emptyText;
+    list.append(empty);
+  }
+  return { section, list };
+}
+
+function renderDelegateProgress(project, delegateState, runLog) {
+  if (!elements.delegateProgressList) {
+    return;
+  }
+
+  const model = buildDelegateProgressModel(delegateState, runLog);
+  const renderKey = JSON.stringify({
+    projectPath: project?.path || "",
+    runId: runLog?.runId || delegateState?.status?.runId || "",
+    status: delegateState?.status?.state || "",
+    activeStep: delegateState?.status?.activeStep || "",
+    updatedAt: delegateState?.status?.updatedAt || "",
+    done: model.done.map((item) => [item.id, item.timestamp, item.outcome, item.checkpoint, item.validation]),
+    working: model.workingNow.map((item) => [item.title, item.timestamp, item.meta, item.text]),
+    next: model.nextUp.map((item) => [item.id, item.source, item.text]),
+  });
+  if (elements.delegateProgressList.dataset.renderKey === renderKey) {
+    return;
+  }
+
+  clearNode(elements.delegateProgressList);
+
+  const doneSection = buildDelegateProgressSection(
+    "Done",
+    "is-done",
+    model.done.length === 0 ? "Completed steps will appear here as the worker lands them." : "",
+  );
+  for (const item of model.done.slice().reverse()) {
+    doneSection.list.append(buildDelegateDoneCard(item));
+  }
+
+  const workingSection = buildDelegateProgressSection(
+    "Working Now",
+    "is-working",
+    model.workingNow.length === 0 ? "No worker step is active right now." : "",
+  );
+  for (const item of model.workingNow) {
+    workingSection.list.append(buildDelegateWorkingCard(item));
+  }
+
+  const nextSection = buildDelegateProgressSection("Next Up", "is-next", "");
+  for (const [index, item] of model.nextUp.entries()) {
+    nextSection.list.append(buildDelegateNextCard(item, index));
+  }
+
+  elements.delegateProgressList.append(doneSection.section, workingSection.section, nextSection.section);
+  elements.delegateProgressList.dataset.renderKey = renderKey;
 }
 
 function appendDelegateStepField(root, label, value, { emptyText = "" } = {}) {
@@ -7556,6 +8094,18 @@ function renderDelegateModal() {
     if (elements.delegateOverview) {
       clearNode(elements.delegateOverview);
     }
+    if (elements.delegateProgressList) {
+      clearNode(elements.delegateProgressList);
+      delete elements.delegateProgressList.dataset.renderKey;
+    }
+    if (elements.delegateDiagnosticsChecks) {
+      clearNode(elements.delegateDiagnosticsChecks);
+      delete elements.delegateDiagnosticsChecks.dataset.renderKey;
+    }
+    if (elements.delegateDebugList) {
+      clearNode(elements.delegateDebugList);
+      delete elements.delegateDebugList.dataset.renderKey;
+    }
     clearNode(elements.delegateRunCardList);
     clearNode(elements.delegateRunList);
     if (elements.delegateSupervisorList) {
@@ -7702,9 +8252,10 @@ function renderDelegateModal() {
   const eventCount = logMatchesSelection && Array.isArray(runLog.events) ? runLog.events.length : 0;
   if (elements.delegateOverview) {
     clearNode(elements.delegateOverview);
-    elements.delegateOverview.append(buildDelegateOverview(project, delegateState, laneId, laneLabel));
-    elements.delegateOverview.append(buildDelegateSupervisorChecklist(project, delegateState, laneId, runLog));
   }
+  renderDelegateProgress(project, delegateState, runLog);
+  renderDelegateStartChecks(project, delegateState, laneId, runLog);
+  renderDelegateDebugList(project, delegateState, laneId, runLog);
 
   clearNode(elements.delegateRunCardList);
   if (!delegateState.initialized && delegateState.loading) {
@@ -8909,6 +9460,7 @@ async function openSessionThread(projectPath = state.selectedProject, sessionId 
   } else {
     window.requestAnimationFrame(() => {
       elements.detailHistoryList.scrollTop = elements.detailHistoryList.scrollHeight;
+      updateDetailScrollBottomButton();
     });
   }
 }
@@ -9785,7 +10337,7 @@ async function openDelegateModal(projectPath = state.selectedProject, laneId = "
   state.delegateFeedPending = false;
   state.delegateBriefDirty = false;
   state.delegateBriefDraft = "";
-  state.delegateCarouselSlide = delegateCarouselSlides.find((slide) => slide.id === options.slide)?.id || "runs";
+  state.delegateCarouselSlide = delegateCarouselSlides.find((slide) => slide.id === options.slide)?.id || "progress";
   renderAll();
   const loadedState = await loadDelegateProject(projectPath, { laneId: state.delegateModalLane });
   if (options.preferBriefWhenEmpty && !String(loadedState?.brief || "").trim()) {
@@ -9840,7 +10392,7 @@ async function selectDelegateRun(runId) {
   const stateKey = delegateStateKey(project.path, laneId);
   const previousRunId = state.delegateSelectedRunIds[stateKey] || "";
   state.delegateSelectedRunIds[stateKey] = selectedRunIdValue;
-  state.delegateCarouselSlide = "log";
+  state.delegateCarouselSlide = "details";
   delegateRunRenderSnapshot = null;
   renderAll();
 
@@ -9962,7 +10514,7 @@ async function toggleDelegateRun() {
   }
 
   state.delegateRunPending = true;
-  state.delegateCarouselSlide = action === "pause" ? "log" : "runs";
+  state.delegateCarouselSlide = action === "pause" ? "details" : "progress";
   if (action === "pause") {
     setDelegateState(project.path, {
       status: normalizeDelegateStatus({
@@ -10019,7 +10571,7 @@ async function requestDelegateSupervisor(action) {
 
   const existing = delegateStateFor(project.path, laneId);
   state.delegateSupervisorPending = normalizedAction;
-  state.delegateCarouselSlide = normalizedAction === "stop" ? "log" : "runs";
+  state.delegateCarouselSlide = normalizedAction === "stop" ? "details" : "progress";
   if (normalizedAction === "start") {
     setDelegateState(project.path, {
       supervisor: normalizeDelegateSupervisorState({
@@ -10857,6 +11409,16 @@ function bindEvents() {
     event.preventDefault();
     void requestDelegateSupervisor(action);
   });
+  elements.delegateRunLogPanel?.addEventListener("click", (event) => {
+    const button =
+      event.target instanceof Element ? event.target.closest("[data-delegate-supervise-action]") : null;
+    const action = String(button?.dataset?.delegateSuperviseAction || "").trim();
+    if (!action) {
+      return;
+    }
+    event.preventDefault();
+    void requestDelegateSupervisor(action);
+  });
   elements.delegateSummaryButton?.addEventListener("click", () => {
     void requestDelegateRunSummary();
   });
@@ -10875,7 +11437,7 @@ function bindEvents() {
       return;
     }
     setDelegateCarouselSlide(button.dataset.delegateSlide);
-    if (button.dataset.delegateSlide === "review") {
+    if (button.dataset.delegateSlide === "details") {
       const project = currentDelegateProject();
       if (project?.path) {
         void loadDelegateFeed(project.path, { force: true, laneId: currentDelegateLaneId() });
@@ -10925,7 +11487,11 @@ function bindEvents() {
     persistQueueCollapsed();
     renderAll();
   });
+  elements.detailScrollBottomButton?.addEventListener("click", () => {
+    scrollDetailHistoryToBottom({ smooth: true });
+  });
   elements.detailHistoryList.addEventListener("scroll", async () => {
+    updateDetailScrollBottomButton();
     const modalThread = currentModalThread();
     if (!modalThread || elements.detailHistoryList.scrollTop > 80) {
       return;

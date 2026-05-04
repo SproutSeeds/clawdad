@@ -39,7 +39,7 @@ globalThis.mergeHistoryItems = mergeHistoryItems;
 async function loadThreadCacheHelpers() {
   const source = await readFile(webAppPath, "utf8");
   const start = source.indexOf("function normalizeHistoryItem");
-  const end = source.indexOf("function hydrateThreadEntriesFromHistoryItems");
+  const end = source.indexOf("function cacheProjects");
   assert.notEqual(start, -1);
   assert.notEqual(end, -1);
   assert.ok(end > start);
@@ -47,7 +47,7 @@ async function loadThreadCacheHelpers() {
   const store = new Map();
   const context = {
     Date,
-    state: { threadEntries: [], historyByThread: {} },
+    state: { threadEntries: [], historyThreads: {} },
     threadCacheKey: "clawdad-thread-log-test",
     localStorage: {
       get length() {
@@ -77,10 +77,31 @@ function fallbackProjectLabel(projectPath) { return String(projectPath || "proje
 function sessionForEntry() { return null; }
 function providerLabel(provider) { return String(provider || "session"); }
 function sessionFingerprint(sessionId) { return String(sessionId || "").slice(-4); }
+function entrySessionLabel(entry) { return entry?.sessionLabel || "codex • test"; }
+function historyKey(projectPath, sessionId) { return String(projectPath || "") + "::" + String(sessionId || ""); }
+function historyStateFor(projectPath, sessionId) {
+  return state.historyThreads[historyKey(projectPath, sessionId)] || {
+    items: [],
+    nextCursor: "0",
+    loading: false,
+    initialized: false,
+    prefetchedAt: 0,
+    error: "",
+  };
+}
+function setHistoryState(projectPath, sessionId, nextState) {
+  const key = historyKey(projectPath, sessionId);
+  state.historyThreads[key] = {
+    ...historyStateFor(projectPath, sessionId),
+    ...nextState,
+  };
+}
 ${source.slice(start, end)}
 globalThis.persistThreadEntries = persistThreadEntries;
 globalThis.restoreThreadEntries = restoreThreadEntries;
 globalThis.purgeLegacyThreadEntryCaches = purgeLegacyThreadEntryCaches;
+globalThis.hydrateThreadEntriesFromHistoryItems = hydrateThreadEntriesFromHistoryItems;
+globalThis.threadEntryVisibleInQueue = threadEntryVisibleInQueue;
 `,
     context,
   );
@@ -163,6 +184,58 @@ test("web thread cache never persists or restores failed cards", async () => {
     JSON.parse(JSON.stringify(context.state.threadEntries.map((entry) => entry.status).sort())),
     ["answered", "queued"],
   );
+});
+
+test("web recent history hydration keeps failed cards out of the dashboard queue state", async () => {
+  const context = await loadThreadCacheHelpers();
+  const failed = {
+    requestId: "failed-request",
+    projectPath: "/repo/clawdad",
+    sessionId: "session-failed",
+    provider: "codex",
+    message: "This failed card belongs in thread history, not the queue.",
+    sentAt: "2026-05-04T12:00:00.000Z",
+    answeredAt: "2026-05-04T12:01:00.000Z",
+    status: "failed",
+    exitCode: 1,
+    response: "Failed.",
+  };
+  const answered = {
+    ...failed,
+    requestId: "answered-request",
+    sessionId: "session-answered",
+    status: "answered",
+    exitCode: 0,
+    response: "Answered.",
+  };
+  const queued = {
+    ...failed,
+    requestId: "queued-request",
+    sessionId: "session-queued",
+    status: "queued",
+    exitCode: null,
+    answeredAt: null,
+    response: "",
+  };
+
+  context.hydrateThreadEntriesFromHistoryItems([failed, answered, queued]);
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.state.threadEntries.map((entry) => entry.status).sort())),
+    ["answered", "queued"],
+  );
+  assert.equal(
+    context.state.historyThreads["/repo/clawdad::session-failed"].items[0].status,
+    "failed",
+  );
+});
+
+test("web dashboard queue visibility excludes failed cards still present in memory", async () => {
+  const context = await loadThreadCacheHelpers();
+  assert.equal(context.threadEntryVisibleInQueue({ status: "queued" }), true);
+  assert.equal(context.threadEntryVisibleInQueue({ status: "answered" }), true);
+  assert.equal(context.threadEntryVisibleInQueue({ status: "failed" }), false);
+  assert.equal(context.threadEntryVisibleInQueue({ status: "FAILED" }), false);
 });
 
 test("web boot purges legacy thread caches", async () => {
