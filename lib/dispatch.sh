@@ -35,6 +35,11 @@ _build_cmd_codex() {
     cmd+=("--turn-idle-timeout-ms" "$turn_idle_timeout_ms")
   fi
 
+  local tool_idle_timeout_ms="${CLAWDAD_CODEX_TOOL_IDLE_TIMEOUT_MS:-90000}"
+  if [[ -n "$tool_idle_timeout_ms" ]]; then
+    cmd+=("--tool-idle-timeout-ms" "$tool_idle_timeout_ms")
+  fi
+
   local request_timeout_ms="${CLAWDAD_CODEX_REQUEST_TIMEOUT_MS:-120000}"
   if [[ -n "$request_timeout_ms" ]]; then
     cmd+=("--request-timeout-ms" "$request_timeout_ms")

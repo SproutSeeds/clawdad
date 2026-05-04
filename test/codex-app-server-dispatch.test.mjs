@@ -260,7 +260,7 @@ test("codex app-server dispatch times out a turn that never completes", async ()
   });
 });
 
-test("codex app-server dispatch recovers partial text when a turn stops making progress", async () => {
+test("codex app-server dispatch recovers partial text when a connector tool stops making progress", async () => {
   await withTempDir(async (root) => {
     const fakeCodex = await writeFakeCodexBinary(root, "partial-stall");
     const result = await execFileCapture(process.execPath, [
@@ -277,6 +277,8 @@ test("codex app-server dispatch recovers partial text when a turn stops making p
       "--turn-timeout-ms",
       "5000",
       "--turn-idle-timeout-ms",
+      "5000",
+      "--tool-idle-timeout-ms",
       "50",
       "--request-timeout-ms",
       "2000",
@@ -287,9 +289,10 @@ test("codex app-server dispatch recovers partial text when a turn stops making p
     const payload = JSON.parse(result.stdout.trim());
     assert.equal(payload.ok, true);
     assert.equal(payload.recovered, true);
-    assert.equal(payload.recovery_reason, "turn_idle_timeout");
+    assert.equal(payload.recovery_reason, "tool_idle_timeout");
     assert.equal(payload.session_id, "thread-real");
     assert.match(payload.result_text, /no live progress/u);
+    assert.match(payload.result_text, /connector\/tool call/u);
     assert.match(payload.result_text, /partial progress before stall/u);
   });
 });
