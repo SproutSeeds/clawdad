@@ -340,12 +340,13 @@ test("watchtower skips raw Codex sidecar streams and cleans legacy unknown deleg
     assert.equal(firstScanResult.exitCode, 0, firstScanResult.stderr || firstScanResult.stdout);
     const dbFile = path.join(fixture.projectPath, ".clawdad", "feed", "watchtower.sqlite");
     const now = "2026-04-23T12:03:00Z";
+    const legacyRawText = `legacy raw sidecar text ${"x".repeat(100_000)}`;
     await sqliteExec(
       dbFile,
       `
 DELETE FROM feed_scan_state WHERE key = 'maintenance.unknown_delegate_events_cleaned.v1';
 INSERT INTO feed_events (
-  id, project_path, lane_id, run_id, at, source_type, source_ref, review_status,
+  id, project_path, lane_id, run_id, at, source_type, source_ref, body, review_status,
   content_hash, payload_json, created_at
 ) VALUES (
   'legacy-unknown-delegate-event',
@@ -355,6 +356,7 @@ INSERT INTO feed_events (
   ${sqlLiteral(now)},
   'delegate_event',
   'delegate-event:default:unknown:legacy-unknown',
+  ${sqlLiteral(legacyRawText)},
   'info',
   'legacy',
   '{}',
@@ -369,7 +371,7 @@ INSERT INTO feed_events_fts (
   '',
   'info',
   'Legacy unknown delegate event',
-  'legacy raw sidecar text',
+  ${sqlLiteral(legacyRawText)},
   '',
   '',
   '[]',
@@ -398,7 +400,14 @@ INSERT INTO feed_events_fts (
       "utf8",
     );
 
-    const scanResult = await runServer(fixture, ["watchtower", fixture.projectPath, "--once", "--json"]);
+    const scanResult = await runServer(
+      fixture,
+      ["watchtower", fixture.projectPath, "--once", "--json"],
+      {
+        CLAWDAD_WATCHTOWER_SQLITE_VACUUM_MIN_FREE_PAGES: "1",
+        CLAWDAD_WATCHTOWER_SQLITE_VACUUM_MIN_FREE_RATIO: "0",
+      },
+    );
     assert.equal(scanResult.exitCode, 0, scanResult.stderr || scanResult.stdout);
     const scanPayload = JSON.parse(scanResult.stdout);
     assert.equal(scanPayload.ok, true);
@@ -410,6 +419,7 @@ INSERT INTO feed_events_fts (
       ),
       "0",
     );
+    assert.equal(await sqliteScalar(dbFile, "PRAGMA freelist_count;"), "0");
 
     const searchResult = await runServer(fixture, [
       "feed",
