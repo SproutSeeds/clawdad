@@ -7827,7 +7827,12 @@ function artifactFileName(artifact) {
 }
 
 function attachmentKindFromFile(file) {
-  return String(file?.type || "").toLowerCase().startsWith("image/") ? "image" : "file";
+  const mimeType = String(file?.type || "").toLowerCase();
+  const fileName = String(file?.name || "").toLowerCase();
+  return mimeType.startsWith("image/") ||
+    /\.(?:gif|heic|heif|jpe?g|png|webp)$/u.test(fileName)
+    ? "image"
+    : "file";
 }
 
 function makeComposerAttachment(file) {

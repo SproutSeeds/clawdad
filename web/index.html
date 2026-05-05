@@ -151,7 +151,14 @@
 
           <label class="sr-only" for="messageInput">Message</label>
           <textarea id="messageInput" name="message" rows="6" placeholder="Message"></textarea>
-          <input id="composerAttachmentInput" type="file" name="attachments" multiple hidden>
+          <input
+            id="composerAttachmentInput"
+            type="file"
+            name="attachments"
+            accept="image/*,.heic,.heif,.png,.jpg,.jpeg,.gif,.webp,application/pdf,text/plain,text/markdown,.md,.txt,.json,.csv"
+            multiple
+            hidden
+          >
           <div id="composerAttachmentList" class="composer-attachment-list" hidden aria-live="polite"></div>
 
           <div class="composer-actions">

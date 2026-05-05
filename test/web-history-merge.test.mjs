@@ -692,7 +692,8 @@ test("web composer can attach files and dispatch them with FormData", async () =
     readFile(webIndexPath, "utf8"),
   ]);
 
-  assert.match(html, /id="composerAttachmentInput"[^>]*type="file"[^>]*multiple/u);
+  assert.match(html, /id="composerAttachmentInput"[\s\S]*?type="file"[\s\S]*?multiple/u);
+  assert.match(html, /id="composerAttachmentInput"[\s\S]*?accept="[^"]*image\/\*[^"]*\.heic[^"]*"/u);
   assert.match(html, /id="composerAttachmentList"[^>]*class="composer-attachment-list"/u);
   assert.match(html, /id="composerAttachmentButton"/u);
   assert.match(html, /aria-label="Attach files"/u);
@@ -710,6 +711,7 @@ test("web composer can attach files and dispatch them with FormData", async () =
   assert.match(source, /function renderComposerAttachments\(\)/u);
   assert.match(source, /function addComposerFiles\(files\)/u);
   assert.match(source, /function clearComposerAttachments\(\)/u);
+  assert.match(source, /heic\|heif\|jpe\?g/u);
   assert.match(source, /new FormData\(\)/u);
   assert.match(source, /formData\.append\("attachments", attachment\.file, attachment\.fileName\)/u);
   assert.match(source, /message: dispatchMessage/u);
