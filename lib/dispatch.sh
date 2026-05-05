@@ -248,11 +248,11 @@ dispatch_to_spoke() {
     _validate_codex_session_binding "$project_path" "$session_id" "$session_seeded" || return 1
   fi
 
-  # Check if already running
+  # Check if a dispatch is already in flight
   local current_status
   current_status=$(mailbox_read_status "$project_path")
-  if [[ "$current_status" == "running" ]]; then
-    clawdad_error "Project '$slug' already has a running dispatch. Use 'clawdad status $slug' to check."
+  if [[ "$current_status" == "running" || "$current_status" == "dispatched" ]]; then
+    clawdad_error "Project '$slug' already has a dispatch in flight. Use 'clawdad status $slug' to check."
     return 1
   fi
 

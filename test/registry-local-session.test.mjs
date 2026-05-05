@@ -62,7 +62,7 @@ exit 2
   return mockPath;
 }
 
-async function runRegistryScript({ root, projectPath, homePath, script }) {
+async function runRegistryScript({ root, projectPath, homePath, script, env = {} }) {
   const mockOrp = await createMockOrp(root);
   const sourceCommon = shellQuote(path.join(repoRoot, "lib", "common.sh"));
   const sourceLog = shellQuote(path.join(repoRoot, "lib", "log.sh"));
@@ -96,6 +96,7 @@ ${script}
       CLAWDAD_ORP_WORKSPACE: "main",
       MOCK_ORP_TABS: JSON.stringify(orpTabs),
       PROJECT_PATH: projectPath,
+      ...env,
     },
   });
 }
@@ -103,6 +104,81 @@ ${script}
 async function readState(homePath) {
   return JSON.parse(await readFile(path.join(homePath, "state.json"), "utf8"));
 }
+
+test("shell registry state updates are serialized across processes", async () => {
+  await withTempProject(async ({ root, projectPath, homePath }) => {
+    const { stdout } = await runRegistryScript({
+      root,
+      projectPath,
+      homePath,
+      script: `
+state_ensure_project "$PROJECT_PATH"
+for i in $(seq 1 40); do
+  (
+    state_register_session "$PROJECT_PATH" "session-$i" "session $i" "codex" "true"
+    state_update_session "$PROJECT_PATH" "session-$i" "status" "completed"
+  ) &
+done
+wait
+"$CLAWDAD_JQ" -c --arg path "$PROJECT_PATH" '{
+  count: ((.projects[$path].sessions // {}) | length),
+  completedCount: ((.projects[$path].sessions // {}) | to_entries | map(select(.value.status == "completed")) | length)
+}' "$CLAWDAD_STATE"
+`,
+    });
+
+    const result = JSON.parse(stdout);
+    assert.equal(result.count, 40);
+    assert.equal(result.completedCount, 40);
+  });
+});
+
+test("dispatch treats dispatched mailbox state as busy", async () => {
+  await withTempProject(async ({ root, projectPath, homePath }) => {
+    const mockCodex = path.join(root, "mock-codex");
+    await writeFile(mockCodex, "#!/bin/sh\nexit 0\n", "utf8");
+    await chmod(mockCodex, 0o755);
+
+    const sourceMailbox = shellQuote(path.join(repoRoot, "lib", "mailbox.sh"));
+    const sourceHistory = shellQuote(path.join(repoRoot, "lib", "history.sh"));
+    const sourceDispatch = shellQuote(path.join(repoRoot, "lib", "dispatch.sh"));
+    const { stdout } = await runRegistryScript({
+      root,
+      projectPath,
+      homePath,
+      env: {
+        CLAWDAD_CODEX: mockCodex,
+      },
+      script: `
+source ${sourceMailbox}
+source ${sourceHistory}
+source ${sourceDispatch}
+_build_dispatch_command() {
+  clawdad_error "busy guard did not stop dispatch"
+  return 1
+}
+state_ensure_project "$PROJECT_PATH"
+state_register_session "$PROJECT_PATH" "busy-session" "busy session" "codex" "false"
+state_set_active_session "$PROJECT_PATH" "busy-session"
+mailbox_init "$PROJECT_PATH"
+mailbox_update_status "$PROJECT_PATH" "dispatched" "req-busy" "" "" "busy-session"
+err_file="$CLAWDAD_HOME/dispatch.err"
+if dispatch_to_spoke "$PROJECT_PATH" "second prompt" "" "" "" "true" 2>"$err_file"; then
+  dispatch_status=0
+else
+  dispatch_status=$?
+fi
+err_text=$(cat "$err_file")
+"$CLAWDAD_JQ" -n --arg err "$err_text" --argjson status "$dispatch_status" '{ status: $status, error: $err }'
+`,
+    });
+
+    const result = JSON.parse(stdout);
+    assert.notEqual(result.status, 0);
+    assert.match(result.error, /dispatch in flight/u);
+    assert.doesNotMatch(result.error, /busy guard did not stop dispatch/u);
+  });
+});
 
 test("registry_add falls back to a local-only session when ORP hits the notes limit", async () => {
   await withTempProject(async ({ root, projectPath, homePath }) => {

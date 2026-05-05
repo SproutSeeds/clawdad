@@ -7,6 +7,8 @@
 # --- Local state management (dispatch stats only) ---
 
 typeset -gi CLAWDAD_STATE_LOCK_DEPTH=0
+typeset -gi CLAWDAD_STATE_LOCK_HELD=0
+typeset -g CLAWDAD_STATE_LOCK_OWNER_TOKEN=""
 
 _state_default_json() {
   printf '{"version": 3, "orp_workspace": "%s", "projects": {}}' "$CLAWDAD_ORP_WORKSPACE"
@@ -21,27 +23,12 @@ _state_lock_owner_file() {
 }
 
 _state_lock_is_stale() {
-  local owner_file owner_pid owner_started now lock_dir lock_started
-  owner_file=$(_state_lock_owner_file)
-
-  if [[ ! -f "$owner_file" ]]; then
-    lock_dir=$(_state_lock_dir)
-    [[ -d "$lock_dir" ]] || return 1
-    lock_started=$(stat -f %m "$lock_dir" 2>/dev/null || echo "")
-    now=$(date +%s)
-    if [[ "$lock_started" =~ '^[0-9]+$' ]] && (( now - lock_started > 30 )); then
-      return 0
-    fi
-    return 1
-  fi
-
-  IFS=' ' read -r owner_pid owner_started < "$owner_file" || return 0
-  if [[ -z "$owner_pid" ]] || ! kill -0 "$owner_pid" 2>/dev/null; then
-    return 0
-  fi
-
+  local now lock_dir lock_started
+  lock_dir=$(_state_lock_dir)
+  [[ -d "$lock_dir" ]] || return 1
+  lock_started=$(stat -f %m "$lock_dir" 2>/dev/null || echo "")
   now=$(date +%s)
-  if [[ "$owner_started" =~ '^[0-9]+$' ]] && (( now - owner_started > 30 )); then
+  if [[ "$lock_started" =~ '^[0-9]+$' ]] && (( now - lock_started > 30 )); then
     return 0
   fi
 
@@ -56,13 +43,83 @@ _state_lock_clear_stale() {
   rmdir "$lock_dir" 2>/dev/null || rm -rf "$lock_dir" 2>/dev/null || true
 }
 
+_state_lock_cleanup() {
+  if (( CLAWDAD_STATE_LOCK_HELD <= 0 )); then
+    return 0
+  fi
+
+  local owner_file owner_pid owner_started owner_token
+  owner_file=$(_state_lock_owner_file)
+  if ! { IFS=' ' read -r owner_pid owner_started owner_token < "$owner_file"; } 2>/dev/null || [[ "$owner_token" != "$CLAWDAD_STATE_LOCK_OWNER_TOKEN" ]]; then
+    CLAWDAD_STATE_LOCK_HELD=0
+    CLAWDAD_STATE_LOCK_DEPTH=0
+    CLAWDAD_STATE_LOCK_OWNER_TOKEN=""
+    return 0
+  fi
+
+  rm -f "$owner_file" 2>/dev/null || true
+  rmdir "$(_state_lock_dir)" 2>/dev/null || true
+  CLAWDAD_STATE_LOCK_HELD=0
+  CLAWDAD_STATE_LOCK_DEPTH=0
+  CLAWDAD_STATE_LOCK_OWNER_TOKEN=""
+}
+
 _state_lock_acquire() {
   if (( CLAWDAD_STATE_LOCK_DEPTH > 0 )); then
     (( CLAWDAD_STATE_LOCK_DEPTH += 1 ))
     return 0
   fi
-  CLAWDAD_STATE_LOCK_DEPTH=1
-  return 0
+
+  mkdir -p "$CLAWDAD_HOME" 2>/dev/null || return 1
+
+  local lock_dir owner_file owner_tmp owner_token started_at now owner_pid timeout_seconds
+  lock_dir=$(_state_lock_dir)
+  owner_file=$(_state_lock_owner_file)
+  started_at=$(date +%s)
+  zmodload zsh/system 2>/dev/null || true
+  if (( ${+sysparams} )) && [[ -n "${sysparams[pid]:-}" ]]; then
+    owner_pid="${sysparams[pid]}"
+  else
+    owner_pid="${ZSH_PID:-$$}"
+  fi
+  timeout_seconds="${CLAWDAD_STATE_LOCK_TIMEOUT_SECONDS:-300}"
+  if [[ ! "$timeout_seconds" =~ '^[0-9]+$' ]]; then
+    timeout_seconds=300
+  fi
+
+  while true; do
+    if mkdir "$lock_dir" 2>/dev/null; then
+      owner_tmp=$(mktemp "$CLAWDAD_HOME/.state.lock.owner.XXXXXX") || {
+        rmdir "$lock_dir" 2>/dev/null || true
+        return 1
+      }
+      owner_token="${owner_pid}:$(basename "$owner_tmp")"
+      if ! printf '%s %s %s\n' "$owner_pid" "$(date +%s)" "$owner_token" > "$owner_tmp" 2>/dev/null || ! mv "$owner_tmp" "$owner_file" 2>/dev/null; then
+        rm -f "$owner_tmp" 2>/dev/null || true
+        rmdir "$lock_dir" 2>/dev/null || true
+        return 1
+      fi
+
+      CLAWDAD_STATE_LOCK_DEPTH=1
+      CLAWDAD_STATE_LOCK_HELD=1
+      CLAWDAD_STATE_LOCK_OWNER_TOKEN="$owner_token"
+      trap '_state_lock_cleanup' EXIT
+      return 0
+    fi
+
+    if _state_lock_is_stale; then
+      _state_lock_clear_stale
+      continue
+    fi
+
+    now=$(date +%s)
+    if (( now - started_at >= timeout_seconds )); then
+      clawdad_error "Timed out waiting for state lock at $lock_dir"
+      return 1
+    fi
+
+    sleep 0.1
+  done
 }
 
 _state_lock_release() {
@@ -75,7 +132,7 @@ _state_lock_release() {
     return 0
   fi
 
-  CLAWDAD_STATE_LOCK_DEPTH=0
+  _state_lock_cleanup
   return 0
 }
 
@@ -165,19 +222,40 @@ _state_upgrade_schema() {
 
 state_init() {
   mkdir -p "$CLAWDAD_HOME"
-  if [[ ! -f "$CLAWDAD_STATE" ]]; then
-    _state_write "$(_state_default_json)"
-    clawdad_log "Initialized state at $CLAWDAD_STATE"
-    return 0
+  if [[ -f "$CLAWDAD_STATE" ]] && _state_is_valid_file; then
+    local current_version
+    current_version=$("$CLAWDAD_JQ" -r '.version // ""' "$CLAWDAD_STATE" 2>/dev/null || echo "")
+    if [[ "$current_version" == "3" ]]; then
+      return 0
+    fi
   fi
 
-  _state_recover_if_invalid || return 1
-  _state_upgrade_schema
+  _state_lock_acquire || return 1
+  local exit_code=0
+  if [[ ! -f "$CLAWDAD_STATE" ]]; then
+    _state_write "$(_state_default_json)" || exit_code=$?
+    if (( exit_code == 0 )); then
+      clawdad_log "Initialized state at $CLAWDAD_STATE"
+    fi
+    _state_lock_release
+    return $exit_code
+  fi
+
+  _state_recover_if_invalid || exit_code=$?
+  if (( exit_code == 0 )); then
+    _state_upgrade_schema || exit_code=$?
+  fi
+  _state_lock_release
+  return $exit_code
 }
 
 state_ensure_project() {
   local project_path="$1"
-  state_init
+  if (( CLAWDAD_STATE_LOCK_DEPTH <= 0 )); then
+    state_init || return 1
+  elif [[ ! -f "$CLAWDAD_STATE" ]]; then
+    _state_write "$(_state_default_json)" || return 1
+  fi
 
   _state_lock_acquire || return 1
   local has_entry

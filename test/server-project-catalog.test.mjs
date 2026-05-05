@@ -696,6 +696,51 @@ test("Codex session discovery ranks externally touched transcripts before newer 
   }
 });
 
+test("Codex session discovery applies list limits after mtime ranking", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-codex-session-limit-"));
+  const codexHome = path.join(root, "codex-home");
+  const projectPath = path.join(root, "clawdad");
+  const touchedOlderSessionId = "aa-touched-older-session";
+  const olderMtime = new Date("2026-04-30T12:00:00.000Z");
+  const newerMtime = new Date("2026-05-02T12:00:00.000Z");
+
+  await mkdir(projectPath, { recursive: true });
+  const files = [];
+  for (let index = 0; index < 12; index += 1) {
+    files.push(await writeCodexSession(codexHome, projectPath, `zz-${String(index).padStart(2, "0")}`, {
+      timestamp: "2026-04-30T12:00:00.000Z",
+    }));
+  }
+  const touchedFile = await writeCodexSession(codexHome, projectPath, touchedOlderSessionId, {
+    timestamp: "2026-04-01T12:00:00.000Z",
+  });
+
+  for (const file of files) {
+    await utimes(file, olderMtime, olderMtime);
+  }
+  await utimes(touchedFile, newerMtime, newerMtime);
+
+  try {
+    const result = await runCodexSessionDiscovery([
+      "--cwd",
+      projectPath,
+      "--codex-home",
+      codexHome,
+      "--list",
+      "--limit",
+      "3",
+    ]);
+    assert.equal(result.exitCode, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.sessions.length, 3);
+    assert.equal(payload.sessions[0].sessionId, touchedOlderSessionId);
+    assert.equal(payload.sessions[0].lastUpdatedAt, "2026-05-02T12:00:00.000Z");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("projects endpoint hides quarantined sessions from the app catalog", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-quarantine-catalog-"));
   const home = path.join(root, "home");
