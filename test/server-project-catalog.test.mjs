@@ -3055,6 +3055,113 @@ test("projects endpoint auto-registers local Codex sessions for the project drop
   }
 });
 
+test("projects endpoint cools down missed background Codex discovery for placeholder sessions", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-auto-import-miss-"));
+  const home = path.join(root, "home");
+  const codexHome = path.join(root, "codex-home");
+  const projectPath = path.join(root, "mtg-decklab");
+  const configPath = path.join(root, "server.json");
+
+  await mkdir(path.join(projectPath, ".clawdad", "mailbox"), { recursive: true });
+  await mkdir(path.join(codexHome, "sessions"), { recursive: true });
+  await mkdir(home, { recursive: true });
+  await writeFile(
+    path.join(home, "state.json"),
+    JSON.stringify(
+      {
+        version: 3,
+        orp_workspace: "main",
+        projects: {
+          [projectPath]: {
+            status: "idle",
+            last_dispatch: null,
+            last_response: null,
+            dispatch_count: 0,
+            registered_at: "2026-05-01T00:00:00Z",
+            active_session_id: "placeholder-session",
+            sessions: {
+              "placeholder-session": {
+                slug: "mtg-decklab",
+                provider: "codex",
+                provider_session_seeded: "false",
+                tracked_at: "2026-05-01T00:00:00Z",
+                last_selected_at: null,
+                dispatch_count: 0,
+                last_dispatch: null,
+                last_response: null,
+                status: "idle",
+                local_only: "true",
+                orp_error: "",
+              },
+            },
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  const port = await freePort();
+  await writeFile(
+    configPath,
+    JSON.stringify(
+      {
+        host: "127.0.0.1",
+        port,
+        defaultProject: projectPath,
+        authMode: "tailscale",
+        allowedUsers: ["tester@example.com"],
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  const child = spawn(process.execPath, [serverScript, "serve", "--config", configPath], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      CLAWDAD_HOME: home,
+      CLAWDAD_CODEX_HOME: codexHome,
+      CLAWDAD_PROJECT_SESSION_AUTO_IMPORT_TTL_MS: "0",
+      CLAWDAD_PROJECT_SESSION_AUTO_IMPORT_MISS_TTL_MS: "60000",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  try {
+    const baseUrl = `http://127.0.0.1:${port}`;
+    await waitForHealth(baseUrl, child);
+    const firstResponse = await fetch(`${baseUrl}/v1/projects`, {
+      headers: {
+        "tailscale-user-login": "tester@example.com",
+      },
+    });
+    assert.equal(firstResponse.status, 200);
+    const firstPayload = await firstResponse.json();
+    assert.equal(firstPayload.ok, true);
+    assert.equal(firstPayload.autoImportScheduled, true);
+
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    const secondResponse = await fetch(`${baseUrl}/v1/projects`, {
+      headers: {
+        "tailscale-user-login": "tester@example.com",
+      },
+    });
+    assert.equal(secondResponse.status, 200);
+    const secondPayload = await secondResponse.json();
+    assert.equal(secondPayload.ok, true);
+    assert.equal(secondPayload.autoImportScheduled, false);
+  } finally {
+    await stopServer(child);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("projects endpoint skips background Codex discovery when sessions are already seeded", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-auto-import-skip-"));
   const home = path.join(root, "home");
