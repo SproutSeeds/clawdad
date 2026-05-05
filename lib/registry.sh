@@ -22,11 +22,17 @@ _state_lock_owner_file() {
   echo "$(_state_lock_dir)/owner"
 }
 
+_state_path_mtime() {
+  local target="$1" value
+  value=$(stat -f %m "$target" 2>/dev/null || stat -c %Y "$target" 2>/dev/null || echo "")
+  echo "$value"
+}
+
 _state_lock_is_stale() {
   local now lock_dir lock_started
   lock_dir=$(_state_lock_dir)
   [[ -d "$lock_dir" ]] || return 1
-  lock_started=$(stat -f %m "$lock_dir" 2>/dev/null || echo "")
+  lock_started=$(_state_path_mtime "$lock_dir")
   now=$(date +%s)
   if [[ "$lock_started" =~ '^[0-9]+$' ]] && (( now - lock_started > 30 )); then
     return 0

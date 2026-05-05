@@ -3,7 +3,7 @@
 
 _build_cmd_codex() {
   local message="$1" session_id="$2" session_seeded="$3"
-  local permission_mode="$4" model="$5" project_path="$6"
+  local permission_mode="$4" model="$5" project_path="$6" attachment_manifest="${7:-}"
 
   require_node
 
@@ -23,6 +23,10 @@ _build_cmd_codex() {
 
   if [[ -n "$model" ]]; then
     cmd+=("--model" "$model")
+  fi
+
+  if [[ -n "$attachment_manifest" ]]; then
+    cmd+=("--attachment-manifest" "$attachment_manifest")
   fi
 
   local turn_timeout_ms="${CLAWDAD_CODEX_TURN_TIMEOUT_MS:-${CLAWDAD_WORKER_TIMEOUT_MS:-1800000}}"
@@ -71,13 +75,13 @@ _build_cmd_chimera() {
 
 _build_dispatch_command() {
   local project_path="$1" message="$2" session_id="$3" dispatch_count="$4"
-  local provider="$5" session_seeded="$6" permission_mode="$7" model="$8"
+  local provider="$5" session_seeded="$6" permission_mode="$7" model="$8" attachment_manifest="${9:-}"
 
   cmd=()
 
   case "$provider" in
     codex)
-      _build_cmd_codex "$message" "$session_id" "$session_seeded" "$permission_mode" "$model" "$project_path"
+      _build_cmd_codex "$message" "$session_id" "$session_seeded" "$permission_mode" "$model" "$project_path" "$attachment_manifest"
       ;;
     chimera)
       _build_cmd_chimera "$project_path" "$message" "$session_id" "$session_seeded" "$permission_mode" "$model"
@@ -89,10 +93,59 @@ _build_dispatch_command() {
   esac
 }
 
+_message_requests_artifact_handoff() {
+  local message="${1:l}"
+  if [[ "$message" == *download* || "$message" == *downloadable* || "$message" == *shareable* || "$message" == *attachment* ]]; then
+    return 0
+  fi
+  if [[ "$message" == *export* && ( "$message" == *file* || "$message" == *pdf* || "$message" == *csv* || "$message" == *zip* ) ]]; then
+    return 0
+  fi
+  if [[ "$message" == *save* && ( "$message" == *file* || "$message" == *pdf* || "$message" == *csv* || "$message" == *artifact* ) ]]; then
+    return 0
+  fi
+  if [[ "$message" == *create* && ( "$message" == *pdf* || "$message" == *csv* || "$message" == *xlsx* || "$message" == *docx* || "$message" == *zip* ) ]]; then
+    return 0
+  fi
+  return 1
+}
+
 _artifact_augmented_message() {
   local project_path="$1" message="$2"
+  if ! _message_requests_artifact_handoff "$message"; then
+    printf '%s\n' "$message"
+    return 0
+  fi
   local artifact_dir="${CLAWDAD_ARTIFACTS_DIR:-$project_path/.clawdad/artifacts}"
   printf '%s\n\n%s\n' "$message" "[Clawdad artifact handoff: If you create a deliverable file the user may need to download or share, save it under '$artifact_dir' using a clear filename. Create that folder if needed. Mention the saved filename in your final reply. Clawdad will surface files from that folder in the mobile app.]"
+}
+
+_attachment_augmented_message() {
+  local message="$1" attachment_manifest="$2"
+  if [[ -z "$attachment_manifest" || ! -f "$attachment_manifest" ]]; then
+    printf '%s\n' "$message"
+    return 0
+  fi
+
+  local attachment_lines
+  attachment_lines=$(
+    "$CLAWDAD_JQ" -r '
+      (.attachments // [])
+      | map(select((.path // "") != ""))
+      | .[]
+      | "- \(.fileName // .originalName // "attachment") (\(.mimeType // "application/octet-stream"), \(.size // 0) bytes): \(.path)"
+    ' "$attachment_manifest" 2>/dev/null || true
+  )
+  if [[ -z "$attachment_lines" ]]; then
+    printf '%s\n' "$message"
+    return 0
+  fi
+
+  printf '%s\n\n%s\n%s\n%s\n' \
+    "$message" \
+    "[Clawdad attachment handoff:" \
+    "$attachment_lines" \
+    "Images are also attached to Codex directly when supported. For non-image files, use the local file paths above.]"
 }
 
 _extract_result_codex() {
@@ -197,6 +250,7 @@ dispatch_to_spoke() {
   local model="${4:-}"
   local session_selector="${5:-}"
   local persist_active="${6:-true}"
+  local attachment_manifest="${7:-}"
 
   # Resolve the active tracked session for this project bucket.
   local session_json
@@ -279,7 +333,8 @@ dispatch_to_spoke() {
   local codex_output_file=""
   local agent_message
   agent_message=$(_artifact_augmented_message "$project_path" "$message")
-  _build_dispatch_command "$project_path" "$agent_message" "$session_id" "$dispatch_count" "$provider" "$session_seeded" "$permission_mode" "$model" || return 1
+  agent_message=$(_attachment_augmented_message "$agent_message" "$attachment_manifest")
+  _build_dispatch_command "$project_path" "$agent_message" "$session_id" "$dispatch_count" "$provider" "$session_seeded" "$permission_mode" "$model" "$attachment_manifest" || return 1
   if [[ "$provider" == "codex" && -z "${CLAWDAD_CODEX_EVENT_LOG_FILE:-}" ]]; then
     local codex_event_dir="$project_path/.clawdad/history/events"
     mkdir -p "$codex_event_dir" 2>/dev/null || true
@@ -298,7 +353,8 @@ dispatch_to_spoke() {
     "$permission_mode" \
     "$model" \
     "$persist_active" \
-    "$agent_message" >/dev/null 2>&1 </dev/null &
+    "$agent_message" \
+    "$attachment_manifest" >/dev/null 2>&1 </dev/null &
   local bg_pid=$!
 
   mailbox_update_status "$project_path" "running" "$request_id" "$bg_pid" "" "$session_id"
@@ -310,7 +366,7 @@ dispatch_to_spoke() {
 _dispatch_background() {
   local project_path="$1" request_id="$2" session_id="$3" slug="$4" provider="$5"
   local session_seeded="${6:-}" dispatch_count="${7:-0}" permission_mode="${8:-$CLAWDAD_PERMISSION_MODE}"
-  local model="${9:-}" persist_active="${10:-true}" message="${11:-}"
+  local model="${9:-}" persist_active="${10:-true}" message="${11:-}" attachment_manifest="${12:-}"
 
   _CLAWDAD_DISPATCH_FINALIZED=false
   _CLAWDAD_DISPATCH_PROJECT_PATH="$project_path"
@@ -366,7 +422,7 @@ _dispatch_background() {
   trap '_CLAWDAD_DISPATCH_ERROR="dispatch worker terminated"; _dispatch_fail_unfinalized; exit 143' TERM INT HUP
 
   local -a cmd
-  _build_dispatch_command "$project_path" "$message" "$session_id" "$dispatch_count" "$provider" "$session_seeded" "$permission_mode" "$model" || {
+  _build_dispatch_command "$project_path" "$message" "$session_id" "$dispatch_count" "$provider" "$session_seeded" "$permission_mode" "$model" "$attachment_manifest" || {
     _CLAWDAD_DISPATCH_ERROR="failed to build dispatch command"
     return 1
   }

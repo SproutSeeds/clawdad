@@ -11,6 +11,7 @@ const state = {
   sessionTitleDraft: "",
   sessionTitleConfirmRemove: false,
   sessionTitlePending: false,
+  sessionCreatePending: false,
   sessionTitleError: "",
   pendingSessionRenames: {},
   importableSessionsByProject: {},
@@ -24,6 +25,7 @@ const state = {
   artifactModalProject: "",
   artifactsByProject: {},
   artifactDownloadPendingId: "",
+  terminalLaunchPendingKey: "",
   artifactRefreshPromises: {},
   artifactShelfCollapsed: false,
   activeRunsModalOpen: false,
@@ -86,6 +88,7 @@ const state = {
   quickPromptDraftText: "",
   quickPromptResetConfirm: false,
   quickPromptError: "",
+  composerAttachments: [],
 };
 
 const elements = {
@@ -119,7 +122,11 @@ const elements = {
   sessionThreadButton: document.querySelector("#sessionThreadButton"),
   audioAutoDownloadButton: document.querySelector("#audioAutoDownloadButton"),
   messageInput: document.querySelector("#messageInput"),
+  composerAttachmentButton: document.querySelector("#composerAttachmentButton"),
+  composerAttachmentInput: document.querySelector("#composerAttachmentInput"),
+  composerAttachmentList: document.querySelector("#composerAttachmentList"),
   quickPromptButton: document.querySelector("#quickPromptButton"),
+  currentTerminalButton: document.querySelector("#currentTerminalButton"),
   dispatchForm: document.querySelector("#dispatchForm"),
   dispatchButton: document.querySelector("#dispatchButton"),
   quickPromptModal: document.querySelector("#quickPromptModal"),
@@ -273,6 +280,7 @@ const artifactShelfCollapsedKey = "clawdad-artifact-shelf-collapsed-v1";
 const audioAutoDownloadKey = "clawdad-audio-auto-download-v1";
 const quickPromptTitleMax = 80;
 const quickPromptTextMax = 12_000;
+const newSessionSelectValue = "__clawdad_new_session__";
 const queuedDispatchGraceMs = 15000;
 // Dispatch startup can lag behind refreshes; do not mark optimistic queue cards failed too early.
 const queuedDispatchAttachGraceMs = 2 * 60 * 1000;
@@ -487,6 +495,15 @@ function downloadIconMarkup() {
   return `
     <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
       <path d="M8 3.2v5.6m0 0 2.5-2.5M8 8.8 5.5 6.3M3.4 11.8h9.2" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"></path>
+    </svg>
+  `;
+}
+
+function terminalIconMarkup() {
+  return `
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <rect x="2.4" y="3.2" width="11.2" height="9.6" rx="1.8" stroke="currentColor" stroke-width="1.35"></rect>
+      <path d="m4.9 6.15 1.95 1.85-1.95 1.85M8.2 9.85h3.1" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"></path>
     </svg>
   `;
 }
@@ -812,6 +829,53 @@ function projectDelegateStatusKey(project) {
   ].join(":");
 }
 
+function timestampToMs(value) {
+  if (!value) {
+    return 0;
+  }
+  const ms = new Date(value).getTime();
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function projectSessionActivityMs(session) {
+  return timestampToMs(
+    session?.lastActivityAt ||
+      session?.providerLastActivity ||
+      session?.lastResponse ||
+      session?.lastDispatch ||
+      session?.providerSessionTimestamp ||
+      "",
+  );
+}
+
+function projectLocalThreadActivityMs(project) {
+  const projectPath = String(project?.path || "").trim();
+  if (!projectPath) {
+    return 0;
+  }
+
+  return state.threadEntries.reduce((latest, entry) => {
+    if (String(entry?.projectPath || "").trim() !== projectPath) {
+      return latest;
+    }
+    return Math.max(latest, timestampToMs(entry?.answeredAt), timestampToMs(entry?.sentAt));
+  }, 0);
+}
+
+function projectActivityTimestampMs(project) {
+  const sessionActivity = (Array.isArray(project?.sessions) ? project.sessions : []).reduce(
+    (latest, session) => Math.max(latest, projectSessionActivityMs(session)),
+    0,
+  );
+  return Math.max(
+    sessionActivity,
+    projectLocalThreadActivityMs(project),
+    timestampToMs(project?.lastActivityAt),
+    timestampToMs(project?.lastResponse),
+    timestampToMs(project?.lastDispatch),
+  );
+}
+
 function compareProjects(left, right) {
   const leftFeatured = Boolean(left?.featured);
   const rightFeatured = Boolean(right?.featured);
@@ -823,6 +887,11 @@ function compareProjects(left, right) {
   const rightLive = projectHasLiveDelegate(right);
   if (leftLive !== rightLive) {
     return leftLive ? -1 : 1;
+  }
+
+  const activityDiff = projectActivityTimestampMs(right) - projectActivityTimestampMs(left);
+  if (activityDiff !== 0) {
+    return activityDiff;
   }
 
   const leftName = String(left?.displayName || left?.slug || left?.path || "");
@@ -2447,6 +2516,27 @@ function entrySessionLabel(entry) {
   return sessionOptionLabel(sessionForEntry(entry), entry?.projectPath || "");
 }
 
+function normalizeHistoryAttachments(attachments) {
+  if (!Array.isArray(attachments)) {
+    return [];
+  }
+  return attachments
+    .map((attachment) => ({
+      id: String(attachment?.id || "").trim() || makeEntryId(),
+      fileName:
+        String(attachment?.fileName || attachment?.originalName || attachment?.relativePath || "attachment")
+          .split(/[\\/]/u)
+          .pop()
+          .trim() || "attachment",
+      relativePath: String(attachment?.relativePath || "").trim(),
+      path: String(attachment?.path || "").trim(),
+      size: Number(attachment?.size || 0) || 0,
+      mimeType: String(attachment?.mimeType || "").trim() || "application/octet-stream",
+      kind: String(attachment?.kind || "").trim() || "file",
+    }))
+    .filter((attachment) => attachment.fileName);
+}
+
 function normalizeHistoryItem(item) {
   const sessionId = String(item?.sessionId || "").trim();
   const provider = String(item?.provider || "").trim() || sessionForEntry(item)?.provider || "session";
@@ -2467,6 +2557,7 @@ function normalizeHistoryItem(item) {
     status: normalizedStatus,
     response: String(item?.response || ""),
     exitCode: typeof item?.exitCode === "number" ? item.exitCode : null,
+    attachments: normalizeHistoryAttachments(item?.attachments),
     seenAt:
       String(item?.seenAt || "").trim() ||
       (normalizedStatus === "queued" ? null : answeredAt || String(item?.sentAt || "").trim() || new Date().toISOString()),
@@ -2580,6 +2671,7 @@ function isSyntheticHistoryRequestId(value) {
 
 function stripClawdadHistoryHandoff(value) {
   return String(value || "")
+    .replace(/\s*\[Clawdad attachment handoff:[\s\S]*?\]\s*$/u, "")
     .replace(/\s*\[Clawdad artifact handoff:[\s\S]*?\]\s*$/u, "")
     .trim();
 }
@@ -2713,6 +2805,8 @@ function mergeHistoryItem(existing, incoming) {
   })();
   const incomingMessage = String(incoming?.message || "");
   const existingMessage = String(existing?.message || "");
+  const incomingAttachments = normalizeHistoryAttachments(incoming?.attachments);
+  const existingAttachments = normalizeHistoryAttachments(existing?.attachments);
 
   return {
     ...existing,
@@ -2732,6 +2826,7 @@ function mergeHistoryItem(existing, incoming) {
     status: status || incoming?.status || existing?.status || "queued",
     response,
     exitCode,
+    attachments: incomingAttachments.length > 0 ? incomingAttachments : existingAttachments,
     seenAt:
       String(existing?.seenAt || "").trim() ||
       String(incoming?.seenAt || "").trim() ||
@@ -3595,29 +3690,56 @@ function currentThreadEntries() {
     .sort((left, right) => new Date(left.sentAt).getTime() - new Date(right.sentAt).getTime());
 }
 
-function queueEntries() {
-  const rankForStatus = (status) => {
-    if (status === "queued") {
-      return 0;
-    }
-    if (status === "answered") {
-      return 1;
-    }
-    return 2;
-  };
+function queueEntryThreadKey(entry) {
+  const projectPath = String(entry?.projectPath || "").trim();
+  const sessionId = String(entry?.sessionId || "").trim();
+  return projectPath && sessionId ? `${projectPath}::${sessionId}` : "";
+}
 
-  return state.threadEntries
-    .filter((entry) => threadEntryVisibleInQueue(entry, state.threadEntries))
-    .sort((left, right) => {
-      const rankDiff = rankForStatus(left.status) - rankForStatus(right.status);
-      if (rankDiff !== 0) {
-        return rankDiff;
+function queueEntryStatusRank(entry) {
+  const status = threadEntryStatus(entry);
+  if (status === "queued") {
+    return 0;
+  }
+  if (status === "answered") {
+    return 1;
+  }
+  return 2;
+}
+
+function queueEntryActivityMs(entry) {
+  const value = new Date(entry?.answeredAt || entry?.sentAt || 0).getTime();
+  return Number.isFinite(value) ? value : 0;
+}
+
+function compareQueueEntries(left, right) {
+  const rankDiff = queueEntryStatusRank(left) - queueEntryStatusRank(right);
+  if (rankDiff !== 0) {
+    return rankDiff;
+  }
+
+  return queueEntryActivityMs(right) - queueEntryActivityMs(left);
+}
+
+function canonicalQueueEntries(entries = []) {
+  const seenThreads = new Set();
+  return entries.filter((entry) => {
+    const threadKey = queueEntryThreadKey(entry);
+    if (threadKey) {
+      if (seenThreads.has(threadKey)) {
+        return false;
       }
+      seenThreads.add(threadKey);
+    }
+    return true;
+  });
+}
 
-      const leftTime = new Date(left.answeredAt || left.sentAt || 0).getTime();
-      const rightTime = new Date(right.answeredAt || right.sentAt || 0).getTime();
-      return rightTime - leftTime;
-    });
+function queueEntries() {
+  const visibleEntries = state.threadEntries
+    .filter((entry) => threadEntryVisibleInQueue(entry, state.threadEntries))
+    .sort(compareQueueEntries);
+  return canonicalQueueEntries(visibleEntries);
 }
 
 function pendingEntryForSession(projectPath, sessionId) {
@@ -3879,6 +4001,30 @@ function sessionIsBusy(session) {
   return true;
 }
 
+function stableCopyHash(value) {
+  let hash = 2166136261;
+  for (const char of String(value || "")) {
+    hash ^= char.codePointAt(0) || 0;
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function entryCopyKey(entry, kind, text = "") {
+  const parts = [
+    kind,
+    entry?.requestId,
+    entry?.id,
+    entry?.projectPath,
+    entry?.sessionId,
+    entry?.sentAt,
+    entry?.answeredAt,
+    entry?.status,
+    stableCopyHash(text),
+  ];
+  return `entry-copy:${parts.map((part) => encodeURIComponent(String(part || ""))).join(":")}`;
+}
+
 function decorateCopyButton(button, copyKey) {
   const copied = copyFeedbackActive(copyKey);
   button.classList.toggle("is-copied", copied);
@@ -3901,6 +4047,80 @@ function buildCopyButton({ copyKey, label, text }) {
     } catch (error) {
       showError(error);
     }
+  });
+  return button;
+}
+
+function terminalSessionKey(projectPath, sessionId) {
+  return `${String(projectPath || "").trim()}::${String(sessionId || "").trim()}`;
+}
+
+function canOpenSessionInTerminal(entry) {
+  const projectPath = String(entry?.projectPath || "").trim();
+  const sessionId = String(entry?.sessionId || "").trim();
+  return Boolean(projectPath && sessionId && !sessionId.startsWith("pending-create:"));
+}
+
+function currentSessionTerminalEntry() {
+  const session = currentSession();
+  return {
+    projectPath: state.selectedProject,
+    sessionId: state.selectedSessionId,
+    provider: session?.provider || currentProject()?.provider || "codex",
+  };
+}
+
+function decorateOpenTerminalButton(button, launchKey) {
+  const pending = state.terminalLaunchPendingKey === launchKey;
+  button.disabled = pending;
+  button.classList.toggle("is-loading", pending);
+  button.innerHTML = terminalIconMarkup();
+  button.setAttribute("aria-label", pending ? "Opening terminal" : "Open in terminal");
+  button.title = pending ? "Opening terminal" : "Open in terminal";
+}
+
+async function openSessionInTerminal(entry) {
+  const projectPath = String(entry?.projectPath || "").trim();
+  const sessionId = String(entry?.sessionId || "").trim();
+  const launchKey = terminalSessionKey(projectPath, sessionId);
+  if (!projectPath || !sessionId || state.terminalLaunchPendingKey) {
+    return;
+  }
+
+  state.terminalLaunchPendingKey = launchKey;
+  renderAll();
+  try {
+    await fetchJson("/v1/session-terminal", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        project: projectPath,
+        sessionId,
+      }),
+    });
+  } catch (error) {
+    showError(error);
+  } finally {
+    state.terminalLaunchPendingKey = "";
+    renderAll();
+  }
+}
+
+function buildOpenTerminalButton(entry) {
+  const projectPath = String(entry?.projectPath || "").trim();
+  const sessionId = String(entry?.sessionId || "").trim();
+  const launchKey = terminalSessionKey(projectPath, sessionId);
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "copy-button copy-button-floating open-terminal-button";
+  button.dataset.terminalLaunchKey = launchKey;
+  decorateOpenTerminalButton(button, launchKey);
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    void openSessionInTerminal(entry);
   });
   return button;
 }
@@ -4240,6 +4460,9 @@ function refreshCopyButtons(root = document) {
   for (const button of root.querySelectorAll(".message-audio-button[data-audio-key]")) {
     decorateAudioButton(button, button.dataset.audioKey || "");
   }
+  for (const button of root.querySelectorAll(".open-terminal-button[data-terminal-launch-key]")) {
+    decorateOpenTerminalButton(button, button.dataset.terminalLaunchKey || "");
+  }
 }
 
 function projectOptionLabel(project) {
@@ -4282,9 +4505,9 @@ function groupedProjectOptions() {
   }
 
   return {
-    featured,
-    liveDelegates,
-    projects,
+    featured: featured.sort(compareProjects),
+    liveDelegates: liveDelegates.sort(compareProjects),
+    projects: projects.sort(compareProjects),
   };
 }
 
@@ -4303,6 +4526,7 @@ function renderProjectOptions() {
       Number(Boolean(project.featured)),
       project.specialRole || "",
       projectDelegateStatusKey(project),
+      projectActivityTimestampMs(project),
     ]),
   });
   if (elements.projectSelect.dataset.renderKey === renderKey) {
@@ -4372,14 +4596,15 @@ function renderSessionOptions() {
   );
   const disabled =
     !project ||
-    sessions.length === 0 ||
     state.sessionSwitchPending ||
+    state.sessionCreatePending ||
     state.dispatchPending;
   const renderKey = JSON.stringify({
     projectPath: project?.path || "",
     disabled,
     sessionBusy,
     selectedSessionId: state.selectedSessionId,
+    sessionCreatePending: state.sessionCreatePending,
     sessions: sessions.map((session) => [
       session.sessionId || "",
       sessionOptionLabel(session, project?.path),
@@ -4414,7 +4639,11 @@ function renderSessionOptions() {
     option.value = "";
     option.textContent = "No sessions";
     elements.sessionSelect.append(option);
-    elements.sessionSelect.disabled = true;
+    const newOption = document.createElement("option");
+    newOption.value = newSessionSelectValue;
+    newOption.textContent = state.sessionCreatePending ? "Starting new Codex session…" : "Start new Codex session…";
+    elements.sessionSelect.append(newOption);
+    elements.sessionSelect.disabled = disabled;
     elements.sessionControl?.classList.remove("is-loading");
     elements.sessionSelect.dataset.renderKey = renderKey;
     return;
@@ -4427,9 +4656,14 @@ function renderSessionOptions() {
     elements.sessionSelect.append(option);
   }
 
+  const newOption = document.createElement("option");
+  newOption.value = newSessionSelectValue;
+  newOption.textContent = state.sessionCreatePending ? "Starting new Codex session…" : "Start new Codex session…";
+  elements.sessionSelect.append(newOption);
+
   elements.sessionControl?.classList.toggle(
     "is-loading",
-    sessionBusy,
+    sessionBusy || state.sessionCreatePending,
   );
   elements.sessionSelect.disabled = disabled;
   elements.sessionSelect.value = state.selectedSessionId;
@@ -4465,7 +4699,6 @@ function updateBodyModalState() {
       Boolean(state.activeRunsModalOpen) ||
       Boolean(state.artifactModalProject) ||
       Boolean(state.delegateModalProject) ||
-      Boolean(state.quickPromptModalOpen) ||
       Boolean(state.sessionTitleModalProject),
   );
 }
@@ -4866,19 +5099,22 @@ function renderQueueList() {
     const message = document.createElement("div");
     message.className = "queue-message";
     message.textContent = entry.message;
+    const attachments = buildMessageAttachmentList(entry.attachments);
 
     const copyButton = buildCopyButton({
-      copyKey: `queue:${entry.id}:message`,
+      copyKey: entryCopyKey(entry, "queue-message", entry.message),
       label: "Copy message",
       text: entry.message,
     });
-    const audioButton = buildAudioButton({
-      audioKey: messageAudioKey(entry, "message"),
-      label: "Play message audio",
-      payload: messageAudioPayload(entry, "message", entry.message),
-    });
 
-    card.append(copyButton, audioButton, head, meta, message);
+    card.append(copyButton);
+    if (canOpenSessionInTerminal(entry)) {
+      card.append(buildOpenTerminalButton(entry));
+    }
+    card.append(head, meta, message);
+    if (attachments) {
+      card.append(attachments);
+    }
 
     elements.queueList.append(card);
   }
@@ -4895,6 +5131,7 @@ function buildThreadCard({
   failed = false,
   audioKind = "",
   audioText = "",
+  attachments = [],
 }) {
   const card = document.createElement("article");
   card.className = `thread-card ${direction} detail-card${failed ? " failed" : ""}`;
@@ -4925,8 +5162,12 @@ function buildThreadCard({
   const body = document.createElement("div");
   body.className = "thread-text";
   renderRichText(body, text, { emptyText: direction === "inbound" ? "Processing…" : "" });
+  const attachmentList = buildMessageAttachmentList(attachments);
 
   card.append(meta, body);
+  if (attachmentList) {
+    card.append(attachmentList);
+  }
   return card;
 }
 
@@ -4940,13 +5181,14 @@ function buildHistoryGroup(entry) {
     buildThreadCard({
       entry,
       direction: "outbound",
-      copyKey: `history:${entry.requestId}:message`,
+      copyKey: entryCopyKey(entry, "history-message", entry.message),
       copyLabel: "Copy message",
       text: entry.message,
       copyTextValue: entry.message,
       metaText: formatTimestamp(entry.sentAt),
       audioKind: "message",
       audioText: entry.message,
+      attachments: entry.attachments,
     }),
   );
 
@@ -4963,7 +5205,7 @@ function buildHistoryGroup(entry) {
     buildThreadCard({
       entry,
       direction: "inbound",
-      copyKey: `history:${entry.requestId}:response`,
+      copyKey: entryCopyKey(entry, "history-response", inboundText),
       copyLabel: "Copy response",
       text: inboundText,
       copyTextValue: entry.status === "queued" ? "" : inboundText,
@@ -5088,6 +5330,8 @@ function buildQuickPromptCard(prompt) {
 }
 
 function renderQuickPromptModal() {
+  elements.quickPromptButton?.setAttribute("aria-expanded", String(state.quickPromptModalOpen));
+  elements.quickPromptButton?.classList.toggle("is-active", state.quickPromptModalOpen);
   if (!state.quickPromptModalOpen) {
     elements.quickPromptModal.hidden = true;
     return;
@@ -7582,6 +7826,148 @@ function artifactFileName(artifact) {
   return String(artifact?.fileName || artifact?.relativePath || "download").split(/[\\/]/u).pop() || "download";
 }
 
+function attachmentKindFromFile(file) {
+  return String(file?.type || "").toLowerCase().startsWith("image/") ? "image" : "file";
+}
+
+function makeComposerAttachment(file) {
+  const kind = attachmentKindFromFile(file);
+  return {
+    id: makeEntryId(),
+    file,
+    fileName: String(file?.name || "attachment").trim() || "attachment",
+    size: Number(file?.size || 0) || 0,
+    mimeType: String(file?.type || "").trim() || "application/octet-stream",
+    kind,
+    previewUrl: kind === "image" ? URL.createObjectURL(file) : "",
+  };
+}
+
+function composerAttachmentSummary(attachment) {
+  return {
+    id: String(attachment?.id || "").trim() || makeEntryId(),
+    fileName: String(attachment?.fileName || "attachment").trim() || "attachment",
+    size: Number(attachment?.size || 0) || 0,
+    mimeType: String(attachment?.mimeType || "").trim() || "application/octet-stream",
+    kind: String(attachment?.kind || "").trim() || "file",
+  };
+}
+
+function revokeComposerAttachment(attachment) {
+  if (attachment?.previewUrl) {
+    URL.revokeObjectURL(attachment.previewUrl);
+  }
+}
+
+function clearComposerAttachments() {
+  for (const attachment of state.composerAttachments) {
+    revokeComposerAttachment(attachment);
+  }
+  state.composerAttachments = [];
+  if (elements.composerAttachmentInput) {
+    elements.composerAttachmentInput.value = "";
+  }
+}
+
+function addComposerFiles(files) {
+  const nextFiles = [...(files || [])].filter(Boolean);
+  if (nextFiles.length === 0) {
+    return;
+  }
+  state.composerAttachments = [
+    ...state.composerAttachments,
+    ...nextFiles.map(makeComposerAttachment),
+  ];
+  renderComposerAttachments();
+  updateSendAvailability();
+}
+
+function removeComposerAttachment(attachmentId) {
+  const attachment = state.composerAttachments.find((item) => item.id === attachmentId);
+  revokeComposerAttachment(attachment);
+  state.composerAttachments = state.composerAttachments.filter((item) => item.id !== attachmentId);
+  if (elements.composerAttachmentInput) {
+    elements.composerAttachmentInput.value = "";
+  }
+  renderComposerAttachments();
+  updateSendAvailability();
+}
+
+function buildMessageAttachmentList(attachments) {
+  const normalized = normalizeHistoryAttachments(attachments);
+  if (normalized.length === 0) {
+    return null;
+  }
+
+  const list = document.createElement("div");
+  list.className = "message-attachment-list";
+  for (const attachment of normalized) {
+    const chip = document.createElement("span");
+    chip.className = "message-attachment-chip";
+
+    const kind = document.createElement("span");
+    kind.className = "message-attachment-kind";
+    kind.textContent = attachment.kind === "image" ? "IMG" : "FILE";
+
+    const name = document.createElement("span");
+    name.className = "message-attachment-name";
+    name.textContent = `${attachment.fileName} · ${formatFileSize(attachment.size)}`;
+
+    chip.append(kind, name);
+    list.append(chip);
+  }
+  return list;
+}
+
+function renderComposerAttachments() {
+  if (!elements.composerAttachmentList) {
+    return;
+  }
+  clearNode(elements.composerAttachmentList);
+  elements.composerAttachmentList.hidden = state.composerAttachments.length === 0;
+
+  for (const attachment of state.composerAttachments) {
+    const card = document.createElement("div");
+    card.className = "composer-attachment-card";
+
+    if (attachment.kind === "image" && attachment.previewUrl) {
+      const preview = document.createElement("img");
+      preview.className = "composer-attachment-thumb";
+      preview.src = attachment.previewUrl;
+      preview.alt = "";
+      card.append(preview);
+    } else {
+      const fileIcon = document.createElement("div");
+      fileIcon.className = "composer-attachment-file-icon";
+      fileIcon.textContent = "FILE";
+      card.append(fileIcon);
+    }
+
+    const meta = document.createElement("div");
+    meta.className = "composer-attachment-meta";
+
+    const name = document.createElement("div");
+    name.className = "composer-attachment-name";
+    name.textContent = attachment.fileName;
+
+    const detail = document.createElement("div");
+    detail.className = "composer-attachment-detail";
+    detail.textContent = `${attachment.kind === "image" ? "Image" : "File"} · ${formatFileSize(attachment.size)}`;
+
+    meta.append(name, detail);
+
+    const removeButton = document.createElement("button");
+    removeButton.className = "thread-button composer-attachment-remove";
+    removeButton.type = "button";
+    removeButton.dataset.removeAttachment = attachment.id;
+    removeButton.setAttribute("aria-label", `Remove ${attachment.fileName}`);
+    removeButton.textContent = "×";
+
+    card.append(meta, removeButton);
+    elements.composerAttachmentList.append(card);
+  }
+}
+
 function artifactDownloadUrl(artifact) {
   const url = String(artifact?.downloadUrl || "").trim();
   return url || "";
@@ -7763,67 +8149,13 @@ function renderArtifactShelf() {
       itemCount > 0 ? `${itemCount} agent file${itemCount === 1 ? "" : "s"}` : "Files";
   }
 
-  if (!elements.artifactShelf || !project?.path || (itemCount === 0 && !artifactState.loading)) {
-    if (elements.artifactShelf) {
-      elements.artifactShelf.hidden = true;
-    }
-    if (elements.artifactShelfList) {
-      clearNode(elements.artifactShelfList);
-    }
-    return;
+  if (elements.artifactShelf) {
+    elements.artifactShelf.hidden = true;
   }
-
-  elements.artifactShelf.hidden = false;
-  elements.artifactShelf.classList.toggle("is-collapsed", state.artifactShelfCollapsed);
-  if (elements.artifactShelfTitle) {
-    elements.artifactShelfTitle.textContent = "Agent files";
+  if (elements.artifactShelfList) {
+    clearNode(elements.artifactShelfList);
+    elements.artifactShelfList.dataset.renderKey = "";
   }
-  if (elements.artifactShelfMeta) {
-    elements.artifactShelfMeta.textContent =
-      artifactState.loading && !artifactState.initialized
-        ? "Checking for downloads"
-        : `${itemCount} file${itemCount === 1 ? "" : "s"} ready`;
-  }
-  if (elements.artifactShelfOpenButton) {
-    elements.artifactShelfOpenButton.disabled = !project.path;
-  }
-  if (elements.artifactShelfToggle) {
-    elements.artifactShelfToggle.setAttribute("aria-expanded", String(!state.artifactShelfCollapsed));
-    elements.artifactShelfToggle.setAttribute(
-      "aria-label",
-      state.artifactShelfCollapsed ? "Expand files" : "Collapse files",
-    );
-  }
-
-  const renderKey = JSON.stringify({
-    projectPath: project.path,
-    collapsed: state.artifactShelfCollapsed,
-    loading: Boolean(artifactState.loading && !artifactState.initialized),
-    downloadPendingId: state.artifactDownloadPendingId,
-    items: items.slice(0, 3).map((artifact) => [
-      artifact.id,
-      artifact.relativePath,
-      artifact.modifiedAt,
-      artifact.size,
-      copyFeedbackActive(`artifact-download:${artifact.id}`),
-    ]),
-  });
-  if (elements.artifactShelfList.dataset.renderKey === renderKey) {
-    return;
-  }
-
-  clearNode(elements.artifactShelfList);
-  if (artifactState.loading && !artifactState.initialized) {
-    const card = document.createElement("div");
-    card.className = "history-state-card artifact-shelf-empty";
-    card.textContent = "Checking for files…";
-    elements.artifactShelfList.append(card);
-  } else {
-    for (const artifact of items.slice(0, 3)) {
-      elements.artifactShelfList.append(buildArtifactCard(artifact, { compact: true }));
-    }
-  }
-  elements.artifactShelfList.dataset.renderKey = renderKey;
 }
 
 function projectLabelForPath(projectPath = "") {
@@ -7907,7 +8239,7 @@ function renderFilesWorkspace() {
   } else if (items.length === 0) {
     const card = document.createElement("div");
     card.className = "history-state-card";
-    card.textContent = "Files agents save into .clawdad/artifacts will show up here.";
+    card.textContent = "Requested files saved into .clawdad/artifacts will show up here.";
     elements.filesWorkspaceList.append(card);
   } else {
     for (const artifact of items.slice(0, 80)) {
@@ -7962,7 +8294,7 @@ function renderArtifactsModal() {
   } else if (artifactState.items.length === 0) {
     const card = document.createElement("div");
     card.className = "history-state-card";
-    card.textContent = "Files agents save into .clawdad/artifacts will show up here.";
+    card.textContent = "Requested files saved into .clawdad/artifacts will show up here.";
     elements.artifactsList.append(card);
   } else {
     for (const artifact of artifactState.items) {
@@ -8514,12 +8846,15 @@ function updateSendAvailability() {
   const hasPending = Boolean(pendingEntryForSession(state.selectedProject, state.selectedSessionId));
   const sessionBusy = hasPending || sessionIsBusy(session);
   const catalogBlocking = catalogIsBootstrapping();
+  const hasDraft = Boolean(String(elements.messageInput?.value || "").trim()) || state.composerAttachments.length > 0;
   const canSend =
     !catalogBlocking &&
     !state.dispatchPending &&
     !state.sessionSwitchPending &&
+    !state.sessionCreatePending &&
     Boolean(state.selectedProject) &&
     Boolean(state.selectedSessionId) &&
+    hasDraft &&
     !sessionBusy;
 
   elements.dispatchButton.disabled = !canSend;
@@ -8536,9 +8871,39 @@ function updateThreadButtonAvailability() {
   const session = currentSession();
   elements.sessionThreadButton.disabled =
     state.projectsLoading ||
+    state.sessionCreatePending ||
     !state.selectedProject ||
     !state.selectedSessionId ||
     Boolean(session?.pendingCreation);
+}
+
+function updateComposerTerminalButtonAvailability() {
+  if (!elements.currentTerminalButton) {
+    return;
+  }
+
+  const entry = currentSessionTerminalEntry();
+  const launchKey = terminalSessionKey(entry.projectPath, entry.sessionId);
+  const session = currentSession();
+  const disabled =
+    state.projectsLoading ||
+    state.sessionCreatePending ||
+    Boolean(session?.pendingCreation) ||
+    !canOpenSessionInTerminal(entry);
+  const pending = Boolean(launchKey) && state.terminalLaunchPendingKey === launchKey;
+
+  elements.currentTerminalButton.dataset.terminalLaunchKey = launchKey;
+  decorateOpenTerminalButton(elements.currentTerminalButton, launchKey);
+  elements.currentTerminalButton.disabled = disabled || pending;
+  if (pending) {
+    return;
+  }
+
+  const label = disabled
+    ? "Select a session before opening terminal"
+    : "Open selected session in terminal";
+  elements.currentTerminalButton.setAttribute("aria-label", label);
+  elements.currentTerminalButton.title = label;
 }
 
 function updateSummaryButtonAvailability() {
@@ -8623,17 +8988,30 @@ function updateArtifactsButtonAvailability() {
 }
 
 function updateImportButtonAvailability() {
+  if (!elements.sessionImportButton) {
+    return;
+  }
+
   const projectPath = state.selectedProject;
+  const project = currentProject();
   const importState = importableSessionsStateFor(projectPath);
-  elements.sessionImportButton.hidden = true;
-  elements.sessionImportButton.setAttribute("aria-hidden", "true");
+  const canShow =
+    Boolean(projectPath) &&
+    String(project?.provider || "codex").trim().toLowerCase() === "codex" &&
+    !Boolean(currentSession()?.pendingCreation);
+  elements.sessionImportButton.hidden = !canShow;
+  elements.sessionImportButton.setAttribute("aria-hidden", canShow ? "false" : "true");
+  elements.sessionImportButton.tabIndex = canShow ? 0 : -1;
   elements.sessionImportButton.disabled =
+    !canShow ||
     state.projectsLoading ||
     state.sessionSwitchPending ||
-    !projectPath ||
-    Boolean(currentSession()?.pendingCreation);
+    state.sessionCreatePending ||
+    Boolean(importState.loading);
   if (elements.sessionImportOrb) {
-    elements.sessionImportOrb.hidden = !(Array.isArray(importState.items) && importState.items.length > 0);
+    elements.sessionImportOrb.hidden =
+      !canShow ||
+      !(Array.isArray(importState.items) && importState.items.length > 0);
   }
 }
 
@@ -8642,6 +9020,7 @@ function updateSessionRenameAvailability() {
   elements.sessionRenameButton.disabled =
     state.projectsLoading ||
     state.sessionSwitchPending ||
+    state.sessionCreatePending ||
     !state.selectedProject ||
     !session?.sessionId ||
     Boolean(session?.pendingCreation) ||
@@ -8686,6 +9065,7 @@ function renderAll() {
   renderArtifactShelf();
   renderFilesWorkspace();
   renderModal();
+  renderComposerAttachments();
   renderQuickPromptModal();
   renderSessionImportModal();
   renderSessionTitleModal();
@@ -8709,6 +9089,7 @@ function renderAll() {
   updateAudioAutoDownloadButton();
   updateBodyModalState();
   refreshCopyButtons();
+  updateComposerTerminalButtonAvailability();
 }
 
 async function reconcileThreadEntries() {
@@ -9010,7 +9391,6 @@ async function refreshProjects() {
         if (state.sessionImportModalProject === state.selectedProject) {
           void refreshImportableSessions(state.selectedProject).catch(() => {});
         }
-        void loadProjectArtifacts(state.selectedProject, { quiet: true }).catch(() => {});
       }
       if (state.activeRunsModalOpen) {
         void primeActiveRunsModal().catch(() => {});
@@ -9220,28 +9600,8 @@ function artifactProjectsNeedingRefresh() {
       }
     }
   }
-  if (state.selectedProject) {
-    targets.add(state.selectedProject);
-  }
   if (state.artifactModalProject) {
     targets.add(state.artifactModalProject);
-  }
-  if (state.delegateModalProject) {
-    targets.add(state.delegateModalProject);
-  }
-
-  for (const [key, delegateState] of Object.entries(state.delegatesByProject)) {
-    const delegateStatus = delegateState?.status?.state;
-    if (delegateStatus === "planning" || delegateStatus === "running") {
-      targets.add(delegateStateProjectPathFromKey(key, delegateState));
-    }
-  }
-
-  for (const entry of state.threadEntries) {
-    const status = threadEntryStatus(entry);
-    if (status === "queued" && threadEntryVisibleInQueue(entry, state.threadEntries)) {
-      targets.add(entry.projectPath);
-    }
   }
 
   return [...targets].filter(Boolean);
@@ -9267,6 +9627,11 @@ function showError(error) {
 
 async function handleSessionSwitch(sessionId) {
   if (!sessionId || state.sessionSwitchPending) {
+    return;
+  }
+
+  if (sessionId === newSessionSelectValue) {
+    await handleSessionCreate();
     return;
   }
 
@@ -9317,6 +9682,49 @@ async function handleSessionSwitch(sessionId) {
     showError(error);
   } finally {
     state.sessionSwitchPending = false;
+    renderAll();
+  }
+}
+
+async function handleSessionCreate() {
+  const project = currentProject();
+  if (!project?.path || state.sessionCreatePending) {
+    return;
+  }
+
+  state.sessionCreatePending = true;
+  renderAll();
+
+  try {
+    const payload = await fetchJson("/v1/sessions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        project: project.path,
+        provider: project.provider || "codex",
+      }),
+    });
+
+    if (payload.projectDetails) {
+      const selectedProjectDetails = projectWithActiveSession(payload.projectDetails, payload.sessionId);
+      upsertProject(selectedProjectDetails);
+      state.selectedProject = selectedProjectDetails.path;
+      if (payload.sessionId) {
+        state.selectedSessionId = payload.sessionId;
+      }
+      syncSelectedSession(payload.sessionId, { preferCurrent: false });
+    } else {
+      await refreshProjects();
+      syncSelectedSession(payload.sessionId || "", { preferCurrent: false });
+    }
+  } catch (error) {
+    await refreshProjects().catch(() => {});
+    syncSelectedSession("", { preferCurrent: true });
+    showError(error);
+  } finally {
+    state.sessionCreatePending = false;
     renderAll();
   }
 }
@@ -10869,16 +11277,6 @@ function openQuickPromptEdit(promptId) {
 }
 
 function openQuickPromptModal() {
-  state.summaryModalProject = "";
-  state.codexIntegrationModalProject = "";
-  state.sessionImportModalProject = "";
-  state.activeRunsModalOpen = false;
-  state.artifactModalProject = "";
-  state.delegateModalProject = "";
-  state.sessionTitleModalProject = "";
-  state.sessionTitleModalSessionId = "";
-  state.projectModalOpen = false;
-  state.modalThread = null;
   state.quickPromptModalOpen = true;
   state.quickPromptError = "";
   state.quickPromptResetConfirm = false;
@@ -10886,13 +11284,25 @@ function openQuickPromptModal() {
   void loadQuickPrompts();
 }
 
-function closeQuickPromptModal() {
+function closeQuickPromptModal({ focusComposer = true } = {}) {
   state.quickPromptModalOpen = false;
   state.quickPromptError = "";
   state.quickPromptResetConfirm = false;
   closeQuickPromptEditor();
   renderAll();
-  window.setTimeout(() => elements.messageInput?.focus(), 0);
+  if (focusComposer) {
+    window.setTimeout(() => elements.messageInput?.focus(), 0);
+  }
+}
+
+function isQuickPromptTarget(target) {
+  if (!(target instanceof Node)) {
+    return false;
+  }
+  return Boolean(
+    elements.quickPromptModal?.contains(target) ||
+      elements.quickPromptButton?.contains(target),
+  );
 }
 
 function appendQuickPromptToComposer(text) {
@@ -10916,6 +11326,27 @@ function insertQuickPrompt(promptId) {
   }
   appendQuickPromptToComposer(prompt.text);
   closeQuickPromptModal();
+}
+
+function saveQuickPromptDraft() {
+  const title = String(elements.quickPromptTitleInput.value || "").trim();
+  const text = String(elements.quickPromptTextInput.value || "").trim();
+  if (!title || !text) {
+    state.quickPromptError = "Quick prompts need a title and prompt text.";
+    renderAll();
+    return;
+  }
+  const prompt = {
+    id: state.quickPromptDraftMode === "edit" ? state.quickPromptDraftId : newQuickPromptId(),
+    title,
+    text,
+    builtIn: state.quickPrompts.find((entry) => entry.id === state.quickPromptDraftId)?.builtIn === true,
+  };
+  const prompts =
+    state.quickPromptDraftMode === "edit"
+      ? state.quickPrompts.map((entry) => (entry.id === state.quickPromptDraftId ? prompt : entry))
+      : [...state.quickPrompts, prompt];
+  void saveQuickPrompts(prompts);
 }
 
 async function openProjectModal() {
@@ -11129,6 +11560,9 @@ async function handleDispatch(event) {
   const project = state.selectedProject;
   const sessionId = state.selectedSessionId;
   const message = elements.messageInput.value.trim();
+  const composerAttachments = [...state.composerAttachments];
+  const hasAttachments = composerAttachments.length > 0;
+  const dispatchMessage = message || (hasAttachments ? "Please review the attached file(s)." : "");
   const projectDetails = currentProject();
   const sessionDetails = currentSession();
 
@@ -11140,8 +11574,8 @@ async function handleDispatch(event) {
     showError(new Error("Select a session."));
     return;
   }
-  if (!message) {
-    showError(new Error("Write a message."));
+  if (!dispatchMessage) {
+    showError(new Error("Write a message or attach a file."));
     return;
   }
 
@@ -11161,7 +11595,8 @@ async function handleDispatch(event) {
     sessionId,
     projectLabel: projectDetails?.displayName || projectDetails?.slug || fallbackProjectLabel(project),
     sessionLabel: sessionOptionLabel(sessionDetails, project),
-    message,
+    message: dispatchMessage,
+    attachments: composerAttachments.map(composerAttachmentSummary),
     requestId: "",
     status: "queued",
     sentAt: new Date().toISOString(),
@@ -11187,25 +11622,45 @@ async function handleDispatch(event) {
   renderAll();
 
   try {
-    const payload = await fetchJson("/v1/dispatch", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        project,
-        sessionId,
-        message,
-        wait: false,
-      }),
-    });
+    const requestOptions = hasAttachments
+      ? (() => {
+          const formData = new FormData();
+          formData.append("project", project);
+          formData.append("sessionId", sessionId);
+          formData.append("message", dispatchMessage);
+          formData.append("wait", "false");
+          for (const attachment of composerAttachments) {
+            formData.append("attachments", attachment.file, attachment.fileName);
+          }
+          return {
+            method: "POST",
+            body: formData,
+          };
+        })()
+      : {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            project,
+            sessionId,
+            message: dispatchMessage,
+            wait: false,
+          }),
+        };
+    const payload = await fetchJson("/v1/dispatch", requestOptions);
 
     updateThreadEntry(entry.id, {
       requestId: String(payload.requestId || "").trim(),
+      attachments: Array.isArray(payload.attachments) && payload.attachments.length > 0
+        ? payload.attachments
+        : entry.attachments,
     });
     hydrateHistoryFromThreadEntry(entryById(entry.id) || entry);
 
     elements.messageInput.value = "";
+    clearComposerAttachments();
     if (
       currentModalThread()?.projectPath === project &&
       currentModalThread()?.sessionId === sessionId
@@ -11216,7 +11671,6 @@ async function handleDispatch(event) {
       });
     }
     void refreshProjects().catch(showError);
-    void loadProjectArtifacts(project, { force: true, quiet: true }).catch(() => {});
   } catch (error) {
     completeThreadEntry(entry, {
       status: "failed",
@@ -11282,7 +11736,55 @@ function bindEvents() {
     void openProjectModal();
   });
   elements.quickPromptButton?.addEventListener("click", () => {
+    if (state.quickPromptModalOpen) {
+      closeQuickPromptModal();
+      return;
+    }
     openQuickPromptModal();
+  });
+  document.addEventListener("pointerdown", (event) => {
+    if (!state.quickPromptModalOpen || isQuickPromptTarget(event.target)) {
+      return;
+    }
+    closeQuickPromptModal({ focusComposer: false });
+  });
+  elements.currentTerminalButton?.addEventListener("click", () => {
+    void openSessionInTerminal(currentSessionTerminalEntry());
+  });
+  elements.composerAttachmentButton?.addEventListener("click", () => {
+    elements.composerAttachmentInput?.click();
+  });
+  elements.composerAttachmentInput?.addEventListener("change", (event) => {
+    addComposerFiles(event.target.files);
+    event.target.value = "";
+  });
+  elements.composerAttachmentList?.addEventListener("click", (event) => {
+    const removeButton =
+      event.target instanceof Element ? event.target.closest("[data-remove-attachment]") : null;
+    if (!removeButton) {
+      return;
+    }
+    removeComposerAttachment(String(removeButton.dataset.removeAttachment || ""));
+  });
+  elements.messageInput?.addEventListener("input", updateSendAvailability);
+  elements.messageInput?.addEventListener("paste", (event) => {
+    const files = [...(event.clipboardData?.files || [])];
+    if (files.length > 0) {
+      addComposerFiles(files);
+    }
+  });
+  elements.messageInput?.addEventListener("drop", (event) => {
+    const files = [...(event.dataTransfer?.files || [])];
+    if (files.length === 0) {
+      return;
+    }
+    event.preventDefault();
+    addComposerFiles(files);
+  });
+  elements.messageInput?.addEventListener("dragover", (event) => {
+    if ((event.dataTransfer?.types || []).includes("Files")) {
+      event.preventDefault();
+    }
   });
   elements.quickPromptBackdrop?.addEventListener("click", closeQuickPromptModal);
   elements.quickPromptClose?.addEventListener("click", closeQuickPromptModal);
@@ -11314,26 +11816,16 @@ function bindEvents() {
       insertQuickPrompt(String(insertButton.dataset.quickPromptInsert || ""));
     }
   });
-  elements.quickPromptForm?.addEventListener("submit", (event) => {
+  elements.quickPromptSaveButton?.addEventListener("click", (event) => {
     event.preventDefault();
-    const title = String(elements.quickPromptTitleInput.value || "").trim();
-    const text = String(elements.quickPromptTextInput.value || "").trim();
-    if (!title || !text) {
-      state.quickPromptError = "Quick prompts need a title and prompt text.";
-      renderAll();
+    saveQuickPromptDraft();
+  });
+  elements.quickPromptForm?.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || (!event.metaKey && !event.ctrlKey)) {
       return;
     }
-    const prompt = {
-      id: state.quickPromptDraftMode === "edit" ? state.quickPromptDraftId : newQuickPromptId(),
-      title,
-      text,
-      builtIn: state.quickPrompts.find((entry) => entry.id === state.quickPromptDraftId)?.builtIn === true,
-    };
-    const prompts =
-      state.quickPromptDraftMode === "edit"
-        ? state.quickPrompts.map((entry) => (entry.id === state.quickPromptDraftId ? prompt : entry))
-        : [...state.quickPrompts, prompt];
-    void saveQuickPrompts(prompts);
+    event.preventDefault();
+    saveQuickPromptDraft();
   });
   elements.quickPromptTitleInput?.addEventListener("input", (event) => {
     state.quickPromptDraftTitle = String(event.target.value || "");
@@ -11376,7 +11868,7 @@ function bindEvents() {
     persistAudioAutoDownload();
     renderAll();
   });
-  elements.sessionImportButton.addEventListener("click", () => {
+  elements.sessionImportButton?.addEventListener("click", () => {
     void openSessionImportModal();
   });
   elements.sessionRenameButton.addEventListener("click", () => {
@@ -11715,6 +12207,7 @@ function bindEvents() {
       return;
     }
     if (event.key === "Escape" && state.quickPromptModalOpen) {
+      event.preventDefault();
       closeQuickPromptModal();
       return;
     }

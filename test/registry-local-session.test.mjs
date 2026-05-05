@@ -133,6 +133,33 @@ wait
   });
 });
 
+test("shell registry stale-lock mtime supports Linux stat output", async () => {
+  await withTempProject(async ({ root, projectPath, homePath }) => {
+    const { stdout } = await runRegistryScript({
+      root,
+      projectPath,
+      homePath,
+      script: `
+stat() {
+  if [[ "$1" == "-f" ]]; then
+    return 1
+  fi
+  if [[ "$1" == "-c" && "$2" == "%Y" ]]; then
+    printf '123456\\n'
+    return 0
+  fi
+  return 2
+}
+mtime=$(_state_path_mtime "$CLAWDAD_HOME")
+"$CLAWDAD_JQ" -n --arg mtime "$mtime" '{ mtime: $mtime }'
+`,
+    });
+
+    const result = JSON.parse(stdout);
+    assert.equal(result.mtime, "123456");
+  });
+});
+
 test("dispatch treats dispatched mailbox state as busy", async () => {
   await withTempProject(async ({ root, projectPath, homePath }) => {
     const mockCodex = path.join(root, "mock-codex");
@@ -177,6 +204,76 @@ err_text=$(cat "$err_file")
     assert.notEqual(result.status, 0);
     assert.match(result.error, /dispatch in flight/u);
     assert.doesNotMatch(result.error, /busy guard did not stop dispatch/u);
+  });
+});
+
+test("dispatch artifact handoff is opt-in for explicit file requests", async () => {
+  await withTempProject(async ({ root, projectPath, homePath }) => {
+    const sourceDispatch = shellQuote(path.join(repoRoot, "lib", "dispatch.sh"));
+    const { stdout } = await runRegistryScript({
+      root,
+      projectPath,
+      homePath,
+      script: `
+source ${sourceDispatch}
+plain=$(_artifact_augmented_message "$PROJECT_PATH" "Fix the Quick Chat dropdown.")
+requested=$(_artifact_augmented_message "$PROJECT_PATH" "Create a downloadable PDF file with the summary.")
+"$CLAWDAD_JQ" -n --arg plain "$plain" --arg requested "$requested" '{ plain: $plain, requested: $requested }'
+`,
+    });
+
+    const result = JSON.parse(stdout);
+    assert.equal(result.plain, "Fix the Quick Chat dropdown.");
+    assert.match(result.requested, /Clawdad artifact handoff/u);
+    assert.match(result.requested, /\.clawdad\/artifacts/u);
+  });
+});
+
+test("dispatch attachment handoff lists uploaded files and forwards manifest to Codex command", async () => {
+  await withTempProject(async ({ root, projectPath, homePath }) => {
+    const sourceDispatch = shellQuote(path.join(repoRoot, "lib", "dispatch.sh"));
+    const manifestPath = path.join(root, "manifest.json");
+    const imagePath = path.join(projectPath, ".clawdad", "attachments", "upload", "screen.png");
+    await mkdir(path.dirname(imagePath), { recursive: true });
+    await writeFile(imagePath, "png", "utf8");
+    await writeFile(
+      manifestPath,
+      JSON.stringify(
+        {
+          projectPath,
+          attachments: [
+            {
+              fileName: "screen.png",
+              path: imagePath,
+              mimeType: "image/png",
+              size: 3,
+              kind: "image",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    const { stdout } = await runRegistryScript({
+      root,
+      projectPath,
+      homePath,
+      script: `
+source ${sourceDispatch}
+message=$(_attachment_augmented_message "Review this." ${shellQuote(manifestPath)})
+_build_cmd_codex "Review this." "session-1" "false" "approve" "" "$PROJECT_PATH" ${shellQuote(manifestPath)}
+"$CLAWDAD_JQ" -n --arg message "$message" --argjson cmd "$(printf '%s\n' "$cmd[@]" | "$CLAWDAD_JQ" -R . | "$CLAWDAD_JQ" -s .)" '{ message: $message, cmd: $cmd }'
+`,
+    });
+
+    const result = JSON.parse(stdout);
+    assert.match(result.message, /Clawdad attachment handoff/u);
+    assert.match(result.message, /screen\.png \(image\/png, 3 bytes\):/u);
+    assert.match(result.message, /Images are also attached to Codex directly/u);
+    assert.ok(result.cmd.includes("--attachment-manifest"));
+    assert.equal(result.cmd[result.cmd.indexOf("--attachment-manifest") + 1], manifestPath);
   });
 });
 

@@ -541,6 +541,7 @@ cmd_dispatch() {
 
   local input="" message="" file="" wait=false timeout="$CLAWDAD_DISPATCH_TIMEOUT"
   local model="" permission_mode="$CLAWDAD_PERMISSION_MODE" session_selector=""
+  local attachment_manifest=""
 
   # Parse arguments
   while (( $# > 0 )); do
@@ -551,6 +552,7 @@ cmd_dispatch() {
       --timeout) timeout="$2"; shift 2 ;;
       --model) model="$2"; shift 2 ;;
       --permission-mode) permission_mode="$2"; shift 2 ;;
+      --attachment-manifest) attachment_manifest="$2"; shift 2 ;;
       --stdin) message=$(cat); shift ;;
       -*)
         clawdad_error "Unknown option: $1"; return 1 ;;
@@ -586,6 +588,11 @@ cmd_dispatch() {
     return 1
   fi
 
+  if [[ -n "$attachment_manifest" && ! -f "$attachment_manifest" ]]; then
+    clawdad_error "Attachment manifest not found: $attachment_manifest"
+    return 1
+  fi
+
   if [[ -n "$timeout" ]]; then
     if [[ ! "$timeout" =~ ^[0-9]+$ ]]; then
       clawdad_error "Timeout must be a non-negative integer"
@@ -604,7 +611,7 @@ cmd_dispatch() {
     persist_active="false"
   fi
 
-  dispatch_to_spoke "$project_path" "$message" "$permission_mode" "$model" "$session_selector" "$persist_active"
+  dispatch_to_spoke "$project_path" "$message" "$permission_mode" "$model" "$session_selector" "$persist_active" "$attachment_manifest"
 
   if $wait; then
     local slug
