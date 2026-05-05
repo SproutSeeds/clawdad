@@ -4750,9 +4750,11 @@ async function refreshImportableSessions(projectPath, { force = false } = {}) {
 
   const promise = (async () => {
     try {
-      const payload = await fetchJson(
-        `/v1/importable-sessions?project=${encodeURIComponent(normalizedProjectPath)}`,
-      );
+      const params = new URLSearchParams({ project: normalizedProjectPath });
+      if (force) {
+        params.set("force", "1");
+      }
+      const payload = await fetchJson(`/v1/importable-sessions?${params.toString()}`);
       setImportableSessionsState(normalizedProjectPath, {
         items: Array.isArray(payload.sessions) ? payload.sessions : [],
         loading: false,
@@ -9003,7 +9005,9 @@ async function refreshProjects() {
         force: state.threadEntries.length === 0,
       });
       if (state.selectedProject) {
-        void refreshImportableSessions(state.selectedProject).catch(() => {});
+        if (state.sessionImportModalProject === state.selectedProject) {
+          void refreshImportableSessions(state.selectedProject).catch(() => {});
+        }
         void loadProjectArtifacts(state.selectedProject, { quiet: true }).catch(() => {});
       }
       if (state.activeRunsModalOpen) {
@@ -9837,7 +9841,7 @@ async function openSessionImportModal(projectPath = state.selectedProject) {
   renderAll();
 
   try {
-    await refreshImportableSessions(project.path, { force: true });
+    await refreshImportableSessions(project.path, { force: false });
   } catch (_error) {
     renderAll();
   }
@@ -11580,7 +11584,6 @@ function bindEvents() {
     state.selectedProject = event.target.value;
     syncSelectedSession("", { preferCurrent: false });
     renderAll();
-    void refreshImportableSessions(state.selectedProject, { force: true }).catch(() => {});
     void refreshRecentHistory({ force: true, project: state.selectedProject }).catch(() => {});
     try {
       await refreshThreads();

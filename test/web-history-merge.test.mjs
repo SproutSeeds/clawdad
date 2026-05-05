@@ -313,6 +313,37 @@ test("web boot purges legacy thread caches", async () => {
   assert.equal(context.localStorage.getItem(context.threadCacheKey), "[]");
 });
 
+test("web project switch leaves Codex session import discovery lazy", async () => {
+  const source = await readFile(webAppPath, "utf8");
+  const projectSelectStart = source.indexOf('elements.projectSelect.addEventListener("change"');
+  const sessionSelectStart = source.indexOf('elements.sessionSelect.addEventListener("change"', projectSelectStart);
+  assert.notEqual(projectSelectStart, -1);
+  assert.notEqual(sessionSelectStart, -1);
+  assert.ok(sessionSelectStart > projectSelectStart);
+
+  const projectSelectHandler = source.slice(projectSelectStart, sessionSelectStart);
+  assert.doesNotMatch(projectSelectHandler, /refreshImportableSessions/u);
+
+  const importModalStart = source.indexOf("async function openSessionImportModal");
+  const titleModalStart = source.indexOf("function openSessionTitleModal", importModalStart);
+  assert.notEqual(importModalStart, -1);
+  assert.notEqual(titleModalStart, -1);
+  const importModal = source.slice(importModalStart, titleModalStart);
+  assert.match(importModal, /refreshImportableSessions\(project\.path,\s*\{\s*force:\s*false\s*\}\)/u);
+
+  const refreshProjectsStart = source.indexOf("async function refreshProjects");
+  const refreshThreadsStart = source.indexOf("async function refreshThreads", refreshProjectsStart);
+  assert.notEqual(refreshProjectsStart, -1);
+  assert.notEqual(refreshThreadsStart, -1);
+  assert.ok(refreshThreadsStart > refreshProjectsStart);
+  const refreshProjects = source.slice(refreshProjectsStart, refreshThreadsStart);
+  assert.match(
+    refreshProjects,
+    /if \(state\.sessionImportModalProject === state\.selectedProject\) \{\s*void refreshImportableSessions\(state\.selectedProject\)/u,
+  );
+  assert.doesNotMatch(refreshProjects, /refreshImportableSessions\(state\.selectedProject,\s*\{\s*force:\s*true/u);
+});
+
 test("web history merge replaces stale cached synthetic answer with fresh synthetic final answer", async () => {
   const { mergeHistoryItems } = await loadHistoryMergeHelpers();
   const staleCached = {
