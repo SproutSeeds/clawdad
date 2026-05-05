@@ -9841,7 +9841,7 @@ async function openSessionImportModal(projectPath = state.selectedProject) {
   renderAll();
 
   try {
-    await refreshImportableSessions(project.path, { force: false });
+    await refreshImportableSessions(project.path, { force: true });
   } catch (_error) {
     renderAll();
   }

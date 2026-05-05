@@ -329,7 +329,7 @@ test("web project switch leaves Codex session import discovery lazy", async () =
   assert.notEqual(importModalStart, -1);
   assert.notEqual(titleModalStart, -1);
   const importModal = source.slice(importModalStart, titleModalStart);
-  assert.match(importModal, /refreshImportableSessions\(project\.path,\s*\{\s*force:\s*false\s*\}\)/u);
+  assert.match(importModal, /refreshImportableSessions\(project\.path,\s*\{\s*force:\s*true\s*\}\)/u);
 
   const refreshProjectsStart = source.indexOf("async function refreshProjects");
   const refreshThreadsStart = source.indexOf("async function refreshThreads", refreshProjectsStart);
