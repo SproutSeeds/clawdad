@@ -286,6 +286,7 @@ const recentHistoryRefreshMs = 60 * 1000;
 const recentHistoryLimit = 24;
 const recentHistorySessionLimit = 10;
 const recentHistoryPerSessionLimit = 4;
+const artifactRefreshFreshMs = 60 * 1000;
 const threadEntryCacheLimit = 80;
 const ttsInlineTextLimit = 50_000;
 const headerCarouselIntervalMs = 11000;
@@ -2255,6 +2256,7 @@ function artifactsStateFor(projectPath) {
       artifactRoot: "",
       loading: false,
       initialized: false,
+      loadedAt: 0,
       error: "",
     }
   );
@@ -9237,10 +9239,7 @@ function artifactProjectsNeedingRefresh() {
 
   for (const entry of state.threadEntries) {
     const status = threadEntryStatus(entry);
-    if (
-      status === "answered" ||
-      (status === "queued" && threadEntryVisibleInQueue(entry, state.threadEntries))
-    ) {
+    if (status === "queued" && threadEntryVisibleInQueue(entry, state.threadEntries)) {
       targets.add(entry.projectPath);
     }
   }
@@ -9248,7 +9247,7 @@ function artifactProjectsNeedingRefresh() {
   return [...targets].filter(Boolean);
 }
 
-async function refreshArtifacts({ force = true } = {}) {
+async function refreshArtifacts({ force = false } = {}) {
   const targets = artifactProjectsNeedingRefresh();
   if (targets.length === 0) {
     return;
@@ -9737,7 +9736,11 @@ async function loadProjectArtifacts(projectPath, { force = false, quiet = false 
   if (existing.loading) {
     return existing;
   }
-  if (!force && existing.initialized) {
+  if (
+    !force &&
+    existing.initialized &&
+    Date.now() - Number(existing.loadedAt || 0) < artifactRefreshFreshMs
+  ) {
     return existing;
   }
 
@@ -9760,6 +9763,7 @@ async function loadProjectArtifacts(projectPath, { force = false, quiet = false 
     setArtifactsState(projectPath, {
       loading: false,
       initialized: true,
+      loadedAt: Date.now(),
       error: "",
       artifactRoot: String(payload.artifactRoot || ""),
       items: Array.isArray(payload.artifacts) ? payload.artifacts.map(normalizeArtifact) : [],
@@ -9770,6 +9774,7 @@ async function loadProjectArtifacts(projectPath, { force = false, quiet = false 
       setArtifactsState(projectPath, {
         loading: false,
         initialized: true,
+        loadedAt: Date.now(),
         error: error.message,
       });
       return artifactsStateFor(projectPath);

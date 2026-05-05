@@ -344,6 +344,29 @@ test("web project switch leaves Codex session import discovery lazy", async () =
   assert.doesNotMatch(refreshProjects, /refreshImportableSessions\(state\.selectedProject,\s*\{\s*force:\s*true/u);
 });
 
+test("web artifact refresh avoids polling historical answered cards", async () => {
+  const source = await readFile(webAppPath, "utf8");
+  assert.match(source, /const artifactRefreshFreshMs = 60 \* 1000;/u);
+
+  const artifactTargetsStart = source.indexOf("function artifactProjectsNeedingRefresh");
+  const refreshArtifactsStart = source.indexOf("async function refreshArtifacts", artifactTargetsStart);
+  assert.notEqual(artifactTargetsStart, -1);
+  assert.notEqual(refreshArtifactsStart, -1);
+  assert.ok(refreshArtifactsStart > artifactTargetsStart);
+
+  const artifactTargets = source.slice(artifactTargetsStart, refreshArtifactsStart);
+  assert.doesNotMatch(artifactTargets, /status === "answered"/u);
+  assert.match(artifactTargets, /status === "queued" && threadEntryVisibleInQueue/u);
+
+  const loadArtifactsStart = source.indexOf("async function loadProjectArtifacts");
+  const openArtifactsStart = source.indexOf("async function openArtifactsModal", loadArtifactsStart);
+  assert.notEqual(loadArtifactsStart, -1);
+  assert.notEqual(openArtifactsStart, -1);
+  const loadArtifacts = source.slice(loadArtifactsStart, openArtifactsStart);
+  assert.match(loadArtifacts, /Date\.now\(\) - Number\(existing\.loadedAt \|\| 0\) < artifactRefreshFreshMs/u);
+  assert.match(loadArtifacts, /loadedAt: Date\.now\(\)/u);
+});
+
 test("web history merge replaces stale cached synthetic answer with fresh synthetic final answer", async () => {
   const { mergeHistoryItems } = await loadHistoryMergeHelpers();
   const staleCached = {
