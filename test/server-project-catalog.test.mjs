@@ -616,6 +616,7 @@ cat > "$CLAWDAD_TERMINAL_CAPTURE"
         defaultProject: projectPath,
         authMode: "tailscale",
         allowedUsers: ["tester@example.com"],
+        bodyLimitBytes: 65536,
       },
       null,
       2,
@@ -2167,7 +2168,9 @@ process.exit(0);
     formData.append("project", projectPath);
     formData.append("sessionId", sessionId);
     formData.append("message", "");
-    formData.append("attachments", new Blob([new Uint8Array([137, 80, 78, 71])], { type: "image/png" }), "screen shot.png");
+    const imageBytes = new Uint8Array(70 * 1024);
+    imageBytes.set([137, 80, 78, 71]);
+    formData.append("attachments", new Blob([imageBytes], { type: "image/png" }), "screen shot.png");
 
     const response = await fetch(`${baseUrl}/v1/dispatch`, {
       method: "POST",
@@ -2184,7 +2187,9 @@ process.exit(0);
     assert.equal(payload.attachments[0].fileName, "screen shot.png");
     assert.equal(payload.attachments[0].kind, "image");
     assert.equal(payload.attachments[0].mimeType, "image/png");
-    assert.equal(await readFile(payload.attachments[0].path, "latin1"), "\u0089PNG");
+    const savedImage = await readFile(payload.attachments[0].path);
+    assert.equal(savedImage.subarray(0, 4).toString("latin1"), "\u0089PNG");
+    assert.equal(savedImage.length, imageBytes.length);
 
     const args = JSON.parse(await readFile(argsPath, "utf8"));
     assert.deepEqual(args.slice(0, 3), [
