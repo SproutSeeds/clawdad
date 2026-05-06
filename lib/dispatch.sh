@@ -29,6 +29,9 @@ _build_cmd_codex() {
     cmd+=("--attachment-manifest" "$attachment_manifest")
   fi
 
+  local interjection_dir="$project_path/.clawdad/mailbox/interjections"
+  cmd+=("--interjection-dir" "$interjection_dir")
+
   local turn_timeout_ms="${CLAWDAD_CODEX_TURN_TIMEOUT_MS:-${CLAWDAD_WORKER_TIMEOUT_MS:-1800000}}"
   if [[ -n "$turn_timeout_ms" ]]; then
     cmd+=("--turn-timeout-ms" "$turn_timeout_ms")
@@ -117,7 +120,7 @@ _artifact_augmented_message() {
     return 0
   fi
   local artifact_dir="${CLAWDAD_ARTIFACTS_DIR:-$project_path/.clawdad/artifacts}"
-  printf '%s\n\n%s\n' "$message" "[Clawdad artifact handoff: If you create a deliverable file the user may need to download or share, save it under '$artifact_dir' using a clear filename. Create that folder if needed. Mention the saved filename in your final reply. Clawdad will surface files from that folder in the mobile app.]"
+  printf '%s\n\n%s\n' "$message" "[Clawdad artifact handoff: If you create a deliverable file the user explicitly requested to download or share, save it under '$artifact_dir' using a clear filename. Create that folder if needed. Mention the saved filename in your final reply. Clawdad will send requested files from that folder to the project's Dumpy party.]"
 }
 
 _attachment_augmented_message() {
@@ -312,7 +315,11 @@ dispatch_to_spoke() {
 
   # Generate request ID
   local request_id
-  request_id=$(gen_uuid)
+  if [[ -n "${CLAWDAD_DISPATCH_REQUEST_ID:-}" && "$CLAWDAD_DISPATCH_REQUEST_ID" =~ ^[A-Za-z0-9._:-]+$ ]]; then
+    request_id="$CLAWDAD_DISPATCH_REQUEST_ID"
+  else
+    request_id=$(gen_uuid)
+  fi
   local started_at
   started_at=$(iso_timestamp)
 

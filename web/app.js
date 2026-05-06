@@ -56,6 +56,7 @@ const state = {
   projectsLoading: true,
   projectRootsLoading: false,
   dispatchPending: false,
+  dispatchMode: "linear",
   sessionSwitchPending: false,
   projectModalPending: false,
   projectsRefreshPromise: null,
@@ -81,6 +82,7 @@ const state = {
   quickPromptsLoaded: false,
   quickPromptsLoading: false,
   quickPromptsSaving: false,
+  composerToolsOpen: false,
   quickPromptModalOpen: false,
   quickPromptDraftMode: "",
   quickPromptDraftId: "",
@@ -89,6 +91,12 @@ const state = {
   quickPromptResetConfirm: false,
   quickPromptError: "",
   composerAttachments: [],
+  voiceRecorder: null,
+  voiceStream: null,
+  voiceChunks: [],
+  voiceState: "idle",
+  voiceError: "",
+  queueArchiveConfirmEntryId: "",
 };
 
 const elements = {
@@ -98,20 +106,14 @@ const elements = {
   projectWorkspaceTab: document.querySelector("#projectWorkspaceTab"),
   autoWorkspaceTab: document.querySelector("#autoWorkspaceTab"),
   summaryWorkspaceTab: document.querySelector("#summaryWorkspaceTab"),
-  filesWorkspaceTab: document.querySelector("#filesWorkspaceTab"),
   projectWorkspacePane: document.querySelector("#projectWorkspacePane"),
   autoWorkspacePane: document.querySelector("#autoWorkspacePane"),
-  filesWorkspacePane: document.querySelector("#filesWorkspacePane"),
   selectedProjectDelegateMeta: document.querySelector("#selectedProjectDelegateMeta"),
   selectedProjectDelegateState: document.querySelector("#selectedProjectDelegateState"),
   selectedProjectDelegateList: document.querySelector("#selectedProjectDelegateList"),
   activeRunsInlineMeta: document.querySelector("#activeRunsInlineMeta"),
   activeRunsInlineState: document.querySelector("#activeRunsInlineState"),
   activeRunsInlineList: document.querySelector("#activeRunsInlineList"),
-  filesWorkspaceMeta: document.querySelector("#filesWorkspaceMeta"),
-  filesWorkspaceState: document.querySelector("#filesWorkspaceState"),
-  filesWorkspaceList: document.querySelector("#filesWorkspaceList"),
-  filesWorkspaceRefreshButton: document.querySelector("#filesWorkspaceRefreshButton"),
   projectSelect: document.querySelector("#projectSelect"),
   projectAddButton: document.querySelector("#projectAddButton"),
   projectDelegateButton: document.querySelector("#projectDelegateButton"),
@@ -122,11 +124,16 @@ const elements = {
   sessionThreadButton: document.querySelector("#sessionThreadButton"),
   audioAutoDownloadButton: document.querySelector("#audioAutoDownloadButton"),
   messageInput: document.querySelector("#messageInput"),
+  composerToolsButton: document.querySelector("#composerToolsButton"),
+  composerToolsMenu: document.querySelector("#composerToolsMenu"),
+  composerVoiceButton: document.querySelector("#composerVoiceButton"),
+  composerVoiceCaptureInput: document.querySelector("#composerVoiceCaptureInput"),
   composerAttachmentButton: document.querySelector("#composerAttachmentButton"),
   composerAttachmentInput: document.querySelector("#composerAttachmentInput"),
   composerAttachmentList: document.querySelector("#composerAttachmentList"),
   quickPromptButton: document.querySelector("#quickPromptButton"),
   currentTerminalButton: document.querySelector("#currentTerminalButton"),
+  dispatchModeButtons: Array.from(document.querySelectorAll("[data-dispatch-mode]")),
   dispatchForm: document.querySelector("#dispatchForm"),
   dispatchButton: document.querySelector("#dispatchButton"),
   quickPromptModal: document.querySelector("#quickPromptModal"),
@@ -149,6 +156,13 @@ const elements = {
   queueToggle: document.querySelector("#queueToggle"),
   queueBody: document.querySelector("#queueBody"),
   queueList: document.querySelector("#queueList"),
+  queueArchiveModal: document.querySelector("#queueArchiveModal"),
+  queueArchiveBackdrop: document.querySelector("#queueArchiveBackdrop"),
+  queueArchiveClose: document.querySelector("#queueArchiveClose"),
+  queueArchiveMeta: document.querySelector("#queueArchiveMeta"),
+  queueArchiveMessage: document.querySelector("#queueArchiveMessage"),
+  queueArchiveCancelButton: document.querySelector("#queueArchiveCancelButton"),
+  queueArchiveConfirmButton: document.querySelector("#queueArchiveConfirmButton"),
   detailModal: document.querySelector("#detailModal"),
   detailBackdrop: document.querySelector("#detailBackdrop"),
   detailClose: document.querySelector("#detailClose"),
@@ -278,9 +292,32 @@ const threadCacheKey = `clawdad-thread-log-v2${cacheVersionSuffix}`;
 const queueCollapsedKey = "clawdad-queue-collapsed-v1";
 const artifactShelfCollapsedKey = "clawdad-artifact-shelf-collapsed-v1";
 const audioAutoDownloadKey = "clawdad-audio-auto-download-v1";
+let queueArchiveReturnFocus = null;
+let queueArchiveFocusPending = false;
 const quickPromptTitleMax = 80;
 const quickPromptTextMax = 12_000;
 const newSessionSelectValue = "__clawdad_new_session__";
+const dispatchModes = ["linear", "queue", "interject"];
+const dispatchModeDetails = {
+  linear: {
+    label: "Linear",
+    aria: "Dispatch mode: Linear",
+    title: "Linear mode: send only when the selected session is idle",
+    icon: '<path d="M4 5.25h7.5M8.75 2.75 11.5 5.25 8.75 7.75M6.5 12.75H14M11.25 10.25 14 12.75l-2.75 2.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"></path>',
+  },
+  queue: {
+    label: "Queue",
+    aria: "Dispatch mode: Queue message",
+    title: "Queue mode: send after the active turn finishes",
+    icon: '<path d="M4.2 4.4h9.6M4.2 9h9.6M4.2 13.6h5.9M12.15 11.55l2.05 2.05-2.05 2.05" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"></path>',
+  },
+  interject: {
+    label: "Interject",
+    aria: "Dispatch mode: Interject message",
+    title: "Interject mode: steer the active turn after the next tool boundary",
+    icon: '<path d="M3.8 9h6.1M8.15 4.8 12.35 9l-4.2 4.2M13.4 4.2v9.6" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"></path>',
+  },
+};
 const queuedDispatchGraceMs = 15000;
 // Dispatch startup can lag behind refreshes; do not mark optimistic queue cards failed too early.
 const queuedDispatchAttachGraceMs = 2 * 60 * 1000;
@@ -1999,6 +2036,7 @@ function historyRenderSignature(historyState) {
           [
             String(entry?.requestId || ""),
             String(entry?.status || ""),
+            String(entry?.scheduleMode || entry?.dispatchMode || ""),
             String(entry?.answeredAt || ""),
             String(entry?.seenAt || ""),
             String(entry?.message || "").length,
@@ -2321,11 +2359,12 @@ function setCodexIntegrationState(projectPath, nextState) {
 function artifactsStateFor(projectPath) {
   return (
     state.artifactsByProject[projectPath] || {
-      items: [],
-      artifactRoot: "",
-      loading: false,
-      initialized: false,
-      loadedAt: 0,
+    items: [],
+    artifactRoot: "",
+    dumpy: null,
+    loading: false,
+    initialized: false,
+    loadedAt: 0,
       error: "",
     }
   );
@@ -2537,11 +2576,27 @@ function normalizeHistoryAttachments(attachments) {
     .filter((attachment) => attachment.fileName);
 }
 
+function normalizeHistoryScheduleMode(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["queue", "queued", "next"].includes(normalized)) {
+    return "queue";
+  }
+  if (["interject", "interrupt", "steer"].includes(normalized)) {
+    return "interject";
+  }
+  if (normalized === "linear") {
+    return "linear";
+  }
+  return "";
+}
+
 function normalizeHistoryItem(item) {
   const sessionId = String(item?.sessionId || "").trim();
   const provider = String(item?.provider || "").trim() || sessionForEntry(item)?.provider || "session";
   const normalizedStatus = String(item?.status || "queued").trim().toLowerCase() || "queued";
   const answeredAt = String(item?.answeredAt || "").trim() || null;
+  const scheduleMode = normalizeHistoryScheduleMode(item?.scheduleMode || item?.dispatchMode);
+  const archivedAt = String(item?.archivedAt || "").trim() || null;
   return {
     requestId: String(item?.requestId || "").trim() || makeEntryId(),
     projectPath: String(item?.projectPath || "").trim(),
@@ -2557,6 +2612,8 @@ function normalizeHistoryItem(item) {
     status: normalizedStatus,
     response: String(item?.response || ""),
     exitCode: typeof item?.exitCode === "number" ? item.exitCode : null,
+    scheduleMode,
+    archivedAt,
     attachments: normalizeHistoryAttachments(item?.attachments),
     seenAt:
       String(item?.seenAt || "").trim() ||
@@ -2618,10 +2675,60 @@ function queuedThreadEntryVisibleInQueue(entry, items = state.threadEntries) {
   return !entryAgePastAttachGraceWindow(entry);
 }
 
+function threadEntryIsInterjection(entry) {
+  return normalizeHistoryScheduleMode(entry?.scheduleMode || entry?.dispatchMode) === "interject";
+}
+
+function historyEntryQueuedForLater(entry, items = []) {
+  if (threadEntryStatus(entry) !== "queued") {
+    return false;
+  }
+  if (normalizeHistoryScheduleMode(entry?.scheduleMode || entry?.dispatchMode) !== "queue") {
+    return false;
+  }
+
+  const projectPath = String(entry?.projectPath || "").trim();
+  const sessionId = String(entry?.sessionId || "").trim();
+  if (!projectPath || !sessionId) {
+    return false;
+  }
+
+  const itemList = Array.isArray(items) ? items : [];
+  const entryIndex = itemList.findIndex((candidate) => candidate === entry);
+  const earlierItems =
+    entryIndex >= 0
+      ? itemList.slice(0, entryIndex)
+      : itemList.filter((candidate) => {
+          const entryMs = entrySentAtMs(entry);
+          const candidateMs = entrySentAtMs(candidate);
+          return entryMs > 0 && candidateMs > 0 && candidateMs < entryMs;
+        });
+
+  return earlierItems.some((candidate) => {
+    if (
+      String(candidate?.projectPath || "").trim() !== projectPath ||
+      String(candidate?.sessionId || "").trim() !== sessionId
+    ) {
+      return false;
+    }
+    return threadEntryStatus(candidate) === "queued";
+  });
+}
+
+function threadEntryIsArchived(entry) {
+  return Boolean(String(entry?.archivedAt || "").trim());
+}
+
 function threadEntryVisibleInQueue(entry, items = state.threadEntries) {
+  if (threadEntryIsArchived(entry)) {
+    return false;
+  }
   const status = threadEntryStatus(entry);
   if (status === "queued") {
     return queuedThreadEntryVisibleInQueue(entry, items);
+  }
+  if (status === "answered" && threadEntryIsInterjection(entry)) {
+    return false;
   }
   return status === "answered";
 }
@@ -2671,8 +2778,8 @@ function isSyntheticHistoryRequestId(value) {
 
 function stripClawdadHistoryHandoff(value) {
   return String(value || "")
-    .replace(/\s*\[Clawdad attachment handoff:[\s\S]*?\]\s*$/u, "")
-    .replace(/\s*\[Clawdad artifact handoff:[\s\S]*?\]\s*$/u, "")
+    .replace(/\s*\[Clawdad (?:attachment|artifact) handoff:[\s\S]*?\]\s*/gu, " ")
+    .replace(/\s*<image\b[\s\S]*?<\/image>\s*/giu, " ")
     .trim();
 }
 
@@ -2785,9 +2892,17 @@ function mergeHistoryItem(existing, incoming) {
     }
     return String(incoming?.response || "").trim() || String(existing?.response || "");
   })();
-  const requestId =
-    String(incoming?.requestId || "").trim() ||
-    String(existing?.requestId || "").trim();
+  const existingRequestId = String(existing?.requestId || "").trim();
+  const incomingRequestId = String(incoming?.requestId || "").trim();
+  const requestId = (() => {
+    if (incomingRequestId && !isSyntheticHistoryRequestId(incomingRequestId)) {
+      return incomingRequestId;
+    }
+    if (existingRequestId && !isSyntheticHistoryRequestId(existingRequestId)) {
+      return existingRequestId;
+    }
+    return incomingRequestId || existingRequestId;
+  })();
   const projectPath = firstNonEmpty(incoming?.projectPath, existing?.projectPath);
   const sessionId = firstNonEmpty(incoming?.sessionId, existing?.sessionId);
   const sentAt = firstNonEmpty(existing?.sentAt, incoming?.sentAt);
@@ -2826,6 +2941,12 @@ function mergeHistoryItem(existing, incoming) {
     status: status || incoming?.status || existing?.status || "queued",
     response,
     exitCode,
+    scheduleMode:
+      firstNonEmpty(
+        normalizeHistoryScheduleMode(incoming?.scheduleMode || incoming?.dispatchMode),
+        normalizeHistoryScheduleMode(existing?.scheduleMode || existing?.dispatchMode),
+      ) || "",
+    archivedAt: firstNonEmpty(existing?.archivedAt, incoming?.archivedAt) || null,
     attachments: incomingAttachments.length > 0 ? incomingAttachments : existingAttachments,
     seenAt:
       String(existing?.seenAt || "").trim() ||
@@ -2856,17 +2977,25 @@ function mergeHistoryItems(existingItems = [], incomingItems = []) {
 
 function trimThreadEntries(items = []) {
   const normalizedItems = Array.isArray(items) ? items : [];
-  const queued = normalizedItems.filter((entry) => queuedThreadEntryVisibleInQueue(entry, normalizedItems));
+  const queued = normalizedItems.filter((entry) => !threadEntryIsArchived(entry) && queuedThreadEntryVisibleInQueue(entry, normalizedItems));
+  const archived = normalizedItems
+    .filter(threadEntryIsArchived)
+    .sort((left, right) => {
+      const leftMs = new Date(left.archivedAt || left.answeredAt || left.sentAt || 0).getTime();
+      const rightMs = new Date(right.archivedAt || right.answeredAt || right.sentAt || 0).getTime();
+      return (Number.isFinite(rightMs) ? rightMs : 0) - (Number.isFinite(leftMs) ? leftMs : 0);
+    })
+    .slice(0, Math.max(0, threadEntryCacheLimit - queued.length));
   const returned = normalizedItems
-    .filter((entry) => threadEntryStatus(entry) === "answered")
+    .filter((entry) => threadEntryStatus(entry) === "answered" && !threadEntryIsArchived(entry))
     .sort((left, right) => {
       const leftMs = new Date(left.answeredAt || left.sentAt || 0).getTime();
       const rightMs = new Date(right.answeredAt || right.sentAt || 0).getTime();
       return (Number.isFinite(rightMs) ? rightMs : 0) - (Number.isFinite(leftMs) ? leftMs : 0);
     })
-    .slice(0, Math.max(0, threadEntryCacheLimit - queued.length));
+    .slice(0, Math.max(0, threadEntryCacheLimit - queued.length - archived.length));
 
-  return mergeHistoryItems([], [...queued, ...returned]);
+  return mergeHistoryItems([], [...queued, ...returned, ...archived]);
 }
 
 function threadEntryFromHistoryItem(item) {
@@ -4072,9 +4201,16 @@ function currentSessionTerminalEntry() {
 
 function decorateOpenTerminalButton(button, launchKey) {
   const pending = state.terminalLaunchPendingKey === launchKey;
+  const visibleLabel = button.classList.contains("composer-tools-item")
+    ? pending
+      ? "Opening terminal"
+      : "Open terminal"
+    : "";
   button.disabled = pending;
   button.classList.toggle("is-loading", pending);
-  button.innerHTML = terminalIconMarkup();
+  button.innerHTML = visibleLabel
+    ? `${terminalIconMarkup()}<span class="button-text">${visibleLabel}</span>`
+    : terminalIconMarkup();
   button.setAttribute("aria-label", pending ? "Opening terminal" : "Open in terminal");
   button.title = pending ? "Opening terminal" : "Open in terminal";
 }
@@ -4699,7 +4835,8 @@ function updateBodyModalState() {
       Boolean(state.activeRunsModalOpen) ||
       Boolean(state.artifactModalProject) ||
       Boolean(state.delegateModalProject) ||
-      Boolean(state.sessionTitleModalProject),
+      Boolean(state.sessionTitleModalProject) ||
+      Boolean(state.queueArchiveConfirmEntryId),
   );
 }
 
@@ -5044,7 +5181,12 @@ function renderQueueList() {
       card.classList.add("clickable");
       card.tabIndex = 0;
       card.setAttribute("role", "button");
-      card.addEventListener("click", () => {
+      card.addEventListener("click", (event) => {
+        if (card.dataset.swipeSuppress === "true") {
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
         void openSessionThread(entry.projectPath, entry.sessionId, {
           focusRequestId: String(entry.requestId || "").trim(),
         });
@@ -5111,12 +5253,195 @@ function renderQueueList() {
     if (canOpenSessionInTerminal(entry)) {
       card.append(buildOpenTerminalButton(entry));
     }
+    card.append(buildQueueArchiveButton(entry));
     card.append(head, meta, message);
     if (attachments) {
       card.append(attachments);
     }
 
+    attachQueueCardArchiveSwipe(card, entry);
     elements.queueList.append(card);
+  }
+}
+
+function queueArchiveEntryId(entry) {
+  return String(entry?.id || entry?.requestId || entry?.sentAt || "").trim();
+}
+
+function queueArchiveEntry() {
+  const entryId = String(state.queueArchiveConfirmEntryId || "").trim();
+  if (!entryId) {
+    return null;
+  }
+  return state.threadEntries.find((entry) => queueArchiveEntryId(entry) === entryId) || null;
+}
+
+function buildQueueArchiveButton(entry) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "copy-button copy-button-floating queue-card-archive-button";
+  button.setAttribute("aria-label", "Archive worker card");
+  button.innerHTML = `
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M3.1 5.35h9.8v7.05a1.15 1.15 0 0 1-1.15 1.15h-7.5A1.15 1.15 0 0 1 3.1 12.4V5.35Z" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"></path>
+      <path d="M2.35 3.15h11.3v2.2H2.35zM6.15 8h3.7" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"></path>
+    </svg>
+  `;
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    openQueueArchiveConfirm(entry, button);
+  });
+  return button;
+}
+
+function attachQueueCardArchiveSwipe(card, entry) {
+  let startX = 0;
+  let startY = 0;
+  let currentX = 0;
+  let pointerId = null;
+  let dragging = false;
+  let horizontal = false;
+
+  const reset = () => {
+    pointerId = null;
+    dragging = false;
+    horizontal = false;
+    card.classList.remove("is-swiping", "is-swipe-armed");
+    card.style.removeProperty("--queue-card-swipe-x");
+  };
+
+  card.addEventListener("pointerdown", (event) => {
+    if (event.button !== undefined && event.button !== 0) {
+      return;
+    }
+    if (event.target instanceof Element && event.target.closest("button, a, input, textarea, select")) {
+      return;
+    }
+    pointerId = event.pointerId;
+    startX = event.clientX;
+    startY = event.clientY;
+    currentX = event.clientX;
+    dragging = true;
+    horizontal = false;
+    card.setPointerCapture?.(event.pointerId);
+  });
+
+  card.addEventListener("pointermove", (event) => {
+    if (!dragging || pointerId !== event.pointerId) {
+      return;
+    }
+    currentX = event.clientX;
+    const deltaX = currentX - startX;
+    const deltaY = event.clientY - startY;
+    if (!horizontal) {
+      if (Math.abs(deltaX) < 10) {
+        return;
+      }
+      if (Math.abs(deltaX) <= Math.abs(deltaY) * 1.2) {
+        return;
+      }
+      horizontal = true;
+      card.classList.add("is-swiping");
+    }
+    if (deltaX >= 0) {
+      card.style.setProperty("--queue-card-swipe-x", "0px");
+      card.classList.remove("is-swipe-armed");
+      return;
+    }
+    event.preventDefault();
+    const clamped = Math.max(deltaX, -118);
+    card.style.setProperty("--queue-card-swipe-x", `${clamped}px`);
+    card.classList.toggle("is-swipe-armed", clamped <= -72);
+  });
+
+  card.addEventListener("pointerup", (event) => {
+    if (!dragging || pointerId !== event.pointerId) {
+      return;
+    }
+    const deltaX = currentX - startX;
+    const shouldArchive = horizontal && deltaX <= -72;
+    if (shouldArchive) {
+      card.dataset.swipeSuppress = "true";
+      window.setTimeout(() => {
+        delete card.dataset.swipeSuppress;
+      }, 250);
+      openQueueArchiveConfirm(entry, card);
+    }
+    reset();
+  });
+
+  card.addEventListener("pointercancel", reset);
+  card.addEventListener("lostpointercapture", () => {
+    if (dragging && !horizontal) {
+      reset();
+    }
+  });
+}
+
+function openQueueArchiveConfirm(entry, returnFocus = null) {
+  const entryId = queueArchiveEntryId(entry);
+  if (!entryId) {
+    return;
+  }
+  state.queueArchiveConfirmEntryId = entryId;
+  queueArchiveReturnFocus =
+    returnFocus instanceof HTMLElement
+      ? returnFocus
+      : document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+  queueArchiveFocusPending = true;
+  renderAll();
+}
+
+function closeQueueArchiveConfirm({ restoreFocus = true } = {}) {
+  state.queueArchiveConfirmEntryId = "";
+  queueArchiveFocusPending = false;
+  const focusTarget = queueArchiveReturnFocus;
+  queueArchiveReturnFocus = null;
+  renderAll();
+  if (restoreFocus && focusTarget?.isConnected) {
+    focusTarget.focus({ preventScroll: true });
+  }
+}
+
+function archiveQueueEntry() {
+  const target = queueArchiveEntry();
+  if (!target) {
+    closeQueueArchiveConfirm({ restoreFocus: false });
+    return;
+  }
+  const targetId = queueArchiveEntryId(target);
+  const archivedAt = new Date().toISOString();
+  state.threadEntries = state.threadEntries.map((entry) =>
+    queueArchiveEntryId(entry) === targetId
+      ? {
+          ...entry,
+          archivedAt,
+        }
+      : entry,
+  );
+  persistThreadEntries();
+  closeQueueArchiveConfirm({ restoreFocus: false });
+}
+
+function renderQueueArchiveConfirm() {
+  const entry = queueArchiveEntry();
+  if (!entry) {
+    elements.queueArchiveModal.hidden = true;
+    return;
+  }
+
+  elements.queueArchiveMeta.textContent = `${entryProjectLabel(entry)} • ${entrySessionLabel(entry)}`;
+  elements.queueArchiveMessage.textContent = String(entry.message || "").trim() || "Worker card";
+  elements.queueArchiveModal.hidden = false;
+
+  if (queueArchiveFocusPending) {
+    queueArchiveFocusPending = false;
+    window.setTimeout(() => {
+      elements.queueArchiveCancelButton?.focus({ preventScroll: true });
+    }, 0);
   }
 }
 
@@ -5129,12 +5454,13 @@ function buildThreadCard({
   copyTextValue,
   metaText,
   failed = false,
+  queuedPending = false,
   audioKind = "",
   audioText = "",
   attachments = [],
 }) {
   const card = document.createElement("article");
-  card.className = `thread-card ${direction} detail-card${failed ? " failed" : ""}`;
+  card.className = `thread-card ${direction} detail-card${failed ? " failed" : ""}${queuedPending ? " queued-pending" : ""}`;
 
   if (copyTextValue) {
     const copyButton = buildCopyButton({
@@ -5171,11 +5497,15 @@ function buildThreadCard({
   return card;
 }
 
-function buildHistoryGroup(entry) {
+function buildHistoryGroup(entry, { items = [] } = {}) {
+  const queuedForLater = historyEntryQueuedForLater(entry, items);
   const group = document.createElement("div");
   group.className = "history-group";
   group.dataset.requestId = entry.requestId || "";
   group.dataset.historyAnchor = entry.requestId || entry.sentAt || entry.answeredAt || entry.message || "";
+  const queuedMeta = ["Queued", "not sent yet", formatTimestamp(entry.sentAt)]
+    .filter(Boolean)
+    .join(" • ");
 
   group.append(
     buildThreadCard({
@@ -5185,12 +5515,17 @@ function buildHistoryGroup(entry) {
       copyLabel: "Copy message",
       text: entry.message,
       copyTextValue: entry.message,
-      metaText: formatTimestamp(entry.sentAt),
+      metaText: queuedForLater ? queuedMeta : formatTimestamp(entry.sentAt),
+      queuedPending: queuedForLater,
       audioKind: "message",
       audioText: entry.message,
       attachments: entry.attachments,
     }),
   );
+
+  if (queuedForLater) {
+    return group;
+  }
 
   const inboundText =
     entry.status === "queued"
@@ -5287,7 +5622,7 @@ function renderModal() {
     elements.detailHistoryList.append(card);
   } else {
     for (const entry of historyState.items) {
-      elements.detailHistoryList.append(buildHistoryGroup(entry));
+      elements.detailHistoryList.append(buildHistoryGroup(entry, { items: historyState.items }));
     }
   }
 
@@ -6515,7 +6850,7 @@ function buildDelegateLaneCard(project, { showProject = false, compact = false }
 }
 
 function setWorkspaceMode(mode) {
-  const nextMode = mode === "auto" || mode === "files" ? mode : "project";
+  const nextMode = mode === "auto" ? mode : "project";
   if (state.workspaceMode === nextMode) {
     return;
   }
@@ -6523,13 +6858,11 @@ function setWorkspaceMode(mode) {
   renderAll();
   if (nextMode === "auto") {
     void primeActiveRunsModal().then(renderAll).catch(showError);
-  } else if (nextMode === "files") {
-    void refreshArtifacts({ force: false }).then(renderAll).catch(showError);
   }
 }
 
 function renderWorkspaceTabs() {
-  const mode = ["auto", "files"].includes(state.workspaceMode) ? state.workspaceMode : "project";
+  const mode = state.workspaceMode === "auto" ? "auto" : "project";
   const activeCount = activeDelegateProjects().length;
   const hasProject = !state.projectsLoading && Boolean(state.selectedProject);
 
@@ -6555,20 +6888,11 @@ function renderWorkspaceTabs() {
     elements.summaryWorkspaceTab.disabled = !hasProject;
     elements.summaryWorkspaceTab.setAttribute("aria-disabled", String(!hasProject));
   }
-  if (elements.filesWorkspaceTab) {
-    elements.filesWorkspaceTab.classList.toggle("is-active", mode === "files");
-    elements.filesWorkspaceTab.disabled = state.projectsLoading;
-    elements.filesWorkspaceTab.setAttribute("aria-disabled", String(state.projectsLoading));
-    elements.filesWorkspaceTab.setAttribute("aria-pressed", String(mode === "files"));
-  }
   if (elements.projectWorkspacePane) {
     elements.projectWorkspacePane.hidden = mode !== "project";
   }
   if (elements.autoWorkspacePane) {
     elements.autoWorkspacePane.hidden = mode !== "auto";
-  }
-  if (elements.filesWorkspacePane) {
-    elements.filesWorkspacePane.hidden = mode !== "files";
   }
 }
 
@@ -7807,6 +8131,25 @@ function normalizeArtifact(item) {
   };
 }
 
+function normalizeDumpyHandoff(item) {
+  if (!item || typeof item !== "object") {
+    return null;
+  }
+  return {
+    enabled: item.enabled !== false,
+    partyId: String(item.partyId || "").trim(),
+    partyName: String(item.partyName || "Dumpy party").trim() || "Dumpy party",
+    partyUrl: String(item.partyUrl || "").trim(),
+    zipUrl: String(item.zipUrl || "").trim(),
+    itemCount: Number.parseInt(String(item.itemCount || "0"), 10) || 0,
+    uploadedCount: Number.parseInt(String(item.uploadedCount || "0"), 10) || 0,
+    handoffPending: Boolean(item.handoffPending),
+    handoffRequestedAt: String(item.handoffRequestedAt || "").trim() || null,
+    lastSyncAt: String(item.lastSyncAt || "").trim() || null,
+    lastError: String(item.lastError || "").trim(),
+  };
+}
+
 function formatFileSize(bytes) {
   const value = Number(bytes || 0);
   if (!Number.isFinite(value) || value <= 0) {
@@ -7846,6 +8189,184 @@ function makeComposerAttachment(file) {
     kind,
     previewUrl: kind === "image" ? URL.createObjectURL(file) : "",
   };
+}
+
+function voiceRecordingSupported() {
+  return Boolean(
+    window.isSecureContext &&
+      navigator.mediaDevices?.getUserMedia &&
+      typeof window.MediaRecorder === "function",
+  );
+}
+
+function preferredVoiceMimeType() {
+  const mediaRecorder = window.MediaRecorder;
+  const candidates = [
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/mp4",
+    "audio/mpeg",
+  ];
+  if (!mediaRecorder?.isTypeSupported) {
+    return "";
+  }
+  return candidates.find((candidate) => mediaRecorder.isTypeSupported(candidate)) || "";
+}
+
+function stopVoiceStream() {
+  for (const track of state.voiceStream?.getTracks?.() || []) {
+    track.stop();
+  }
+  state.voiceStream = null;
+}
+
+function setVoiceState(nextState, error = "") {
+  state.voiceState = nextState;
+  state.voiceError = String(error || "");
+  updateComposerVoiceButton();
+}
+
+function updateComposerVoiceButton() {
+  const button = elements.composerVoiceButton;
+  if (!button) {
+    return;
+  }
+  const recording = state.voiceState === "recording";
+  const transcribing = state.voiceState === "transcribing";
+  const disabled = transcribing || state.dispatchPending;
+  button.classList.toggle("is-recording", recording);
+  button.classList.toggle("is-loading", transcribing);
+  button.disabled = disabled;
+  button.setAttribute(
+    "aria-label",
+    transcribing
+      ? "Transcribing voice message"
+      : recording
+        ? "Stop recording voice message"
+        : "Record voice message",
+  );
+  button.setAttribute("aria-pressed", String(recording));
+  button.title = transcribing
+    ? "Transcribing voice message"
+    : recording
+      ? "Stop recording"
+      : "Record voice message";
+  const label = button.querySelector(".button-text");
+  if (label) {
+    label.textContent = transcribing ? "Transcribing" : recording ? "Stop talking" : "Talk";
+  }
+}
+
+function insertTranscriptIntoComposer(text) {
+  const transcript = String(text || "").trim();
+  if (!transcript || !elements.messageInput) {
+    return;
+  }
+  const current = String(elements.messageInput.value || "").trim();
+  elements.messageInput.value = current ? `${current}\n\n${transcript}` : transcript;
+  elements.messageInput.focus();
+  elements.messageInput.setSelectionRange(elements.messageInput.value.length, elements.messageInput.value.length);
+  updateSendAvailability();
+}
+
+async function transcribeComposerVoice(blob, { fileName = "clawdad-voice.webm", mimeType = "" } = {}) {
+  if (!blob || Number(blob.size || 0) <= 0) {
+    setVoiceState("idle");
+    return;
+  }
+  setVoiceState("transcribing");
+  try {
+    const formData = new FormData();
+    if (state.selectedProject) {
+      formData.append("project", state.selectedProject);
+    }
+    formData.append("audio", blob, fileName || "clawdad-voice.webm");
+    const payload = await fetchJson("/v1/stt/transcribe", {
+      method: "POST",
+      body: formData,
+    });
+    insertTranscriptIntoComposer(payload.text || payload.transcript || "");
+    setVoiceState("idle");
+  } catch (error) {
+    setVoiceState("idle", error.message);
+    showError(error);
+  } finally {
+    renderAll();
+  }
+}
+
+async function startVoiceRecording() {
+  if (!voiceRecordingSupported()) {
+    elements.composerVoiceCaptureInput?.click();
+    return;
+  }
+  if (state.voiceState === "transcribing") {
+    return;
+  }
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mimeType = preferredVoiceMimeType();
+    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    state.voiceStream = stream;
+    state.voiceChunks = [];
+    state.voiceRecorder = recorder;
+
+    recorder.addEventListener("dataavailable", (event) => {
+      if (event.data?.size > 0) {
+        state.voiceChunks.push(event.data);
+      }
+    });
+    recorder.addEventListener("stop", () => {
+      const chunks = [...state.voiceChunks];
+      state.voiceChunks = [];
+      state.voiceRecorder = null;
+      stopVoiceStream();
+      const type = mimeType || chunks[0]?.type || "audio/webm";
+      const blob = new Blob(chunks, { type });
+      void transcribeComposerVoice(blob, {
+        fileName: type.includes("mp4") ? "clawdad-voice.mp4" : "clawdad-voice.webm",
+        mimeType: type,
+      });
+    }, { once: true });
+    recorder.addEventListener("error", (event) => {
+      stopVoiceStream();
+      state.voiceRecorder = null;
+      setVoiceState("idle", event.error?.message || "Voice recording failed");
+      showError(new Error(state.voiceError || "Voice recording failed"));
+    }, { once: true });
+
+    recorder.start();
+    setVoiceState("recording");
+  } catch (error) {
+    stopVoiceStream();
+    state.voiceRecorder = null;
+    setVoiceState("idle", error.message);
+    showError(error);
+  } finally {
+    renderAll();
+  }
+}
+
+function stopVoiceRecording() {
+  const recorder = state.voiceRecorder;
+  if (!recorder || recorder.state === "inactive") {
+    setVoiceState("idle");
+    stopVoiceStream();
+    renderAll();
+    return;
+  }
+  setVoiceState("transcribing");
+  recorder.stop();
+  renderAll();
+}
+
+function handleComposerVoiceButtonClick() {
+  if (state.voiceState === "recording") {
+    stopVoiceRecording();
+    return;
+  }
+  void startVoiceRecording();
 }
 
 function composerAttachmentSummary(attachment) {
@@ -8136,11 +8657,65 @@ function buildArtifactCard(artifact, { compact = false, projectLabel = "" } = {}
   return card;
 }
 
+function buildDumpyHandoffCard(dumpy) {
+  const card = document.createElement("article");
+  card.className = "artifact-card is-compact dumpy-handoff-card";
+
+  const head = document.createElement("div");
+  head.className = "artifact-head";
+
+  const name = document.createElement("div");
+  name.className = "artifact-name";
+  name.textContent = dumpy.partyName || "Dumpy party";
+
+  const meta = document.createElement("div");
+  meta.className = "artifact-meta";
+  meta.textContent = [
+    dumpy.itemCount > 0 ? `${dumpy.itemCount} dump${dumpy.itemCount === 1 ? "" : "s"}` : "",
+    dumpy.lastSyncAt ? `synced ${formatTimestamp(dumpy.lastSyncAt)}` : "",
+  ].filter(Boolean).join(" • ") || (dumpy.handoffPending ? "Waiting for requested files" : "Ready");
+
+  head.append(name, meta);
+
+  const pathLabel = document.createElement("div");
+  pathLabel.className = "artifact-path";
+  pathLabel.textContent = dumpy.lastError
+    ? `Dumpy sync needs attention: ${dumpy.lastError}`
+    : "Requested files from this project land in this Dumpy party.";
+
+  const actions = document.createElement("div");
+  actions.className = "artifact-actions";
+
+  const open = document.createElement("button");
+  open.className = "artifact-action-button";
+  open.type = "button";
+  open.disabled = !dumpy.partyUrl;
+  open.textContent = "Open in Dumpy";
+  open.addEventListener("click", () => {
+    if (dumpy.partyUrl) {
+      window.open(dumpy.partyUrl, "_blank", "noopener,noreferrer");
+    }
+  });
+  actions.append(open);
+
+  if (dumpy.zipUrl) {
+    const zip = document.createElement("a");
+    zip.className = "artifact-action";
+    zip.href = dumpy.zipUrl;
+    zip.textContent = "Download zip";
+    zip.setAttribute("download", `${dumpy.partyName || "dump-party"}.zip`);
+    actions.append(zip);
+  }
+
+  card.append(head, pathLabel, actions);
+  return card;
+}
+
 function renderArtifactShelf() {
   const project = currentProject();
   const artifactState = artifactsStateFor(project?.path || "");
-  const items = Array.isArray(artifactState.items) ? artifactState.items : [];
-  const itemCount = items.length;
+  const dumpy = normalizeDumpyHandoff(artifactState.dumpy);
+  const itemCount = Number(dumpy?.itemCount || 0) || 0;
 
   if (elements.projectArtifactsOrb) {
     elements.projectArtifactsOrb.hidden = itemCount === 0;
@@ -8149,17 +8724,44 @@ function renderArtifactShelf() {
     elements.projectArtifactsButton.title =
       itemCount > 0 ? `${itemCount} agent file${itemCount === 1 ? "" : "s"}` : "Files";
   }
-  if (elements.filesWorkspaceTab) {
-    elements.filesWorkspaceTab.title =
-      itemCount > 0 ? `${itemCount} agent file${itemCount === 1 ? "" : "s"}` : "Files";
-  }
-
+  const visible = Boolean(dumpy && (itemCount > 0 || dumpy.lastError));
   if (elements.artifactShelf) {
-    elements.artifactShelf.hidden = true;
+    elements.artifactShelf.hidden = !visible;
+    elements.artifactShelf.classList.toggle("is-collapsed", state.artifactShelfCollapsed);
+    elements.artifactShelf.classList.toggle("has-error", Boolean(dumpy?.lastError));
+  }
+  if (elements.artifactShelfTitle) {
+    elements.artifactShelfTitle.textContent = "Dumpy party";
+  }
+  if (elements.artifactShelfMeta) {
+    elements.artifactShelfMeta.textContent = dumpy?.lastError
+      ? "SYNC NEEDS ATTENTION"
+      : itemCount > 0
+        ? `${itemCount} DUMP${itemCount === 1 ? "" : "S"} READY`
+        : dumpy?.handoffPending
+          ? "WAITING FOR FILES"
+          : "";
+  }
+  if (elements.artifactShelfOpenButton) {
+    elements.artifactShelfOpenButton.disabled = !dumpy?.partyUrl;
+    elements.artifactShelfOpenButton.dataset.dumpyUrl = dumpy?.partyUrl || "";
+    elements.artifactShelfOpenButton.textContent = "Open Dumpy";
+  }
+  if (elements.artifactShelfToggle) {
+    elements.artifactShelfToggle.setAttribute("aria-expanded", String(!state.artifactShelfCollapsed));
+    elements.artifactShelfToggle.setAttribute(
+      "aria-label",
+      `${state.artifactShelfCollapsed ? "Expand" : "Collapse"} Dumpy party`,
+    );
   }
   if (elements.artifactShelfList) {
     clearNode(elements.artifactShelfList);
-    elements.artifactShelfList.dataset.renderKey = "";
+    if (visible) {
+      elements.artifactShelfList.append(buildDumpyHandoffCard(dumpy));
+      elements.artifactShelfList.dataset.renderKey = JSON.stringify(dumpy);
+    } else {
+      elements.artifactShelfList.dataset.renderKey = "";
+    }
   }
 }
 
@@ -8846,10 +9448,77 @@ function updateQueueUnreadOrb() {
   elements.queueUnreadOrb.hidden = !hasUnreadQueueEntries();
 }
 
+function normalizeDispatchMode(value) {
+  return dispatchModes.includes(value) ? value : "linear";
+}
+
+function dispatchModeAllowsBusySend(mode = state.dispatchMode) {
+  return normalizeDispatchMode(mode) !== "linear";
+}
+
+function setDispatchMode(mode, { closeTools = false } = {}) {
+  state.dispatchMode = normalizeDispatchMode(mode);
+  if (closeTools) {
+    closeComposerToolsMenu({ focusComposer: false });
+    return;
+  }
+  updateDispatchModeButton();
+  updateSendAvailability();
+}
+
+function cycleDispatchMode() {
+  const currentIndex = dispatchModes.indexOf(normalizeDispatchMode(state.dispatchMode));
+  setDispatchMode(dispatchModes[(currentIndex + 1) % dispatchModes.length]);
+}
+
+function renderComposerToolsMenu() {
+  if (elements.composerToolsButton) {
+    elements.composerToolsButton.setAttribute("aria-expanded", String(state.composerToolsOpen));
+    elements.composerToolsButton.classList.toggle("is-active", state.composerToolsOpen);
+  }
+  if (elements.composerToolsMenu) {
+    elements.composerToolsMenu.hidden = !state.composerToolsOpen;
+  }
+}
+
+function updateDispatchModeButton() {
+  const mode = normalizeDispatchMode(state.dispatchMode);
+  state.dispatchMode = mode;
+  const details = dispatchModeDetails[mode] || dispatchModeDetails.linear;
+  if (elements.composerToolsButton) {
+    elements.composerToolsButton.classList.toggle("is-queue", mode === "queue");
+    elements.composerToolsButton.classList.toggle("is-interject", mode === "interject");
+    elements.composerToolsButton.setAttribute("aria-label", `Open composer tools. ${details.aria}`);
+    elements.composerToolsButton.title = details.title;
+  }
+  for (const button of elements.dispatchModeButtons) {
+    const active = normalizeDispatchMode(button.dataset.dispatchMode) === mode;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", String(active));
+  }
+}
+
+function dispatchButtonText({ catalogBlocking = false, sessionBusy = false, allowBusySend = true } = {}) {
+  const mode = normalizeDispatchMode(state.dispatchMode);
+  const details = dispatchModeDetails[mode] || dispatchModeDetails.linear;
+  const modeLabel = details.label;
+  if (state.dispatchPending) {
+    return "Sending…";
+  }
+  if (catalogBlocking) {
+    return "Loading…";
+  }
+  if (sessionBusy && !allowBusySend) {
+    return `Working (${modeLabel})`;
+  }
+  return `Send (${modeLabel})`;
+}
+
 function updateSendAvailability() {
   const session = currentSession();
   const hasPending = Boolean(pendingEntryForSession(state.selectedProject, state.selectedSessionId));
   const sessionBusy = hasPending || sessionIsBusy(session);
+  const allowBusySend = dispatchModeAllowsBusySend();
   const catalogBlocking = catalogIsBootstrapping();
   const hasDraft = Boolean(String(elements.messageInput?.value || "").trim()) || state.composerAttachments.length > 0;
   const canSend =
@@ -8860,16 +9529,14 @@ function updateSendAvailability() {
     Boolean(state.selectedProject) &&
     Boolean(state.selectedSessionId) &&
     hasDraft &&
-    !sessionBusy;
+    (!sessionBusy || allowBusySend);
 
   elements.dispatchButton.disabled = !canSend;
-  elements.dispatchButton.querySelector(".button-text").textContent = state.dispatchPending
-    ? "Sending…"
-    : catalogBlocking
-      ? "Loading…"
-      : sessionBusy
-      ? `${currentProcessingPhrase()}…`
-      : "Send";
+  elements.dispatchButton.querySelector(".button-text").textContent = dispatchButtonText({
+    catalogBlocking,
+    sessionBusy,
+    allowBusySend,
+  });
 }
 
 function updateThreadButtonAvailability() {
@@ -8982,11 +9649,6 @@ function updateArtifactsButtonAvailability() {
   if (elements.projectArtifactsButton) {
     elements.projectArtifactsButton.disabled = projectDisabled;
   }
-  if (elements.filesWorkspaceTab) {
-    elements.filesWorkspaceTab.disabled = state.projectsLoading;
-    elements.filesWorkspaceTab.setAttribute("aria-disabled", String(state.projectsLoading));
-    elements.filesWorkspaceTab.title = state.projectsLoading ? "Loading projects" : "Files";
-  }
   if (projectDisabled && elements.projectArtifactsOrb) {
     elements.projectArtifactsOrb.hidden = true;
   }
@@ -9071,6 +9733,7 @@ function renderAll() {
   renderFilesWorkspace();
   renderModal();
   renderComposerAttachments();
+  renderComposerToolsMenu();
   renderQuickPromptModal();
   renderSessionImportModal();
   renderSessionTitleModal();
@@ -9080,8 +9743,10 @@ function renderAll() {
   renderArtifactsModal();
   renderDelegateModal();
   renderProjectModal();
+  renderQueueArchiveConfirm();
   updateMailboxState();
   updateQueueUnreadOrb();
+  updateDispatchModeButton();
   updateSendAvailability();
   updateThreadButtonAvailability();
   updateImportButtonAvailability();
@@ -9092,6 +9757,7 @@ function renderAll() {
   updateActiveRunsButtonAvailability();
   updateQueueChrome();
   updateAudioAutoDownloadButton();
+  updateComposerVoiceButton();
   updateBodyModalState();
   refreshCopyButtons();
   updateComposerTerminalButtonAvailability();
@@ -9403,9 +10069,6 @@ async function refreshProjects() {
       if (state.workspaceMode === "auto") {
         void primeActiveRunsModal().then(renderAll).catch(() => {});
       }
-      if (state.workspaceMode === "files") {
-        void refreshArtifacts({ force: false }).then(renderAll).catch(() => {});
-      }
     } finally {
       state.projectsLoading = false;
       renderAll();
@@ -9598,12 +10261,8 @@ async function refreshDelegates() {
 
 function artifactProjectsNeedingRefresh() {
   const targets = new Set();
-  if (state.workspaceMode === "files") {
-    for (const project of state.projects) {
-      if (project?.path) {
-        targets.add(project.path);
-      }
-    }
+  if (state.selectedProject) {
+    targets.add(state.selectedProject);
   }
   if (state.artifactModalProject) {
     targets.add(state.artifactModalProject);
@@ -10180,6 +10839,7 @@ async function loadProjectArtifacts(projectPath, { force = false, quiet = false 
       error: "",
       artifactRoot: String(payload.artifactRoot || ""),
       items: Array.isArray(payload.artifacts) ? payload.artifacts.map(normalizeArtifact) : [],
+      dumpy: normalizeDumpyHandoff(payload.dumpy),
     });
     return artifactsStateFor(projectPath);
   })()
@@ -11281,7 +11941,39 @@ function openQuickPromptEdit(promptId) {
   window.setTimeout(() => elements.quickPromptTitleInput?.focus(), 0);
 }
 
+function openComposerToolsMenu() {
+  state.composerToolsOpen = true;
+  renderAll();
+}
+
+function closeComposerToolsMenu({ focusComposer = false } = {}) {
+  state.composerToolsOpen = false;
+  renderAll();
+  if (focusComposer) {
+    window.setTimeout(() => elements.messageInput?.focus(), 0);
+  }
+}
+
+function toggleComposerToolsMenu() {
+  if (state.composerToolsOpen) {
+    closeComposerToolsMenu({ focusComposer: false });
+    return;
+  }
+  openComposerToolsMenu();
+}
+
+function isComposerToolsTarget(target) {
+  if (!(target instanceof Node)) {
+    return false;
+  }
+  return Boolean(
+    elements.composerToolsButton?.contains(target) ||
+      elements.composerToolsMenu?.contains(target),
+  );
+}
+
 function openQuickPromptModal() {
+  state.composerToolsOpen = false;
   state.quickPromptModalOpen = true;
   state.quickPromptError = "";
   state.quickPromptResetConfirm = false;
@@ -11570,6 +12262,8 @@ async function handleDispatch(event) {
   const dispatchMessage = message || (hasAttachments ? "Please review the attached file(s)." : "");
   const projectDetails = currentProject();
   const sessionDetails = currentSession();
+  const dispatchMode = normalizeDispatchMode(state.dispatchMode);
+  const allowBusySend = dispatchModeAllowsBusySend(dispatchMode);
 
   if (!project) {
     showError(new Error("Select a project."));
@@ -11584,12 +12278,12 @@ async function handleDispatch(event) {
     return;
   }
 
-  if (pendingEntryForSession(project, sessionId)) {
+  if (!allowBusySend && pendingEntryForSession(project, sessionId)) {
     renderAll();
     return;
   }
 
-  if (sessionIsBusy(sessionDetails)) {
+  if (!allowBusySend && sessionIsBusy(sessionDetails)) {
     showError(new Error("This session is busy."));
     return;
   }
@@ -11604,6 +12298,7 @@ async function handleDispatch(event) {
     attachments: composerAttachments.map(composerAttachmentSummary),
     requestId: "",
     status: "queued",
+    scheduleMode: dispatchMode,
     sentAt: new Date().toISOString(),
     answeredAt: null,
     response: "",
@@ -11634,6 +12329,7 @@ async function handleDispatch(event) {
           formData.append("sessionId", sessionId);
           formData.append("message", dispatchMessage);
           formData.append("wait", "false");
+          formData.append("dispatchMode", dispatchMode);
           for (const attachment of composerAttachments) {
             formData.append("attachments", attachment.file, attachment.fileName);
           }
@@ -11652,16 +12348,30 @@ async function handleDispatch(event) {
             sessionId,
             message: dispatchMessage,
             wait: false,
+            dispatchMode,
           }),
         };
     const payload = await fetchJson("/v1/dispatch", requestOptions);
+    const effectiveScheduleMode =
+      normalizeHistoryScheduleMode(payload.dispatchMode || payload.scheduleMode) ||
+      (payload.interjected ? "interject" : dispatchMode);
 
     updateThreadEntry(entry.id, {
       requestId: String(payload.requestId || "").trim(),
+      scheduleMode: effectiveScheduleMode,
       attachments: Array.isArray(payload.attachments) && payload.attachments.length > 0
         ? payload.attachments
         : entry.attachments,
     });
+    if (payload.interjected) {
+      completeThreadEntry(entryById(entry.id) || entry, {
+        status: "answered",
+        scheduleMode: "interject",
+        answeredAt: new Date().toISOString(),
+        response: "Interjected into the active Codex turn.",
+        seenAt: null,
+      });
+    }
     hydrateHistoryFromThreadEntry(entryById(entry.id) || entry);
 
     elements.messageInput.value = "";
@@ -11708,15 +12418,12 @@ function bindEvents() {
     }
     void openProjectSummary();
   });
-  elements.filesWorkspaceTab?.addEventListener("click", () => {
-    if (elements.filesWorkspaceTab.disabled) {
-      return;
-    }
-    setWorkspaceMode("files");
-  });
-  elements.filesWorkspaceRefreshButton?.addEventListener("click", () => {
-    void refreshArtifacts({ force: true }).then(renderAll).catch(showError);
-  });
+  elements.composerToolsButton?.addEventListener("click", toggleComposerToolsMenu);
+  for (const button of elements.dispatchModeButtons) {
+    button.addEventListener("click", () => {
+      setDispatchMode(button.dataset.dispatchMode, { closeTools: true });
+    });
+  }
   elements.projectSummaryButton?.addEventListener("click", () => {
     void openProjectSummary();
   });
@@ -11748,15 +12455,31 @@ function bindEvents() {
     openQuickPromptModal();
   });
   document.addEventListener("pointerdown", (event) => {
+    if (state.composerToolsOpen && !isComposerToolsTarget(event.target)) {
+      closeComposerToolsMenu({ focusComposer: false });
+    }
     if (!state.quickPromptModalOpen || isQuickPromptTarget(event.target)) {
       return;
     }
     closeQuickPromptModal({ focusComposer: false });
   });
   elements.currentTerminalButton?.addEventListener("click", () => {
+    closeComposerToolsMenu({ focusComposer: false });
     void openSessionInTerminal(currentSessionTerminalEntry());
   });
+  elements.composerVoiceButton?.addEventListener("click", handleComposerVoiceButtonClick);
+  elements.composerVoiceCaptureInput?.addEventListener("change", (event) => {
+    const file = event.target.files?.[0] || null;
+    event.target.value = "";
+    if (file) {
+      void transcribeComposerVoice(file, {
+        fileName: file.name || "clawdad-voice.webm",
+        mimeType: file.type || "",
+      });
+    }
+  });
   elements.composerAttachmentButton?.addEventListener("click", () => {
+    closeComposerToolsMenu({ focusComposer: false });
     elements.composerAttachmentInput?.click();
   });
   elements.composerAttachmentInput?.addEventListener("change", (event) => {
@@ -11861,7 +12584,10 @@ function bindEvents() {
     void openArtifactsModal();
   });
   elements.artifactShelfOpenButton?.addEventListener("click", () => {
-    void openArtifactsModal();
+    const url = elements.artifactShelfOpenButton.dataset.dumpyUrl || "";
+    if (url) {
+      window.open(url, "_blank", "noopener,noreferrer");
+    }
   });
   elements.artifactShelfToggle?.addEventListener("click", () => {
     state.artifactShelfCollapsed = !state.artifactShelfCollapsed;
@@ -12061,6 +12787,10 @@ function bindEvents() {
     persistQueueCollapsed();
     renderAll();
   });
+  elements.queueArchiveBackdrop?.addEventListener("click", closeQueueArchiveConfirm);
+  elements.queueArchiveClose?.addEventListener("click", closeQueueArchiveConfirm);
+  elements.queueArchiveCancelButton?.addEventListener("click", closeQueueArchiveConfirm);
+  elements.queueArchiveConfirmButton?.addEventListener("click", archiveQueueEntry);
   elements.detailScrollBottomButton?.addEventListener("click", () => {
     scrollDetailHistoryToBottom({ smooth: true });
   });
@@ -12179,6 +12909,11 @@ function bindEvents() {
   document.addEventListener("visibilitychange", refreshAfterForeground);
 
   window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && state.queueArchiveConfirmEntryId) {
+      event.preventDefault();
+      closeQueueArchiveConfirm();
+      return;
+    }
     if (event.key === "Escape" && currentModalThread()) {
       closeSessionThread();
       return;
@@ -12214,6 +12949,11 @@ function bindEvents() {
     if (event.key === "Escape" && state.quickPromptModalOpen) {
       event.preventDefault();
       closeQuickPromptModal();
+      return;
+    }
+    if (event.key === "Escape" && state.composerToolsOpen) {
+      event.preventDefault();
+      closeComposerToolsMenu();
       return;
     }
     if (event.key === "Escape" && state.projectModalOpen) {

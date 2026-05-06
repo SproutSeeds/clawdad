@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -133,6 +133,45 @@ function handle(message) {
   }
   if (message.method === "turn/start") {
     send({ id: message.id, result: { turn: { id: "turn-test" } } });
+    if (behavior === "steer") {
+      setTimeout(() => {
+        send({
+          method: "item/started",
+          params: {
+            threadId: "thread-test",
+            turnId: "turn-test",
+            item: { id: "cmd-live", type: "commandExecution", status: "in_progress" },
+          },
+        });
+      }, 10);
+      setTimeout(() => {
+        send({
+          method: "item/completed",
+          params: {
+            threadId: "thread-test",
+            turnId: "turn-test",
+            item: { id: "cmd-live", type: "commandExecution", status: "completed" },
+          },
+        });
+      }, 80);
+      setTimeout(() => {
+        send({
+          method: "item/completed",
+          params: {
+            threadId: "thread-test",
+            turnId: "turn-test",
+            item: { type: "agentMessage", phase: "final_answer", text: "steered response" },
+          },
+        });
+        send({
+          method: "turn/completed",
+          params: {
+            threadId: "thread-test",
+            turn: { id: "turn-test", status: "completed" },
+          },
+        });
+      }, 650);
+    }
     if (behavior === "partial-stall") {
       setTimeout(() => {
         send({
@@ -196,6 +235,10 @@ function handle(message) {
         });
       }, 10);
     }
+    return;
+  }
+  if (message.method === "turn/steer") {
+    send({ id: message.id, result: { turn: { id: message.params?.expectedTurnId || "turn-test" } } });
     return;
   }
   if (message.method === "thread/read") {
@@ -294,6 +337,253 @@ test("codex app-server dispatch recovers partial text when a connector tool stop
     assert.match(payload.result_text, /no live progress/u);
     assert.match(payload.result_text, /connector\/tool call/u);
     assert.match(payload.result_text, /partial progress before stall/u);
+  });
+});
+
+test("codex app-server dispatch steers queued interjections into the active turn", async () => {
+  await withTempDir(async (root) => {
+    const fakeCodex = await writeFakeCodexBinary(root, "steer");
+    const requestLog = path.join(root, "requests.jsonl");
+    const interjectionDir = path.join(root, ".clawdad", "mailbox", "interjections");
+    const historySessionDir = path.join(root, ".clawdad", "history", "sessions", "thread-test");
+    const historyRequestsDir = path.join(root, ".clawdad", "history", "requests");
+    const recordFile = path.join(historySessionDir, "20260505T120000--interject-1.json");
+    const indexFile = path.join(historyRequestsDir, "interject-1.json");
+    await mkdir(interjectionDir, { recursive: true });
+    await mkdir(historySessionDir, { recursive: true });
+    await mkdir(historyRequestsDir, { recursive: true });
+    await writeFile(
+      path.join(interjectionDir, "interject-1.json"),
+      JSON.stringify(
+        {
+          state: "pending",
+          requestId: "interject-1",
+          sessionId: "thread-test",
+          message: "Fold this into the current loop.",
+          createdAt: "2026-05-05T12:00:00.000Z",
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    await writeFile(
+      path.join(interjectionDir, "interject-other.json"),
+      JSON.stringify(
+        {
+          state: "pending",
+          requestId: "interject-other",
+          sessionId: "other-thread",
+          message: "This belongs to a different session.",
+          createdAt: "2026-05-05T11:59:00.000Z",
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    await writeFile(
+      recordFile,
+      JSON.stringify(
+        {
+          requestId: "interject-1",
+          projectPath: root,
+          sessionId: "thread-test",
+          sessionSlug: "test",
+          provider: "codex",
+          message: "Fold this into the current loop.",
+          sentAt: "2026-05-05T12:00:00.000Z",
+          answeredAt: null,
+          status: "queued",
+          exitCode: null,
+          response: "",
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    await writeFile(
+      indexFile,
+      JSON.stringify(
+        {
+          requestId: "interject-1",
+          sessionId: "thread-test",
+          sentAt: "2026-05-05T12:00:00.000Z",
+          file: recordFile,
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const result = await execFileCapture(process.execPath, [
+      dispatchScript,
+      "--project-path",
+      root,
+      "--message",
+      "hello",
+      "--session-id",
+      "thread-test",
+      "--session-seeded",
+      "--codex-binary",
+      fakeCodex,
+      "--interjection-dir",
+      interjectionDir,
+      "--turn-timeout-ms",
+      "5000",
+      "--request-timeout-ms",
+      "2000",
+    ], {
+      env: {
+        ...process.env,
+        FAKE_CODEX_REQUEST_LOG: requestLog,
+      },
+      timeout: 10000,
+    });
+
+    assert.equal(result.stderr, "");
+    assert.equal(result.exitCode, 0);
+    const payload = JSON.parse(result.stdout.trim());
+    assert.equal(payload.ok, true);
+    assert.equal(payload.result_text, "steered response");
+
+    const requests = (await readFile(requestLog, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    const steerRequest = requests.find((entry) => entry.method === "turn/steer");
+    assert.ok(steerRequest);
+    assert.equal(requests.filter((entry) => entry.method === "turn/steer").length, 1);
+    assert.equal(steerRequest.params.threadId, "thread-test");
+    assert.equal(steerRequest.params.expectedTurnId, "turn-test");
+    assert.equal(steerRequest.params.input[0].text, "Fold this into the current loop.");
+
+    const interjection = JSON.parse(await readFile(path.join(interjectionDir, "interject-1.json"), "utf8"));
+    assert.equal(interjection.state, "accepted");
+    const skippedInterjection = JSON.parse(await readFile(path.join(interjectionDir, "interject-other.json"), "utf8"));
+    assert.equal(skippedInterjection.state, "pending");
+    const record = JSON.parse(await readFile(recordFile, "utf8"));
+    assert.equal(record.status, "answered");
+    assert.match(record.response, /Interjected into the active Codex turn/u);
+  });
+});
+
+test("codex app-server dispatch steers provisional-session interjections after thread remap", async () => {
+  await withTempDir(async (root) => {
+    const fakeCodex = await writeFakeCodexBinary(root, "steer");
+    const requestLog = path.join(root, "requests.jsonl");
+    const interjectionDir = path.join(root, ".clawdad", "mailbox", "interjections");
+    const historySessionDir = path.join(root, ".clawdad", "history", "sessions", "placeholder-thread");
+    const historyRequestsDir = path.join(root, ".clawdad", "history", "requests");
+    const recordFile = path.join(historySessionDir, "20260505T120000--interject-remap.json");
+    const indexFile = path.join(historyRequestsDir, "interject-remap.json");
+    await mkdir(interjectionDir, { recursive: true });
+    await mkdir(historySessionDir, { recursive: true });
+    await mkdir(historyRequestsDir, { recursive: true });
+    await writeFile(
+      path.join(interjectionDir, "interject-remap.json"),
+      JSON.stringify(
+        {
+          state: "pending",
+          requestId: "interject-remap",
+          sessionId: "placeholder-thread",
+          message: "Fold this into the real thread.",
+          createdAt: "2026-05-05T12:00:00.000Z",
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    await writeFile(
+      recordFile,
+      JSON.stringify(
+        {
+          requestId: "interject-remap",
+          projectPath: root,
+          sessionId: "placeholder-thread",
+          sessionSlug: "test",
+          provider: "codex",
+          message: "Fold this into the real thread.",
+          sentAt: "2026-05-05T12:00:00.000Z",
+          answeredAt: null,
+          status: "queued",
+          exitCode: null,
+          response: "",
+          scheduleMode: "interject",
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    await writeFile(
+      indexFile,
+      JSON.stringify(
+        {
+          requestId: "interject-remap",
+          sessionId: "placeholder-thread",
+          sentAt: "2026-05-05T12:00:00.000Z",
+          file: recordFile,
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const result = await execFileCapture(process.execPath, [
+      dispatchScript,
+      "--project-path",
+      root,
+      "--message",
+      "hello",
+      "--session-id",
+      "placeholder-thread",
+      "--codex-binary",
+      fakeCodex,
+      "--interjection-dir",
+      interjectionDir,
+      "--turn-timeout-ms",
+      "5000",
+      "--request-timeout-ms",
+      "2000",
+    ], {
+      env: {
+        ...process.env,
+        FAKE_CODEX_REQUEST_LOG: requestLog,
+      },
+      timeout: 10000,
+    });
+
+    assert.equal(result.stderr, "");
+    assert.equal(result.exitCode, 0);
+    const payload = JSON.parse(result.stdout.trim());
+    assert.equal(payload.ok, true);
+    assert.equal(payload.session_id, "thread-test");
+
+    const requests = (await readFile(requestLog, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    const steerRequest = requests.find((entry) => entry.method === "turn/steer");
+    assert.ok(steerRequest);
+    assert.equal(steerRequest.params.threadId, "thread-test");
+    assert.equal(steerRequest.params.input[0].text, "Fold this into the real thread.");
+
+    const interjection = JSON.parse(await readFile(path.join(interjectionDir, "interject-remap.json"), "utf8"));
+    assert.equal(interjection.state, "accepted");
+    assert.equal(interjection.sessionId, "thread-test");
+    const index = JSON.parse(await readFile(indexFile, "utf8"));
+    assert.equal(index.sessionId, "thread-test");
+    assert.match(index.file, /sessions\/thread-test\/20260505T120000\.000Z--interject-remap\.json$/u);
+    const record = JSON.parse(await readFile(index.file, "utf8"));
+    assert.equal(record.sessionId, "thread-test");
+    assert.equal(record.status, "answered");
+    assert.equal(record.scheduleMode, "interject");
+    await assert.rejects(readFile(recordFile, "utf8"));
   });
 });
 

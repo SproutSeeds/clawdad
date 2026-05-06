@@ -108,6 +108,7 @@ globalThis.hydrateThreadEntriesFromHistoryItems = hydrateThreadEntriesFromHistor
 globalThis.threadEntryVisibleInQueue = threadEntryVisibleInQueue;
 globalThis.queueEntries = queueEntries;
 globalThis.entryCopyKey = entryCopyKey;
+globalThis.historyEntryQueuedForLater = historyEntryQueuedForLater;
 `,
     context,
   );
@@ -169,6 +170,28 @@ test("web history merge clears stale cached synthetic answered transcript cards"
   assert.equal(merged[0].response, "");
   assert.equal(merged[0].answeredAt, null);
   assert.equal(merged[0].exitCode, null);
+});
+
+test("web composer exposes voice transcription controls", async () => {
+  const [indexHtml, appSource] = await Promise.all([
+    readFile(webIndexPath, "utf8"),
+    readFile(webAppPath, "utf8"),
+  ]);
+
+  assert.match(indexHtml, /id="composerVoiceButton"/u);
+  assert.match(indexHtml, /id="composerVoiceCaptureInput"/u);
+  const actionsStart = indexHtml.indexOf('class="composer-actions"');
+  const sendStart = indexHtml.indexOf('id="dispatchButton"', actionsStart);
+  const voiceStart = indexHtml.indexOf('id="composerVoiceButton"', actionsStart);
+  const toolsMenuStart = indexHtml.indexOf('id="composerToolsMenu"', actionsStart);
+  const toolsMenuEnd = indexHtml.indexOf('id="quickPromptModal"', toolsMenuStart);
+  assert.ok(sendStart > actionsStart);
+  assert.ok(voiceStart > sendStart);
+  assert.doesNotMatch(indexHtml.slice(toolsMenuStart, toolsMenuEnd), /id="composerVoiceButton"/u);
+  assert.match(appSource, /navigator\.mediaDevices\.getUserMedia/u);
+  assert.match(appSource, /new MediaRecorder/u);
+  assert.match(appSource, /\/v1\/stt\/transcribe/u);
+  assert.match(appSource, /insertTranscriptIntoComposer/u);
 });
 
 test("web thread cache never persists or restores failed cards", async () => {
@@ -272,6 +295,58 @@ test("web dashboard queue visibility excludes failed cards still present in memo
   assert.equal(context.threadEntryVisibleInQueue({ status: "answered" }), true);
   assert.equal(context.threadEntryVisibleInQueue({ status: "failed" }), false);
   assert.equal(context.threadEntryVisibleInQueue({ status: "FAILED" }), false);
+});
+
+test("web dashboard queue visibility excludes completed interjection acknowledgments", async () => {
+  const context = await loadThreadCacheHelpers();
+  const answer = {
+    requestId: "answer-request",
+    projectPath: "/repo/clawdad",
+    sessionId: "session-a",
+    status: "answered",
+    scheduleMode: "linear",
+    sentAt: "2026-05-05T12:00:00.000Z",
+    answeredAt: "2026-05-05T12:01:00.000Z",
+    response: "Finished.",
+  };
+  const interjectionAck = {
+    ...answer,
+    requestId: "interject-request",
+    scheduleMode: "interject",
+    sentAt: "2026-05-05T12:02:00.000Z",
+    answeredAt: "2026-05-05T12:02:01.000Z",
+    response: "Interjected into the active Codex turn.",
+  };
+
+  context.state.threadEntries = [answer, interjectionAck];
+
+  assert.equal(context.threadEntryVisibleInQueue(answer), true);
+  assert.equal(context.threadEntryVisibleInQueue(interjectionAck), false);
+  assert.deepEqual(context.queueEntries().map((entry) => entry.requestId), [answer.requestId]);
+});
+
+test("web dashboard queue visibility excludes archived worker cards without dropping cache state", async () => {
+  const context = await loadThreadCacheHelpers();
+  const archived = {
+    requestId: "archived-request",
+    projectPath: "/repo/clawdad",
+    sessionId: "session-a",
+    status: "answered",
+    sentAt: "2026-05-05T12:00:00.000Z",
+    answeredAt: "2026-05-05T12:01:00.000Z",
+    archivedAt: "2026-05-05T12:02:00.000Z",
+    response: "Done.",
+  };
+
+  context.state.threadEntries = [archived];
+  context.persistThreadEntries();
+  context.state.threadEntries = [];
+  context.restoreThreadEntries();
+
+  assert.equal(context.state.threadEntries.length, 1);
+  assert.equal(context.state.threadEntries[0].archivedAt, archived.archivedAt);
+  assert.equal(context.threadEntryVisibleInQueue(context.state.threadEntries[0]), false);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.queueEntries())), []);
 });
 
 test("web dashboard queue visibility excludes stale history queued transcript rows", async () => {
@@ -549,12 +624,14 @@ test("web composer exposes open terminal for the selected session", async () => 
   ]);
 
   assert.match(html, /id="currentTerminalButton"/u);
-  assert.match(html, /class="thread-button composer-terminal-button open-terminal-button"/u);
+  assert.match(html, /class="composer-tools-item composer-terminal-button open-terminal-button"/u);
   assert.match(html, /aria-label="Open selected session in terminal"/u);
 
   assert.match(source, /currentTerminalButton: document\.querySelector\("#currentTerminalButton"\)/u);
   assert.match(source, /function currentSessionTerminalEntry\(\)/u);
   assert.match(source, /function updateComposerTerminalButtonAvailability\(\)/u);
+  assert.match(source, /button\.classList\.contains\("composer-tools-item"\)/u);
+  assert.match(source, /<span class="button-text">\$\{visibleLabel\}<\/span>/u);
   assert.match(source, /decorateOpenTerminalButton\(elements\.currentTerminalButton, launchKey\)/u);
   assert.match(source, /openSessionInTerminal\(currentSessionTerminalEntry\(\)\)/u);
 
@@ -603,18 +680,24 @@ test("web quick chats render as a composer dropdown instead of a modal or linear
   ]);
 
   const actionsStart = html.indexOf('class="composer-actions"');
+  const toolsButtonStart = html.indexOf('id="composerToolsButton"', actionsStart);
+  const toolsMenuStart = html.indexOf('id="composerToolsMenu"', actionsStart);
   const quickButtonStart = html.indexOf('id="quickPromptButton"', actionsStart);
   const quickStart = html.indexOf('id="quickPromptModal"', actionsStart);
   const terminalStart = html.indexOf('id="currentTerminalButton"', actionsStart);
   assert.notEqual(actionsStart, -1);
+  assert.notEqual(toolsButtonStart, -1);
+  assert.notEqual(toolsMenuStart, -1);
   assert.notEqual(quickButtonStart, -1);
   assert.notEqual(quickStart, -1);
   assert.notEqual(terminalStart, -1);
-  assert.ok(quickButtonStart > actionsStart);
-  assert.ok(quickStart > quickButtonStart);
-  assert.ok(quickStart < terminalStart);
+  assert.ok(toolsButtonStart > actionsStart);
+  assert.ok(toolsMenuStart > toolsButtonStart);
+  assert.ok(quickButtonStart > toolsMenuStart);
+  assert.ok(terminalStart > quickButtonStart);
+  assert.ok(quickStart > terminalStart);
 
-  const quickMarkupEnd = html.indexOf('id="currentTerminalButton"', quickStart);
+  const quickMarkupEnd = html.indexOf('id="dispatchButton"', quickStart);
   const quickMarkup = html.slice(quickStart, quickMarkupEnd);
   assert.match(quickMarkup, /class="quick-prompt-dropdown quick-prompt-panel"/u);
   assert.match(quickMarkup, />Quick Chats</u);
@@ -654,17 +737,24 @@ test("web quick chats render as a composer dropdown instead of a modal or linear
   assert.match(source, /function isQuickPromptTarget\(target\)/u);
   assert.match(source, /elements\.quickPromptModal\?\.contains\(target\)/u);
   assert.match(source, /elements\.quickPromptButton\?\.contains\(target\)/u);
+  assert.match(source, /function isComposerToolsTarget\(target\)/u);
+  assert.match(source, /state\.composerToolsOpen && !isComposerToolsTarget\(event\.target\)/u);
   assert.match(quickButtonListener, /document\.addEventListener\("pointerdown"/u);
   assert.match(quickButtonListener, /isQuickPromptTarget\(event\.target\)/u);
   assert.match(quickButtonListener, /closeQuickPromptModal\(\{ focusComposer: false \}\)/u);
 
   const quickEscapeStart = source.indexOf('if (event.key === "Escape" && state.quickPromptModalOpen)');
+  const toolsEscapeStart = source.indexOf('if (event.key === "Escape" && state.composerToolsOpen)', quickEscapeStart);
   const projectEscapeStart = source.indexOf('if (event.key === "Escape" && state.projectModalOpen)', quickEscapeStart);
   assert.notEqual(quickEscapeStart, -1);
+  assert.notEqual(toolsEscapeStart, -1);
   assert.notEqual(projectEscapeStart, -1);
-  const quickEscapeHandler = source.slice(quickEscapeStart, projectEscapeStart);
+  const quickEscapeHandler = source.slice(quickEscapeStart, toolsEscapeStart);
   assert.match(quickEscapeHandler, /event\.preventDefault\(\);/u);
   assert.match(quickEscapeHandler, /closeQuickPromptModal\(\);/u);
+  const toolsEscapeHandler = source.slice(toolsEscapeStart, projectEscapeStart);
+  assert.match(toolsEscapeHandler, /event\.preventDefault\(\);/u);
+  assert.match(toolsEscapeHandler, /closeComposerToolsMenu\(\);/u);
 
   const saveListenerStart = source.indexOf("elements.quickPromptSaveButton?.addEventListener");
   const titleListenerStart = source.indexOf("elements.quickPromptTitleInput?.addEventListener", saveListenerStart);
@@ -684,6 +774,8 @@ test("web quick chats render as a composer dropdown instead of a modal or linear
   assert.match(dropdownCss, /position: absolute;/u);
   assert.match(dropdownCss, /bottom: calc\(100% \+ 8px\);/u);
   assert.match(dropdownCss, /width: min\(420px, calc\(100vw - 40px\)\);/u);
+  assert.match(css, /\.composer-tools-menu/u);
+  assert.match(css, /\.composer-tools-claw/u);
 });
 
 test("web composer can attach files and dispatch them with FormData", async () => {
@@ -699,9 +791,11 @@ test("web composer can attach files and dispatch them with FormData", async () =
   assert.match(html, /aria-label="Attach files"/u);
 
   const actionsStart = html.indexOf('class="composer-actions"');
-  const quickButtonStart = html.indexOf('id="quickPromptButton"', actionsStart);
+  const toolsMenuStart = html.indexOf('id="composerToolsMenu"', actionsStart);
+  const quickButtonStart = html.indexOf('id="quickPromptButton"', toolsMenuStart);
   const attachmentButtonStart = html.indexOf('id="composerAttachmentButton"', actionsStart);
   const terminalButtonStart = html.indexOf('id="currentTerminalButton"', actionsStart);
+  assert.ok(toolsMenuStart > actionsStart);
   assert.ok(quickButtonStart > actionsStart);
   assert.ok(attachmentButtonStart > quickButtonStart);
   assert.ok(terminalButtonStart > attachmentButtonStart);
@@ -726,6 +820,68 @@ test("web composer can attach files and dispatch them with FormData", async () =
   const updateSend = source.slice(updateSendStart, updateThreadStart);
   assert.match(updateSend, /state\.composerAttachments\.length > 0/u);
   assert.match(updateSend, /hasDraft/u);
+});
+
+test("web composer exposes linear queue and interject dispatch modes", async () => {
+  const [source, html, css] = await Promise.all([
+    readFile(webAppPath, "utf8"),
+    readFile(webIndexPath, "utf8"),
+    readFile(path.join(repoRoot, "web", "app.css"), "utf8"),
+  ]);
+
+  assert.match(html, /id="composerToolsButton"/u);
+  assert.match(html, /src="\/assets\/clawdad-claw-hyperreal-icon\.png"/u);
+  assert.doesNotMatch(html, /id="composerToolsModeLabel"/u);
+  assert.match(html, /id="dispatchButton"[^>]*>\s*<span class="button-text">Send \(Linear\)<\/span>/u);
+  assert.match(html, /data-dispatch-mode="linear"/u);
+  assert.match(html, /data-dispatch-mode="queue"/u);
+  assert.match(html, /data-dispatch-mode="interject"/u);
+  const actionsStart = html.indexOf('class="composer-actions"');
+  const sendStart = html.indexOf('id="dispatchButton"', actionsStart);
+  const modeStart = html.indexOf('id="composerToolsButton"', actionsStart);
+  const toolsMenuStart = html.indexOf('id="composerToolsMenu"', actionsStart);
+  assert.ok(sendStart > actionsStart);
+  assert.ok(modeStart > actionsStart);
+  assert.ok(modeStart < sendStart);
+  assert.ok(toolsMenuStart > modeStart);
+  assert.ok(toolsMenuStart < sendStart);
+  assert.match(source, /dispatchMode: "linear"/u);
+  assert.match(source, /const dispatchModes = \["linear", "queue", "interject"\]/u);
+  assert.match(source, /function cycleDispatchMode\(\)/u);
+  assert.match(source, /function setDispatchMode\(mode/u);
+  assert.match(source, /function dispatchModeAllowsBusySend/u);
+  assert.match(source, /function dispatchButtonText/u);
+  assert.match(source, /return `Send \(\$\{modeLabel\}\)`/u);
+  assert.match(source, /return `Working \(\$\{modeLabel\}\)`/u);
+  assert.match(source, /elements\.composerToolsButton\?\.addEventListener\("click", toggleComposerToolsMenu\)/u);
+  assert.match(source, /for \(const button of elements\.dispatchModeButtons\)/u);
+  assert.match(source, /formData\.append\("dispatchMode", dispatchMode\)/u);
+  assert.match(source, /dispatchMode,/u);
+  assert.match(source, /!allowBusySend && pendingEntryForSession/u);
+  assert.match(source, /!allowBusySend && sessionIsBusy/u);
+  assert.match(source, /payload\.interjected/u);
+  assert.match(css, /\.composer-tools-button/u);
+  assert.match(css, /\.composer-mode-options/u);
+  assert.match(css, /grid-template-columns: 48px minmax\(0, 1fr\) 48px;/u);
+});
+
+test("web queue cards expose swipe-left archive confirmation", async () => {
+  const [source, html, css] = await Promise.all([
+    readFile(webAppPath, "utf8"),
+    readFile(webIndexPath, "utf8"),
+    readFile(path.join(repoRoot, "web", "app.css"), "utf8"),
+  ]);
+
+  assert.match(html, /id="queueArchiveModal"/u);
+  assert.match(html, /id="queueArchiveCancelButton"/u);
+  assert.match(html, /id="queueArchiveConfirmButton"/u);
+  assert.match(source, /function attachQueueCardArchiveSwipe/u);
+  assert.match(source, /openQueueArchiveConfirm\(entry, card\)/u);
+  assert.match(source, /function archiveQueueEntry/u);
+  assert.match(source, /const archivedAt = new Date\(\)\.toISOString\(\)/u);
+  assert.match(source, /threadEntryIsArchived\(entry\)/u);
+  assert.match(css, /\.queue-card\.is-swiping::after/u);
+  assert.match(css, /\.queue-card-archive-button/u);
 });
 
 test("web history merge preserves outbound attachment summaries", async () => {
@@ -771,9 +927,124 @@ test("web history merge preserves outbound attachment summaries", async () => {
   ]);
 });
 
-test("web artifact refresh only polls explicit files surfaces", async () => {
-  const source = await readFile(webAppPath, "utf8");
+test("web history merge preserves interjection schedule metadata", async () => {
+  const { mergeHistoryItems } = await loadHistoryMergeHelpers();
+  const merged = mergeHistoryItems([], [
+    {
+      requestId: "interject-1",
+      projectPath: "/repo/clawdad",
+      sessionId: "session-a",
+      provider: "codex",
+      message: "Fold this into the current pass.",
+      sentAt: "2026-05-05T12:00:00.000Z",
+      answeredAt: "2026-05-05T12:00:01.000Z",
+      status: "answered",
+      scheduleMode: "interject",
+      response: "Interjected into the active Codex turn.",
+    },
+  ]);
+
+  assert.equal(merged[0].scheduleMode, "interject");
+});
+
+test("web detail marks later queue-mode messages as queued and not sent yet", async () => {
+  const [source, css] = await Promise.all([
+    readFile(webAppPath, "utf8"),
+    readFile(path.join(repoRoot, "web", "app.css"), "utf8"),
+  ]);
+  const { historyEntryQueuedForLater } = await loadThreadCacheHelpers();
+  const active = {
+    requestId: "active-request",
+    projectPath: "/repo/clawdad",
+    sessionId: "session-a",
+    provider: "codex",
+    message: "Current prompt.",
+    sentAt: "2026-05-05T12:00:00.000Z",
+    answeredAt: null,
+    status: "queued",
+    scheduleMode: "linear",
+    response: "",
+  };
+  const waiting = {
+    requestId: "waiting-request",
+    projectPath: "/repo/clawdad",
+    sessionId: "session-a",
+    provider: "codex",
+    message: "Run this next.",
+    sentAt: "2026-05-05T12:01:00.000Z",
+    answeredAt: null,
+    status: "queued",
+    scheduleMode: "queue",
+    response: "",
+  };
+  const soloWaiting = {
+    ...waiting,
+    requestId: "solo-request",
+    sentAt: "2026-05-05T12:02:00.000Z",
+  };
+
+  assert.equal(historyEntryQueuedForLater(active, [active, waiting]), false);
+  assert.equal(historyEntryQueuedForLater(waiting, [active, waiting]), true);
+  assert.equal(historyEntryQueuedForLater(soloWaiting, [soloWaiting]), false);
+  assert.match(source, /Queued", "not sent yet"/u);
+  assert.match(source, /if \(queuedForLater\) \{\s*return group;\s*\}/u);
+  assert.match(source, /normalizeHistoryScheduleMode\(payload\.dispatchMode \|\| payload\.scheduleMode\)/u);
+  assert.match(css, /\.thread-card\.outbound\.queued-pending/u);
+});
+
+test("web history merge folds synthetic attachment transcript placeholders into concrete answers", async () => {
+  const { mergeHistoryItems } = await loadHistoryMergeHelpers();
+  const concrete = {
+    requestId: "6119516a-afac-4032-9b9e-67c297e40995",
+    projectPath: "/repo/frg-site",
+    sessionId: "019df926-0f39-7c80-9d4f-ee13ef27036e",
+    provider: "codex",
+    message: "Do you see the image I am attaching to this message?",
+    sentAt: "2026-05-05T19:12:08.000Z",
+    answeredAt: "2026-05-05T19:19:16.000Z",
+    status: "answered",
+    exitCode: 0,
+    response: "The image-backed check completed.",
+  };
+  const syntheticQueued = {
+    requestId: "codex:019df926-0f39-7c80-9d4f-ee13ef27036e:3",
+    projectPath: concrete.projectPath,
+    sessionId: concrete.sessionId,
+    provider: "codex",
+    message: `${concrete.message}
+
+[Clawdad attachment handoff:
+- IMG_4315.png (image/png, 5914806 bytes): /repo/frg-site/.clawdad/attachments/upload/IMG_4315.png
+Images are also attached to Codex directly when supported. For non-image files, use the local file paths above.]
+
+<image name=[Image #1]>
+
+</image>`,
+    sentAt: "2026-05-05T19:12:17.968Z",
+    answeredAt: null,
+    status: "queued",
+    response: "",
+  };
+
+  const merged = mergeHistoryItems([concrete], [syntheticQueued]);
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].requestId, concrete.requestId);
+  assert.equal(merged[0].status, "answered");
+  assert.equal(merged[0].response, concrete.response);
+  assert.equal(merged[0].answeredAt, concrete.answeredAt);
+});
+
+test("web artifacts surface through contextual Dumpy handoff instead of a global files tab", async () => {
+  const [source, html] = await Promise.all([
+    readFile(webAppPath, "utf8"),
+    readFile(webIndexPath, "utf8"),
+  ]);
   assert.match(source, /const artifactRefreshFreshMs = 60 \* 1000;/u);
+  assert.doesNotMatch(html, /id="filesWorkspaceTab"/u);
+  assert.doesNotMatch(html, /id="filesWorkspacePane"/u);
+  assert.match(html, />Dumpy party</u);
+  assert.match(html, />Open Dumpy</u);
 
   const artifactTargetsStart = source.indexOf("function artifactProjectsNeedingRefresh");
   const refreshArtifactsStart = source.indexOf("async function refreshArtifacts", artifactTargetsStart);
@@ -782,9 +1053,9 @@ test("web artifact refresh only polls explicit files surfaces", async () => {
   assert.ok(refreshArtifactsStart > artifactTargetsStart);
 
   const artifactTargets = source.slice(artifactTargetsStart, refreshArtifactsStart);
-  assert.match(artifactTargets, /state\.workspaceMode === "files"/u);
+  assert.match(artifactTargets, /state\.selectedProject/u);
   assert.match(artifactTargets, /state\.artifactModalProject/u);
-  assert.doesNotMatch(artifactTargets, /state\.selectedProject/u);
+  assert.doesNotMatch(artifactTargets, /state\.workspaceMode === "files"/u);
   assert.doesNotMatch(artifactTargets, /state\.delegateModalProject/u);
   assert.doesNotMatch(artifactTargets, /threadEntryStatus/u);
   assert.doesNotMatch(artifactTargets, /threadEntryVisibleInQueue/u);
@@ -794,9 +1065,10 @@ test("web artifact refresh only polls explicit files surfaces", async () => {
   assert.notEqual(renderShelfStart, -1);
   assert.notEqual(projectLabelStart, -1);
   const renderShelf = source.slice(renderShelfStart, projectLabelStart);
-  assert.match(renderShelf, /elements\.artifactShelf\.hidden = true;/u);
-  assert.doesNotMatch(renderShelf, /elements\.artifactShelf\.hidden = false;/u);
-  assert.doesNotMatch(renderShelf, /buildArtifactCard\(artifact, \{ compact: true \}\)/u);
+  assert.match(renderShelf, /normalizeDumpyHandoff\(artifactState\.dumpy\)/u);
+  assert.match(renderShelf, /const visible = Boolean\(dumpy && \(itemCount > 0 \|\| dumpy\.lastError\)\);/u);
+  assert.match(renderShelf, /elements\.artifactShelf\.hidden = !visible;/u);
+  assert.match(renderShelf, /buildDumpyHandoffCard\(dumpy\)/u);
 
   const loadArtifactsStart = source.indexOf("async function loadProjectArtifacts");
   const openArtifactsStart = source.indexOf("async function openArtifactsModal", loadArtifactsStart);
@@ -805,6 +1077,7 @@ test("web artifact refresh only polls explicit files surfaces", async () => {
   const loadArtifacts = source.slice(loadArtifactsStart, openArtifactsStart);
   assert.match(loadArtifacts, /Date\.now\(\) - Number\(existing\.loadedAt \|\| 0\) < artifactRefreshFreshMs/u);
   assert.match(loadArtifacts, /loadedAt: Date\.now\(\)/u);
+  assert.match(loadArtifacts, /dumpy: normalizeDumpyHandoff\(payload\.dumpy\)/u);
 });
 
 test("web history merge replaces stale cached synthetic answer with fresh synthetic final answer", async () => {

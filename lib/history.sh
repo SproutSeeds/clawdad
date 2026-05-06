@@ -70,6 +70,17 @@ history_write_request() {
   history_init "$project_path"
   record_file="$(history_request_file "$project_path" "$session_id" "$request_id" "$sent_at")"
   index_file="$(history_request_index_file "$project_path" "$request_id")"
+  if [[ -f "$index_file" ]]; then
+    local existing_file existing_sent_at
+    existing_file=$("$CLAWDAD_JQ" -r '.file // ""' "$index_file" 2>/dev/null || printf '')
+    existing_sent_at=$("$CLAWDAD_JQ" -r '.sentAt // ""' "$index_file" 2>/dev/null || printf '')
+    if [[ -n "$existing_file" && -f "$existing_file" ]]; then
+      record_file="$existing_file"
+    fi
+    if [[ -n "$existing_sent_at" && "$existing_sent_at" != "null" ]]; then
+      sent_at="$existing_sent_at"
+    fi
+  fi
 
   record_payload=$(
     "$CLAWDAD_JQ" -n \

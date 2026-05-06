@@ -570,7 +570,7 @@ textarea {
 .composer-actions {
   position: relative;
   display: grid;
-  grid-template-columns: 48px 48px 48px minmax(0, 1fr);
+  grid-template-columns: 48px minmax(0, 1fr) 48px;
   gap: 8px;
   align-items: stretch;
 }
@@ -653,6 +653,39 @@ textarea {
   color: rgba(255, 244, 227, 0.84);
 }
 
+.composer-voice-button {
+  color: rgba(255, 244, 227, 0.86);
+}
+
+.composer-voice-button.is-recording {
+  border-color: rgba(255, 177, 159, 0.58);
+  color: #fff4e3;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(255, 177, 159, 0.2), transparent 58%),
+    linear-gradient(180deg, rgba(121, 18, 22, 0.98), rgba(77, 10, 13, 0.98));
+}
+
+.composer-voice-button.is-recording::after {
+  content: "";
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #fff4e3;
+  box-shadow: 0 0 14px rgba(255, 244, 227, 0.74);
+}
+
+.composer-voice-button.is-loading {
+  color: #f0d06d;
+  border-color: rgba(240, 208, 109, 0.38);
+}
+
+.composer-voice-button.is-loading svg {
+  animation: audio-spin 820ms linear infinite;
+}
+
 .quick-prompt-open-button {
   color: rgba(255, 244, 227, 0.88);
 }
@@ -666,6 +699,145 @@ textarea {
 
 .composer-terminal-button {
   color: rgba(255, 218, 185, 0.9);
+}
+
+.composer-tools-button {
+  min-width: 48px;
+  width: 48px;
+  padding: 0 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 244, 227, 0.88);
+}
+
+.composer-tools-button.is-active,
+.composer-tools-button.is-queue,
+.composer-tools-button.is-interject {
+  border-color: rgba(240, 208, 109, 0.5);
+  color: #fff4e3;
+}
+
+.composer-tools-claw {
+  width: 34px;
+  height: 28px;
+  object-fit: contain;
+  filter: drop-shadow(0 4px 8px rgba(14, 2, 4, 0.42));
+}
+
+.composer-tools-menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  z-index: 45;
+  width: min(360px, calc(100vw - 40px));
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(105, 22, 20, 0.98), rgba(70, 9, 12, 0.98));
+  box-shadow: 0 20px 46px rgba(18, 2, 4, 0.38);
+}
+
+.composer-tools-menu[hidden] {
+  display: none;
+}
+
+.composer-tools-list {
+  display: grid;
+  gap: 6px;
+}
+
+.composer-tools-item {
+  position: relative;
+  min-height: 42px;
+  width: 100%;
+  padding: 0 10px;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 9px;
+  align-items: center;
+  justify-content: start;
+  border: 1px solid rgba(255, 218, 185, 0.14);
+  border-radius: 10px;
+  background: rgba(54, 7, 10, 0.52);
+  color: rgba(255, 244, 227, 0.84);
+  box-shadow: inset 0 1px 0 rgba(255, 237, 212, 0.04);
+}
+
+.composer-tools-item:hover:not(:disabled),
+.composer-tools-item:focus-visible:not(:disabled) {
+  background: rgba(88, 14, 15, 0.74);
+  border-color: rgba(255, 218, 185, 0.3);
+  color: #fff4e3;
+}
+
+.composer-tools-item svg {
+  width: 17px;
+  height: 17px;
+}
+
+.composer-tools-item .button-text {
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.78rem;
+}
+
+.composer-tools-label {
+  margin-bottom: 6px;
+  font-family: var(--mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.06em;
+  color: rgba(255, 218, 185, 0.68);
+  text-transform: uppercase;
+}
+
+.composer-mode-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.composer-mode-option {
+  min-height: 38px;
+  padding: 0 8px;
+  border: 1px solid rgba(255, 218, 185, 0.14);
+  border-radius: 10px;
+  background: rgba(54, 7, 10, 0.5);
+  color: rgba(255, 244, 227, 0.78);
+  box-shadow: none;
+}
+
+.composer-mode-option .button-text {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.72rem;
+}
+
+.composer-mode-option.is-active {
+  border-color: rgba(240, 208, 109, 0.52);
+  color: #fff4e3;
+  background: linear-gradient(180deg, rgba(110, 36, 18, 0.9), rgba(67, 10, 12, 0.96));
+}
+
+#dispatchButton {
+  min-width: 0;
+}
+
+#dispatchButton .button-text {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 select:focus,
@@ -738,6 +910,33 @@ textarea:disabled {
   width: 16px;
   height: 16px;
   display: block;
+}
+
+.dispatch-mode-button {
+  min-width: 96px;
+  padding: 0 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  color: rgba(255, 244, 227, 0.82);
+}
+
+.dispatch-mode-button .button-text {
+  min-width: 48px;
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+  text-align: left;
+}
+
+.dispatch-mode-button.is-queue {
+  border-color: rgba(255, 207, 117, 0.5);
+  color: rgba(255, 234, 180, 0.95);
+}
+
+.dispatch-mode-button.is-interject {
+  border-color: rgba(119, 214, 255, 0.48);
+  color: rgba(197, 238, 255, 0.95);
 }
 
 .delegate-open-button {
@@ -928,12 +1127,54 @@ textarea:disabled {
   width: 100%;
   display: grid;
   gap: 8px;
-  padding: 12px 84px 12px 14px;
+  padding: 12px 118px 12px 14px;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: linear-gradient(180deg, rgba(80, 11, 15, 0.92), rgba(59, 8, 11, 0.96));
   color: var(--text);
   text-align: left;
+  touch-action: pan-y;
+  transform: translateX(var(--queue-card-swipe-x, 0));
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    transform 160ms ease;
+}
+
+.queue-card::after {
+  content: "Archive";
+  position: absolute;
+  top: 0;
+  right: -104px;
+  bottom: 0;
+  display: grid;
+  place-items: center;
+  width: 92px;
+  border-radius: 0 12px 12px 0;
+  background: rgba(20, 17, 16, 0.88);
+  color: rgba(255, 244, 227, 0.86);
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease, color 120ms ease, background 120ms ease;
+}
+
+.queue-card.is-swiping::after {
+  opacity: 1;
+}
+
+.queue-card.is-swipe-armed {
+  border-color: rgba(240, 208, 109, 0.62);
+}
+
+.queue-card.is-swipe-armed::after {
+  background: rgba(94, 28, 18, 0.96);
+  color: #fff4e3;
 }
 
 .queue-card.clickable {
@@ -963,6 +1204,10 @@ textarea:disabled {
   box-shadow:
     0 0 0 1px rgba(255, 244, 227, 0.08),
     0 0 22px rgba(255, 244, 227, 0.08);
+}
+
+.queue-card-archive-button.copy-button-floating {
+  right: 78px;
 }
 
 .queue-head {
@@ -1097,6 +1342,14 @@ textarea:disabled {
 
 .thread-card.outbound {
   border-color: rgba(240, 208, 109, 0.24);
+}
+
+.thread-card.outbound.queued-pending {
+  border-color: rgba(240, 208, 109, 0.46);
+  background:
+    linear-gradient(180deg, rgba(98, 73, 24, 0.36), rgba(59, 8, 11, 0.94)),
+    rgba(59, 8, 11, 0.96);
+  box-shadow: inset 3px 0 0 rgba(240, 208, 109, 0.72);
 }
 
 .thread-card.inbound.failed {
@@ -1353,6 +1606,30 @@ textarea:disabled {
   overflow-wrap: anywhere;
 }
 
+.queue-archive-panel {
+  width: min(calc(100% - 28px), 440px);
+  grid-template-rows: auto auto auto;
+}
+
+.queue-archive-message {
+  min-width: 0;
+  max-height: 160px;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid rgba(255, 218, 185, 0.12);
+  border-radius: 10px;
+  background: rgba(54, 7, 10, 0.48);
+  color: rgba(255, 244, 227, 0.9);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.queue-archive-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+}
+
 .detail-close {
   width: 40px;
   min-width: 40px;
@@ -1544,6 +1821,10 @@ textarea:disabled {
   transform: rotate(-90deg);
 }
 
+.artifact-shelf.has-error {
+  border-color: rgba(255, 177, 159, 0.34);
+}
+
 .artifact-shelf-head {
   display: flex;
   align-items: center;
@@ -1591,6 +1872,10 @@ textarea:disabled {
 .artifact-shelf-list {
   display: grid;
   gap: 8px;
+}
+
+.dumpy-handoff-card .artifact-path {
+  white-space: normal;
 }
 
 .artifact-shelf-empty {
