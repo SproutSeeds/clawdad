@@ -11,6 +11,7 @@ import {
   resolveOpenAiApiKey,
   resolveSttRuntimeConfig,
   sttAudioFileIsSupported,
+  transcribeDocReaderAudio,
   transcribeOpenAiAudio,
 } from "../lib/stt-cache.mjs";
 
@@ -105,14 +106,66 @@ async function startFakeOpenAi() {
   };
 }
 
-test("STT runtime config defaults to OpenAI transcription", () => {
+async function startFakeDocReaderStt() {
+  const calls = [];
+  const server = http.createServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    const body = Buffer.concat(chunks);
+    calls.push({
+      method: req.method,
+      url: req.url,
+      authorization: req.headers.authorization,
+      contentType: req.headers["content-type"],
+      language: req.headers["x-doc-reader-language"],
+      fileName: req.headers["x-doc-reader-filename"],
+      source: req.headers["x-doc-reader-source"],
+      sourceItemId: req.headers["x-doc-reader-source-item-id"],
+      project: req.headers["x-doc-reader-project"],
+      body,
+    });
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      ok: true,
+      text: "Transcribed from local Doc Reader.",
+      item: {
+        id: "dictation-1",
+        source: "clawdad",
+      },
+      transcription: {
+        model: "large-v3",
+        language: "en",
+        duration: 1.25,
+        generation_seconds: 0.12,
+        segments: [],
+      },
+    }));
+  });
+
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  const port = address && typeof address === "object" ? address.port : 0;
+  return {
+    baseUrl: `http://127.0.0.1:${port}`,
+    calls,
+    close: () => new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve()))),
+  };
+}
+
+test("STT runtime config defaults to Doc Reader local transcription", () => {
   const config = resolveSttRuntimeConfig({
     env: {},
     config: {},
   });
   assert.equal(config.enabled, true);
-  assert.equal(config.provider, "openai");
-  assert.equal(config.modelId, "gpt-4o-transcribe");
+  assert.equal(config.provider, "doc-reader");
+  assert.equal(config.modelId, "large-v3");
+  assert.equal(config.baseUrl, "http://127.0.0.1:8766");
   assert.equal(config.maxBytes, 25 * 1024 * 1024);
 });
 
@@ -191,12 +244,43 @@ test("transcribeOpenAiAudio sends multipart transcription request", async () => 
   }
 });
 
-test("STT endpoint transcribes uploaded composer audio", async () => {
+test("transcribeDocReaderAudio sends raw local transcription request", async () => {
+  const fakeDocReader = await startFakeDocReaderStt();
+  try {
+    const result = await transcribeDocReaderAudio({
+      config: {
+        baseUrl: fakeDocReader.baseUrl,
+        modelId: "large-v3",
+      },
+      audio: Buffer.from("fake-audio"),
+      fileName: "voice.webm",
+      mimeType: "audio/webm",
+      language: "en",
+    });
+    assert.equal(result.text, "Transcribed from local Doc Reader.");
+    assert.equal(result.provider, "doc-reader");
+    assert.equal(result.modelId, "large-v3");
+    assert.equal(result.language, "en");
+    assert.equal(fakeDocReader.calls.length, 1);
+    assert.equal(fakeDocReader.calls[0].method, "POST");
+    assert.equal(fakeDocReader.calls[0].url, "/api/transcribe");
+    assert.equal(fakeDocReader.calls[0].authorization, undefined);
+    assert.equal(fakeDocReader.calls[0].contentType, "audio/webm");
+    assert.equal(fakeDocReader.calls[0].language, "en");
+    assert.equal(fakeDocReader.calls[0].fileName, "voice.webm");
+    assert.equal(fakeDocReader.calls[0].source, "clawdad");
+    assert.equal(fakeDocReader.calls[0].body.toString("utf8"), "fake-audio");
+  } finally {
+    await fakeDocReader.close();
+  }
+});
+
+test("STT endpoint transcribes uploaded composer audio with Doc Reader", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-stt-server-"));
   const home = path.join(root, "home");
   const projectPath = path.join(root, "project");
   const configPath = path.join(root, "server.json");
-  const fakeOpenAi = await startFakeOpenAi();
+  const fakeDocReader = await startFakeDocReaderStt();
   await mkdir(home, { recursive: true });
   await mkdir(projectPath, { recursive: true });
   await writeJson(path.join(home, "state.json"), {
@@ -230,9 +314,9 @@ test("STT endpoint transcribes uploaded composer audio", async () => {
       ...process.env,
       HOME: home,
       CLAWDAD_HOME: home,
-      CLAWDAD_OPENAI_API_KEY: "server-openai-key",
-      CLAWDAD_OPENAI_BASE_URL: fakeOpenAi.baseUrl,
-      CLAWDAD_STT_MODEL: "gpt-4o-mini-transcribe",
+      CLAWDAD_STT_PROVIDER: "doc-reader",
+      CLAWDAD_DOC_READER_STT_URL: fakeDocReader.baseUrl,
+      CLAWDAD_STT_MODEL: "large-v3",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -252,13 +336,18 @@ test("STT endpoint transcribes uploaded composer audio", async () => {
     assert.equal(response.status, 200);
     const payload = await response.json();
     assert.equal(payload.ok, true);
-    assert.equal(payload.text, "Transcribed from fake OpenAI.");
-    assert.equal(payload.model, "gpt-4o-mini-transcribe");
-    assert.equal(fakeOpenAi.calls.length, 1);
-    assert.equal(fakeOpenAi.calls[0].authorization, "Bearer server-openai-key");
+    assert.equal(payload.text, "Transcribed from local Doc Reader.");
+    assert.equal(payload.model, "large-v3");
+    assert.equal(payload.provider, "doc-reader");
+    assert.equal(fakeDocReader.calls.length, 1);
+    assert.equal(fakeDocReader.calls[0].authorization, undefined);
+    assert.equal(fakeDocReader.calls[0].contentType, "audio/webm");
+    assert.equal(fakeDocReader.calls[0].url, "/api/transcribe");
+    assert.equal(fakeDocReader.calls[0].source, "clawdad");
+    assert.equal(fakeDocReader.calls[0].project, projectPath);
   } finally {
     await stopServer(child);
-    await fakeOpenAi.close();
+    await fakeDocReader.close();
     await rm(root, { recursive: true, force: true });
   }
 });

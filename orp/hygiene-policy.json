@@ -1,0 +1,158 @@
+{
+  "schema_version": "1.0.0",
+  "kind": "orp_hygiene_policy",
+  "enabled": true,
+  "non_destructive": true,
+  "stop_on_unclassified": true,
+  "command": "orp hygiene --json",
+  "workspace_alias": "orp workspace hygiene --json",
+  "known_canonical_surfaces": [
+    "AGENTS.md",
+    "CLAUDE.md",
+    "AGENT_INTEGRATION.md",
+    "README.md",
+    "PROTOCOL.md",
+    "INSTALL.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "llms.txt",
+    "orp.yml",
+    "analysis/orp.kernel.task.yml"
+  ],
+  "allowed_artifact_roots": {
+    "canonical_artifact": [
+      "analysis/",
+      "proofs/",
+      "data/",
+      "reports/",
+      "results/"
+    ],
+    "runtime_research_artifact": [
+      "orp/",
+      ".orp/",
+      ".clawdad/"
+    ],
+    "scratch_or_output_artifact": [
+      "scratch/",
+      "tmp/",
+      "temp/",
+      "output/",
+      "outputs/",
+      "build/"
+    ]
+  },
+  "classification_rules": [
+    {
+      "category": "canonical_artifact",
+      "description": "Known project authority surfaces and durable analysis artifacts.",
+      "globs": [
+        "AGENTS.md",
+        "CLAUDE.md",
+        "AGENT_INTEGRATION.md",
+        "README.md",
+        "PROTOCOL.md",
+        "INSTALL.md",
+        "CHANGELOG.md",
+        "LICENSE",
+        "llms.txt",
+        "orp.yml",
+        "analysis/orp.kernel.task.yml",
+        "analysis/**",
+        "proofs/**",
+        "data/**",
+        "reports/**",
+        "results/**"
+      ]
+    },
+    {
+      "category": "source_or_test_change",
+      "description": "Implementation, validation, and app UI code that belongs to the project worktree.",
+      "globs": [
+        "src/**",
+        "lib/**",
+        "app/**",
+        "cli/**",
+        "bin/**",
+        "packages/**",
+        "scripts/**",
+        "tests/**",
+        "test/**",
+        "__tests__/**",
+        "public/**",
+        "web/**"
+      ]
+    },
+    {
+      "category": "docs_or_project_metadata",
+      "description": "Documentation, manifests, operational configs, and project metadata.",
+      "globs": [
+        "docs/**",
+        "ops/**",
+        "assets/**",
+        ".github/**",
+        ".agents/**",
+        ".codex/**",
+        ".env.example",
+        ".gitignore",
+        ".npmignore",
+        ".gitattributes",
+        "package.json",
+        "package-lock.json",
+        "tsconfig.json",
+        "pnpm-lock.yaml",
+        "yarn.lock",
+        "pyproject.toml",
+        "requirements*.txt",
+        "Cargo.toml",
+        "Cargo.lock",
+        "go.mod",
+        "go.sum",
+        "Makefile",
+        "justfile"
+      ]
+    },
+    {
+      "category": "runtime_research_artifact",
+      "description": "ORP process/runtime artifacts created for agent continuity.",
+      "globs": [
+        "orp/**",
+        ".orp/**",
+        ".clawdad/**"
+      ]
+    },
+    {
+      "category": "scratch_or_output_artifact",
+      "description": "Scratch, temporary, cache, build, or generated output paths that should be canonicalized when useful.",
+      "globs": [
+        "scratch/**",
+        "tmp/**",
+        "temp/**",
+        "output/**",
+        "outputs/**",
+        "build/**",
+        ".cache/**",
+        "coverage/**"
+      ]
+    }
+  ],
+  "agent_stop_rule": "Do not start or continue long-running expansion while any dirty path is unclassified. Classify it, refresh generated surfaces, canonicalize useful scratch, or write a blocker.",
+  "run_moments": [
+    "before long delegation",
+    "after material writeback",
+    "before remote side effects or unbudgeted paid compute",
+    "when dirty state grows unexpectedly"
+  ],
+  "self_healing_policy": [
+    "Classify dirty paths instead of hiding them.",
+    "Refresh generated surfaces when they are stale.",
+    "Canonicalize useful scratch into durable project artifacts.",
+    "Emit a blocker when a path cannot be classified or safely refreshed.",
+    "Never reset, checkout, or delete files merely to make hygiene look clean."
+  ],
+  "recommended_next_checks": [
+    "orp hygiene --json",
+    "orp workspace hygiene --json",
+    "git status --short",
+    "git diff --stat"
+  ]
+}

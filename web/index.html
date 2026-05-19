@@ -140,7 +140,21 @@
           </div>
 
           <label class="sr-only" for="messageInput">Message</label>
-          <textarea id="messageInput" name="message" rows="6" placeholder="Message"></textarea>
+          <div class="message-input-wrap">
+            <textarea id="messageInput" name="message" rows="6" placeholder="Message"></textarea>
+            <button
+              id="messageCopyButton"
+              class="copy-button composer-copy-button"
+              type="button"
+              aria-label="Copy composer text"
+              disabled
+            >
+              <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M6.2 5.1h5.05c.78 0 1.4.63 1.4 1.4v5.05c0 .78-.63 1.4-1.4 1.4H6.2c-.78 0-1.4-.63-1.4-1.4V6.5c0-.78.63-1.4 1.4-1.4Z" stroke="currentColor" stroke-width="1.25"></path>
+                <path d="M3.35 9.8H2.9c-.78 0-1.4-.63-1.4-1.4V3.35c0-.78.63-1.4 1.4-1.4h5.05c.78 0 1.4.63 1.4 1.4v.45" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"></path>
+              </svg>
+            </button>
+          </div>
             <input
               id="composerAttachmentInput"
               type="file"
@@ -343,18 +357,6 @@
           </div>
           <div class="queue-actions">
             <button
-              id="audioAutoDownloadButton"
-              class="queue-toggle audio-auto-download-button"
-              type="button"
-              aria-pressed="false"
-              aria-label="Enable automatic audio downloads"
-            >
-              <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <path d="M8 3.2v5.6m0 0 2.5-2.5M8 8.8 5.5 6.3M3.4 11.8h9.2" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"></path>
-              </svg>
-              <span class="button-text">Auto audio</span>
-            </button>
-            <button
               id="queueToggle"
               class="queue-toggle"
               type="button"
@@ -420,6 +422,36 @@
             <path d="M9 3.8v9.1m0 0 3.7-3.7M9 12.9 5.3 9.2" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"></path>
           </svg>
         </button>
+      </section>
+    </div>
+
+    <div id="terminalPanel" class="terminal-panel" hidden>
+      <section class="terminal-panel-shell" role="dialog" aria-modal="true" aria-labelledby="terminalPanelTitle">
+        <header class="terminal-panel-head">
+          <button id="terminalPanelBack" class="terminal-back-button" type="button" aria-label="Close terminal stream">
+            <svg viewBox="0 0 18 18" fill="none" aria-hidden="true">
+              <path d="M10.8 4.4 6.2 9l4.6 4.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path>
+            </svg>
+          </button>
+          <div class="terminal-panel-title-wrap">
+            <div id="terminalPanelTitle" class="terminal-panel-title">Terminal Stream</div>
+            <div id="terminalPanelMeta" class="terminal-panel-meta"></div>
+          </div>
+          <div id="terminalPanelStatus" class="terminal-panel-status">Waiting</div>
+        </header>
+
+        <div id="terminalStreamState" class="terminal-stream-state is-empty"></div>
+        <div id="terminalStreamList" class="terminal-stream-list"></div>
+
+        <div class="terminal-panel-actions">
+          <button id="terminalPanelOpenExternal" class="detail-action-button terminal-open-external-button" type="button">
+            <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <rect x="2.4" y="3.2" width="11.2" height="9.6" rx="1.8" stroke="currentColor" stroke-width="1.35"></rect>
+              <path d="m4.9 6.15 1.95 1.85-1.95 1.85M8.2 9.85h3.1" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"></path>
+            </svg>
+            <span class="button-text">Open In Terminal</span>
+          </button>
+        </div>
       </section>
     </div>
 

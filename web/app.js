@@ -26,6 +26,20 @@ const state = {
   artifactsByProject: {},
   artifactDownloadPendingId: "",
   terminalLaunchPendingKey: "",
+  terminalPanel: {
+    projectPath: "",
+    sessionId: "",
+    requestId: "",
+    projectLabel: "",
+    sessionLabel: "",
+    events: [],
+    nextCursor: "0",
+    total: 0,
+    loading: false,
+    initialized: false,
+    error: "",
+    requestStatus: null,
+  },
   artifactRefreshPromises: {},
   artifactShelfCollapsed: false,
   activeRunsModalOpen: false,
@@ -77,7 +91,15 @@ const state = {
     status: "idle",
   },
   audioAvailability: {},
-  audioAutoDownload: false,
+  ttsStatus: {
+    loaded: false,
+    enabled: true,
+    available: true,
+    error: "",
+    errorCode: "",
+    retryAfterMs: 0,
+    unavailableUntil: null,
+  },
   quickPrompts: [],
   quickPromptsLoaded: false,
   quickPromptsLoading: false,
@@ -122,8 +144,8 @@ const elements = {
   sessionImportButton: document.querySelector("#sessionImportButton"),
   sessionImportOrb: document.querySelector("#sessionImportOrb"),
   sessionThreadButton: document.querySelector("#sessionThreadButton"),
-  audioAutoDownloadButton: document.querySelector("#audioAutoDownloadButton"),
   messageInput: document.querySelector("#messageInput"),
+  messageCopyButton: document.querySelector("#messageCopyButton"),
   composerToolsButton: document.querySelector("#composerToolsButton"),
   composerToolsMenu: document.querySelector("#composerToolsMenu"),
   composerVoiceButton: document.querySelector("#composerVoiceButton"),
@@ -133,6 +155,14 @@ const elements = {
   composerAttachmentList: document.querySelector("#composerAttachmentList"),
   quickPromptButton: document.querySelector("#quickPromptButton"),
   currentTerminalButton: document.querySelector("#currentTerminalButton"),
+  terminalPanel: document.querySelector("#terminalPanel"),
+  terminalPanelBack: document.querySelector("#terminalPanelBack"),
+  terminalPanelTitle: document.querySelector("#terminalPanelTitle"),
+  terminalPanelStatus: document.querySelector("#terminalPanelStatus"),
+  terminalPanelMeta: document.querySelector("#terminalPanelMeta"),
+  terminalStreamState: document.querySelector("#terminalStreamState"),
+  terminalStreamList: document.querySelector("#terminalStreamList"),
+  terminalPanelOpenExternal: document.querySelector("#terminalPanelOpenExternal"),
   dispatchModeButtons: Array.from(document.querySelectorAll("[data-dispatch-mode]")),
   dispatchForm: document.querySelector("#dispatchForm"),
   dispatchButton: document.querySelector("#dispatchButton"),
@@ -288,12 +318,17 @@ const cacheVersionSuffix = appBuildVersion && appBuildVersion !== "__CLAWDAD_APP
   ? `-${appBuildVersion}`
   : "";
 const projectCacheKey = `clawdad-project-catalog-v4${cacheVersionSuffix}`;
-const threadCacheKey = `clawdad-thread-log-v2${cacheVersionSuffix}`;
+const threadCacheKey = "clawdad-thread-log-v2";
 const queueCollapsedKey = "clawdad-queue-collapsed-v1";
 const artifactShelfCollapsedKey = "clawdad-artifact-shelf-collapsed-v1";
-const audioAutoDownloadKey = "clawdad-audio-auto-download-v1";
+const composerCopyKey = "composer-message";
 let queueArchiveReturnFocus = null;
 let queueArchiveFocusPending = false;
+let terminalPanelReturnFocus = null;
+let terminalPanelHistoryActive = false;
+let terminalPanelPollTimer = null;
+let terminalPanelRequestSequence = 0;
+let terminalPanelStickToBottom = true;
 const quickPromptTitleMax = 80;
 const quickPromptTextMax = 12_000;
 const newSessionSelectValue = "__clawdad_new_session__";
@@ -331,6 +366,8 @@ const recentHistoryRefreshMs = 60 * 1000;
 const recentHistoryLimit = 24;
 const recentHistorySessionLimit = 10;
 const recentHistoryPerSessionLimit = 4;
+const terminalStreamPageSize = 120;
+const terminalStreamPollMs = 2400;
 const artifactRefreshFreshMs = 60 * 1000;
 const threadEntryCacheLimit = 80;
 const ttsInlineTextLimit = 50_000;
@@ -471,8 +508,10 @@ const headerCatchphrases = {
 let detailHistoryRenderSnapshot = null;
 let delegateRunRenderSnapshot = null;
 let activeMessageAudio = null;
+let audioNoticeTimer = null;
 const audioPreparePromises = new Map();
 const audioPrepareTimers = new Map();
+const audioPreparePlaybackPromises = new Map();
 const pendingSessionCycle = {
   order: [],
   cursor: 0,
@@ -500,6 +539,9 @@ const fullDateTimeFormatter = new Intl.DateTimeFormat([], {
 });
 const controlLockMs = 2600;
 const ttsPreparePollMs = 3500;
+const ttsClickPreparePollMs = 700;
+const ttsClickPrepareTimeoutMs = 45_000;
+const audioPlaybackStartTimeoutMs = 12000;
 
 function copyIconMarkup() {
   return `
@@ -524,14 +566,6 @@ function speakerIconMarkup() {
       <path d="M2.5 6.1h2.2l3.1-2.65v9.1L4.7 9.9H2.5z" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round"></path>
       <path d="M10.2 5.25c.75.7 1.15 1.6 1.15 2.75s-.4 2.05-1.15 2.75" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"></path>
       <path d="M12.1 3.7c1.16 1.12 1.75 2.55 1.75 4.3s-.59 3.18-1.75 4.3" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" opacity=".75"></path>
-    </svg>
-  `;
-}
-
-function downloadIconMarkup() {
-  return `
-    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path d="M8 3.2v5.6m0 0 2.5-2.5M8 8.8 5.5 6.3M3.4 11.8h9.2" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"></path>
     </svg>
   `;
 }
@@ -566,8 +600,24 @@ function audioLoadingMarkup() {
 function stopAudioIconMarkup() {
   return `
     <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <rect x="4.35" y="4.35" width="7.3" height="7.3" rx="1.35" fill="currentColor"></rect>
+    </svg>
+  `;
+}
+
+function pauseAudioIconMarkup() {
+  return `
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
       <rect x="4.6" y="4" width="2.4" height="8" rx=".8" fill="currentColor"></rect>
       <rect x="9" y="4" width="2.4" height="8" rx=".8" fill="currentColor"></rect>
+    </svg>
+  `;
+}
+
+function playAudioIconMarkup() {
+  return `
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M5.2 3.9v8.2l6.3-4.1-6.3-4.1Z" fill="currentColor"></path>
     </svg>
   `;
 }
@@ -2503,22 +2553,6 @@ function restoreArtifactShelfCollapsed() {
   }
 }
 
-function persistAudioAutoDownload() {
-  try {
-    localStorage.setItem(audioAutoDownloadKey, JSON.stringify(state.audioAutoDownload));
-  } catch (_error) {
-    // Ignore storage failures.
-  }
-}
-
-function restoreAudioAutoDownload() {
-  try {
-    state.audioAutoDownload = JSON.parse(localStorage.getItem(audioAutoDownloadKey) || "false") === true;
-  } catch (_error) {
-    state.audioAutoDownload = false;
-  }
-}
-
 function entryById(entryId) {
   return state.threadEntries.find((entry) => entry.id === entryId) || null;
 }
@@ -2590,6 +2624,115 @@ function normalizeHistoryScheduleMode(value) {
   return "";
 }
 
+function normalizeHistoryAudioManifest(manifest) {
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
+    return null;
+  }
+
+  const parts = Array.isArray(manifest.parts) ? manifest.parts : [];
+  const audioId = String(manifest.audioId || "").trim();
+  const state = String(manifest.state || "").trim().toLowerCase();
+  const error = String(manifest.error || "").trim();
+  const errorCode = String(manifest.errorCode || manifest.code || "").trim();
+  if (!audioId && !state && parts.length === 0 && !error && !errorCode) {
+    return null;
+  }
+
+  return {
+    audioId,
+    state: state || (parts.length > 0 ? "ready" : "unknown"),
+    provider: String(manifest.provider || "").trim(),
+    voiceId: String(manifest.voiceId || "").trim(),
+    modelId: String(manifest.modelId || "").trim(),
+    outputFormat: String(manifest.outputFormat || "").trim(),
+    textHash: String(manifest.textHash || manifest.source?.textHash || "").trim() || null,
+    charCount: typeof manifest.charCount === "number" ? manifest.charCount : null,
+    chunkCount: typeof manifest.chunkCount === "number" ? manifest.chunkCount : parts.length,
+    cachedAt: String(manifest.cachedAt || manifest.updatedAt || manifest.createdAt || "").trim() || null,
+    error: error || null,
+    errorCode,
+    retryAfterMs: Number.isFinite(Number.parseInt(String(manifest.retryAfterMs || "0"), 10))
+      ? Number.parseInt(String(manifest.retryAfterMs || "0"), 10)
+      : 0,
+    unavailableUntil: String(manifest.unavailableUntil || "").trim() || null,
+    source: manifest.source && typeof manifest.source === "object" && !Array.isArray(manifest.source)
+      ? { ...manifest.source }
+      : null,
+    parts: parts
+      .map((part) => ({
+        index: typeof part?.index === "number" ? part.index : null,
+        fileName: String(part?.fileName || "").trim(),
+        bytes: typeof part?.bytes === "number" ? part.bytes : null,
+        charCount: typeof part?.charCount === "number" ? part.charCount : null,
+        url: String(part?.url || "").trim(),
+      }))
+      .filter((part) => part.fileName || part.url),
+  };
+}
+
+function normalizeHistoryAudioMetadata(audio) {
+  if (!audio || typeof audio !== "object" || Array.isArray(audio)) {
+    return null;
+  }
+
+  const message = normalizeHistoryAudioManifest(audio.message);
+  const response = normalizeHistoryAudioManifest(audio.response);
+  if (!message && !response) {
+    return null;
+  }
+  return {
+    ...(message ? { message } : {}),
+    ...(response ? { response } : {}),
+  };
+}
+
+function audioManifestReady(audio) {
+  return audio?.state === "ready" && Array.isArray(audio.parts) && audio.parts.some((part) => part?.url);
+}
+
+function audioManifestFailed(audio) {
+  return audio?.state === "failed" || Boolean(String(audio?.error || "").trim());
+}
+
+function preferredHistoryAudioManifest(existingManifest = null, incomingManifest = null) {
+  if (!existingManifest) {
+    return incomingManifest || null;
+  }
+  if (!incomingManifest) {
+    return existingManifest;
+  }
+  if (audioManifestReady(incomingManifest)) {
+    return incomingManifest;
+  }
+  if (audioManifestReady(existingManifest)) {
+    return existingManifest;
+  }
+  if (audioManifestFailed(incomingManifest)) {
+    return incomingManifest;
+  }
+  return existingManifest;
+}
+
+function mergeHistoryAudioMetadata(existingAudio, incomingAudio) {
+  const existing = normalizeHistoryAudioMetadata(existingAudio);
+  const incoming = normalizeHistoryAudioMetadata(incomingAudio);
+  if (!existing) {
+    return incoming;
+  }
+  if (!incoming) {
+    return existing;
+  }
+  const message = preferredHistoryAudioManifest(existing.message, incoming.message);
+  const response = preferredHistoryAudioManifest(existing.response, incoming.response);
+  if (!message && !response) {
+    return null;
+  }
+  return {
+    ...(message ? { message } : {}),
+    ...(response ? { response } : {}),
+  };
+}
+
 function normalizeHistoryItem(item) {
   const sessionId = String(item?.sessionId || "").trim();
   const provider = String(item?.provider || "").trim() || sessionForEntry(item)?.provider || "session";
@@ -2597,6 +2740,7 @@ function normalizeHistoryItem(item) {
   const answeredAt = String(item?.answeredAt || "").trim() || null;
   const scheduleMode = normalizeHistoryScheduleMode(item?.scheduleMode || item?.dispatchMode);
   const archivedAt = String(item?.archivedAt || "").trim() || null;
+  const audio = normalizeHistoryAudioMetadata(item?.audio);
   return {
     requestId: String(item?.requestId || "").trim() || makeEntryId(),
     projectPath: String(item?.projectPath || "").trim(),
@@ -2615,6 +2759,7 @@ function normalizeHistoryItem(item) {
     scheduleMode,
     archivedAt,
     attachments: normalizeHistoryAttachments(item?.attachments),
+    ...(audio ? { audio } : {}),
     seenAt:
       String(item?.seenAt || "").trim() ||
       (normalizedStatus === "queued" ? null : answeredAt || String(item?.sentAt || "").trim() || new Date().toISOString()),
@@ -2922,6 +3067,10 @@ function mergeHistoryItem(existing, incoming) {
   const existingMessage = String(existing?.message || "");
   const incomingAttachments = normalizeHistoryAttachments(incoming?.attachments);
   const existingAttachments = normalizeHistoryAttachments(existing?.attachments);
+  const audio = mergeHistoryAudioMetadata(existing?.audio, incoming?.audio);
+  const shouldKeepReturnedEntryUnread =
+    threadEntryStatus(existing) === "queued" &&
+    (status === "answered" || status === "failed");
 
   return {
     ...existing,
@@ -2948,11 +3097,56 @@ function mergeHistoryItem(existing, incoming) {
       ) || "",
     archivedAt: firstNonEmpty(existing?.archivedAt, incoming?.archivedAt) || null,
     attachments: incomingAttachments.length > 0 ? incomingAttachments : existingAttachments,
-    seenAt:
-      String(existing?.seenAt || "").trim() ||
-      String(incoming?.seenAt || "").trim() ||
-      null,
+    ...(audio ? { audio } : {}),
+    seenAt: shouldKeepReturnedEntryUnread
+      ? null
+      : String(existing?.seenAt || "").trim() ||
+        String(incoming?.seenAt || "").trim() ||
+        null,
   };
+}
+
+function historyAudioSignature(entry) {
+  const audio = normalizeHistoryAudioMetadata(entry?.audio);
+  const response = audio?.response;
+  if (!response) {
+    return "";
+  }
+  return [
+    response.state || "",
+    response.audioId || "",
+    response.textHash || "",
+    Array.isArray(response.parts) ? response.parts.length : 0,
+    response.error || "",
+  ].join(":");
+}
+
+function historyDisplayTimestampMs(entry) {
+  const status = threadEntryStatus(entry);
+  const primary =
+    status === "queued"
+      ? entry?.sentAt
+      : entry?.answeredAt || entry?.sentAt;
+  const value = new Date(primary || 0).getTime();
+  return Number.isFinite(value) ? value : 0;
+}
+
+function compareHistoryDisplayOrder(left, right) {
+  const activityDiff = historyDisplayTimestampMs(left) - historyDisplayTimestampMs(right);
+  if (activityDiff !== 0) {
+    return activityDiff;
+  }
+
+  const leftSentAt = new Date(left?.sentAt || 0).getTime();
+  const rightSentAt = new Date(right?.sentAt || 0).getTime();
+  const sentAtDiff =
+    (Number.isFinite(leftSentAt) ? leftSentAt : 0) -
+    (Number.isFinite(rightSentAt) ? rightSentAt : 0);
+  if (sentAtDiff !== 0) {
+    return sentAtDiff;
+  }
+
+  return String(left?.requestId || left?.id || "").localeCompare(String(right?.requestId || right?.id || ""));
 }
 
 function mergeHistoryItems(existingItems = [], incomingItems = []) {
@@ -2968,11 +3162,7 @@ function mergeHistoryItems(existingItems = [], incomingItems = []) {
     }
   }
 
-  return merged.sort((left, right) => {
-    const leftMs = new Date(left.sentAt || 0).getTime();
-    const rightMs = new Date(right.sentAt || 0).getTime();
-    return (Number.isFinite(leftMs) ? leftMs : 0) - (Number.isFinite(rightMs) ? rightMs : 0);
-  });
+  return merged.sort(compareHistoryDisplayOrder);
 }
 
 function trimThreadEntries(items = []) {
@@ -3038,6 +3228,10 @@ function hydrateHistoryFromThreadEntry(entry) {
   const item = historyItemFromThreadEntry(entry);
   if (!item) {
     return;
+  }
+
+  if (typeof hydrateAudioAvailabilityFromHistoryItem === "function") {
+    hydrateAudioAvailabilityFromHistoryItem(item);
   }
 
   const existing = historyStateFor(item.projectPath, item.sessionId);
@@ -3707,14 +3901,51 @@ function persistThreadEntries() {
   }
 }
 
-function restoreThreadEntries() {
+function readThreadEntryCache(key) {
   try {
-    const raw = localStorage.getItem(threadCacheKey);
+    const raw = localStorage.getItem(key);
     if (!raw) {
-      return;
+      return null;
     }
     const parsed = JSON.parse(raw);
-    state.threadEntries = Array.isArray(parsed) ? trimThreadEntries(cacheableThreadEntries(parsed)) : [];
+    return Array.isArray(parsed) ? cacheableThreadEntries(parsed) : [];
+  } catch (_error) {
+    return [];
+  }
+}
+
+function threadEntryCacheKeysForRestore() {
+  const keys = [threadCacheKey];
+  try {
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (
+        key &&
+        key.startsWith("clawdad-thread-log-") &&
+        key !== threadCacheKey &&
+        !keys.includes(key)
+      ) {
+        keys.push(key);
+      }
+    }
+  } catch (_error) {
+    // Ignore storage failures.
+  }
+  return keys;
+}
+
+function restoreThreadEntries() {
+  try {
+    const caches = threadEntryCacheKeysForRestore()
+      .map((key) => ({ key, items: readThreadEntryCache(key) }))
+      .filter((entry) => entry.items !== null);
+    if (caches.length === 0) {
+      return;
+    }
+
+    const allItems = caches.flatMap((entry) => entry.items);
+    state.threadEntries = trimThreadEntries(cacheableThreadEntries(mergeHistoryItems([], allItems)));
+    persistThreadEntries();
   } catch (_error) {
     state.threadEntries = [];
   }
@@ -3722,16 +3953,7 @@ function restoreThreadEntries() {
 
 function purgeLegacyThreadEntryCaches() {
   try {
-    const keys = [];
-    for (let index = 0; index < localStorage.length; index += 1) {
-      const key = localStorage.key(index);
-      if (key && key.startsWith("clawdad-thread-log-") && key !== threadCacheKey) {
-        keys.push(key);
-      }
-    }
-    for (const key of keys) {
-      localStorage.removeItem(key);
-    }
+    restoreThreadEntries();
   } catch (_error) {
     // Ignore storage failures.
   }
@@ -3746,11 +3968,11 @@ function hydrateThreadEntriesFromHistoryItems(items = []) {
   }
 
   const beforeSignature = state.threadEntries
-    .map((entry) => `${entry.id || ""}:${entry.requestId || ""}:${entry.status || ""}:${entry.answeredAt || ""}:${String(entry.response || "").length}`)
+    .map((entry) => `${entry.id || ""}:${entry.requestId || ""}:${entry.status || ""}:${entry.answeredAt || ""}:${String(entry.response || "").length}:${historyAudioSignature(entry)}`)
     .join("|");
   state.threadEntries = trimThreadEntries(mergeHistoryItems(state.threadEntries, incoming));
   const afterSignature = state.threadEntries
-    .map((entry) => `${entry.id || ""}:${entry.requestId || ""}:${entry.status || ""}:${entry.answeredAt || ""}:${String(entry.response || "").length}`)
+    .map((entry) => `${entry.id || ""}:${entry.requestId || ""}:${entry.status || ""}:${entry.answeredAt || ""}:${String(entry.response || "").length}:${historyAudioSignature(entry)}`)
     .join("|");
 
   for (const entry of incoming) {
@@ -3816,7 +4038,7 @@ function currentThreadEntries() {
         entry.projectPath === state.selectedProject &&
         entry.sessionId === state.selectedSessionId,
     )
-    .sort((left, right) => new Date(left.sentAt).getTime() - new Date(right.sentAt).getTime());
+    .sort(compareHistoryDisplayOrder);
 }
 
 function queueEntryThreadKey(entry) {
@@ -4046,7 +4268,6 @@ function completeThreadEntry(entry, patch) {
   if (entryHasReturned(completedEntry)) {
     void prefetchSessionHistory(completedEntry.projectPath, completedEntry.sessionId, { force: true });
   }
-  prepareResponseAudioForEntry(completedEntry);
 }
 
 function sessionStatusLabel(entry) {
@@ -4139,6 +4360,22 @@ function stableCopyHash(value) {
   return (hash >>> 0).toString(36);
 }
 
+function ttsComparableText(value) {
+  return String(value || "").trim();
+}
+
+function messageAudioTextFingerprint(text = "") {
+  const value = ttsComparableText(text);
+  const hash = stableCopyHash(value);
+  return {
+    text: value,
+    length: value.length,
+    hash,
+    colonKey: `${value.length}:${hash}`,
+    dashKey: `${value.length}-${hash}`,
+  };
+}
+
 function entryCopyKey(entry, kind, text = "") {
   const parts = [
     kind,
@@ -4180,6 +4417,37 @@ function buildCopyButton({ copyKey, label, text }) {
   return button;
 }
 
+function updateMessageCopyButton() {
+  const button = elements.messageCopyButton;
+  if (!button) {
+    return;
+  }
+  const hasText = Boolean(String(elements.messageInput?.value || "").trim());
+  button.dataset.copyKey = composerCopyKey;
+  button.disabled = !hasText;
+  decorateCopyButton(button, composerCopyKey);
+  const copied = copyFeedbackActive(composerCopyKey);
+  const label = copied ? "Copied composer text" : "Copy composer text";
+  button.setAttribute("aria-label", label);
+  button.title = label;
+}
+
+function terminalPanelIsOpen() {
+  return Boolean(
+    state.terminalPanel.projectPath &&
+      state.terminalPanel.sessionId &&
+      state.terminalPanel.requestId,
+  );
+}
+
+function terminalStreamRequestKey(projectPath, sessionId, requestId) {
+  return [
+    String(projectPath || "").trim(),
+    String(sessionId || "").trim(),
+    String(requestId || "").trim(),
+  ].join("::");
+}
+
 function terminalSessionKey(projectPath, sessionId) {
   return `${String(projectPath || "").trim()}::${String(sessionId || "").trim()}`;
 }
@@ -4188,6 +4456,11 @@ function canOpenSessionInTerminal(entry) {
   const projectPath = String(entry?.projectPath || "").trim();
   const sessionId = String(entry?.sessionId || "").trim();
   return Boolean(projectPath && sessionId && !sessionId.startsWith("pending-create:"));
+}
+
+function canOpenTerminalStream(entry) {
+  const requestId = String(entry?.requestId || "").trim();
+  return Boolean(canOpenSessionInTerminal(entry) && requestId);
 }
 
 function currentSessionTerminalEntry() {
@@ -4244,6 +4517,302 @@ async function openSessionInTerminal(entry) {
   }
 }
 
+function terminalPanelStatusIsTerminal(status) {
+  return Boolean(status?.terminal) || ["completed", "failed"].includes(String(status?.status || status?.state || "").toLowerCase());
+}
+
+function terminalPanelStatusLabel(status) {
+  const normalized = String(status?.status || status?.state || "").trim().toLowerCase();
+  if (normalized === "completed") {
+    return "Completed";
+  }
+  if (normalized === "failed") {
+    return "Failed";
+  }
+  if (normalized === "queued") {
+    return "Queued";
+  }
+  if (normalized === "running" || normalized === "dispatched") {
+    return "Running";
+  }
+  if (normalized === "idle" || normalized === "unknown") {
+    return "Waiting";
+  }
+  return normalized ? normalized.replace(/\b\w/gu, (match) => match.toUpperCase()) : "Waiting";
+}
+
+function resetTerminalPanelState() {
+  state.terminalPanel = {
+    projectPath: "",
+    sessionId: "",
+    requestId: "",
+    projectLabel: "",
+    sessionLabel: "",
+    events: [],
+    nextCursor: "0",
+    total: 0,
+    loading: false,
+    initialized: false,
+    error: "",
+    requestStatus: null,
+  };
+}
+
+function stopTerminalPanelPolling() {
+  if (terminalPanelPollTimer) {
+    window.clearTimeout(terminalPanelPollTimer);
+    terminalPanelPollTimer = null;
+  }
+}
+
+function scheduleTerminalPanelPoll() {
+  stopTerminalPanelPolling();
+  if (!terminalPanelIsOpen() || terminalPanelStatusIsTerminal(state.terminalPanel.requestStatus)) {
+    return;
+  }
+  terminalPanelPollTimer = window.setTimeout(() => {
+    void loadTerminalStreamEvents({ append: true, quiet: true });
+  }, terminalStreamPollMs);
+}
+
+function mergeTerminalStreamEvents(existingEvents = [], incomingEvents = []) {
+  const byId = new Map();
+  for (const event of [...existingEvents, ...incomingEvents]) {
+    const id = String(event?.id || "").trim();
+    if (!id) {
+      continue;
+    }
+    byId.set(id, normalizeTerminalStreamEvent(event));
+  }
+  return [...byId.values()].sort((left, right) => {
+    const leftMs = Date.parse(left.at || "");
+    const rightMs = Date.parse(right.at || "");
+    return (Number.isFinite(leftMs) ? leftMs : 0) - (Number.isFinite(rightMs) ? rightMs : 0);
+  });
+}
+
+function normalizeTerminalStreamEvent(event = {}) {
+  return {
+    id: String(event.id || makeEntryId()).trim(),
+    at: String(event.at || event.timestamp || "").trim(),
+    type: String(event.type || "event").trim(),
+    method: String(event.method || "").trim(),
+    label: String(event.label || event.type || "Event").trim(),
+    text: String(event.text || "").trim(),
+    level: String(event.level || "info").trim(),
+    status: String(event.status || "").trim(),
+    itemType: String(event.itemType || "").trim(),
+  };
+}
+
+function terminalPanelDistanceFromBottom() {
+  const list = elements.terminalStreamList;
+  if (!list) {
+    return 0;
+  }
+  return list.scrollHeight - list.scrollTop - list.clientHeight;
+}
+
+function terminalPanelNearBottom() {
+  const list = elements.terminalStreamList;
+  return !list || terminalPanelDistanceFromBottom() < 96;
+}
+
+function scrollTerminalStreamToBottom({ smooth = false } = {}) {
+  const list = elements.terminalStreamList;
+  if (!list) {
+    return;
+  }
+  list.scrollTo({
+    top: list.scrollHeight,
+    behavior: smooth ? "smooth" : "auto",
+  });
+}
+
+function pushTerminalPanelHistory() {
+  if (terminalPanelHistoryActive || !window.history?.pushState) {
+    return;
+  }
+  const currentState =
+    window.history.state && typeof window.history.state === "object"
+      ? window.history.state
+      : {};
+  window.history.pushState(
+    {
+      ...currentState,
+      clawdadTerminalPanel: true,
+    },
+    "",
+    window.location.href,
+  );
+  terminalPanelHistoryActive = true;
+}
+
+function closeTerminalStreamPanel({ fromHistory = false, restoreFocus = true } = {}) {
+  const wasOpen = terminalPanelIsOpen();
+  stopTerminalPanelPolling();
+  terminalPanelRequestSequence += 1;
+  resetTerminalPanelState();
+  renderAll();
+  if (restoreFocus && terminalPanelReturnFocus instanceof HTMLElement) {
+    terminalPanelReturnFocus.focus({ preventScroll: true });
+  }
+  terminalPanelReturnFocus = null;
+
+  if (fromHistory) {
+    terminalPanelHistoryActive = false;
+    return;
+  }
+  if (
+    wasOpen &&
+    terminalPanelHistoryActive &&
+    window.history?.state?.clawdadTerminalPanel &&
+    window.history.back
+  ) {
+    window.history.back();
+  } else {
+    terminalPanelHistoryActive = false;
+  }
+}
+
+async function loadTerminalStreamEvents({ append = false, quiet = false } = {}) {
+  if (!terminalPanelIsOpen()) {
+    return;
+  }
+  const requestKey = terminalStreamRequestKey(
+    state.terminalPanel.projectPath,
+    state.terminalPanel.sessionId,
+    state.terminalPanel.requestId,
+  );
+  const sequence = ++terminalPanelRequestSequence;
+  const cursor = append ? String(state.terminalPanel.nextCursor || "0") : "0";
+  const shouldStick = terminalPanelStickToBottom || terminalPanelNearBottom();
+
+  state.terminalPanel = {
+    ...state.terminalPanel,
+    loading: !quiet,
+    error: "",
+  };
+  if (!quiet) {
+    renderAll();
+  }
+
+  try {
+    const query = new URLSearchParams({
+      project: state.terminalPanel.projectPath,
+      sessionId: state.terminalPanel.sessionId,
+      requestId: state.terminalPanel.requestId,
+      cursor,
+      limit: String(terminalStreamPageSize),
+    });
+    const payload = await fetchJson(`/v1/session-terminal-log?${query.toString()}`);
+    if (
+      sequence !== terminalPanelRequestSequence ||
+      requestKey !== terminalStreamRequestKey(
+        state.terminalPanel.projectPath,
+        state.terminalPanel.sessionId,
+        state.terminalPanel.requestId,
+      )
+    ) {
+      return;
+    }
+    const incomingEvents = Array.isArray(payload.events)
+      ? payload.events.map(normalizeTerminalStreamEvent)
+      : [];
+    state.terminalPanel = {
+      ...state.terminalPanel,
+      events: mergeTerminalStreamEvents(append ? state.terminalPanel.events : [], incomingEvents),
+      nextCursor: String(payload.nextCursor || "0"),
+      total: Number.parseInt(String(payload.total || "0"), 10) || 0,
+      requestStatus: payload.requestStatus || state.terminalPanel.requestStatus,
+      loading: false,
+      initialized: true,
+      error: "",
+    };
+  } catch (error) {
+    if (sequence !== terminalPanelRequestSequence) {
+      return;
+    }
+    state.terminalPanel = {
+      ...state.terminalPanel,
+      loading: false,
+      initialized: true,
+      error: error.message,
+    };
+  }
+
+  terminalPanelStickToBottom = shouldStick;
+  renderAll();
+  if (shouldStick) {
+    window.requestAnimationFrame(() => scrollTerminalStreamToBottom());
+  }
+  scheduleTerminalPanelPoll();
+}
+
+async function openTerminalStreamPanel(entry, trigger = null) {
+  const projectPath = String(entry?.projectPath || "").trim();
+  const sessionId = String(entry?.sessionId || "").trim();
+  const requestId = String(entry?.requestId || "").trim();
+  if (!projectPath || !sessionId || !requestId) {
+    return;
+  }
+
+  stopTerminalPanelPolling();
+  terminalPanelRequestSequence += 1;
+  terminalPanelReturnFocus = trigger instanceof HTMLElement ? trigger : document.activeElement;
+  terminalPanelStickToBottom = true;
+  state.terminalPanel = {
+    projectPath,
+    sessionId,
+    requestId,
+    projectLabel: String(entry?.projectLabel || entryProjectLabel(entry) || fallbackProjectLabel(projectPath)),
+    sessionLabel: String(entry?.sessionLabel || entrySessionLabel(entry) || sessionId),
+    events: [],
+    nextCursor: "0",
+    total: 0,
+    loading: true,
+    initialized: false,
+    error: "",
+    requestStatus: {
+      requestId,
+      sessionId,
+      state: threadEntryStatus(entry) === "queued" ? "running" : threadEntryStatus(entry),
+      status: threadEntryStatus(entry) === "answered" ? "completed" : threadEntryStatus(entry),
+      terminal: entryHasReturned(entry),
+      active: !entryHasReturned(entry),
+      source: "client",
+      sentAt: String(entry?.sentAt || "").trim() || null,
+      answeredAt: String(entry?.answeredAt || "").trim() || null,
+      exitCode: null,
+      error: threadEntryStatus(entry) === "failed" ? String(entry?.response || "").trim() || null : null,
+    },
+  };
+  pushTerminalPanelHistory();
+  renderAll();
+  window.requestAnimationFrame(() => scrollTerminalStreamToBottom());
+  await loadTerminalStreamEvents({ append: false });
+}
+
+function buildTerminalStreamButton(entry) {
+  const projectPath = String(entry?.projectPath || "").trim();
+  const sessionId = String(entry?.sessionId || "").trim();
+  const requestId = String(entry?.requestId || "").trim();
+  const launchKey = terminalStreamRequestKey(projectPath, sessionId, requestId);
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "copy-button copy-button-floating open-terminal-button terminal-stream-button";
+  button.dataset.terminalStreamKey = launchKey;
+  button.innerHTML = terminalIconMarkup();
+  button.setAttribute("aria-label", "Open terminal stream");
+  button.title = "Open terminal stream";
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    void openTerminalStreamPanel(entry, button);
+  });
+  return button;
+}
+
 function buildOpenTerminalButton(entry) {
   const projectPath = String(entry?.projectPath || "").trim();
   const sessionId = String(entry?.sessionId || "").trim();
@@ -4293,6 +4862,173 @@ function audioPartsFromAvailability(audioKey) {
   return availability.status === "ready" && parts.length > 0 ? parts : [];
 }
 
+function normalizeTtsStatus(value = {}) {
+  const source = value?.ttsStatus || value?.tts || value || {};
+  const enabled = source.enabled !== false;
+  const available = enabled && source.available !== false;
+  const retryAfterMs = Number.parseInt(String(source.retryAfterMs || "0"), 10);
+  return {
+    loaded: Boolean(source.loaded || value?.ttsStatus || value?.tts),
+    enabled,
+    available,
+    error: String(source.error || "").trim(),
+    errorCode: String(source.errorCode || source.code || "").trim(),
+    retryAfterMs: Number.isFinite(retryAfterMs) && retryAfterMs > 0 ? retryAfterMs : 0,
+    unavailableUntil: String(source.unavailableUntil || "").trim() || null,
+  };
+}
+
+function setTtsStatus(value = {}, { render = false } = {}) {
+  state.ttsStatus = normalizeTtsStatus({
+    ...state.ttsStatus,
+    ...value,
+    loaded: true,
+  });
+  if (render) {
+    renderAll();
+  }
+  return state.ttsStatus;
+}
+
+function ttsUnavailableMessage(status = state.ttsStatus) {
+  const normalized = normalizeTtsStatus(status);
+  if (normalized.available) {
+    return "";
+  }
+  if (normalized.errorCode === "insufficient_funds") {
+    return "Text-to-speech failed: insufficient OpenAI funds or credits. Update OpenAI billing, recharge the budget, or use an API key with available credits.";
+  }
+  if (normalized.errorCode === "quota_exceeded") {
+    return "Text-to-speech quota or rate limit was reached. Saved audio can still play.";
+  }
+  if (normalized.errorCode === "rate_limited") {
+    return "Text-to-speech is temporarily rate limited by OpenAI. Try again after the retry window.";
+  }
+  if (normalized.errorCode === "not_configured") {
+    return "Text-to-speech provider is not configured.";
+  }
+  if (normalized.errorCode === "local_service_not_configured") {
+    return "Local text-to-speech is missing a Doc Reader service URL.";
+  }
+  if (normalized.errorCode === "local_service_unavailable") {
+    return "Local text-to-speech is unavailable. Check the Doc Reader speech services and try again.";
+  }
+  if (normalized.errorCode === "disabled") {
+    return "Text-to-speech is disabled on this Clawdad server.";
+  }
+  if (normalized.error) {
+    return normalized.error;
+  }
+  return "Text-to-speech is temporarily unavailable.";
+}
+
+function ttsStatusBlocksGeneration() {
+  return state.ttsStatus?.loaded && !normalizeTtsStatus(state.ttsStatus).available;
+}
+
+function ttsUnavailableFromErrorPayload(payload = {}) {
+  const statusPayload = payload?.ttsStatus || payload?.tts;
+  if (statusPayload) {
+    return setTtsStatus(statusPayload);
+  }
+  const errorCode = String(payload?.errorCode || "").trim();
+  if (
+    [
+      "insufficient_funds",
+      "quota_exceeded",
+      "rate_limited",
+      "not_configured",
+      "local_service_not_configured",
+      "local_service_unavailable",
+      "disabled",
+      "unsupported",
+    ]
+      .includes(errorCode)
+  ) {
+    return setTtsStatus({
+      available: false,
+      error: String(payload?.error || "").trim(),
+      errorCode,
+      retryAfterMs: payload?.retryAfterMs,
+      unavailableUntil: payload?.unavailableUntil,
+    });
+  }
+  return null;
+}
+
+function ttsErrorCodeFromMessage(error = "") {
+  const message = String(error || "").trim();
+  if (
+    /insufficient[_ -]?quota|exceeded your current quota|billing|payment|credit|funds|balance|hard limit/iu
+      .test(message)
+  ) {
+    return "insufficient_funds";
+  }
+  if (/rate limit|too many requests|temporarily limited/iu.test(message)) {
+    return "rate_limited";
+  }
+  if (/quota|status 429/iu.test(message)) {
+    return "quota_exceeded";
+  }
+  if (/doc reader.*not configured|local speech.*not configured|local text-to-speech.*not configured/iu.test(message)) {
+    return "local_service_not_configured";
+  }
+  if (/doc reader|local speech|local text-to-speech|econnrefused|econnreset|enotfound|fetch failed/iu.test(message)) {
+    return "local_service_unavailable";
+  }
+  if (/api key|not configured/iu.test(message)) {
+    return "not_configured";
+  }
+  if (/disabled/iu.test(message)) {
+    return "disabled";
+  }
+  return "";
+}
+
+function ttsErrorImpliesUnavailable(errorCode = "", error = "") {
+  const code = String(errorCode || ttsErrorCodeFromMessage(error) || "").trim();
+  const message = String(error || "").trim();
+  return [
+    "insufficient_funds",
+    "quota_exceeded",
+    "rate_limited",
+    "not_configured",
+    "local_service_not_configured",
+    "local_service_unavailable",
+    "disabled",
+    "unsupported",
+  ]
+    .includes(code) ||
+    /quota|exceeded your current quota|billing|payment|credit|funds|api key|not configured|doc reader|local speech|local text-to-speech|disabled/iu
+      .test(message);
+}
+
+function showAudioStatus(message) {
+  const text = String(message || "").trim();
+  if (!text) {
+    return;
+  }
+  setText(elements.mailboxState, text, { empty: false });
+  if (audioNoticeTimer) {
+    window.clearTimeout(audioNoticeTimer);
+  }
+  audioNoticeTimer = window.setTimeout(() => {
+    audioNoticeTimer = null;
+    updateMailboxState();
+  }, 4500);
+}
+
+async function refreshTtsStatus({ quiet = false } = {}) {
+  try {
+    const payload = await fetchJson("/v1/tts/status");
+    setTtsStatus(payload?.ttsStatus || payload?.tts || payload, { render: false });
+  } catch (error) {
+    if (!quiet) {
+      showAudioStatus(error.message || "Text-to-speech status is unavailable.");
+    }
+  }
+}
+
 function clearAudioPrepareTimer(audioKey) {
   const timer = audioPrepareTimers.get(audioKey);
   if (timer) {
@@ -4301,33 +5037,59 @@ function clearAudioPrepareTimer(audioKey) {
   }
 }
 
-function scheduleAudioPreparePoll(audioKey, payload, { autoplay = false } = {}) {
+function scheduleAudioPreparePoll(audioKey, payload) {
   if (!audioKey || audioPrepareTimers.has(audioKey)) {
     return;
   }
   const timer = window.setTimeout(() => {
     audioPrepareTimers.delete(audioKey);
-    void prepareMessageAudio(audioKey, payload, { poll: true, autoplay });
+    void prepareMessageAudio(audioKey, payload, {
+      poll: true,
+      background: true,
+    });
   }, ttsPreparePollMs);
   audioPrepareTimers.set(audioKey, timer);
 }
 
-async function prepareMessageAudio(audioKey, payload, { poll = false, autoplay = false } = {}) {
+async function prepareMessageAudio(
+  audioKey,
+  payload,
+  { poll = false, background = true } = {},
+) {
   if (!audioKey || !payload?.project) {
-    return;
+    return null;
   }
 
   const current = audioAvailability(audioKey);
   const currentReady = audioPartsFromAvailability(audioKey).length > 0;
-  if (!poll && ((current.status === "ready" && currentReady) || current.status === "preparing")) {
-    return;
+  if (!poll && current.status === "ready" && currentReady) {
+    return current.audio || null;
+  }
+  if (!poll && background && current.status === "preparing") {
+    scheduleAudioPreparePoll(audioKey, payload);
+    return current.audio || null;
   }
 
-  if (audioPreparePromises.has(audioKey)) {
-    return audioPreparePromises.get(audioKey);
+  const existingPreparePromise = audioPreparePromises.get(audioKey);
+  if (existingPreparePromise && (background || poll)) {
+    return existingPreparePromise;
   }
 
-  setAudioAvailability(audioKey, { status: "preparing", error: "" });
+  if (!currentReady && ttsStatusBlocksGeneration()) {
+    const message = ttsUnavailableMessage();
+    setAudioAvailability(audioKey, {
+      status: "unavailable",
+      error: message,
+      errorCode: state.ttsStatus?.errorCode || "",
+    });
+    if (!background) {
+      showAudioStatus(message);
+    }
+    return null;
+  }
+
+  setAudioAvailability(audioKey, { status: "preparing", error: "", playbackError: "" });
+  const trackPreparePromise = background || poll;
   const promise = (async () => {
     try {
       const response = await fetchJson("/v1/tts/message", {
@@ -4337,7 +5099,9 @@ async function prepareMessageAudio(audioKey, payload, { poll = false, autoplay =
         },
         body: JSON.stringify({
           ...payload,
-          async: true,
+          async: Boolean(background || poll),
+          poll: Boolean(poll),
+          retry: current.status === "error",
         }),
       });
       const parts = Array.isArray(response?.audio?.parts)
@@ -4349,46 +5113,53 @@ async function prepareMessageAudio(audioKey, payload, { poll = false, autoplay =
           status: "ready",
           audio: response.audio,
           error: "",
+          playbackError: "",
         });
-        if (autoplay && audioPlaybackStatus(audioKey) === "idle") {
-          void playMessageAudio(audioKey, payload).catch(() => {});
-        }
-        return;
+        return response.audio;
       }
 
+      if (audioPartsFromAvailability(audioKey).length > 0) {
+        return audioAvailability(audioKey).audio || null;
+      }
       setAudioAvailability(audioKey, {
         status: "preparing",
         audio: response?.audio || current.audio || null,
         error: "",
+        playbackError: "",
       });
-      scheduleAudioPreparePoll(audioKey, payload, { autoplay });
+      scheduleAudioPreparePoll(audioKey, payload);
+      return response?.audio || null;
     } catch (error) {
       clearAudioPrepareTimer(audioKey);
+      if (audioPartsFromAvailability(audioKey).length > 0) {
+        return audioAvailability(audioKey).audio || null;
+      }
+      const unavailableStatus = ttsUnavailableFromErrorPayload(error.payload);
+      const unavailable = unavailableStatus && !unavailableStatus.available;
+      const message =
+        (unavailable ? ttsUnavailableMessage(unavailableStatus) : "") ||
+        error.message ||
+        "Audio is not available.";
       setAudioAvailability(audioKey, {
-        status: "error",
-        error: error.message || "Audio is not available.",
+        status: unavailable ? "unavailable" : "error",
+        error: message,
+        errorCode: error.payload?.errorCode || unavailableStatus?.errorCode || "",
+        playbackError: message,
       });
+      if (!background) {
+        showAudioStatus(message);
+      }
+      return null;
     } finally {
-      audioPreparePromises.delete(audioKey);
+      if (audioPreparePromises.get(audioKey) === promise) {
+        audioPreparePromises.delete(audioKey);
+      }
     }
   })();
-  audioPreparePromises.set(audioKey, promise);
+  if (trackPreparePromise) {
+    audioPreparePromises.set(audioKey, promise);
+  }
   return promise;
-}
-
-function prepareResponseAudioForEntry(entry) {
-  if (!state.audioAutoDownload) {
-    return;
-  }
-  if (entry?.status !== "answered" || !String(entry?.response || "").trim()) {
-    return;
-  }
-  const audioKey = messageAudioKey(entry, "response");
-  void prepareMessageAudio(
-    audioKey,
-    messageAudioPayload(entry, "response", entry.response),
-    { autoplay: false },
-  );
 }
 
 function audioPlaybackStatus(audioKey) {
@@ -4408,43 +5179,78 @@ function decorateAudioButton(button, audioKey) {
   const availability = audioAvailability(audioKey);
   const preparing = availability.status === "preparing";
   const ready = audioPartsFromAvailability(audioKey).length > 0;
+  const playbackError = ready && status === "idle" && String(availability.playbackError || "").trim();
+  const unavailable = availability.status === "unavailable" && !ready;
   const failed = availability.status === "error" && !ready;
-  const loading = status === "loading" || preparing;
+  const loading = status === "loading";
+  button.dataset.audioAction = "tts";
   button.disabled = false;
+  button.removeAttribute("aria-disabled");
   button.classList.toggle("is-ready", ready);
   button.classList.toggle("is-preparing", preparing);
-  button.classList.toggle("is-unavailable", failed);
-  button.classList.toggle("is-download", !ready && !failed && !loading && status !== "playing");
+  button.classList.toggle("is-unavailable", unavailable || failed || Boolean(playbackError));
+  button.classList.remove("is-download");
   button.classList.toggle("is-loading", loading);
   button.classList.toggle("is-playing", status === "playing");
+  button.classList.toggle("is-paused", status === "paused");
   if (status === "loading") {
     button.innerHTML = audioLoadingMarkup();
-    button.setAttribute("aria-label", "Preparing audio");
-    button.title = "Preparing audio";
+    button.setAttribute("aria-label", "Starting audio");
+    button.title = "Starting audio";
     return;
   }
   if (status === "playing") {
-    button.innerHTML = stopAudioIconMarkup();
+    button.innerHTML = pauseAudioIconMarkup();
     button.setAttribute("aria-label", "Pause audio");
     button.title = "Pause audio";
     return;
   }
+  if (status === "paused") {
+    button.innerHTML = playAudioIconMarkup();
+    button.setAttribute("aria-label", "Resume audio");
+    button.title = "Resume audio";
+    return;
+  }
   if (preparing) {
-    button.disabled = true;
     button.innerHTML = audioLoadingMarkup();
     button.setAttribute("aria-label", "Preparing audio");
-    button.title = "Preparing audio";
+    button.title = "Preparing audio. Tap to play when ready.";
+    return;
+  }
+  if (playbackError) {
+    button.innerHTML = audioErrorIconMarkup();
+    button.setAttribute("aria-label", `Audio failed. ${playbackError}`);
+    button.title = playbackError;
     return;
   }
   if (failed) {
+    const errorCode = availability.errorCode || ttsErrorCodeFromMessage(availability.error);
+    const message = ttsUnavailableMessage({
+      available: false,
+      errorCode,
+      error: availability.error,
+    }) || availability.error || "Audio is not available. Click to retry.";
     button.innerHTML = audioErrorIconMarkup();
-    button.setAttribute("aria-label", "Audio failed. Retry download");
-    button.title = availability.error || "Audio is not available. Click to retry.";
+    button.setAttribute("aria-label", `Audio failed. ${message}`);
+    button.title = message;
+    return;
+  }
+  if (unavailable) {
+    const errorCode = availability.errorCode || ttsErrorCodeFromMessage(availability.error);
+    const message = ttsUnavailableMessage({
+      available: false,
+      errorCode,
+      error: availability.error,
+    }) || availability.error || "Text-to-speech is unavailable.";
+    button.innerHTML = audioErrorIconMarkup();
+    button.setAttribute("aria-label", message);
+    button.setAttribute("aria-disabled", "true");
+    button.title = message;
     return;
   }
   if (!ready) {
-    const label = button.dataset.audioDownloadLabel || "Download audio";
-    button.innerHTML = downloadIconMarkup();
+    const label = button.dataset.audioPrepareLabel || button.dataset.audioPlayLabel || "Play audio";
+    button.innerHTML = speakerIconMarkup();
     button.setAttribute("aria-label", label);
     button.title = label;
     return;
@@ -4459,103 +5265,414 @@ function ttsFallbackText(text) {
   return value.length <= ttsInlineTextLimit ? value : "";
 }
 
-function stopActiveMessageAudio() {
-  if (activeMessageAudio) {
-    activeMessageAudio.stopped = true;
+function createMessageAudioPlayback(audioKey) {
+  return {
+    key: audioKey,
+    audio: new Audio(),
+    paused: false,
+    stopped: false,
+    finishCurrent: null,
+  };
+}
+
+function reserveMessageAudioPlayback(audioKey) {
+  if (activeMessageAudio?.key === audioKey && !activeMessageAudio.stopped) {
+    return activeMessageAudio;
   }
-  if (activeMessageAudio?.audio) {
+  stopActiveMessageAudio({ render: false });
+  const playback = createMessageAudioPlayback(audioKey);
+  activeMessageAudio = playback;
+  return playback;
+}
+
+function stopActiveMessageAudio({ render = true } = {}) {
+  const playback = activeMessageAudio;
+  const audioKey = playback?.key || state.audioPlayback.key || "";
+  if (playback) {
+    playback.stopped = true;
+    if (typeof playback.finishCurrent === "function") {
+      playback.finishCurrent();
+    }
+  }
+  if (playback?.audio) {
     try {
-      activeMessageAudio.audio.pause();
-      activeMessageAudio.audio.removeAttribute("src");
-      activeMessageAudio.audio.load();
+      playback.audio.pause();
+      playback.audio.removeAttribute("src");
+      playback.audio.load();
     } catch (_error) {
       // Best effort cleanup for mobile browsers.
     }
   }
   activeMessageAudio = null;
+  if (audioKey) {
+    clearAudioPrepareTimer(audioKey);
+  }
   if (state.audioPlayback.status !== "idle") {
-    setAudioPlaybackStatus("", "idle");
+    if (render) {
+      setAudioPlaybackStatus("", "idle");
+    } else {
+      state.audioPlayback = {
+        key: "",
+        status: "idle",
+      };
+    }
   }
 }
 
-function playAudioElement(playback, url) {
-  return new Promise((resolve, reject) => {
-    const audio = playback.audio;
-    const cleanup = () => {
-      audio.removeEventListener("ended", onEnded);
-      audio.removeEventListener("error", onError);
-    };
-    const onEnded = () => {
-      cleanup();
-      resolve();
-    };
-    const onError = () => {
-      cleanup();
-      if (playback.stopped) {
-        resolve();
-        return;
-      }
-      reject(new Error("Audio playback failed"));
-    };
-    audio.addEventListener("ended", onEnded, { once: true });
-    audio.addEventListener("error", onError, { once: true });
-    audio.src = url;
-    audio.play().catch((error) => {
-      cleanup();
-      if (playback.stopped) {
-        resolve();
-        return;
-      }
-      reject(error);
-    });
+function pauseActiveMessageAudio(audioKey) {
+  if (activeMessageAudio?.key !== audioKey || !activeMessageAudio.audio) {
+    return false;
+  }
+  activeMessageAudio.paused = true;
+  activeMessageAudio.audio.pause();
+  setAudioPlaybackStatus(audioKey, "paused");
+  return true;
+}
+
+function resumeActiveMessageAudio(audioKey) {
+  if (activeMessageAudio?.key !== audioKey || !activeMessageAudio.audio) {
+    return null;
+  }
+  const playback = activeMessageAudio;
+  playback.paused = false;
+  state.audioPlayback = {
+    key: audioKey,
+    status: "loading",
+  };
+  let playPromise;
+  try {
+    playPromise = playback.audio.play();
+  } catch (error) {
+    return Promise.reject(error);
+  }
+  renderAll();
+  return Promise.resolve(playPromise).then(() => {
+    if (!playback.stopped && activeMessageAudio === playback) {
+      setAudioPlaybackStatus(audioKey, "playing");
+    }
+    return true;
   });
 }
 
-async function playAudioParts(audioKey, parts) {
-  const playback = {
-    key: audioKey,
-    audio: new Audio(),
-    stopped: false,
-  };
+function audioPlaybackBaseErrorMessage(error = null, audio = null) {
+  const name = String(error?.name || "").trim();
+  const message = String(error?.message || "").trim();
+  const mediaCode = audio?.error?.code;
+  if (name === "NotAllowedError") {
+    return "Audio is ready. Tap the speaker again to play it.";
+  }
+  if (name === "AbortError" || mediaCode === 1) {
+    return "Audio playback was aborted.";
+  }
+  if (name === "NetworkError" || mediaCode === 2) {
+    return "Audio network request failed.";
+  }
+  if (name === "EncodingError" || name === "DecodeError" || mediaCode === 3) {
+    return "Browser could not decode the generated audio.";
+  }
+  if (name === "NotSupportedError" || mediaCode === 4) {
+    return "Browser does not support this audio source.";
+  }
+  if (/did not start/iu.test(message)) {
+    return message;
+  }
+  return message || "Audio playback failed.";
+}
+
+function compactAudioDiagnosticText(value = "") {
+  return String(value || "")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .slice(0, 180);
+}
+
+async function diagnosticFetchAudioUrl(url) {
+  if (!url) {
+    return "";
+  }
+  try {
+    const response = await fetch(url, {
+      cache: "no-store",
+      headers: {
+        accept: "audio/*",
+        range: "bytes=0-0",
+      },
+    });
+    if (!response.ok) {
+      const detail = compactAudioDiagnosticText(await response.text().catch(() => ""));
+      return `Audio endpoint returned HTTP ${response.status}${detail ? `: ${detail}` : "."}`;
+    }
+    const contentType = String(response.headers.get("content-type") || "").trim();
+    if (contentType && !contentType.toLowerCase().startsWith("audio/")) {
+      return `Audio endpoint returned ${contentType}, not audio.`;
+    }
+  } catch (error) {
+    return `Audio endpoint check failed: ${error.message || "request failed"}.`;
+  }
+  return "";
+}
+
+async function enrichAudioPlaybackError(error, { audio = null, url = "", diagnose = false } = {}) {
+  const base = audioPlaybackBaseErrorMessage(error, audio);
+  const diagnostic = diagnose ? await diagnosticFetchAudioUrl(url) : "";
+  const enriched = new Error(diagnostic ? `${base} ${diagnostic}` : base);
+  try {
+    enriched.cause = error;
+  } catch (_error) {
+    // Older browsers may not allow assigning cause.
+  }
+  return enriched;
+}
+
+function playAudioElement(audioKey, playback, url) {
+  return new Promise((resolve, reject) => {
+    const audio = playback.audio;
+    let settled = false;
+    let settlingError = false;
+    let started = false;
+    let startTimer = null;
+    let cleanup = () => {
+      if (startTimer) {
+        window.clearTimeout(startTimer);
+        startTimer = null;
+      }
+      if (playback.finishCurrent === finishCurrent) {
+        playback.finishCurrent = null;
+      }
+    };
+    const settle = (error = null) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    };
+    const settleWithError = (error, { diagnose = false } = {}) => {
+      if (settled || settlingError) {
+        return;
+      }
+      settlingError = true;
+      void enrichAudioPlaybackError(error, { audio, url, diagnose })
+        .then((enriched) => {
+          if (playback.stopped) {
+            settle();
+            return;
+          }
+          settle(enriched);
+        });
+    };
+    const finishCurrent = () => {
+      settle();
+    };
+    playback.finishCurrent = finishCurrent;
+    const onEnded = () => {
+      settle();
+    };
+    const onPlaying = () => {
+      started = true;
+      if (!playback.stopped && activeMessageAudio === playback) {
+        setAudioPlaybackStatus(audioKey, "playing");
+      }
+    };
+    const onError = () => {
+      if (playback.stopped) {
+        settle();
+        return;
+      }
+      settleWithError(new Error("Audio element error"), { diagnose: true });
+    };
+    cleanup = () => {
+      if (startTimer) {
+        window.clearTimeout(startTimer);
+        startTimer = null;
+      }
+      audio.removeEventListener("ended", onEnded);
+      audio.removeEventListener("error", onError);
+      audio.removeEventListener("playing", onPlaying);
+      if (playback.finishCurrent === finishCurrent) {
+        playback.finishCurrent = null;
+      }
+    };
+    audio.addEventListener("ended", onEnded, { once: true });
+    audio.addEventListener("error", onError, { once: true });
+    audio.addEventListener("playing", onPlaying, { once: true });
+    audio.preload = "auto";
+    audio.src = url;
+    audio.load();
+    let playPromise;
+    try {
+      playPromise = audio.play();
+    } catch (error) {
+      settleWithError(error, { diagnose: false });
+      return;
+    }
+    startTimer = window.setTimeout(() => {
+      if (!settled && !started && !playback.stopped) {
+        settleWithError(new Error("Audio playback did not start. Tap play again."));
+      }
+    }, audioPlaybackStartTimeoutMs);
+    if (playPromise && typeof playPromise.then === "function") {
+      playPromise
+        .then(() => {
+          started = true;
+          if (!playback.stopped && activeMessageAudio === playback) {
+            setAudioPlaybackStatus(audioKey, "playing");
+          }
+        })
+        .catch((error) => {
+          if (playback.stopped) {
+            settle();
+            return;
+          }
+          settleWithError(error, { diagnose: false });
+        });
+    } else {
+      started = true;
+      if (!playback.stopped && activeMessageAudio === playback) {
+        setAudioPlaybackStatus(audioKey, "playing");
+      }
+    }
+  });
+}
+
+async function playAudioParts(audioKey, parts, playback = null) {
+  playback = playback?.key === audioKey && !playback.stopped
+    ? playback
+    : reserveMessageAudioPlayback(audioKey);
   activeMessageAudio = playback;
 
   for (const part of parts) {
     if (activeMessageAudio !== playback || playback.stopped) {
       return;
     }
-    await playAudioElement(playback, part.url);
+    await playAudioElement(audioKey, playback, part.url);
   }
 }
 
-async function playMessageAudio(audioKey, payload) {
-  const status = audioPlaybackStatus(audioKey);
-  if (status === "loading" || status === "playing") {
-    stopActiveMessageAudio();
-    return;
+function startReadyMessageAudioPlayback(audioKey, parts) {
+  if (!Array.isArray(parts) || parts.length === 0) {
+    return Promise.resolve(false);
   }
-
-  stopActiveMessageAudio();
-  setAudioPlaybackStatus(audioKey, "loading");
-  try {
-    const parts = audioPartsFromAvailability(audioKey);
-    if (parts.length === 0) {
-      setAudioPlaybackStatus("", "idle");
-      await prepareMessageAudio(audioKey, payload, { autoplay: false });
-      return;
-    }
-    if (state.audioPlayback.key !== audioKey) {
-      return;
-    }
-    setAudioPlaybackStatus(audioKey, "playing");
-    await playAudioParts(audioKey, parts);
-  } finally {
-    if (state.audioPlayback.key === audioKey) {
+  const playback =
+    activeMessageAudio?.key === audioKey && !activeMessageAudio.stopped
+      ? activeMessageAudio
+      : reserveMessageAudioPlayback(audioKey);
+  activeMessageAudio = playback;
+  state.audioPlayback = {
+    key: audioKey,
+    status: "loading",
+  };
+  setAudioAvailability(audioKey, { playbackError: "" }, { render: false });
+  const playbackPromise = playAudioParts(audioKey, parts, playback);
+  renderAll();
+  return playbackPromise.finally(() => {
+    if (state.audioPlayback.key === audioKey && state.audioPlayback.status !== "paused") {
       setAudioPlaybackStatus("", "idle");
     }
-    if (activeMessageAudio?.key === audioKey) {
+    if (activeMessageAudio === playback && playback.stopped) {
+      activeMessageAudio = null;
+    } else if (activeMessageAudio === playback && state.audioPlayback.key !== audioKey) {
       activeMessageAudio = null;
     }
+  });
+}
+
+function waitForClickPreparedAudioPoll(delayMs = ttsClickPreparePollMs) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, delayMs);
+  });
+}
+
+async function prepareMessageAudioPartsForPlayback(audioKey, payload) {
+  const startedAt = Date.now();
+  let poll = false;
+  while (Date.now() - startedAt <= ttsClickPrepareTimeoutMs) {
+    await prepareMessageAudio(audioKey, payload, {
+      background: poll,
+      poll,
+    });
+    const parts = audioPartsFromAvailability(audioKey);
+    if (parts.length > 0) {
+      return parts;
+    }
+    const availability = audioAvailability(audioKey);
+    if (["error", "unavailable"].includes(availability.status)) {
+      return [];
+    }
+    await waitForClickPreparedAudioPoll();
+    poll = true;
   }
+  throw new Error("Audio is still preparing. Tap the speaker again in a moment.");
+}
+
+async function prepareAndPlayMessageAudio(audioKey, payload) {
+  const existingPromise = audioPreparePlaybackPromises.get(audioKey);
+  if (existingPromise) {
+    showAudioStatus("Preparing audio");
+    return existingPromise;
+  }
+  const promise = (async () => {
+    showAudioStatus("Preparing audio");
+    const parts = await prepareMessageAudioPartsForPlayback(audioKey, payload);
+    if (parts.length > 0) {
+      showAudioStatus("Starting audio");
+      return startReadyMessageAudioPlayback(audioKey, parts);
+    }
+
+    const availability = audioAvailability(audioKey);
+    const message =
+      availability.error ||
+      ttsUnavailableMessage({ available: false, errorCode: availability.errorCode }) ||
+      "Audio is not available yet.";
+    showAudioStatus(message);
+    return false;
+  })().finally(() => {
+    if (audioPreparePlaybackPromises.get(audioKey) === promise) {
+      audioPreparePlaybackPromises.delete(audioKey);
+    }
+  });
+  audioPreparePlaybackPromises.set(audioKey, promise);
+  return promise;
+}
+
+function playMessageAudio(audioKey, payload) {
+  const status = audioPlaybackStatus(audioKey);
+  if (status === "loading") {
+    return Promise.resolve(false);
+  }
+  if (status === "playing") {
+    pauseActiveMessageAudio(audioKey);
+    return Promise.resolve(true);
+  }
+  if (status === "paused") {
+    return resumeActiveMessageAudio(audioKey) || Promise.resolve(false);
+  }
+
+  const parts = audioPartsFromAvailability(audioKey);
+  if (parts.length > 0) {
+    return startReadyMessageAudioPlayback(audioKey, parts);
+  }
+  return prepareAndPlayMessageAudio(audioKey, payload);
+}
+
+function handleMessageAudioPlaybackError(audioKey, error) {
+  const message = audioPlaybackBaseErrorMessage(error) || "Audio playback failed.";
+  const ready = audioPartsFromAvailability(audioKey).length > 0;
+  const current = audioAvailability(audioKey);
+  setAudioAvailability(audioKey, {
+    status: ready ? "ready" : "error",
+    audio: ready ? current.audio : current.audio || null,
+    error: ready ? current.error || "" : message,
+    playbackError: message,
+  }, { render: false });
+  stopActiveMessageAudio({ render: false });
+  showAudioStatus(message);
+  renderAll();
 }
 
 function buildAudioButton({ audioKey, label, payload }) {
@@ -4563,30 +5680,64 @@ function buildAudioButton({ audioKey, label, payload }) {
   button.type = "button";
   button.className = "copy-button copy-button-floating message-audio-button";
   button.dataset.audioKey = audioKey;
+  button.dataset.audioAction = "tts";
   button.dataset.audioPlayLabel = label || "Play audio";
-  button.dataset.audioDownloadLabel = String(label || "Play audio").replace(/^Play\b/u, "Download");
+  button.dataset.audioPrepareLabel = String(label || "Play audio").replace(/^Play\b/u, "Prepare local audio and play");
   button.setAttribute("aria-label", label);
   decorateAudioButton(button, audioKey);
-  button.addEventListener("click", async (event) => {
+  button.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
-    try {
-      const status = audioPlaybackStatus(audioKey);
-      if (status === "loading" || status === "playing") {
-        stopActiveMessageAudio();
-        return;
-      }
-      if (audioPartsFromAvailability(audioKey).length === 0) {
-        await prepareMessageAudio(audioKey, payload, { autoplay: false });
-        return;
-      }
-      await playMessageAudio(audioKey, payload);
-    } catch (error) {
-      stopActiveMessageAudio();
-      showError(error);
+    const status = audioPlaybackStatus(audioKey);
+    if (status === "loading") {
+      return;
+    }
+    const availability = audioAvailability(audioKey);
+    if (
+      availability.status === "unavailable" &&
+      audioPartsFromAvailability(audioKey).length === 0
+    ) {
+      showAudioStatus(availability.error || ttsUnavailableMessage() || "Text-to-speech is unavailable.");
+      return;
+    }
+    const playbackPromise = playMessageAudio(audioKey, payload);
+    if (playbackPromise && typeof playbackPromise.catch === "function") {
+      void playbackPromise.catch((error) => {
+        handleMessageAudioPlaybackError(audioKey, error);
+      });
     }
   });
   return button;
+}
+
+function decorateAudioStopButton(button, audioKey) {
+  const active = ["playing", "paused"].includes(audioPlaybackStatus(audioKey));
+  button.hidden = !active;
+  button.disabled = !active;
+  button.innerHTML = stopAudioIconMarkup();
+  button.setAttribute("aria-label", "Stop audio");
+  button.title = "Stop audio";
+}
+
+function buildAudioStopButton({ audioKey }) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "copy-button copy-button-floating message-audio-stop-button";
+  button.dataset.audioKey = audioKey;
+  decorateAudioStopButton(button, audioKey);
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    stopActiveMessageAudio();
+  });
+  return button;
+}
+
+function buildAudioControls(options) {
+  const fragment = document.createDocumentFragment();
+  fragment.append(buildAudioButton(options));
+  fragment.append(buildAudioStopButton({ audioKey: options.audioKey }));
+  return fragment;
 }
 
 function refreshCopyButtons(root = document) {
@@ -4595,6 +5746,9 @@ function refreshCopyButtons(root = document) {
   }
   for (const button of root.querySelectorAll(".message-audio-button[data-audio-key]")) {
     decorateAudioButton(button, button.dataset.audioKey || "");
+  }
+  for (const button of root.querySelectorAll(".message-audio-stop-button[data-audio-key]")) {
+    decorateAudioStopButton(button, button.dataset.audioKey || "");
   }
   for (const button of root.querySelectorAll(".open-terminal-button[data-terminal-launch-key]")) {
     decorateOpenTerminalButton(button, button.dataset.terminalLaunchKey || "");
@@ -4836,6 +5990,7 @@ function updateBodyModalState() {
       Boolean(state.artifactModalProject) ||
       Boolean(state.delegateModalProject) ||
       Boolean(state.sessionTitleModalProject) ||
+      terminalPanelIsOpen() ||
       Boolean(state.queueArchiveConfirmEntryId),
   );
 }
@@ -4942,21 +6097,108 @@ function renderProjectModal() {
   elements.projectModal.hidden = false;
 }
 
-function messageAudioKey(entry, kind) {
+function messageAudioKey(entry, kind, text = "") {
   const projectPath = String(entry?.projectPath || "").trim();
   const sessionId = String(entry?.sessionId || "").trim();
   const requestId = String(entry?.requestId || entry?.id || entry?.sentAt || "").trim();
-  return `tts:${projectPath}:${sessionId}:${requestId}:${kind}`;
+  const fingerprint = messageAudioTextFingerprint(text);
+  return `tts:${projectPath}:${sessionId}:${requestId}:${kind}:${fingerprint.colonKey}`;
 }
 
 function messageAudioPayload(entry, kind, text) {
+  const requestId = String(entry?.requestId || "").trim();
+  const fingerprint = messageAudioTextFingerprint(text);
   return {
     project: String(entry?.projectPath || "").trim(),
     sessionId: String(entry?.sessionId || "").trim(),
-    requestId: String(entry?.requestId || "").trim(),
+    requestId: requestId ? `${requestId}:tts:${fingerprint.dashKey}` : `tts:${fingerprint.dashKey}`,
+    historyRequestId: requestId,
     kind,
-    text: ttsFallbackText(text),
+    text: ttsFallbackText(fingerprint.text),
+    textCharCount: fingerprint.length,
+    clientTextLength: fingerprint.length,
+    clientTextHash: fingerprint.hash,
+    clientTextKey: fingerprint.dashKey,
   };
+}
+
+function historyAudioManifestMatchesVisibleText(manifest, text = "") {
+  if (!manifest || typeof manifest !== "object") {
+    return false;
+  }
+  const fingerprint = messageAudioTextFingerprint(text);
+  if (!fingerprint.text) {
+    return false;
+  }
+  const source = manifest.source && typeof manifest.source === "object" && !Array.isArray(manifest.source)
+    ? manifest.source
+    : {};
+  const clientHash = String(
+    source.clientTextHash ||
+      source.visibleTextHash ||
+      source.clientVisibleTextHash ||
+      "",
+  ).trim();
+  if (!clientHash || clientHash !== fingerprint.hash) {
+    return false;
+  }
+  const rawLength = source.clientTextLength ?? source.clientTextCharCount ?? source.textCharCount;
+  const clientLength = Number.parseInt(String(rawLength ?? ""), 10);
+  return !Number.isFinite(clientLength) || clientLength === fingerprint.length;
+}
+
+function hydrateAudioAvailabilityFromHistoryItem(item, { render = false } = {}) {
+  const normalized = normalizeHistoryItem(item);
+  const audio = normalizeHistoryAudioMetadata(normalized.audio);
+  if (!audio) {
+    return;
+  }
+
+  for (const [kind, manifest] of [
+    ["message", audio.message],
+    ["response", audio.response],
+  ]) {
+    if (!manifest) {
+      continue;
+    }
+    if (kind === "message" && !String(normalized.message || "").trim()) {
+      continue;
+    }
+    if (kind === "response" && !String(normalized.response || "").trim()) {
+      continue;
+    }
+    if (!String(manifest.textHash || manifest.source?.textHash || "").trim()) {
+      continue;
+    }
+    const text = kind === "response" ? normalized.response : normalized.message;
+    if (!historyAudioManifestMatchesVisibleText(manifest, text)) {
+      continue;
+    }
+    const audioKey = messageAudioKey(normalized, kind, text);
+    if (audioManifestReady(manifest)) {
+      setAudioAvailability(audioKey, {
+        status: "ready",
+        audio: manifest,
+        error: "",
+      }, { render });
+      continue;
+    }
+
+    if (audioManifestFailed(manifest)) {
+      const errorCode = manifest.errorCode || ttsErrorCodeFromMessage(manifest.error);
+      const unavailable = ttsErrorImpliesUnavailable(errorCode, manifest.error);
+      setAudioAvailability(audioKey, {
+        status: unavailable ? "unavailable" : "error",
+        audio: manifest,
+        error: ttsUnavailableMessage({
+          available: false,
+          errorCode,
+          error: manifest.error,
+        }) || manifest.error || "Audio is not available. Click to retry.",
+        errorCode,
+      }, { render });
+    }
+  }
 }
 
 function renderSessionTitleModal() {
@@ -5250,8 +6492,8 @@ function renderQueueList() {
     });
 
     card.append(copyButton);
-    if (canOpenSessionInTerminal(entry)) {
-      card.append(buildOpenTerminalButton(entry));
+    if (canOpenTerminalStream(entry)) {
+      card.append(buildTerminalStreamButton(entry));
     }
     card.append(buildQueueArchiveButton(entry));
     card.append(head, meta, message);
@@ -5472,11 +6714,13 @@ function buildThreadCard({
   }
 
   if (audioKind && audioText) {
+    const audioKey = messageAudioKey(entry, audioKind, audioText);
+    const audioPayload = messageAudioPayload(entry, audioKind, audioText);
     card.append(
-      buildAudioButton({
-        audioKey: messageAudioKey(entry, audioKind),
+      buildAudioControls({
+        audioKey,
         label: audioKind === "response" ? "Play response audio" : "Play message audio",
-        payload: messageAudioPayload(entry, audioKind, audioText),
+        payload: audioPayload,
       }),
     );
   }
@@ -9537,6 +10781,7 @@ function updateSendAvailability() {
     sessionBusy,
     allowBusySend,
   });
+  updateMessageCopyButton();
 }
 
 function updateThreadButtonAvailability() {
@@ -9703,21 +10948,143 @@ function updateQueueChrome() {
   );
 }
 
-function updateAudioAutoDownloadButton() {
-  const button = elements.audioAutoDownloadButton;
-  if (!button) {
+function shortTerminalRequestId(requestId) {
+  const value = String(requestId || "").trim();
+  return value.length > 18 ? `${value.slice(0, 8)}...${value.slice(-6)}` : value;
+}
+
+function formatTerminalEventTime(value) {
+  const timestamp = Date.parse(String(value || ""));
+  if (!Number.isFinite(timestamp)) {
+    return "";
+  }
+  return new Date(timestamp).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function buildTerminalStreamRow(event) {
+  const normalized = normalizeTerminalStreamEvent(event);
+  const row = document.createElement("div");
+  const level = ["info", "success", "warn", "error"].includes(normalized.level)
+    ? normalized.level
+    : "info";
+  row.className = `terminal-stream-row is-${level}`;
+
+  const marker = document.createElement("div");
+  marker.className = "terminal-stream-marker";
+  marker.setAttribute("aria-hidden", "true");
+
+  const body = document.createElement("div");
+  body.className = "terminal-stream-row-body";
+
+  const head = document.createElement("div");
+  head.className = "terminal-stream-row-head";
+
+  const label = document.createElement("div");
+  label.className = "terminal-stream-row-label";
+  label.textContent = normalized.label;
+  head.append(label);
+
+  const time = formatTerminalEventTime(normalized.at);
+  if (time) {
+    const timeNode = document.createElement("div");
+    timeNode.className = "terminal-stream-row-time";
+    timeNode.textContent = time;
+    head.append(timeNode);
+  }
+
+  body.append(head);
+  if (normalized.text) {
+    const text = document.createElement("pre");
+    text.className = "terminal-stream-row-text";
+    text.textContent = normalized.text;
+    body.append(text);
+  }
+
+  row.append(marker, body);
+  return row;
+}
+
+function renderTerminalPanel() {
+  if (
+    !elements.terminalPanel ||
+    !elements.terminalStreamList ||
+    !elements.terminalPanelTitle ||
+    !elements.terminalPanelStatus ||
+    !elements.terminalPanelMeta ||
+    !elements.terminalStreamState
+  ) {
     return;
   }
 
-  const enabled = Boolean(state.audioAutoDownload);
-  button.classList.toggle("is-active", enabled);
-  button.setAttribute("aria-pressed", String(enabled));
-  button.setAttribute(
-    "aria-label",
-    enabled ? "Disable automatic audio downloads" : "Enable automatic audio downloads",
+  const panel = state.terminalPanel;
+  if (!terminalPanelIsOpen()) {
+    elements.terminalPanel.hidden = true;
+    clearNode(elements.terminalStreamList);
+    setText(elements.terminalStreamState, "", { empty: true });
+    return;
+  }
+
+  const statusLabel = terminalPanelStatusLabel(panel.requestStatus);
+  const terminal = terminalPanelStatusIsTerminal(panel.requestStatus);
+  const metaParts = [
+    panel.sessionLabel || panel.sessionId,
+    `Request ${shortTerminalRequestId(panel.requestId)}`,
+  ].filter(Boolean);
+  elements.terminalPanel.hidden = false;
+  elements.terminalPanelTitle.textContent = panel.projectLabel || fallbackProjectLabel(panel.projectPath);
+  elements.terminalPanelStatus.textContent = statusLabel;
+  elements.terminalPanelStatus.classList.toggle("is-terminal", terminal);
+  elements.terminalPanelStatus.classList.toggle(
+    "is-failed",
+    String(panel.requestStatus?.status || panel.requestStatus?.state || "").toLowerCase() === "failed",
   );
-  button.title = enabled ? "Auto-download audio is on" : "Auto-download audio is off";
-  button.innerHTML = `${downloadIconMarkup()}<span class="button-text">Auto audio</span>`;
+  elements.terminalPanelMeta.textContent = metaParts.join(" • ");
+
+  const launchKey = terminalSessionKey(panel.projectPath, panel.sessionId);
+  const externalPending = Boolean(launchKey) && state.terminalLaunchPendingKey === launchKey;
+  if (elements.terminalPanelOpenExternal) {
+    elements.terminalPanelOpenExternal.disabled =
+      externalPending ||
+      !canOpenSessionInTerminal({
+        projectPath: panel.projectPath,
+        sessionId: panel.sessionId,
+      });
+    elements.terminalPanelOpenExternal.classList.toggle("is-loading", externalPending);
+    elements.terminalPanelOpenExternal.innerHTML =
+      `${terminalIconMarkup()}<span class="button-text">${externalPending ? "Opening Terminal" : "Open In Terminal"}</span>`;
+  }
+
+  if (panel.error) {
+    setText(elements.terminalStreamState, panel.error, { empty: false });
+  } else if (panel.loading && !panel.initialized) {
+    setText(elements.terminalStreamState, "Loading stream", { empty: false });
+  } else if (panel.events.length === 0 && terminal) {
+    setText(elements.terminalStreamState, "Completed without a saved terminal log", { empty: false });
+  } else if (panel.events.length === 0) {
+    setText(elements.terminalStreamState, "Waiting for terminal output", { empty: false });
+  } else if (panel.loading) {
+    setText(elements.terminalStreamState, "Updating stream", { empty: false });
+  } else {
+    setText(elements.terminalStreamState, "", { empty: true });
+  }
+
+  const renderKey = panel.events
+    .map((event) => `${event.id}:${event.at}:${event.label}:${event.text.length}`)
+    .join("|");
+  if (elements.terminalStreamList.dataset.renderKey !== renderKey) {
+    clearNode(elements.terminalStreamList);
+    for (const event of panel.events) {
+      elements.terminalStreamList.append(buildTerminalStreamRow(event));
+    }
+    elements.terminalStreamList.dataset.renderKey = renderKey;
+    if (terminalPanelStickToBottom) {
+      window.requestAnimationFrame(() => scrollTerminalStreamToBottom());
+    }
+  }
 }
 
 function renderAll() {
@@ -9744,6 +11111,7 @@ function renderAll() {
   renderDelegateModal();
   renderProjectModal();
   renderQueueArchiveConfirm();
+  renderTerminalPanel();
   updateMailboxState();
   updateQueueUnreadOrb();
   updateDispatchModeButton();
@@ -9756,7 +11124,6 @@ function renderAll() {
   updateDelegateButtonAvailability();
   updateActiveRunsButtonAvailability();
   updateQueueChrome();
-  updateAudioAutoDownloadButton();
   updateComposerVoiceButton();
   updateBodyModalState();
   refreshCopyButtons();
@@ -9857,6 +11224,7 @@ async function reconcileThreadEntries() {
               : exactStatus === "failed"
                 ? 1
                 : 0,
+          ...(exactHistoryItem?.audio ? { audio: exactHistoryItem.audio } : {}),
           seenAt: null,
         });
         continue;
@@ -10439,6 +11807,7 @@ async function loadSessionHistory(projectPath, sessionId, { reset = false, appen
       : appendOlder
         ? mergeHistoryItems(pageItems, existing.items)
         : mergeHistoryItems(localItems, pageItems);
+    nextItems.forEach((item) => hydrateAudioAvailabilityFromHistoryItem(item));
 
     if (sameOpenThread) {
       queueDetailHistorySnapshot(
@@ -12494,6 +13863,19 @@ function bindEvents() {
     }
     removeComposerAttachment(String(removeButton.dataset.removeAttachment || ""));
   });
+  elements.messageCopyButton?.addEventListener("click", async () => {
+    const text = String(elements.messageInput?.value || "");
+    if (!text.trim()) {
+      return;
+    }
+    try {
+      await copyText(text);
+      markCopied(composerCopyKey);
+      updateMessageCopyButton();
+    } catch (error) {
+      showError(error);
+    }
+  });
   elements.messageInput?.addEventListener("input", updateSendAvailability);
   elements.messageInput?.addEventListener("paste", (event) => {
     const files = [...(event.clipboardData?.files || [])];
@@ -12592,11 +13974,6 @@ function bindEvents() {
   elements.artifactShelfToggle?.addEventListener("click", () => {
     state.artifactShelfCollapsed = !state.artifactShelfCollapsed;
     persistArtifactShelfCollapsed();
-    renderAll();
-  });
-  elements.audioAutoDownloadButton?.addEventListener("click", () => {
-    state.audioAutoDownload = !state.audioAutoDownload;
-    persistAudioAutoDownload();
     renderAll();
   });
   elements.sessionImportButton?.addEventListener("click", () => {
@@ -12791,6 +14168,18 @@ function bindEvents() {
   elements.queueArchiveClose?.addEventListener("click", closeQueueArchiveConfirm);
   elements.queueArchiveCancelButton?.addEventListener("click", closeQueueArchiveConfirm);
   elements.queueArchiveConfirmButton?.addEventListener("click", archiveQueueEntry);
+  elements.terminalPanelBack?.addEventListener("click", () => {
+    closeTerminalStreamPanel();
+  });
+  elements.terminalPanelOpenExternal?.addEventListener("click", () => {
+    void openSessionInTerminal({
+      projectPath: state.terminalPanel.projectPath,
+      sessionId: state.terminalPanel.sessionId,
+    });
+  });
+  elements.terminalStreamList?.addEventListener("scroll", () => {
+    terminalPanelStickToBottom = terminalPanelNearBottom();
+  });
   elements.detailScrollBottomButton?.addEventListener("click", () => {
     scrollDetailHistoryToBottom({ smooth: true });
   });
@@ -12907,8 +14296,22 @@ function bindEvents() {
   window.addEventListener("focus", refreshAfterForeground);
   window.addEventListener("pageshow", refreshAfterForeground);
   document.addEventListener("visibilitychange", refreshAfterForeground);
+  window.addEventListener("popstate", () => {
+    if (!terminalPanelHistoryActive) {
+      return;
+    }
+    terminalPanelHistoryActive = false;
+    if (terminalPanelIsOpen()) {
+      closeTerminalStreamPanel({ fromHistory: true });
+    }
+  });
 
   window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && terminalPanelIsOpen()) {
+      event.preventDefault();
+      closeTerminalStreamPanel();
+      return;
+    }
     if (event.key === "Escape" && state.queueArchiveConfirmEntryId) {
       event.preventDefault();
       closeQueueArchiveConfirm();
@@ -12966,14 +14369,13 @@ async function boot() {
   bindEvents();
   void initHeaderCarousel();
   resetProcessingPhraseCycle();
-  purgeLegacyThreadEntryCaches();
   restoreThreadEntries();
   hydrateReturnedThreadEntries();
   restoreQueueCollapsed();
   restoreArtifactShelfCollapsed();
-  restoreAudioAutoDownload();
   restoreCachedProjects();
   renderAll();
+  void refreshTtsStatus({ quiet: true });
 
   try {
     await refreshProjects();

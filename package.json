@@ -1,6 +1,6 @@
 {
   "name": "clawdad",
-  "version": "0.6.91",
+  "version": "0.6.92",
   "description": "Multi-agent orchestration CLI for AI coding agents. Manages persistent spoke agents across projects using ORP as the canonical data store.",
   "scripts": {
     "test": "node --test test/*.test.mjs"
@@ -46,6 +46,7 @@
     "docs/BORROWING_FROM_AGENT_RUNTIMES.md",
     "docs/chimera-local-lane.md",
     "docs/tailscale-live-services.md",
+    "ops/tailnet-app/",
     "assets/clawdad-mascot.jpg",
     "assets/clawdad-mascot-app.png",
     "assets/clawdad-app-icon-source.txt",
@@ -61,6 +62,7 @@
     "README.md"
   ],
   "dependencies": {
+    "@sproutseeds/tailnet-app": "^0.3.0",
     "open-research-protocol": ">=0.4.27"
   }
 }

@@ -1,0 +1,27 @@
+{
+  "appName": "clawdad",
+  "host": "127.0.0.1",
+  "port": 4477,
+  "healthPath": "/healthz",
+  "officialUrl": "https://clawdad.tail649edd.ts.net/",
+  "serviceName": "clawdad",
+  "serviceSocket": "/Users/codymitchell/.clawdad/tailscale-live-host/tailscaled.sock",
+  "requireService": true,
+  "requireOfficialHealth": true,
+  "requireDeviceServe": false,
+  "autoService": true,
+  "allowFunnel": false,
+  "dependencies": [
+    {
+      "name": "doc-reader",
+      "healthUrl": "http://127.0.0.1:8766/healthz",
+      "required": false,
+      "autoStart": true,
+      "startCommand": ["read-docs", "ensure"],
+      "feature": "Doc Reader message audio and composer speech-to-text",
+      "timeoutMs": 45000
+    }
+  ],
+  "startupTimeoutMs": 30000,
+  "timeoutMs": 8000
+}

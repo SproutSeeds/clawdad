@@ -173,6 +173,7 @@ async function runServerCli(args, { cwd = repoRoot, env = {} } = {}) {
     cwd,
     env: {
       ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
       ...env,
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -194,6 +195,7 @@ async function runClawdadCli(args, { cwd = repoRoot, env = {} } = {}) {
     cwd,
     env: {
       ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
       CLAWDAD_ROOT: repoRoot,
       ...env,
     },
@@ -216,6 +218,7 @@ async function runCodexSessionDiscovery(args, { cwd = repoRoot, env = {} } = {})
     cwd,
     env: {
       ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
       ...env,
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -315,6 +318,7 @@ test("app shell injects a fresh build fingerprint for frontend assets", async ()
     cwd: repoRoot,
     env: {
       ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
       HOME: home,
       CLAWDAD_HOME: home,
       CLAWDAD_BIN_PATH: mockBinPath,
@@ -482,6 +486,7 @@ sleep 10
     cwd: repoRoot,
     env: {
       ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
       CLAWDAD_HOME: home,
       CLAWDAD_BIN_PATH: mockBinPath,
     },
@@ -607,6 +612,7 @@ cat > "$CLAWDAD_TERMINAL_CAPTURE"
     cwd: repoRoot,
     env: {
       ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
       CLAWDAD_HOME: home,
       CLAWDAD_CODEX_HOME: codexHome,
       CLAWDAD_CODEX: "codex-fake",
@@ -723,6 +729,7 @@ cat > "$CLAWDAD_TERMINAL_CAPTURE"
     cwd: repoRoot,
     env: {
       ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
       CLAWDAD_HOME: home,
       CLAWDAD_CODEX: "codex-fake",
       CLAWDAD_TERMINAL_LAUNCHER: launcherPath,
@@ -758,6 +765,428 @@ cat > "$CLAWDAD_TERMINAL_CAPTURE"
       launched.shellCommand,
       `exec bash -lc 'cd '\\''${projectPath}'\\'' && clear && exec '\\''codex-fake'\\'''`,
     );
+  } finally {
+    await stopServer(child);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("session-terminal-log endpoint returns paged Codex events for a tracked request", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-terminal-log-"));
+  const home = path.join(root, "home");
+  const projectPath = path.join(root, "clawdad");
+  const configPath = path.join(root, "server.json");
+  const mockBinPath = path.join(root, "clawdad-mock");
+  const sessionId = "019e0000-2222-7000-8000-000000000001";
+  const requestId = "terminal-log-request-1";
+  const sentAt = "2026-05-06T15:00:00.000Z";
+  const recordFile = path.join(
+    projectPath,
+    ".clawdad",
+    "history",
+    "sessions",
+    sessionId,
+    `20260506T150000.000Z--${requestId}.json`,
+  );
+
+  await mkdir(path.join(projectPath, ".clawdad", "mailbox"), { recursive: true });
+  await mkdir(path.dirname(recordFile), { recursive: true });
+  await mkdir(path.join(projectPath, ".clawdad", "history", "requests"), { recursive: true });
+  await mkdir(path.join(projectPath, ".clawdad", "history", "events"), { recursive: true });
+  await mkdir(home, { recursive: true });
+  await writeFile(
+    path.join(home, "state.json"),
+    JSON.stringify(
+      {
+        version: 3,
+        projects: {
+          [projectPath]: {
+            status: "running",
+            active_session_id: sessionId,
+            sessions: {
+              [sessionId]: {
+                slug: "Main",
+                provider: "codex",
+                provider_session_seeded: "true",
+                status: "running",
+              },
+            },
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    path.join(projectPath, ".clawdad", "mailbox", "status.json"),
+    JSON.stringify(
+      {
+        state: "running",
+        request_id: requestId,
+        session_id: sessionId,
+        dispatched_at: sentAt,
+        heartbeat_at: new Date().toISOString(),
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    path.join(projectPath, ".clawdad", "history", "requests", `${requestId}.json`),
+    JSON.stringify({ requestId, sessionId, sentAt, file: recordFile }, null, 2),
+    "utf8",
+  );
+  await writeFile(
+    recordFile,
+    JSON.stringify(
+      {
+        requestId,
+        projectPath,
+        sessionId,
+        provider: "codex",
+        message: "Run the terminal log check.",
+        sentAt,
+        answeredAt: null,
+        status: "queued",
+        response: "",
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    path.join(projectPath, ".clawdad", "history", "events", `${requestId}.codex-events.jsonl`),
+    [
+      JSON.stringify({ at: sentAt, type: "codex_turn_started", method: "turn/started", turnId: "turn-1" }),
+      JSON.stringify({
+        at: "2026-05-06T15:00:02.000Z",
+        type: "codex_agent_message_delta",
+        method: "item/agentMessage/delta",
+        payload: { delta: "working live" },
+      }),
+      JSON.stringify({
+        at: "2026-05-06T15:00:03.000Z",
+        type: "codex_item",
+        method: "item/started",
+        itemType: "commandExecution",
+        status: "in_progress",
+        payload: { commandText: "npm test" },
+      }),
+    ].join("\n") + "\n",
+    "utf8",
+  );
+  await writeFile(mockBinPath, "#!/bin/sh\nexit 1\n", "utf8");
+  await chmod(mockBinPath, 0o755);
+
+  const port = await freePort();
+  await writeFile(
+    configPath,
+    JSON.stringify(
+      {
+        host: "127.0.0.1",
+        port,
+        defaultProject: projectPath,
+        authMode: "tailscale",
+        allowedUsers: ["tester@example.com"],
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  const child = spawn(process.execPath, [serverScript, "serve", "--config", configPath], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
+      CLAWDAD_HOME: home,
+      CLAWDAD_BIN_PATH: mockBinPath,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  try {
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const headers = { "tailscale-user-login": "tester@example.com" };
+    await waitForHealth(baseUrl, child);
+    const firstResponse = await fetch(
+      `${baseUrl}/v1/session-terminal-log?project=${encodeURIComponent(projectPath)}&sessionId=${encodeURIComponent(sessionId)}&requestId=${encodeURIComponent(requestId)}&cursor=0&limit=2`,
+      { headers },
+    );
+    assert.equal(firstResponse.status, 200);
+    const firstPayload = await firstResponse.json();
+    assert.equal(firstPayload.ok, true);
+    assert.equal(firstPayload.total, 3);
+    assert.equal(firstPayload.nextCursor, "2");
+    assert.equal(firstPayload.events.length, 2);
+    assert.equal(firstPayload.events[0].label, "Turn started");
+    assert.equal(firstPayload.events[1].text, "working live");
+    assert.equal(firstPayload.requestStatus.status, "running");
+    assert.equal(firstPayload.requestStatus.active, true);
+
+    const secondResponse = await fetch(
+      `${baseUrl}/v1/session-terminal-log?project=${encodeURIComponent(projectPath)}&sessionId=${encodeURIComponent(sessionId)}&requestId=${encodeURIComponent(requestId)}&cursor=${encodeURIComponent(firstPayload.nextCursor)}&limit=2`,
+      { headers },
+    );
+    assert.equal(secondResponse.status, 200);
+    const secondPayload = await secondResponse.json();
+    assert.equal(secondPayload.events.length, 1);
+    assert.equal(secondPayload.events[0].label, "Command started");
+    assert.equal(secondPayload.events[0].text, "npm test");
+  } finally {
+    await stopServer(child);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("session-terminal-log returns empty events with completed request status when no log exists", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-terminal-log-empty-"));
+  const home = path.join(root, "home");
+  const projectPath = path.join(root, "frg-site");
+  const configPath = path.join(root, "server.json");
+  const mockBinPath = path.join(root, "clawdad-mock");
+  const sessionId = "019e0000-2222-7000-8000-000000000002";
+  const requestId = "terminal-log-missing";
+  const sentAt = "2026-05-06T15:10:00.000Z";
+  const answeredAt = "2026-05-06T15:11:00.000Z";
+  const recordFile = path.join(
+    projectPath,
+    ".clawdad",
+    "history",
+    "sessions",
+    sessionId,
+    `20260506T151000.000Z--${requestId}.json`,
+  );
+
+  await mkdir(path.join(projectPath, ".clawdad", "mailbox"), { recursive: true });
+  await mkdir(path.dirname(recordFile), { recursive: true });
+  await mkdir(path.join(projectPath, ".clawdad", "history", "requests"), { recursive: true });
+  await mkdir(home, { recursive: true });
+  await writeFile(
+    path.join(home, "state.json"),
+    JSON.stringify(
+      {
+        version: 3,
+        projects: {
+          [projectPath]: {
+            status: "completed",
+            active_session_id: sessionId,
+            sessions: {
+              [sessionId]: {
+                slug: "Main",
+                provider: "codex",
+                provider_session_seeded: "true",
+                status: "completed",
+              },
+            },
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    path.join(projectPath, ".clawdad", "history", "requests", `${requestId}.json`),
+    JSON.stringify({ requestId, sessionId, sentAt, file: recordFile }, null, 2),
+    "utf8",
+  );
+  await writeFile(
+    recordFile,
+    JSON.stringify(
+      {
+        requestId,
+        projectPath,
+        sessionId,
+        provider: "codex",
+        message: "Return without an event log.",
+        sentAt,
+        answeredAt,
+        status: "answered",
+        exitCode: 0,
+        response: "Done.",
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(mockBinPath, "#!/bin/sh\nexit 1\n", "utf8");
+  await chmod(mockBinPath, 0o755);
+
+  const port = await freePort();
+  await writeFile(
+    configPath,
+    JSON.stringify(
+      {
+        host: "127.0.0.1",
+        port,
+        defaultProject: projectPath,
+        authMode: "tailscale",
+        allowedUsers: ["tester@example.com"],
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  const child = spawn(process.execPath, [serverScript, "serve", "--config", configPath], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
+      CLAWDAD_HOME: home,
+      CLAWDAD_BIN_PATH: mockBinPath,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  try {
+    const baseUrl = `http://127.0.0.1:${port}`;
+    await waitForHealth(baseUrl, child);
+    const response = await fetch(
+      `${baseUrl}/v1/session-terminal-log?project=${encodeURIComponent(projectPath)}&sessionId=${encodeURIComponent(sessionId)}&requestId=${encodeURIComponent(requestId)}`,
+      {
+        headers: {
+          "tailscale-user-login": "tester@example.com",
+        },
+      },
+    );
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.deepEqual(payload.events, []);
+    assert.equal(payload.total, 0);
+    assert.equal(payload.requestStatus.status, "completed");
+    assert.equal(payload.requestStatus.terminal, true);
+  } finally {
+    await stopServer(child);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("session-terminal-log rejects unsafe ids and wrong project/session bindings", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-terminal-log-reject-"));
+  const home = path.join(root, "home");
+  const projectPath = path.join(root, "clawdad");
+  const otherProjectPath = path.join(root, "other");
+  const configPath = path.join(root, "server.json");
+  const mockBinPath = path.join(root, "clawdad-mock");
+  const sessionId = "019e0000-2222-7000-8000-000000000003";
+  const otherSessionId = "019e0000-2222-7000-8000-000000000004";
+  const requestId = "terminal-log-bound";
+  const sentAt = "2026-05-06T15:20:00.000Z";
+  const recordFile = path.join(
+    projectPath,
+    ".clawdad",
+    "history",
+    "sessions",
+    sessionId,
+    `20260506T152000.000Z--${requestId}.json`,
+  );
+
+  await mkdir(path.join(projectPath, ".clawdad", "mailbox"), { recursive: true });
+  await mkdir(path.join(otherProjectPath, ".clawdad", "mailbox"), { recursive: true });
+  await mkdir(path.dirname(recordFile), { recursive: true });
+  await mkdir(path.join(projectPath, ".clawdad", "history", "requests"), { recursive: true });
+  await mkdir(home, { recursive: true });
+  await writeFile(
+    path.join(home, "state.json"),
+    JSON.stringify(
+      {
+        version: 3,
+        projects: {
+          [projectPath]: {
+            status: "completed",
+            active_session_id: sessionId,
+            sessions: {
+              [sessionId]: { slug: "Main", provider: "codex", provider_session_seeded: "true" },
+              [otherSessionId]: { slug: "Other", provider: "codex", provider_session_seeded: "true" },
+            },
+          },
+          [otherProjectPath]: {
+            status: "idle",
+            active_session_id: otherSessionId,
+            sessions: {
+              [otherSessionId]: { slug: "Other project", provider: "codex", provider_session_seeded: "true" },
+            },
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    path.join(projectPath, ".clawdad", "history", "requests", `${requestId}.json`),
+    JSON.stringify({ requestId, sessionId, sentAt, file: recordFile }, null, 2),
+    "utf8",
+  );
+  await writeFile(
+    recordFile,
+    JSON.stringify({ requestId, projectPath, sessionId, provider: "codex", message: "Bound.", sentAt, status: "answered", response: "Done." }, null, 2),
+    "utf8",
+  );
+  await writeFile(mockBinPath, "#!/bin/sh\nexit 1\n", "utf8");
+  await chmod(mockBinPath, 0o755);
+
+  const port = await freePort();
+  await writeFile(
+    configPath,
+    JSON.stringify(
+      {
+        host: "127.0.0.1",
+        port,
+        defaultProject: projectPath,
+        authMode: "tailscale",
+        allowedUsers: ["tester@example.com"],
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  const child = spawn(process.execPath, [serverScript, "serve", "--config", configPath], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
+      CLAWDAD_HOME: home,
+      CLAWDAD_BIN_PATH: mockBinPath,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  try {
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const headers = { "tailscale-user-login": "tester@example.com" };
+    await waitForHealth(baseUrl, child);
+
+    const unsafeResponse = await fetch(
+      `${baseUrl}/v1/session-terminal-log?project=${encodeURIComponent(projectPath)}&sessionId=${encodeURIComponent(sessionId)}&requestId=${encodeURIComponent("../escape")}`,
+      { headers },
+    );
+    assert.equal(unsafeResponse.status, 400);
+
+    const wrongSessionResponse = await fetch(
+      `${baseUrl}/v1/session-terminal-log?project=${encodeURIComponent(projectPath)}&sessionId=${encodeURIComponent(otherSessionId)}&requestId=${encodeURIComponent(requestId)}`,
+      { headers },
+    );
+    assert.equal(wrongSessionResponse.status, 404);
+
+    const wrongProjectResponse = await fetch(
+      `${baseUrl}/v1/session-terminal-log?project=${encodeURIComponent(otherProjectPath)}&sessionId=${encodeURIComponent(otherSessionId)}&requestId=${encodeURIComponent(requestId)}`,
+      { headers },
+    );
+    assert.equal(wrongProjectResponse.status, 404);
   } finally {
     await stopServer(child);
     await rm(root, { recursive: true, force: true });
@@ -826,6 +1255,7 @@ test("sessions endpoint creates a new local Codex placeholder for the dropdown",
     cwd: repoRoot,
     env: {
       ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
       CLAWDAD_HOME: home,
       CLAWDAD_BIN_PATH: mockBinPath,
     },
@@ -1025,6 +1455,7 @@ test("projects endpoint orders sessions by latest provider activity while preser
     cwd: repoRoot,
     env: {
       ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
       CLAWDAD_HOME: home,
       CLAWDAD_CODEX_HOME: codexHome,
     },
@@ -1123,6 +1554,7 @@ test("projects endpoint does not let import tracking time outrank real session a
     cwd: repoRoot,
     env: {
       ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
       CLAWDAD_HOME: home,
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -1361,6 +1793,7 @@ test("status endpoint auto-imports untracked Codex sessions for seeded projects"
     cwd: repoRoot,
     env: {
       ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
       CLAWDAD_HOME: home,
       CLAWDAD_CODEX_HOME: codexHome,
       CLAWDAD_BIN_PATH: mockBinPath,
@@ -1469,6 +1902,7 @@ test("projects endpoint hides quarantined sessions from the app catalog", async 
     cwd: repoRoot,
     env: {
       ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
       CLAWDAD_HOME: home,
       CLAWDAD_BIN_PATH: mockBinPath,
     },
@@ -2120,6 +2554,7 @@ exit 0
     cwd: repoRoot,
     env: {
       ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
       CLAWDAD_HOME: home,
       CLAWDAD_CODEX_HOME: codexHome,
       CLAWDAD_BIN_PATH: mockBinPath,
@@ -2250,6 +2685,7 @@ process.exit(0);
     cwd: repoRoot,
     env: {
       ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
       CLAWDAD_HOME: home,
       CLAWDAD_BIN_PATH: mockBinPath,
     },
@@ -2395,6 +2831,7 @@ process.exit(0);
     cwd: repoRoot,
     env: {
       ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
       CLAWDAD_HOME: home,
       CLAWDAD_BIN_PATH: mockBinPath,
       CLAWDAD_DUMPY_API_URL: fakeDumpy.baseUrl,
@@ -2546,6 +2983,7 @@ fs.writeFileSync(
     cwd: repoRoot,
     env: {
       ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
       CLAWDAD_HOME: home,
       CLAWDAD_BIN_PATH: mockBinPath,
     },
@@ -2676,6 +3114,7 @@ exit 1
     cwd: repoRoot,
     env: {
       ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
       CLAWDAD_HOME: home,
       CLAWDAD_BIN_PATH: mockBinPath,
     },
@@ -2797,6 +3236,7 @@ exit 1
     cwd: repoRoot,
     env: {
       ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
       CLAWDAD_HOME: home,
       CLAWDAD_BIN_PATH: mockBinPath,
     },
@@ -2941,6 +3381,7 @@ fs.writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify({
     cwd: repoRoot,
     env: {
       ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
       CLAWDAD_HOME: home,
       CLAWDAD_BIN_PATH: mockBinPath,
     },
@@ -3103,6 +3544,7 @@ fs.writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify({
     cwd: repoRoot,
     env: {
       ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
       CLAWDAD_HOME: home,
       CLAWDAD_BIN_PATH: mockBinPath,
     },
@@ -3208,6 +3650,7 @@ fs.writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify({
       cwd: repoRoot,
       env: {
         ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
         CLAWDAD_HOME: home,
       },
       stdio: ["ignore", "pipe", "pipe"],
@@ -3381,6 +3824,7 @@ test("projects and delegate lanes endpoints expose explicit lane metadata with d
     cwd: repoRoot,
     env: {
       ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
       CLAWDAD_HOME: home,
       CLAWDAD_BIN_PATH: mockBinPath,
     },
@@ -3519,6 +3963,7 @@ test("projects endpoint does not keep serving a cached busy session after comple
     cwd: repoRoot,
     env: {
       ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
       CLAWDAD_HOME: home,
       CLAWDAD_BIN_PATH: mockBinPath,
     },
@@ -3656,6 +4101,7 @@ test("status endpoint does not stale-fail a dead child pid during recent heartbe
     cwd: repoRoot,
     env: {
       ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
       CLAWDAD_HOME: home,
       CLAWDAD_BIN_PATH: mockBinPath,
       CLAWDAD_STALE_DISPATCH_DEAD_WORKER_GRACE_MS: "120000",
@@ -3771,6 +4217,7 @@ test("status endpoint stale-fails live pid mailboxes with no heartbeat after tim
     cwd: repoRoot,
     env: {
       ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
       CLAWDAD_HOME: home,
       CLAWDAD_BIN_PATH: mockBinPath,
       CLAWDAD_STALE_DISPATCH_TIMEOUT_MS: "1000",
@@ -3944,6 +4391,7 @@ test("read endpoint heals a stale mailbox response from answered history", async
     cwd: repoRoot,
     env: {
       ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
       CLAWDAD_HOME: home,
       CLAWDAD_BIN_PATH: mockBinPath,
     },
@@ -4115,6 +4563,7 @@ test("read endpoint can fetch an exact completed request while latest mailbox is
     cwd: repoRoot,
     env: {
       ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
       CLAWDAD_HOME: home,
       CLAWDAD_BIN_PATH: mockBinPath,
     },
@@ -4298,6 +4747,7 @@ Images are also attached to Codex directly when supported. For non-image files, 
     cwd: repoRoot,
     env: {
       ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
       HOME: home,
       CLAWDAD_HOME: home,
       CLAWDAD_BIN_PATH: mockBinPath,
@@ -4457,6 +4907,7 @@ test("history endpoint ignores Codex commentary when building provider transcrip
     cwd: repoRoot,
     env: {
       ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
       HOME: home,
       CLAWDAD_HOME: home,
       CLAWDAD_BIN_PATH: mockBinPath,
@@ -4611,6 +5062,7 @@ test("recent history keeps provider request ids stable when reading transcript t
     cwd: repoRoot,
     env: {
       ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
       HOME: home,
       CLAWDAD_HOME: home,
       CLAWDAD_BIN_PATH: mockBinPath,
@@ -4809,6 +5261,7 @@ test("recent history endpoint returns server-backed prompt cards across tracked 
     cwd: repoRoot,
     env: {
       ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
       HOME: home,
       CLAWDAD_HOME: home,
       CLAWDAD_BIN_PATH: mockBinPath,
@@ -4958,6 +5411,7 @@ sleep 10
     cwd: repoRoot,
     env: {
       ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
       CLAWDAD_HOME: home,
       CLAWDAD_CODEX_HOME: codexHome,
       CLAWDAD_BIN_PATH: mockBinPath,
@@ -5080,6 +5534,7 @@ test("importable-sessions endpoint caches repeated local Codex discovery", async
     cwd: repoRoot,
     env: {
       ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
       CLAWDAD_HOME: home,
       CLAWDAD_CODEX_HOME: codexHome,
       CLAWDAD_IMPORTABLE_SESSION_LIST_CACHE_TTL_MS: "60000",
@@ -5203,6 +5658,7 @@ test("projects endpoint auto-registers local Codex sessions for the project drop
     cwd: repoRoot,
     env: {
       ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
       CLAWDAD_HOME: home,
       CLAWDAD_CODEX_HOME: codexHome,
     },
@@ -5315,6 +5771,7 @@ test("projects endpoint cools down missed background Codex discovery for placeho
     cwd: repoRoot,
     env: {
       ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
       CLAWDAD_HOME: home,
       CLAWDAD_CODEX_HOME: codexHome,
       CLAWDAD_PROJECT_SESSION_AUTO_IMPORT_TTL_MS: "0",
@@ -5426,6 +5883,7 @@ test("projects endpoint skips background Codex discovery when sessions are alrea
     cwd: repoRoot,
     env: {
       ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
       CLAWDAD_HOME: home,
       CLAWDAD_CODEX_HOME: codexHome,
     },
@@ -5540,6 +5998,7 @@ sleep 10
     cwd: repoRoot,
     env: {
       ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
       CLAWDAD_HOME: home,
       CLAWDAD_BIN_PATH: mockBinPath,
     },

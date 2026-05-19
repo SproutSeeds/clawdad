@@ -104,3 +104,16 @@ Advertise the live app Services:
 
 Verify both compatibility and durable URLs after any Tailscale policy or Serve
 change.
+
+## Startup Orchestration
+
+Use `clawdad secure-doctor --ensure` for the operational readiness check. It
+keeps the same secure-doctor route checks, then runs the shared
+`@sproutseeds/tailnet-app` ensure pass so configured local and cross-machine
+dependencies are started or reported as degraded before users rely on the app.
+
+Live app entries can include `port`, `healthPath`, `serviceName`,
+`serviceSocket`, `required`, `autoStart`, and `startCommand` as they migrate to
+the shared startup contract. Apps should still start their UI in degraded mode
+when an optional backend is down, while clearly reporting which feature is
+blocked.

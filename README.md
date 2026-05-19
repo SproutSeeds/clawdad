@@ -90,7 +90,7 @@ If you ever just want the local CLI and not the phone app yet, you can stop afte
 - cross-project queue for in-flight and completed work
 - saved project summary snapshots with manual refresh
 - server-backed quick prompts that append reusable text into the composer
-- cached message audio via ElevenLabs, with manual download/play controls and optional auto-download
+- Doc Reader-backed message audio, with speaker, pause, and stop playback controls
 - Codex delegate mode with semantic hard stops and a weekly compute reserve guard
 
 Tap the summary icon beside the project picker to open the latest saved snapshot or request a fresh one.
@@ -99,17 +99,23 @@ The quick prompt button beside Send opens editable preset prompts. Selecting a
 prompt appends its text to the current composer message instead of replacing it;
 custom prompts are saved in Clawdad state and can be edited later.
 
-Message audio starts as a download icon. Tapping it prepares and caches the MP3;
-after it is ready the control becomes a speaker icon for playback. The queue
-header has an `Auto audio` toggle for preloading response audio completed after
-the toggle is enabled, without autoplay. The API key stays on the Clawdad server: set
-`ELEVENLABS_API_KEY` or
-`CLAWDAD_ELEVENLABS_API_KEY`, or store a macOS Keychain generic password named
-`clawdad-elevenlabs`. Clawdad also falls back to ORP secrets aliases such as
-`elevenlabs`, `elevenlabs-api-key`, `elevenlabs-primary`, or
-`ELEVENLABS_API_KEY`, and project-scoped `--provider elevenlabs` resolution.
-Generated MP3 parts are cached under the project at `.clawdad/audio/messages/`
-for replay.
+Completed agent responses and sent message cards are registered in Doc Reader's
+Library and prepare local text-to-speech audio in the background. The speaker
+icon plays the prepared WAV immediately when audio is ready, switches to pause
+during playback, and shows a stop control beside it. If audio is still being
+prepared, the same control keeps polling Doc Reader and starts playback when the
+Library item becomes ready. By default Clawdad calls the Doc Reader web app as
+the speech system of record:
+`CLAWDAD_TTS_PROVIDER=doc-reader`,
+`CLAWDAD_DOC_READER_URL=http://127.0.0.1:8766`,
+`CLAWDAD_DOC_READER_TTS_ENGINE=kokoro`,
+`CLAWDAD_STT_PROVIDER=doc-reader`, and
+`CLAWDAD_DOC_READER_STT_URL=http://127.0.0.1:8766`.
+Legacy generated WAV parts under `.clawdad/audio/messages/` remain playable for
+old history entries, while new Clawdad speech is stored in Doc Reader's Library.
+OpenAI speech remains available only when
+`CLAWDAD_TTS_PROVIDER=openai` or `CLAWDAD_STT_PROVIDER=openai` is configured;
+that opt-in path resolves keys from environment, Keychain, or ORP secrets.
 
 ## CLI Quick Start
 
@@ -347,6 +353,7 @@ local lane needs a quick health check. See [Chimera Local Lane](docs/chimera-loc
 - durable team URLs can use a tagged Tailscale Service host, for example `svc:clawdad` behind `https://clawdad.YOUR-TAILNET.ts.net`
 - do not enable public Funnel unless you explicitly want a public internet surface
 - `secure-doctor` also checks node key expiry, local Tailscale CLI/daemon drift, public Funnel exposure, tagged Service readiness, and any sibling app health URLs configured under `tailscale.liveApps`
+- `secure-doctor --ensure` runs the shared tailnet startup orchestration check and starts configured dependencies such as Doc Reader before reporting readiness
 
 The mobile app and automation routes live under the same origin:
 
