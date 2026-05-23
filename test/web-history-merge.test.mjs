@@ -1080,6 +1080,8 @@ test("web composer exposes linear queue and interject dispatch modes", async () 
   assert.match(source, /!allowBusySend && pendingEntryForSession/u);
   assert.match(source, /!allowBusySend && sessionIsBusy/u);
   assert.match(source, /payload\.interjected/u);
+  assert.match(source, /payload\.requestId \|\| payload\.queueId/u);
+  assert.match(source, /handoffPending/u);
   assert.match(css, /\.composer-tools-button/u);
   assert.match(css, /\.composer-mode-options/u);
   assert.match(css, /grid-template-columns: 48px minmax\(0, 1fr\) 48px;/u);
@@ -1307,6 +1309,9 @@ test("web detail marks later queue-mode messages as queued and not sent yet", as
   assert.equal(historyEntryQueuedForLater(active, [active, waiting]), false);
   assert.equal(historyEntryQueuedForLater(waiting, [active, waiting]), true);
   assert.equal(historyEntryQueuedForLater(soloWaiting, [soloWaiting]), false);
+  assert.match(source, /function pendingThreadEntryLabel/u);
+  assert.match(source, /handoffPending/u);
+  assert.match(source, /return "Starting"/u);
   assert.match(source, /Queued", "not sent yet"/u);
   assert.match(source, /if \(queuedForLater\) \{\s*return group;\s*\}/u);
   assert.match(source, /normalizeHistoryScheduleMode\(payload\.dispatchMode \|\| payload\.scheduleMode\)/u);

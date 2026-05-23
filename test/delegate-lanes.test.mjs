@@ -63,14 +63,14 @@ async function createProjectFixture(prefix) {
   return { root, home, projectPath };
 }
 
-async function runServerCommand(fixture, args) {
+async function runServerCommand(fixture, args, { cwd = repoRoot } = {}) {
   const commandArgs = [...args];
   if (!commandArgs.includes("--json")) {
     commandArgs.push("--json");
   }
   try {
     const result = await execFileAsync(process.execPath, [serverScript, ...commandArgs], {
-      cwd: repoRoot,
+      cwd,
       env: {
         ...process.env,
         HOME: fixture.home,
@@ -88,8 +88,8 @@ async function runServerCommand(fixture, args) {
   }
 }
 
-async function runJsonCommand(fixture, args) {
-  const result = await runServerCommand(fixture, args);
+async function runJsonCommand(fixture, args, options = {}) {
+  const result = await runServerCommand(fixture, args, options);
   assert.equal(result.exitCode, 0, result.stderr || result.stdout);
   return JSON.parse(result.stdout);
 }
@@ -219,6 +219,9 @@ test("lane-aware delegate commands keep default lane compatibility intact", asyn
     assert.match(frontendBrief, /Frontend lane brief\./u);
 
     const defaultPayload = await runJsonCommand(fixture, ["delegate", fixture.projectPath]);
+    const relativePayload = await runJsonCommand(fixture, ["delegate", "."], {
+      cwd: fixture.projectPath,
+    });
     const frontendPayload = await runJsonCommand(fixture, [
       "delegate",
       fixture.projectPath,
@@ -226,6 +229,8 @@ test("lane-aware delegate commands keep default lane compatibility intact", asyn
       "frontend",
     ]);
     assert.equal(defaultPayload.config.laneId, "default");
+    assert.equal(relativePayload.project, fixture.projectPath);
+    assert.equal(relativePayload.config.laneId, "default");
     assert.equal(frontendPayload.config.laneId, "frontend");
     assert.equal(defaultPayload.config.watchtowerReviewMode, "off");
     assert.equal(frontendPayload.config.watchtowerReviewMode, "off");

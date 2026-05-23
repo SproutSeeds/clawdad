@@ -168,6 +168,7 @@ clawdad read my-project
 | `clawdad serve` | Run a secure HTTP listener for remote/iPhone entrypoints |
 | `clawdad secure-bootstrap` | Write the recommended Tailscale-first self-hosted setup |
 | `clawdad secure-doctor` | Verify the secure self-hosted deployment end-to-end |
+| `clawdad prod-doctor` | Verify the installed live runtime, app asset, Codex integration, and session health |
 | `clawdad chimera-doctor` | Verify the local Chimera/Ollama provider lane |
 | `clawdad gen-token --write` | Generate and store a bearer token for the listener |
 | `clawdad install-launch-agent` | Install a macOS launchd plist for always-on listening |
@@ -354,6 +355,7 @@ local lane needs a quick health check. See [Chimera Local Lane](docs/chimera-loc
 - do not enable public Funnel unless you explicitly want a public internet surface
 - `secure-doctor` also checks node key expiry, local Tailscale CLI/daemon drift, public Funnel exposure, tagged Service readiness, and any sibling app health URLs configured under `tailscale.liveApps`
 - `secure-doctor --ensure` runs the shared tailnet startup orchestration check and starts configured dependencies such as Doc Reader before reporting readiness
+- `prod-doctor` is the quick production check before or after a release; see [Live Runtime Runbook](docs/live-runtime-runbook.md)
 
 The mobile app and automation routes live under the same origin:
 

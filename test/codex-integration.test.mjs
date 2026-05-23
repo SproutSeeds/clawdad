@@ -98,7 +98,8 @@ test("codex integration install writes hooks, skills, plugin, marketplace, and A
     const hooks = JSON.parse(await readFile(paths.hooksJson, "utf8"));
     assert.match(JSON.stringify(hooks), /clawdad-hook\.mjs/u);
     assert.match(await readFile(paths.agentsFile, "utf8"), /BEGIN CLAWDAD CODEX INTEGRATION/u);
-    assert.match(await readFile(paths.codexConfig, "utf8"), /codex_hooks = true/u);
+    assert.match(await readFile(paths.codexConfig, "utf8"), /hooks = true/u);
+    assert.doesNotMatch(await readFile(paths.codexConfig, "utf8"), /codex_hooks/u);
     await stat(paths.hookScript);
 
     for (const skillName of codexIntegrationSkillNames) {
@@ -126,6 +127,22 @@ test("codex integration install writes hooks, skills, plugin, marketplace, and A
     const report = await buildCodexIntegrationReport({ projectPath, codexHome });
     assert.equal(report.ok, true);
     assert.equal(report.failCount, 0);
+  });
+});
+
+test("codex integration doctor warns on deprecated hook feature flag", async () => {
+  await withTempProject(async ({ projectPath, codexHome }) => {
+    const paths = codexIntegrationPaths(projectPath);
+    await installCodexIntegration({ projectPath, codexHome });
+    await writeFile(paths.codexConfig, "# Managed by Clawdad Codex Integration.\n[features]\ncodex_hooks = true\n", "utf8");
+
+    const report = await buildCodexIntegrationReport({ projectPath, codexHome });
+    assert.equal(report.failCount, 0);
+    assert.ok(report.checks.some((entry) =>
+      entry.label === "Codex config" &&
+      entry.status === "warn" &&
+      /deprecated features\.codex_hooks/u.test(entry.detail)
+    ));
   });
 });
 

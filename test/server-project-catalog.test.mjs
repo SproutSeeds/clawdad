@@ -2046,6 +2046,9 @@ test("sessions-doctor repairs quarantined pointers and orphaned delegate lanes",
     assert.equal(result.exitCode, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.ok, true);
+    assert.equal(payload.activeOk, true);
+    assert.equal(payload.activeBlockerCount, 0);
+    assert.equal(payload.repairableIssueCount, 0);
     assert.equal(payload.projectCount, 1);
     assert.equal(payload.unresolvedIssueCount, 0);
     assert.ok(payload.issueCount >= 3);
@@ -2160,6 +2163,7 @@ test("sessions-doctor repairs stale active mirrored Codex goals on terminal lane
     assert.equal(doctor.exitCode, 1, doctor.stderr || doctor.stdout);
     const report = JSON.parse(doctor.stdout);
     assert.equal(report.projects[0].issues.some((issue) => issue.type === "stale_codex_goal_active"), true);
+    assert.equal(report.projects[0].issues.find((issue) => issue.type === "stale_codex_goal_active").repairable, true);
 
     const repaired = await runServerCli(["sessions-doctor", projectPath, "--repair", "--json"], {
       env: { CLAWDAD_HOME: home },
@@ -2241,6 +2245,8 @@ test("sessions-doctor flags and repairs a failed active session without quaranti
     assert.equal(audit.exitCode, 1, audit.stderr);
     const auditPayload = JSON.parse(audit.stdout);
     assert.equal(auditPayload.projects[0].issues[0].type, "active_session_failed");
+    assert.equal(auditPayload.projects[0].issues[0].activeBlocker, true);
+    assert.equal(auditPayload.activeBlockerCount, 1);
     assert.equal(auditPayload.projects[0].sessions[0].quarantined, false);
 
     const repair = await runServerCli([
@@ -2442,6 +2448,8 @@ test("sessions-doctor quarantines Codex sessions that do not belong to the proje
     assert.equal(audit.exitCode, 1, audit.stderr);
     const auditPayload = JSON.parse(audit.stdout);
     assert.equal(auditPayload.ok, false);
+    assert.equal(auditPayload.activeBlockerCount, 1);
+    assert.equal(auditPayload.repairableIssueCount, 2);
     const issueTypes = auditPayload.projects[0].issues.map((issue) => issue.type).sort();
     assert.deepEqual(issueTypes, ["codex_session_unbound", "session_provider_missing"]);
 
@@ -2473,6 +2481,137 @@ test("sessions-doctor quarantines Codex sessions that do not belong to the proje
       "missing_session_provider",
     );
     assert.equal(projectState.sessions[placeholderSessionId].quarantined, undefined);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("sessions-doctor classifies inactive stale bindings as historical repairable issues", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-historical-doctor-"));
+  const home = path.join(root, "home");
+  const codexHome = path.join(root, "codex-home");
+  const projectPath = path.join(root, "historical-project");
+  const goodSessionId = "019e6000-0000-7000-8000-000000000001";
+  const staleSessionId = "019e6000-0000-7000-8000-000000000002";
+
+  await mkdir(projectPath, { recursive: true });
+  await mkdir(home, { recursive: true });
+  await writeCodexSession(codexHome, projectPath, goodSessionId);
+  await writeFile(
+    path.join(home, "state.json"),
+    JSON.stringify(
+      {
+        version: 3,
+        projects: {
+          [projectPath]: {
+            status: "idle",
+            active_session_id: goodSessionId,
+            sessions: {
+              [goodSessionId]: {
+                slug: "Good",
+                provider: "codex",
+                provider_session_seeded: "true",
+                status: "idle",
+              },
+              [staleSessionId]: {
+                slug: "Old missing transcript",
+                provider: "codex",
+                provider_session_seeded: "true",
+                status: "completed",
+              },
+            },
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  try {
+    const audit = await runServerCli(["sessions-doctor", projectPath, "--json"], {
+      env: {
+        CLAWDAD_HOME: home,
+        CLAWDAD_CODEX_HOME: codexHome,
+      },
+    });
+    assert.equal(audit.exitCode, 1, audit.stderr || audit.stdout);
+    const payload = JSON.parse(audit.stdout);
+    assert.equal(payload.activeOk, true);
+    assert.equal(payload.activeBlockerCount, 0);
+    assert.equal(payload.historicalIssueCount, 1);
+    assert.equal(payload.repairableIssueCount, 1);
+    assert.equal(payload.requiresHumanDecisionCount, 0);
+    assert.equal(payload.projects[0].issues[0].severity, "historical");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("prod-doctor emits live runtime and session health summary", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-prod-doctor-"));
+  const home = path.join(root, "home");
+  const projectPath = path.join(root, "prod-project");
+  const configPath = path.join(root, "server.json");
+  const port = await freePort();
+
+  await mkdir(projectPath, { recursive: true });
+  await mkdir(home, { recursive: true });
+  await writeFile(
+    path.join(home, "state.json"),
+    JSON.stringify(
+      {
+        version: 3,
+        projects: {
+          [projectPath]: {
+            status: "idle",
+            active_session_id: "local-placeholder",
+            sessions: {
+              "local-placeholder": {
+                slug: "Local placeholder",
+                provider: "codex",
+                provider_session_seeded: "false",
+                status: "idle",
+              },
+            },
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    configPath,
+    JSON.stringify(
+      {
+        host: "127.0.0.1",
+        port,
+        authMode: "tailscale",
+        allowedUsers: ["tester@example.com"],
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  try {
+    const result = await runServerCli(["prod-doctor", "--project", projectPath, "--config", configPath, "--json"], {
+      env: {
+        CLAWDAD_HOME: home,
+      },
+    });
+    assert.equal(result.exitCode, 1, result.stderr || result.stdout);
+    const payload = JSON.parse(result.stdout);
+    const currentPackage = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8"));
+    assert.equal(payload.version, currentPackage.version);
+    assert.equal(payload.sessions.activeBlockerCount, 0);
+    assert.ok(payload.checks.some((check) => check.label === "Installed binary"));
+    assert.ok(payload.checks.some((check) => check.label === "Local health" && check.status === "fail"));
+    assert.ok(payload.checks.some((check) => check.label === "App asset fingerprint"));
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -2892,8 +3031,8 @@ process.exit(0);
   }
 });
 
-test("dispatch endpoint starts linear messages immediately when mailbox is idle", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-linear-idle-"));
+test("dispatch endpoint returns request id for delayed linear mailbox start", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-linear-delayed-"));
   const home = path.join(root, "home");
   const projectPath = path.join(root, "linear-lab");
   const configPath = path.join(root, "server.json");
@@ -2942,21 +3081,29 @@ const args = process.argv.slice(2);
 const projectPath = args[1];
 const sessionIndex = args.indexOf("--session");
 const sessionId = sessionIndex >= 0 ? args[sessionIndex + 1] : null;
+const delayMs = Number(process.env.CLAWDAD_TEST_MAILBOX_DELAY_MS || "0");
 fs.writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify({ args }, null, 2));
-fs.mkdirSync(path.join(projectPath, ".clawdad", "mailbox"), { recursive: true });
-fs.writeFileSync(
-  path.join(projectPath, ".clawdad", "mailbox", "status.json"),
-  JSON.stringify({
-    state: "running",
-    request_id: "linear-started",
-    session_id: sessionId,
-    dispatched_at: new Date().toISOString(),
-    heartbeat_at: new Date().toISOString(),
-    completed_at: null,
-    error: null,
-    pid: process.pid,
-  }, null, 2),
-);
+const writeStatus = () => {
+  fs.mkdirSync(path.join(projectPath, ".clawdad", "mailbox"), { recursive: true });
+  fs.writeFileSync(
+    path.join(projectPath, ".clawdad", "mailbox", "status.json"),
+    JSON.stringify({
+      state: "running",
+      request_id: "linear-started",
+      session_id: sessionId,
+      dispatched_at: new Date().toISOString(),
+      heartbeat_at: new Date().toISOString(),
+      completed_at: null,
+      error: null,
+      pid: process.pid,
+    }, null, 2),
+  );
+};
+if (delayMs > 0) {
+  setTimeout(writeStatus, delayMs);
+} else {
+  writeStatus();
+}
 `,
     "utf8",
   );
@@ -2986,6 +3133,8 @@ fs.writeFileSync(
       CLAWDAD_TTS_ENABLED: "false",
       CLAWDAD_HOME: home,
       CLAWDAD_BIN_PATH: mockBinPath,
+      CLAWDAD_REMOTE_DISPATCH_START_TIMEOUT_MS: "5000",
+      CLAWDAD_TEST_MAILBOX_DELAY_MS: "3500",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -3016,13 +3165,151 @@ fs.writeFileSync(
     assert.equal(payload.queued, false);
     assert.equal(payload.interjected, false);
 
-    const captured = JSON.parse(await readFile(capturePath, "utf8"));
+    const captured = JSON.parse(await waitForFileText(capturePath));
     assert.deepEqual(captured.args.slice(0, 3), [
       "dispatch",
       projectPath,
       "Run the linear prompt now.",
     ]);
     assert.equal(captured.args[captured.args.indexOf("--session") + 1], sessionId);
+  } finally {
+    await stopServer(child);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("dispatch endpoint returns generated request id when linear handoff is still starting", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-linear-starting-"));
+  const home = path.join(root, "home");
+  const projectPath = path.join(root, "linear-starting-lab");
+  const configPath = path.join(root, "server.json");
+  const mockBinPath = path.join(root, "clawdad-mock.js");
+  const capturePath = path.join(root, "linear-starting-capture.json");
+  const sessionId = "codex-linear-starting";
+
+  await mkdir(path.join(projectPath, ".clawdad", "mailbox"), { recursive: true });
+  await mkdir(home, { recursive: true });
+  await writeFile(
+    path.join(home, "state.json"),
+    JSON.stringify(
+      {
+        version: 3,
+        projects: {
+          [projectPath]: {
+            status: "idle",
+            active_session_id: sessionId,
+            sessions: {
+              [sessionId]: {
+                slug: "linear starting",
+                provider: "codex",
+                provider_session_seeded: "false",
+                status: "idle",
+              },
+            },
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    path.join(projectPath, ".clawdad", "mailbox", "status.json"),
+    JSON.stringify({ state: "idle", request_id: null, session_id: null }, null, 2),
+    "utf8",
+  );
+  await writeFile(
+    mockBinPath,
+    `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = require("node:path");
+const args = process.argv.slice(2);
+const projectPath = args[1];
+const sessionIndex = args.indexOf("--session");
+const sessionId = sessionIndex >= 0 ? args[sessionIndex + 1] : null;
+const requestId = process.env.CLAWDAD_DISPATCH_REQUEST_ID || "";
+fs.writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify({ args, requestId }, null, 2));
+setTimeout(() => {
+  fs.mkdirSync(path.join(projectPath, ".clawdad", "mailbox"), { recursive: true });
+  fs.writeFileSync(
+    path.join(projectPath, ".clawdad", "mailbox", "status.json"),
+    JSON.stringify({
+      state: "running",
+      request_id: requestId,
+      session_id: sessionId,
+      dispatched_at: new Date().toISOString(),
+      heartbeat_at: new Date().toISOString(),
+      completed_at: null,
+      error: null,
+      pid: process.pid,
+    }, null, 2),
+  );
+}, 250);
+`,
+    "utf8",
+  );
+  await chmod(mockBinPath, 0o755);
+
+  const port = await freePort();
+  await writeFile(
+    configPath,
+    JSON.stringify(
+      {
+        host: "127.0.0.1",
+        port,
+        defaultProject: projectPath,
+        authMode: "tailscale",
+        allowedUsers: ["tester@example.com"],
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  const child = spawn(process.execPath, [serverScript, "serve", "--config", configPath], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
+      CLAWDAD_HOME: home,
+      CLAWDAD_BIN_PATH: mockBinPath,
+      CLAWDAD_REMOTE_DISPATCH_START_TIMEOUT_MS: "25",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  try {
+    const baseUrl = `http://127.0.0.1:${port}`;
+    await waitForHealth(baseUrl, child);
+    const response = await fetch(`${baseUrl}/v1/dispatch`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "tailscale-user-login": "tester@example.com",
+      },
+      body: JSON.stringify({
+        project: projectPath,
+        sessionId,
+        message: "Run the linear prompt now.",
+        wait: false,
+        dispatchMode: "linear",
+      }),
+    });
+
+    assert.equal(response.status, 202);
+    const payload = await response.json();
+    assert.equal(payload.ok, true);
+    assert.match(payload.requestId, /^[0-9a-f-]{36}$/u);
+    assert.equal(payload.queueId, null);
+    assert.equal(payload.requestState, "starting");
+    assert.equal(payload.handoffPending, true);
+    assert.equal(payload.mailboxStatus, null);
+
+    const captured = JSON.parse(await waitForFileText(capturePath));
+    assert.equal(captured.requestId, payload.requestId);
+    await new Promise((resolve) => setTimeout(resolve, 300));
   } finally {
     await stopServer(child);
     await rm(root, { recursive: true, force: true });

@@ -57,6 +57,7 @@ Commands:
   serve [options]               Run the secure HTTP listener entrypoint
   secure-bootstrap [options]    Write a Tailscale-first secure server setup
   secure-doctor [options]       Verify the secure self-hosted setup
+  prod-doctor [options]         Verify the live Clawdad app runtime
   chimera-doctor [options]      Verify the local Chimera/Ollama provider lane
   codex-hook                    Internal Codex hook entrypoint
   gen-token [options]           Generate a bearer token for the listener
@@ -936,6 +937,10 @@ cmd_secure_doctor() {
   run_server_helper secure-doctor "$@"
 }
 
+cmd_prod_doctor() {
+  run_server_helper prod-doctor "$@"
+}
+
 cmd_gen_token() {
   run_server_helper gen-token "$@"
 }
@@ -1039,6 +1044,7 @@ main() {
     serve)      cmd_serve "$@" ;;
     secure-bootstrap) cmd_secure_bootstrap "$@" ;;
     secure-doctor) cmd_secure_doctor "$@" ;;
+    prod-doctor) cmd_prod_doctor "$@" ;;
     chimera-doctor) cmd_chimera_doctor "$@" ;;
     gen-token)  cmd_gen_token "$@" ;;
     print-launch-agent) cmd_print_launch_agent "$@" ;;

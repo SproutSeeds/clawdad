@@ -2741,8 +2741,10 @@ function normalizeHistoryItem(item) {
   const scheduleMode = normalizeHistoryScheduleMode(item?.scheduleMode || item?.dispatchMode);
   const archivedAt = String(item?.archivedAt || "").trim() || null;
   const audio = normalizeHistoryAudioMetadata(item?.audio);
+  const requestState = String(item?.requestState || item?.lifecycleState || "").trim().toLowerCase();
   return {
     requestId: String(item?.requestId || "").trim() || makeEntryId(),
+    queueId: String(item?.queueId || "").trim() || null,
     projectPath: String(item?.projectPath || "").trim(),
     sessionId,
     projectLabel: item?.projectLabel || fallbackProjectLabel(item?.projectPath),
@@ -2757,6 +2759,8 @@ function normalizeHistoryItem(item) {
     response: String(item?.response || ""),
     exitCode: typeof item?.exitCode === "number" ? item.exitCode : null,
     scheduleMode,
+    requestState,
+    handoffPending: Boolean(item?.handoffPending),
     archivedAt,
     attachments: normalizeHistoryAttachments(item?.attachments),
     ...(audio ? { audio } : {}),
@@ -4278,6 +4282,19 @@ function sessionStatusLabel(entry) {
     return "failed";
   }
   return "cajun butter";
+}
+
+function pendingThreadEntryLabel(entry, items = state.threadEntries) {
+  if (historyEntryQueuedForLater(entry, items)) {
+    return "Queued";
+  }
+  if (entry?.handoffPending || String(entry?.requestState || "").trim().toLowerCase() === "starting") {
+    return "Starting";
+  }
+  if (normalizeHistoryScheduleMode(entry?.scheduleMode || entry?.dispatchMode) === "queue") {
+    return "Queued";
+  }
+  return currentProcessingPhrase();
 }
 
 function entryHasReturned(entry) {
@@ -6743,6 +6760,7 @@ function buildThreadCard({
 
 function buildHistoryGroup(entry, { items = [] } = {}) {
   const queuedForLater = historyEntryQueuedForLater(entry, items);
+  const pendingLabel = pendingThreadEntryLabel(entry, items);
   const group = document.createElement("div");
   group.className = "history-group";
   group.dataset.requestId = entry.requestId || "";
@@ -6773,11 +6791,11 @@ function buildHistoryGroup(entry, { items = [] } = {}) {
 
   const inboundText =
     entry.status === "queued"
-      ? `${currentProcessingPhrase()}…`
+      ? `${pendingLabel}…`
       : entry.response || (entry.status === "failed" ? "Failed." : "");
   const inboundMeta =
     entry.status === "queued"
-      ? currentProcessingPhrase()
+      ? pendingLabel
       : formatTimestamp(entry.answeredAt) || (entry.status === "failed" ? "failed" : "");
 
   group.append(
@@ -11204,6 +11222,8 @@ async function reconcileThreadEntries() {
         );
         completeThreadEntry(entry, {
           status: exactStatus,
+          requestState: exactStatus,
+          handoffPending: false,
           sessionId: sessionResult.sessionId || entry.sessionId,
           sessionLabel: sessionOptionLabel(sessionResult.session, entry.projectPath),
           answeredAt:
@@ -11251,6 +11271,8 @@ async function reconcileThreadEntries() {
 
         completeThreadEntry(entry, {
           status: status === "completed" ? "answered" : "failed",
+          requestState: status,
+          handoffPending: false,
           sessionId: mailboxCompletionFallbackSession.sessionId || entry.sessionId,
           sessionLabel: sessionOptionLabel(
             mailboxCompletionFallbackSession,
@@ -11294,6 +11316,8 @@ async function reconcileThreadEntries() {
     if (!trackedRequestId && requestLooksFresh) {
       updateThreadEntry(entry.id, {
         requestId: liveRequestId,
+        requestState: status === "running" || status === "dispatched" ? "running" : status,
+        handoffPending: false,
       });
     }
 
@@ -11370,6 +11394,8 @@ async function reconcileThreadEntries() {
 
     completeThreadEntry(entry, {
       status: status === "completed" ? "answered" : "failed",
+      requestState: status,
+      handoffPending: false,
       answeredAt:
         mailboxStatus.completed_at ||
         mailboxStatus.completedAt ||
@@ -13666,6 +13692,9 @@ async function handleDispatch(event) {
     message: dispatchMessage,
     attachments: composerAttachments.map(composerAttachmentSummary),
     requestId: "",
+    queueId: null,
+    requestState: dispatchMode === "queue" ? "queued" : "starting",
+    handoffPending: true,
     status: "queued",
     scheduleMode: dispatchMode,
     sentAt: new Date().toISOString(),
@@ -13724,9 +13753,14 @@ async function handleDispatch(event) {
     const effectiveScheduleMode =
       normalizeHistoryScheduleMode(payload.dispatchMode || payload.scheduleMode) ||
       (payload.interjected ? "interject" : dispatchMode);
+    const payloadRequestId = String(payload.requestId || payload.queueId || "").trim();
+    const handoffPending = Boolean(payload.handoffPending) && !payload.interjected;
 
     updateThreadEntry(entry.id, {
-      requestId: String(payload.requestId || "").trim(),
+      requestId: payloadRequestId,
+      queueId: String(payload.queueId || "").trim() || null,
+      requestState: String(payload.requestState || (handoffPending ? "starting" : "running")).trim().toLowerCase(),
+      handoffPending,
       scheduleMode: effectiveScheduleMode,
       attachments: Array.isArray(payload.attachments) && payload.attachments.length > 0
         ? payload.attachments
@@ -13735,6 +13769,8 @@ async function handleDispatch(event) {
     if (payload.interjected) {
       completeThreadEntry(entryById(entry.id) || entry, {
         status: "answered",
+        requestState: "interjected",
+        handoffPending: false,
         scheduleMode: "interject",
         answeredAt: new Date().toISOString(),
         response: "Interjected into the active Codex turn.",
@@ -13758,6 +13794,8 @@ async function handleDispatch(event) {
   } catch (error) {
     completeThreadEntry(entry, {
       status: "failed",
+      requestState: "failed",
+      handoffPending: false,
       answeredAt: new Date().toISOString(),
       response: error.message,
       seenAt: null,
