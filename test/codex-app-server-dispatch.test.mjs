@@ -193,6 +193,45 @@ function handle(message) {
         });
       }, 10);
     }
+    if (behavior === "slow-tool-complete") {
+      setTimeout(() => {
+        send({
+          method: "item/started",
+          params: {
+            threadId: "thread-test",
+            turnId: "turn-test",
+            item: { id: "tool-slow", type: "mcpToolCall", status: "in_progress" },
+          },
+        });
+      }, 10);
+      setTimeout(() => {
+        send({
+          method: "item/completed",
+          params: {
+            threadId: "thread-test",
+            turnId: "turn-test",
+            item: { id: "tool-slow", type: "mcpToolCall", status: "completed" },
+          },
+        });
+      }, 110);
+      setTimeout(() => {
+        send({
+          method: "item/completed",
+          params: {
+            threadId: "thread-test",
+            turnId: "turn-test",
+            item: { type: "agentMessage", phase: "final_answer", text: "tool completed response" },
+          },
+        });
+        send({
+          method: "turn/completed",
+          params: {
+            threadId: "thread-test",
+            turn: { id: "turn-test", status: "completed" },
+          },
+        });
+      }, 130);
+    }
     if (
       behavior === "complete" ||
       behavior === "delta" ||
@@ -337,6 +376,39 @@ test("codex app-server dispatch recovers partial text when a connector tool stop
     assert.match(payload.result_text, /no live progress/u);
     assert.match(payload.result_text, /connector\/tool call/u);
     assert.match(payload.result_text, /partial progress before stall/u);
+  });
+});
+
+test("codex app-server dispatch allows quiet connector tools when tool idle timeout is disabled", async () => {
+  await withTempDir(async (root) => {
+    const fakeCodex = await writeFakeCodexBinary(root, "slow-tool-complete");
+    const result = await execFileCapture(process.execPath, [
+      dispatchScript,
+      "--project-path",
+      root,
+      "--message",
+      "hello",
+      "--session-id",
+      "thread-test",
+      "--session-seeded",
+      "--codex-binary",
+      fakeCodex,
+      "--turn-timeout-ms",
+      "5000",
+      "--turn-idle-timeout-ms",
+      "5000",
+      "--tool-idle-timeout-ms",
+      "0",
+      "--request-timeout-ms",
+      "2000",
+    ], { timeout: 10000 });
+
+    assert.equal(result.stderr, "");
+    assert.equal(result.exitCode, 0);
+    const payload = JSON.parse(result.stdout.trim());
+    assert.equal(payload.ok, true);
+    assert.equal(payload.recovered, undefined);
+    assert.equal(payload.result_text, "tool completed response");
   });
 });
 

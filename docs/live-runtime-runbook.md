@@ -65,9 +65,14 @@ curl -sS -X POST http://127.0.0.1:4477/v1/dispatch \
 
 A successful accepted response must include `requestId`. If `handoffPending` is true, the app should keep the card in `Starting` and reconcile through status/read polling.
 
+## Connector Tool Stalls
+
+Clawdad keeps a normal turn timeout and a normal turn-idle timeout, but connector/tool-specific idle recovery is disabled by default. Some Codex connectors can be quiet while they are still making real progress, so `CLAWDAD_CODEX_TOOL_IDLE_TIMEOUT_MS` should only be set for controlled smoke tests or known-safe environments.
+
 ## Common Failure Shapes
 
 - Source tests pass but the app still behaves old: reinstall the package, restart the LaunchAgent, and verify `/healthz`.
 - `sessions-doctor` has historical issues but `activeBlockerCount` is zero: the app is not actively blocked, but cleanup is still owed.
 - `/v1/dispatch` accepts a message without a request id: this is a release blocker.
 - `/v1/projects` fails while `/healthz` passes: check auth headers, Tailscale identity, and the server config allowlist.
+- A casual message receives stale task text: verify the selected project session, then switch away from old delegate/task threads before testing transport.
