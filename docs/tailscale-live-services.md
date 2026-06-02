@@ -1,11 +1,11 @@
 # Tailscale Live Services
 
-Clawdad, Cmail, and Dumpy keep their original device URLs live as compatibility
-routes, and use durable Tailscale Services as the primary phone URLs.
+Clawdad, Cmail, and Dumpy use durable Tailscale Services as the primary phone
+URLs. Older device URLs can exist as compatibility routes, but the bare Mac
+hostname may be owned by an unrelated app or Funnel route.
 
-Current compatibility URLs:
+Current legacy device URLs:
 
-- Clawdad: `https://codys-mac-studio-1.tail649edd.ts.net`
 - Cmail: `https://codys-mac-studio-1.tail649edd.ts.net:4311`
 - Dumpy: `https://codys-mac-studio-1.tail649edd.ts.net:7331`
 
@@ -102,8 +102,8 @@ Advertise the live app Services:
   serve --yes --service=svc:dumpy --https=443 http://127.0.0.1:7331
 ```
 
-Verify both compatibility and durable URLs after any Tailscale policy or Serve
-change.
+Verify the durable URLs after any Tailscale policy or Serve change. Treat
+device-host compatibility routes as optional and app-specific.
 
 ## Startup Orchestration
 
