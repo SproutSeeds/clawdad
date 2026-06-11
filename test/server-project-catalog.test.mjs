@@ -1210,7 +1210,8 @@ test("sessions endpoint creates a new local Codex placeholder for the dropdown",
         version: 3,
         projects: {
           [projectPath]: {
-            status: "idle",
+            status: "failed",
+            last_response: "2026-05-03T07:33:12Z",
             active_session_id: existingSessionId,
             sessions: {
               [existingSessionId]: {
@@ -1219,12 +1220,29 @@ test("sessions endpoint creates a new local Codex placeholder for the dropdown",
                 provider_session_seeded: "false",
                 tracked_at: "2026-05-03T07:01:12Z",
                 last_selected_at: "2026-05-03T07:01:12Z",
-                status: "idle",
+                last_response: "2026-05-03T07:33:12Z",
+                status: "failed",
                 local_only: "true",
               },
             },
           },
         },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    path.join(projectPath, ".clawdad", "mailbox", "status.json"),
+    JSON.stringify(
+      {
+        state: "failed",
+        request_id: "old-timeout",
+        session_id: existingSessionId,
+        completed_at: "2026-05-03T07:33:12Z",
+        error: "codex turn did not complete within 1800s",
+        pid: null,
       },
       null,
       2,
@@ -1284,8 +1302,13 @@ test("sessions endpoint creates a new local Codex placeholder for the dropdown",
     assert.ok(payload.sessionId);
     assert.equal(payload.session.providerSessionSeeded, false);
     assert.equal(payload.session.localOnly, true);
+    assert.equal(payload.codexIntegration.ok, true);
+    assert.equal(payload.codexIntegration.failCount, 0);
+    assert.ok(payload.codexIntegration.operationCount > 0);
+    assert.equal(payload.projectDetails.status, "idle");
     assert.equal(payload.projectDetails.activeSessionId, payload.sessionId);
     assert.equal(payload.projectDetails.activeSession.sessionId, payload.sessionId);
+    assert.equal(payload.projectDetails.activeSession.status, "idle");
     assert.equal(
       payload.projectDetails.sessions.find((session) => session.sessionId === payload.sessionId).active,
       true,
@@ -1296,8 +1319,29 @@ test("sessions endpoint creates a new local Codex placeholder for the dropdown",
     );
 
     const state = JSON.parse(await readFile(path.join(home, "state.json"), "utf8"));
+    assert.equal(state.projects[projectPath].status, "idle");
     assert.equal(state.projects[projectPath].active_session_id, payload.sessionId);
     assert.equal(state.projects[projectPath].sessions[payload.sessionId].provider_session_seeded, "false");
+    assert.equal(state.projects[projectPath].sessions[existingSessionId].status, "failed");
+    assert.match(
+      await readFile(path.join(projectPath, "AGENTS.md"), "utf8"),
+      /BEGIN CLAWDAD CODEX INTEGRATION/u,
+    );
+    assert.match(
+      await readFile(path.join(projectPath, ".codex", "config.toml"), "utf8"),
+      /hooks = true/u,
+    );
+    assert.match(
+      await readFile(path.join(projectPath, ".codex", "hooks.json"), "utf8"),
+      /clawdad-hook\.mjs/u,
+    );
+    assert.match(
+      await readFile(
+        path.join(projectPath, ".agents", "skills", "clawdad-incident-triage", "SKILL.md"),
+        "utf8",
+      ),
+      /Clawdad failures/u,
+    );
   } finally {
     await stopServer(child);
     await rm(root, { recursive: true, force: true });
@@ -2370,6 +2414,113 @@ test("sessions-doctor repairs a stale failed mailbox for an otherwise idle activ
     assert.equal(mailboxStatus.state, "idle");
     assert.equal(mailboxStatus.request_id, null);
     assert.equal(mailboxStatus.error, null);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("sessions-doctor repairs a stale failed mailbox from an old non-active session", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-old-failed-mailbox-"));
+  const home = path.join(root, "home");
+  const projectPath = path.join(root, "erdos-problems");
+  const activeSessionId = "019dfe60-3e67-7b83-a0ae-b975c4752e19";
+  const oldSessionId = "019eb6d0-612c-7821-a784-d6a289f74128";
+
+  await mkdir(path.join(projectPath, ".clawdad", "mailbox"), { recursive: true });
+  await mkdir(home, { recursive: true });
+  await writeFile(
+    path.join(projectPath, ".clawdad", "mailbox", "status.json"),
+    JSON.stringify(
+      {
+        state: "failed",
+        request_id: "request-timeout",
+        session_id: oldSessionId,
+        dispatched_at: "2026-06-11T17:01:51Z",
+        completed_at: "2026-06-11T17:31:58Z",
+        error: "codex turn did not complete within 1800s",
+        pid: null,
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    path.join(home, "state.json"),
+    JSON.stringify(
+      {
+        version: 3,
+        projects: {
+          [projectPath]: {
+            status: "failed",
+            active_session_id: activeSessionId,
+            sessions: {
+              [activeSessionId]: {
+                slug: "What do you think about the 848 progress and...",
+                provider: "codex",
+                provider_session_seeded: "false",
+                status: "idle",
+                local_only: "true",
+              },
+              [oldSessionId]: {
+                slug: "Recent failed timeout",
+                provider: "codex",
+                provider_session_seeded: "false",
+                status: "failed",
+                local_only: "true",
+              },
+            },
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  try {
+    const audit = await runServerCli([
+      "sessions-doctor",
+      projectPath,
+      "--json",
+    ], {
+      env: {
+        CLAWDAD_HOME: home,
+      },
+    });
+    assert.equal(audit.exitCode, 1, audit.stderr);
+    const auditPayload = JSON.parse(audit.stdout);
+    assert.equal(auditPayload.projects[0].issues[0].type, "stale_failed_mailbox");
+    assert.equal(auditPayload.projects[0].issues[0].sessionId, activeSessionId);
+    assert.equal(auditPayload.projects[0].issues[0].mailboxSessionId, oldSessionId);
+
+    const repair = await runServerCli([
+      "sessions-doctor",
+      projectPath,
+      "--repair",
+      "--json",
+    ], {
+      env: {
+        CLAWDAD_HOME: home,
+      },
+    });
+    assert.equal(repair.exitCode, 0, repair.stderr);
+    const repairPayload = JSON.parse(repair.stdout);
+    assert.equal(repairPayload.projects[0].repairs[0].type, "stale_failed_mailbox_reset");
+
+    const mailboxStatus = JSON.parse(
+      await readFile(path.join(projectPath, ".clawdad", "mailbox", "status.json"), "utf8"),
+    );
+    assert.equal(mailboxStatus.state, "idle");
+    assert.equal(mailboxStatus.request_id, null);
+    assert.equal(mailboxStatus.error, null);
+
+    const state = JSON.parse(await readFile(path.join(home, "state.json"), "utf8"));
+    assert.equal(state.projects[projectPath].status, "idle");
+    assert.equal(state.projects[projectPath].active_session_id, activeSessionId);
+    assert.equal(state.projects[projectPath].sessions[activeSessionId].status, "idle");
+    assert.equal(state.projects[projectPath].sessions[oldSessionId].status, "failed");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -6200,7 +6351,7 @@ test("projects endpoint skips background Codex discovery when sessions are alrea
   }
 });
 
-test("existing README-only directories can be selected and registered locally", async () => {
+test("existing README-only directories can be selected, registered locally, and made Codex-ready", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-local-create-"));
   const home = path.join(root, "home");
   const projectRoot = path.join(root, "code");
@@ -6332,11 +6483,33 @@ sleep 10
     assert.equal(createPayload.projectPath, canonicalLocalProjectPath);
     assert.equal(createPayload.projectDetails.activeSession.localOnly, true);
     assert.equal(createPayload.projectDetails.activeSession.providerSessionSeeded, false);
+    assert.equal(createPayload.codexIntegration.ok, true);
+    assert.equal(createPayload.codexIntegration.failCount, 0);
+    assert.ok(createPayload.codexIntegration.operationCount > 0);
 
     const state = JSON.parse(await readFile(path.join(home, "state.json"), "utf8"));
     assert.equal(state.projects[canonicalLocalProjectPath].active_session_id, createPayload.sessionId);
     assert.equal(state.projects[canonicalLocalProjectPath].sessions[createPayload.sessionId].provider, "codex");
     assert.equal(state.projects[canonicalLocalProjectPath].sessions[createPayload.sessionId].local_only, "true");
+    assert.match(
+      await readFile(path.join(canonicalLocalProjectPath, "AGENTS.md"), "utf8"),
+      /BEGIN CLAWDAD CODEX INTEGRATION/u,
+    );
+    assert.match(
+      await readFile(path.join(canonicalLocalProjectPath, ".codex", "config.toml"), "utf8"),
+      /hooks = true/u,
+    );
+    assert.match(
+      await readFile(path.join(canonicalLocalProjectPath, ".codex", "hooks.json"), "utf8"),
+      /clawdad-hook\.mjs/u,
+    );
+    assert.match(
+      await readFile(
+        path.join(canonicalLocalProjectPath, ".agents", "skills", "clawdad-incident-triage", "SKILL.md"),
+        "utf8",
+      ),
+      /name: clawdad-incident-triage/u,
+    );
     await assert.rejects(readFile(invokedPath, "utf8"), { code: "ENOENT" });
   } finally {
     await stopServer(child);

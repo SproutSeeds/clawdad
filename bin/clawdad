@@ -142,6 +142,19 @@ run_server_helper() {
   "$CLAWDAD_NODE" "$CLAWDAD_ROOT/lib/server.mjs" "$@"
 }
 
+ensure_codex_integration_installed() {
+  local project_path="$1" provider="${2:-codex}"
+  if [[ "$provider" != "codex" ]]; then
+    return 0
+  fi
+
+  if run_server_helper codex install "$project_path" --skip-hook-trust --json >/dev/null 2>&1; then
+    clawdad_info "Installed Codex integration for $project_path"
+  else
+    clawdad_warn "Registered $project_path, but Codex integration install failed. Run: clawdad codex doctor $project_path"
+  fi
+}
+
 cmd_init() {
   require_jq
   require_orp
@@ -249,6 +262,7 @@ cmd_register() {
 
   # Initialize mailbox
   mailbox_init "$project_path"
+  ensure_codex_integration_installed "$project_path" "$provider"
 
   if [[ "$provider" == "codex" && "$session_seeded" == "true" ]]; then
     clawdad_info "Registered: $slug -> $project_path (provider: $provider, adopted native session: $session_id)"
@@ -370,6 +384,7 @@ cmd_add_session() {
 
   registry_add "$project_path" "$session_id" "$slug" "" "$provider" "$session_seeded"
   mailbox_init "$project_path"
+  ensure_codex_integration_installed "$project_path" "$provider"
 
   if [[ "$provider" == "codex" && "$session_seeded" == "true" ]]; then
     clawdad_info "Added session: $slug -> $project_path (provider: $provider, adopted native session: $session_id)"

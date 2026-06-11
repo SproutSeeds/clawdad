@@ -394,6 +394,7 @@ state_set_active_session() {
       | .projects[$path].sessions = (.projects[$path].sessions // {})
       | if (.projects[$path].sessions[$session] // null) != null then
           .projects[$path].sessions[$session].last_selected_at = $ts
+          | .projects[$path].status = (.projects[$path].sessions[$session].status // "idle")
         else
           .
         end

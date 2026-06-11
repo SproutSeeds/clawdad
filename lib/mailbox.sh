@@ -128,8 +128,12 @@ Exit code: $exit_code
 
 $content
 EOF
-)
+  )
 
+  if [[ "$exit_code" != "0" ]] && mailbox_request_is_completed "$project_path" "$request_id"; then
+    clawdad_log "Skipped late failed response for completed request $request_id"
+    return 0
+  fi
   _mailbox_write_file "$mbox/response.md" "$payload" || return 1
 
   clawdad_log "Wrote response $request_id to $mbox/response.md"
@@ -200,8 +204,12 @@ mailbox_update_status() {
         error: $error,
         pid: $pid
       }'
-  ) || return 1
+	  ) || return 1
 
+  if [[ "$state" == "failed" ]] && mailbox_request_is_completed "$project_path" "$request_id"; then
+    clawdad_log "Skipped late failed status for completed request $request_id"
+    return 0
+  fi
   _mailbox_write_file "$mbox/status.json" "$payload" || return 1
 }
 
