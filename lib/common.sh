@@ -46,6 +46,9 @@ if [[ -z "${CLAWDAD_CHIMERA:-}" ]]; then
   fi
 fi
 CLAWDAD_CHIMERA_MODEL="${CLAWDAD_CHIMERA_MODEL:-local}"
+CLAWDAD_CLAUDE="${CLAWDAD_CLAUDE:-claude}"
+CLAWDAD_CLAUDE_MODEL="${CLAWDAD_CLAUDE_MODEL:-}"
+CLAWDAD_CLAUDE_TURN_TIMEOUT_MS="${CLAWDAD_CLAUDE_TURN_TIMEOUT_MS:-1800000}"
 CLAWDAD_TMUX="${CLAWDAD_TMUX:-/opt/homebrew/bin/tmux}"
 
 # Listener defaults
@@ -62,7 +65,7 @@ CLAWDAD_SERVER_ALLOW_TAGGED_DEVICES="${CLAWDAD_SERVER_ALLOW_TAGGED_DEVICES:-fals
 CLAWDAD_SERVER_HTTPS_PORT="${CLAWDAD_SERVER_HTTPS_PORT:-443}"
 
 # Supported providers
-CLAWDAD_PROVIDERS=("codex" "chimera")
+CLAWDAD_PROVIDERS=("codex" "chimera" "claude")
 
 require_jq() {
   if ! command -v "$CLAWDAD_JQ" &>/dev/null; then
@@ -92,6 +95,7 @@ require_provider() {
   case "$provider" in
     codex)  binary="$CLAWDAD_CODEX" ;;
     chimera) binary="$CLAWDAD_CHIMERA" ;;
+    claude) binary="$CLAWDAD_CLAUDE" ;;
     *)
       echo "error: unknown provider '$provider' (supported: ${CLAWDAD_PROVIDERS[*]})" >&2
       exit 1

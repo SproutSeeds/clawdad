@@ -325,6 +325,7 @@ clawdad dispatches to the right CLI based on the active session's `resumeTool`:
 | Provider | Interactive (human) | Non-interactive (clawdad) |
 |----------|-------------------|--------------------------|
 | Codex | `codex` or `codex resume <id>` | Native saved Codex thread created or adopted per repo, then Clawdad resumes that same thread programmatically |
+| Claude Code | `claude` or `claude --resume <id>` | `claude -p --session-id <id>` creates the session on first dispatch, then `claude -p --resume <id>` continues the same session |
 | Chimera | `chimera --resume <id>` | `chimera --model local --prompt "msg" --resume <id> --json` after Clawdad seeds and maintains the session file |
 
 Chimera is Clawdad's local-first provider lane. Install `chimera-sigil` or keep a
@@ -340,6 +341,7 @@ local lane needs a quick health check. See [Chimera Local Lane](docs/chimera-loc
 - sqlite3 with FTS5
 - orp CLI >= 0.4.27 (workspace tab management and delegate preflight)
 - codex CLI
+- claude CLI from Claude Code (optional Anthropic provider)
 - chimera CLI from `chimera-sigil` (optional local-first provider)
 - tmux (for watch daemon mode)
 
@@ -414,6 +416,38 @@ Permission modes map to Codex sandbox behavior like this:
 - `plan` -> read-only sandbox with no network access
 - `approve` -> workspace-write sandbox with network access enabled for unattended remote work
 - `full` -> danger-full-access
+
+## Claude Session Notes
+
+For Claude Code-backed projects, Clawdad pre-generates a session UUID at
+register time and creates the real Claude session on first dispatch with
+`claude -p --session-id <id>`. Later dispatches resume that same session with
+`claude -p --resume <id>`. Claude session ids stay stable across resumes, so
+the session you drive from your phone is the same one `claude --resume <id>`
+opens in a terminal inside that repo.
+
+```bash
+clawdad register ~/code/my-project --provider claude
+clawdad dispatch my-project "Summarize this repo." --wait
+```
+
+Claude sessions are stored by Claude Code under `~/.claude/projects/`, and
+ORP tracks them natively with `resumeTool: claude`. Headless dispatches use
+your existing Claude Code login and share the same subscription usage pool as
+interactive Claude Code work. If the Clawdad service cannot reach your
+keychain credentials, mint a token with `claude setup-token` and set
+`CLAUDE_CODE_OAUTH_TOKEN` in the service environment.
+
+Permission modes map to Claude Code like this:
+
+- `plan` -> `--permission-mode plan` (read-only analysis)
+- `approve` -> `--permission-mode bypassPermissions` for unattended remote work
+- `full` -> `--permission-mode bypassPermissions`
+
+Claude Code PreToolUse hooks (such as damage-control allow/deny rules) still
+run in every permission mode, so hook-based guardrails remain active even in
+`bypassPermissions`. Set `CLAWDAD_CLAUDE_MODEL` to pin a model; by default
+dispatches use the account's configured default model.
 
 ## Chimera Session Notes
 

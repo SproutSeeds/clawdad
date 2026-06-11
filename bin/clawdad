@@ -70,11 +70,11 @@ Commands:
 Options for register:
   --slug <name>                 Custom slug (default: directory basename)
   --description <text>          Project description
-  --provider <name>             AI provider: codex or chimera (default: codex)
+  --provider <name>             AI provider: codex, chimera, or claude (default: codex)
 
 Options for add-session:
   --slug <name>                 Custom session label
-  --provider <name>             AI provider: codex or chimera (default: codex)
+  --provider <name>             AI provider: codex, chimera, or claude (default: codex)
 
 Options for track-session:
   --slug <name>                 Custom session label
@@ -124,6 +124,8 @@ Environment:
   CLAWDAD_CHIMERA_MODEL         Default Chimera model/profile (default: local)
   CLAWDAD_CHIMERA_LOCAL_OLLAMA_BASE_URL Local Ollama base URL for Mac fallback
   CLAWDAD_CHIMERA_4090_OLLAMA_BASE_URL  Ollama base URL for 4090/workstation profiles
+  CLAWDAD_CLAUDE                Claude Code CLI binary (default: claude)
+  CLAWDAD_CLAUDE_MODEL          Default Claude model (default: account default)
   CLAWDAD_ORP_WORKSPACE         ORP workspace name (default: main)
   CLAWDAD_SERVER_HOST           Listener host (default: 127.0.0.1)
   CLAWDAD_SERVER_PORT           Listener port (default: 4477)
@@ -188,7 +190,7 @@ choose_provider_session_seed() {
   fi
 
   session_id=$(gen_uuid)
-  if [[ "$provider" == "codex" || "$provider" == "chimera" ]]; then
+  if [[ "$provider" == "codex" || "$provider" == "chimera" || "$provider" == "claude" ]]; then
     session_seeded="false"
   fi
   echo "$session_id"$'\t'"$session_seeded"
@@ -212,7 +214,7 @@ cmd_register() {
   done
 
   if [[ -z "$project_path" ]]; then
-    clawdad_error "Usage: clawdad register <path> [--slug <name>] [--provider <codex|chimera>]"
+    clawdad_error "Usage: clawdad register <path> [--slug <name>] [--provider <codex|chimera|claude>]"
     return 1
   fi
 
@@ -335,7 +337,7 @@ cmd_add_session() {
   done
 
   if [[ -z "$input" ]]; then
-    clawdad_error "Usage: clawdad add-session <project> [--slug <name>] [--provider <codex|chimera>]"
+    clawdad_error "Usage: clawdad add-session <project> [--slug <name>] [--provider <codex|chimera|claude>]"
     return 1
   fi
 

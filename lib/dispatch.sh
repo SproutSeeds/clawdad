@@ -76,6 +76,37 @@ _build_cmd_chimera() {
 
 }
 
+_build_cmd_claude() {
+  local project_path="$1" message="$2" session_id="$3" session_seeded="$4"
+  local permission_mode="$5" model="$6"
+  local claude_model="${model:-$CLAWDAD_CLAUDE_MODEL}"
+
+  require_node
+
+  cmd=(
+    "$CLAWDAD_NODE"
+    "$CLAWDAD_ROOT/lib/claude-dispatch.mjs"
+    "--project-path" "$project_path"
+    "--message" "$message"
+    "--session-id" "$session_id"
+    "--permission-mode" "$permission_mode"
+    "--claude-binary" "$CLAWDAD_CLAUDE"
+  )
+
+  if [[ -n "$claude_model" ]]; then
+    cmd+=("--model" "$claude_model")
+  fi
+
+  if [[ "$session_seeded" == "true" ]]; then
+    cmd+=("--session-seeded")
+  fi
+
+  local turn_timeout_ms="${CLAWDAD_CLAUDE_TURN_TIMEOUT_MS:-${CLAWDAD_WORKER_TIMEOUT_MS:-1800000}}"
+  if [[ -n "$turn_timeout_ms" ]]; then
+    cmd+=("--turn-timeout-ms" "$turn_timeout_ms")
+  fi
+}
+
 _build_dispatch_command() {
   local project_path="$1" message="$2" session_id="$3" dispatch_count="$4"
   local provider="$5" session_seeded="$6" permission_mode="$7" model="$8" attachment_manifest="${9:-}"
@@ -88,6 +119,9 @@ _build_dispatch_command() {
       ;;
     chimera)
       _build_cmd_chimera "$project_path" "$message" "$session_id" "$session_seeded" "$permission_mode" "$model"
+      ;;
+    claude)
+      _build_cmd_claude "$project_path" "$message" "$session_id" "$session_seeded" "$permission_mode" "$model"
       ;;
     *)
       clawdad_error "Unknown provider: $provider"
@@ -235,6 +269,21 @@ _clear_codex_transport_failure() {
 _extract_result_chimera() {
   local output="$1"
   printf '%s' "$output" | "$CLAWDAD_JQ" -r '.result_text // ""' 2>/dev/null
+}
+
+_extract_result_claude() {
+  local output="$1"
+  printf '%s' "$output" | "$CLAWDAD_JQ" -r '.result_text // ""' 2>/dev/null
+}
+
+_extract_claude_session_id() {
+  local output="$1"
+  printf '%s' "$output" | "$CLAWDAD_JQ" -r '.session_id // ""' 2>/dev/null
+}
+
+_extract_claude_error_text() {
+  local output="$1"
+  printf '%s' "$output" | "$CLAWDAD_JQ" -r '.error_text // ""' 2>/dev/null
 }
 
 _extract_chimera_session_id() {
@@ -507,6 +556,18 @@ _dispatch_background() {
         fi
       fi
     fi
+  elif [[ "$provider" == "claude" ]]; then
+    local claude_session_id
+    claude_session_id=$(_extract_claude_session_id "$output")
+    if [[ -n "$claude_session_id" && "$claude_session_id" != "null" ]]; then
+      effective_session_id="$claude_session_id"
+      if [[ "$claude_session_id" != "$session_id" || "$session_seeded" != "true" ]]; then
+        if registry_set_resume_session "$project_path" "$slug" "$provider" "$session_id" "$claude_session_id"; then
+        else
+          clawdad_log "dispatch warning: failed to persist Claude session id for $slug request_id=$request_id session=$claude_session_id"
+        fi
+      fi
+    fi
   fi
 
   if (( exit_code == 0 )); then
@@ -515,6 +576,7 @@ _dispatch_background() {
     case "$provider" in
       codex)  result_text=$(_extract_result_codex "$output") ;;
       chimera) result_text=$(_extract_result_chimera "$output") ;;
+      claude) result_text=$(_extract_result_claude "$output") ;;
       *)      result_text="$output" ;;
     esac
 
@@ -550,6 +612,10 @@ _dispatch_background() {
         error_msg=$(_extract_chimera_error_text "$output")
         [[ -n "$error_msg" ]] || error_msg=$(echo "$output" | tail -5)
         ;;
+      claude)
+        error_msg=$(_extract_claude_error_text "$output")
+        [[ -n "$error_msg" ]] || error_msg=$(echo "$output" | tail -5)
+        ;;
       *)
         error_msg=$(echo "$output" | tail -5)
         ;;
@@ -563,7 +629,7 @@ _dispatch_background() {
     fi
 
     case "$provider" in
-      chimera)
+      chimera|claude)
         mailbox_write_response "$project_path" "$request_id" "$effective_session_id" "$exit_code" "${error_msg:-$output}"
         ;;
       *)

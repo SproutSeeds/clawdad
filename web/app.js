@@ -2922,7 +2922,11 @@ function historyItemsHaveSameSyntheticRequestId(left, right) {
 
 function isSyntheticHistoryRequestId(value) {
   const requestId = String(value || "").trim();
-  return requestId.startsWith("codex:") || requestId.startsWith("chimera:");
+  return (
+    requestId.startsWith("codex:") ||
+    requestId.startsWith("chimera:") ||
+    requestId.startsWith("claude:")
+  );
 }
 
 function stripClawdadHistoryHandoff(value) {

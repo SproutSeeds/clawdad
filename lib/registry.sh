@@ -624,7 +624,7 @@ _registry_default_session_seeded() {
     return 0
   fi
 
-  if [[ "$provider" == "codex" || "$provider" == "chimera" ]]; then
+  if [[ "$provider" == "codex" || "$provider" == "chimera" || "$provider" == "claude" ]]; then
     echo "false"
   else
     echo "true"
@@ -1012,7 +1012,7 @@ _registry_tabs_for_path_tsv() {
       | select(
           .path == $path
           and (.resumeSessionId // "") != ""
-          and (((.resumeTool // "codex") == "codex") or ((.resumeTool // "codex") == "chimera"))
+          and ((.resumeTool // "codex") as $tool | ($tool == "codex" or $tool == "chimera" or $tool == "claude"))
         )
       | [(.resumeSessionId // ""), (.title // (.path | split("/") | last)), (.resumeTool // "codex")]
       | @tsv'
@@ -1031,7 +1031,7 @@ registry_session_exists() {
       | select(
           .path == $path
           and (.resumeSessionId // "") == $session
-          and (((.resumeTool // "codex") == "codex") or ((.resumeTool // "codex") == "chimera"))
+          and ((.resumeTool // "codex") as $tool | ($tool == "codex" or $tool == "chimera" or $tool == "claude"))
         )
       | .resumeSessionId' | head -1)
   if [[ -n "$match" ]]; then
@@ -1196,6 +1196,7 @@ registry_local_session_json() {
             }
             + (if $provider == "codex" then { codexSessionId: $entry.key } else {} end)
             + (if $provider == "chimera" then { chimeraSessionId: $entry.key } else {} end)
+            + (if $provider == "claude" then { claudeSessionId: $entry.key } else {} end)
         end
     ' "$CLAWDAD_STATE" 2>/dev/null || true)
 
@@ -1300,7 +1301,7 @@ registry_session_json() {
         .tabs[]
         | select(
             .path == $path
-            and (((.resumeTool // "codex") == "codex") or ((.resumeTool // "codex") == "chimera"))
+            and ((.resumeTool // "codex") as $tool | ($tool == "codex" or $tool == "chimera" or $tool == "claude"))
             and (($quarantined[.resumeSessionId] // null) == null)
             and (($session_state[.resumeSessionId].quarantined // "false") != "true")
           )
@@ -1346,7 +1347,7 @@ registry_list_sessions_json() {
             | select(
                 .path == $path
                 and (.resumeSessionId // "") != ""
-                and (((.resumeTool // "codex") == "codex") or ((.resumeTool // "codex") == "chimera"))
+                and ((.resumeTool // "codex") as $tool | ($tool == "codex" or $tool == "chimera" or $tool == "claude"))
                 and (($quarantined[.resumeSessionId] // null) == null)
                 and (($session_state[.resumeSessionId].quarantined // "false") != "true")
               )
@@ -1499,7 +1500,7 @@ registry_has_tracked_session_for_path() {
       | select(
           .path == $path
           and (.resumeSessionId // "") != ""
-          and (((.resumeTool // "codex") == "codex") or ((.resumeTool // "codex") == "chimera"))
+          and ((.resumeTool // "codex") as $tool | ($tool == "codex" or $tool == "chimera" or $tool == "claude"))
         )
       | .resumeSessionId' | head -1)
   if [[ -n "$match" ]]; then
@@ -1511,7 +1512,7 @@ registry_has_tracked_session_for_path() {
       --arg path "$project_path" '
         (.projects[$path].sessions // {})
         | to_entries[]?
-        | select((.value.provider // "") == "codex" or (.value.provider // "") == "chimera")
+        | select((.value.provider // "") as $p | ($p == "codex" or $p == "chimera" or $p == "claude"))
         | .key
       ' "$CLAWDAD_STATE" 2>/dev/null | head -1)
     [[ -n "$match" ]] && return 0
