@@ -53,8 +53,10 @@ Prepared: 2026-07-30
 - Two canonical 6.9-inch App Store screenshots are reproducible from synthetic
   in-memory data, opaque, visually reviewed at `1290x2796`, and uploaded in
   order to the draft App Store version with `COMPLETE` processing state.
-- The connected iPhone remains on `0.1.0 (15)`. Physical certification begins
-  after TestFlight updates it to `0.7.0 (19)`.
+- The connected iPhone remains on development build `0.1.0 (15)`, and the
+  TestFlight app is not currently installed. Physical certification begins
+  after a clean removal of build 15, TestFlight installation, and installation
+  of `0.7.0 (19)` from `ClawDad Internal`.
 - The existing Cloudflare deployment token is healthy for Workers deployment
   but lacks `Calls Write`; TURN activation needs a narrowly scoped token.
 - Session Doctor is healthy apart from four missing historical project paths

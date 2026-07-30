@@ -10,7 +10,9 @@
 5. Publish the npm beta, Git tag, GitHub prerelease, Mac ZIP, DMG, and appcast.
 6. Install the published package and Mac app on the host and verify local and
    public health.
-7. Install build 19 from TestFlight on the iPhone.
+7. Remove any development-signed ClawDad build from the iPhone, install
+   TestFlight from the App Store when needed, then install build 19 from
+   `ClawDad Internal`.
 8. Run `npm run certify:snapshot` and confirm `deviceBuildReady` is `true`
    before testing app behavior.
 9. Generate a fresh pairing QR from Mac Settings and pair the phone.

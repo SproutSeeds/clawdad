@@ -40,7 +40,7 @@ problem; use `pending` to clear a result for a fresh rerun.
 | TestFlight processing | Pass | App Store Connect build 19 is `VALID`, export-compliance complete, localized, and assigned to `ClawDad Internal`; private external group `ClawDad Founding Customers` is prepared with no build or public link |
 | Mac signing and notarization | Pass | `npm run native:release`; beta.4 app `0.7.0 (19)`, ZIP, and DMG are signed, notarized, stapled, Gatekeeper-accepted, and checksum-verified |
 | Persisted event privacy | Pass | Integration coverage redacts credentials before event and live-checkpoint writes; the local JSONL history scan contains no token-shaped or plaintext authorization values |
-| Package contents | Pass | The exact tagged beta.4 reconstruction is 207 files with shasum `b38f32333bcb60ef55d853c69c0bdb2a00cf5bfc`; the post-release branch dry run is 208 files with shasum `81a7b59e79cef3d30ac91f33c97cb1549214c489`, including the App Store screenshot command and excluding wordmark explorations |
+| Package contents | Pass | The immutable published beta.4 artifact is 207 files with shasum `b38f32333bcb60ef55d853c69c0bdb2a00cf5bfc`; the post-release branch dry run remains a distinct 208-file package containing release-certification tooling and excluding wordmark explorations |
 | Cloud public health | Pass | Production `/healthz`, `/support`, `/privacy`, and `/mac/appcast.xml` returned HTTP 200 after the final Worker upload; script settings report Logpush off and observability absent/disabled |
 
 ## Physical iPhone And Mac
