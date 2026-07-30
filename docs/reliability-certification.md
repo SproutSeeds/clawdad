@@ -19,10 +19,10 @@ paths. Service-health fields are allow-listed so project paths are excluded.
 | iPhone Swift unit suite | Pass | `swift test --package-path apps/ios/ClawDadMobile`: 13 tests passed |
 | Mac Swift unit suite | Pass | `swift test --package-path native/macos`: 8 tests passed |
 | Simulator build | Pass | `npm run ios:build` completed for the final build-19 source |
-| Certification snapshot | Pass | `npm run certify:snapshot` wrote a mode-`0600` privacy-safe artifact; npm, Mac, cloud, public pages, and TestFlight are ready, while the connected iPhone correctly reports build 15 instead of candidate build 19 |
+| Certification snapshot | Pass | `npm run certify:snapshot` writes a mode-`0600`, path-free artifact and fails readiness closed when published, installed, or connected-device versions differ |
 | Signed iPhone archive | Pass | `npm run ios:archive`; `ClawDadMobile.xcarchive` is version 0.7.0, build 19, and passes strict code-signature validation |
 | TestFlight processing | Pass | App Store Connect build 19 is `VALID`, export-compliance complete, localized, and assigned to `ClawDad Internal` |
-| Mac signing and notarization | Pass | `npm run native:release`; beta.2 app, ZIP, and DMG are signed, notarized, and stapled |
+| Mac signing and notarization | Pass | `npm run native:release`; beta.3 app `0.7.0 (18)`, ZIP, and DMG are signed, notarized, stapled, and checksum-verified |
 | Package contents | Pass | `npm pack --dry-run --json` completed successfully |
 | Cloud public health | Pass | Production `/healthz`, `/support`, and `/privacy` returned HTTP 200 after the final worker upload |
 
