@@ -15,7 +15,7 @@ paths. Service-health fields are allow-listed so project paths are excluded.
 
 | Check | State | Evidence |
 | --- | --- | --- |
-| Node integration suite | Pass | `npm test`: 381 tests passed |
+| Node integration suite | Pass | `npm test`: 382 tests passed |
 | iPhone Swift unit suite | Pass | `swift test --package-path apps/ios/ClawDadMobile`: 13 tests passed |
 | Mac Swift unit suite | Pass | `swift test --package-path native/macos`: 8 tests passed |
 | Simulator build | Pass | `npm run ios:build` completed for the final build-19 source |
@@ -25,7 +25,7 @@ paths. Service-health fields are allow-listed so project paths are excluded.
 | Mac signing and notarization | Pass | `npm run native:release`; beta.4 app `0.7.0 (19)`, ZIP, and DMG are signed, notarized, stapled, Gatekeeper-accepted, and checksum-verified |
 | Persisted event privacy | Pass | Integration coverage redacts credentials before event and live-checkpoint writes; the local JSONL history scan contains no token-shaped or plaintext authorization values |
 | Package contents | Pass | `npm pack --dry-run --json`: 207 files, including the shared privacy redactor and excluding wordmark explorations |
-| Cloud public health | Pass | Production `/healthz`, `/support`, and `/privacy` returned HTTP 200 after the final worker upload |
+| Cloud public health | Pass | Production `/healthz`, `/support`, `/privacy`, and `/mac/appcast.xml` returned HTTP 200 after the final Worker upload; script settings report Logpush off and observability absent/disabled |
 
 ## Physical iPhone And Mac
 
