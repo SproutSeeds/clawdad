@@ -7,10 +7,13 @@ app_name="ClawDad"
 bundle_id="earth.frg.ClawDad"
 app_version="${CLAWDAD_APP_VERSION:-0.7.0}"
 app_build="${CLAWDAD_APP_BUILD:-16}"
+sparkle_feed_url="${CLAWDAD_SPARKLE_FEED_URL:-https://clawdad-cloud.frg.earth/mac/appcast.xml}"
+sparkle_public_key="${CLAWDAD_SPARKLE_PUBLIC_KEY:-OjSne9VtiBjR3Ls2aaLTgEUeKtYzi9oAtexOiA5K+dI=}"
 dist_dir="$script_dir/dist"
 app_dir="$dist_dir/$app_name.app"
 icon_source="$repo_root/assets/clawdad-claw-hyperreal-icon.png"
 webrtc_framework_source="$repo_root/vendor/WebRTCPackage/WebRTC.xcframework/macos-x86_64_arm64/WebRTC.framework"
+sparkle_framework_source="$script_dir/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
 runtime_dir="$app_dir/Contents/Resources/runtime"
 
 "$repo_root/bin/fetch-webrtc-dependency"
@@ -25,6 +28,7 @@ mkdir -p \
 cp "$bin_dir/$app_name" "$app_dir/Contents/MacOS/$app_name"
 chmod +x "$app_dir/Contents/MacOS/$app_name"
 ditto "$webrtc_framework_source" "$app_dir/Contents/Frameworks/WebRTC.framework"
+ditto "$sparkle_framework_source" "$app_dir/Contents/Frameworks/Sparkle.framework"
 install_name_tool \
   -add_rpath "@executable_path/../Frameworks" \
   "$app_dir/Contents/MacOS/$app_name"
@@ -121,6 +125,14 @@ cat > "$app_dir/Contents/Info.plist" <<PLIST
   <string>ClawDad uses the microphone to record voice messages and transcribe them into the composer.</string>
   <key>NSScreenCaptureUsageDescription</key>
   <string>ClawDad shares the primary display only during a Remote Assist session you start from your paired iPhone.</string>
+  <key>SUFeedURL</key>
+  <string>$sparkle_feed_url</string>
+  <key>SUPublicEDKey</key>
+  <string>$sparkle_public_key</string>
+  <key>SUEnableAutomaticChecks</key>
+  <true/>
+  <key>SUScheduledCheckInterval</key>
+  <integer>86400</integer>
 </dict>
 </plist>
 PLIST
@@ -144,6 +156,37 @@ if [[ -n "$signing_identity" ]]; then
     --options runtime \
     --timestamp \
     --sign "$signing_identity" \
+    "$app_dir/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Installer.xpc"
+  codesign \
+    --force \
+    --options runtime \
+    --timestamp \
+    --preserve-metadata=entitlements \
+    --sign "$signing_identity" \
+    "$app_dir/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Downloader.xpc"
+  codesign \
+    --force \
+    --options runtime \
+    --timestamp \
+    --sign "$signing_identity" \
+    "$app_dir/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate"
+  codesign \
+    --force \
+    --options runtime \
+    --timestamp \
+    --sign "$signing_identity" \
+    "$app_dir/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app"
+  codesign \
+    --force \
+    --options runtime \
+    --timestamp \
+    --sign "$signing_identity" \
+    "$app_dir/Contents/Frameworks/Sparkle.framework"
+  codesign \
+    --force \
+    --options runtime \
+    --timestamp \
+    --sign "$signing_identity" \
     "$app_dir/Contents/Frameworks/WebRTC.framework"
   codesign \
     --force \
@@ -152,6 +195,16 @@ if [[ -n "$signing_identity" ]]; then
     --sign "$signing_identity" \
     "$app_dir"
 else
+  codesign --force --options runtime --sign - \
+    "$app_dir/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Installer.xpc"
+  codesign --force --options runtime --preserve-metadata=entitlements --sign - \
+    "$app_dir/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Downloader.xpc"
+  codesign --force --options runtime --sign - \
+    "$app_dir/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate"
+  codesign --force --options runtime --sign - \
+    "$app_dir/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app"
+  codesign --force --options runtime --sign - \
+    "$app_dir/Contents/Frameworks/Sparkle.framework"
   codesign --force --sign - "$app_dir/Contents/Frameworks/WebRTC.framework"
   codesign --force --sign - "$app_dir"
 fi

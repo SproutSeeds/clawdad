@@ -149,6 +149,9 @@ const state = {
   voiceInputDevicesLoading: false,
   voiceSettingsStatus: "",
   voiceActiveInputLabel: "",
+  desktopAppStatus: null,
+  desktopAppPending: "",
+  desktopAppMessage: "",
   remoteAssistStatus: null,
   remoteAssistPending: false,
   remoteAssistInfoOpen: false,
@@ -193,6 +196,12 @@ const elements = {
   settingsVoiceInputSelect: document.querySelector("#settingsVoiceInputSelect"),
   settingsRefreshVoiceDevicesButton: document.querySelector("#settingsRefreshVoiceDevicesButton"),
   settingsVoiceStatus: document.querySelector("#settingsVoiceStatus"),
+  settingsDesktopAppSection: document.querySelector("#settingsDesktopAppSection"),
+  settingsDesktopAppVersion: document.querySelector("#settingsDesktopAppVersion"),
+  settingsDesktopAppStatus: document.querySelector("#settingsDesktopAppStatus"),
+  settingsCheckUpdatesButton: document.querySelector("#settingsCheckUpdatesButton"),
+  settingsOpenLogsButton: document.querySelector("#settingsOpenLogsButton"),
+  settingsCopyDiagnosticsButton: document.querySelector("#settingsCopyDiagnosticsButton"),
   settingsRemoteAssistSection: document.querySelector("#settingsRemoteAssistSection"),
   settingsRemoteAssistToggle: document.querySelector("#settingsRemoteAssistToggle"),
   settingsRemoteAssistStatus: document.querySelector("#settingsRemoteAssistStatus"),
@@ -501,6 +510,18 @@ const nativeBridge = (() => {
     },
     stopRemoteAssist() {
       return bridge.call("stopRemoteAssist");
+    },
+    getDesktopAppStatus() {
+      return bridge.call("getDesktopAppStatus");
+    },
+    checkForUpdates() {
+      return bridge.call("checkForUpdates");
+    },
+    openLogs() {
+      return bridge.call("openLogs");
+    },
+    copyDiagnostics() {
+      return bridge.call("copyDiagnostics");
     },
     __resolve(payload = {}) {
       const entry = pending.get(payload.id);
@@ -6444,6 +6465,7 @@ function renderSettingsModal() {
       isChoosing ? "Opening..." : "Browse Folders";
   }
   renderVoiceSettings();
+  renderDesktopAppSettings();
   renderRemoteAssistSettings();
   if (elements.settingsPairIphoneButton) {
     elements.settingsPairIphoneButton.disabled =
@@ -10368,6 +10390,148 @@ function renderVoiceSettings() {
   const status = state.voiceSettingsStatus ||
     (selectedDeviceId ? `Using ${voiceInputDeviceLabel(selectedDeviceId)}` : "Using system default microphone.");
   setText(elements.settingsVoiceStatus, status, { empty: !status });
+}
+
+function renderDesktopAppSettings() {
+  const section = elements.settingsDesktopAppSection;
+  if (!section) {
+    return;
+  }
+  const available = nativeBridge.isAvailable();
+  section.hidden = !available;
+  if (!available) {
+    return;
+  }
+
+  const status = state.desktopAppStatus;
+  const updateStatus = status?.updates || {};
+  const version = String(status?.version || "").trim();
+  const build = String(status?.build || "").trim();
+  const runtimeVersion = String(status?.runtimeVersion || "").trim();
+  const appVersion = version
+    ? `ClawDad ${version}${build ? ` (${build})` : ""}`
+    : "ClawDad desktop";
+  const versionText = runtimeVersion
+    ? `${appVersion} • Runtime ${runtimeVersion}`
+    : appVersion;
+  setText(elements.settingsDesktopAppVersion, versionText, { empty: false });
+
+  let statusText = state.desktopAppMessage;
+  if (!statusText && !status) {
+    statusText = "Checking the desktop app...";
+  } else if (!statusText && status?.serviceReady !== true) {
+    statusText = "The ClawDad service is still starting.";
+  } else if (!statusText && updateStatus.canCheckForUpdates === false) {
+    statusText = "The updater is getting ready.";
+  } else if (!statusText) {
+    statusText = "Desktop service and secure updates are ready.";
+  }
+  setText(elements.settingsDesktopAppStatus, statusText, { empty: false });
+
+  const pending = state.desktopAppPending;
+  if (elements.settingsCheckUpdatesButton) {
+    elements.settingsCheckUpdatesButton.disabled =
+      Boolean(pending) || updateStatus.canCheckForUpdates === false;
+    setText(
+      elements.settingsCheckUpdatesButton.querySelector(".button-text"),
+      pending === "updates" ? "Checking..." : "Check for Updates",
+    );
+  }
+  if (elements.settingsOpenLogsButton) {
+    elements.settingsOpenLogsButton.disabled =
+      Boolean(pending) || status?.logsAvailable === false;
+    setText(
+      elements.settingsOpenLogsButton.querySelector(".button-text"),
+      pending === "logs" ? "Opening..." : "Open Logs",
+    );
+  }
+  if (elements.settingsCopyDiagnosticsButton) {
+    elements.settingsCopyDiagnosticsButton.disabled = Boolean(pending);
+    setText(
+      elements.settingsCopyDiagnosticsButton.querySelector(".button-text"),
+      pending === "diagnostics" ? "Copying..." : "Copy Diagnostics",
+    );
+  }
+}
+
+async function refreshDesktopAppStatus({ quiet = false } = {}) {
+  if (!nativeBridge.isAvailable()) {
+    return;
+  }
+  if (!quiet) {
+    state.desktopAppPending = "status";
+    state.desktopAppMessage = "";
+    renderAll();
+  }
+  try {
+    state.desktopAppStatus = await nativeBridge.getDesktopAppStatus();
+  } catch (error) {
+    state.desktopAppMessage = String(error?.message || "Unable to read desktop app status.");
+    if (!quiet) {
+      showError(error);
+    }
+  } finally {
+    state.desktopAppPending = "";
+    renderAll();
+  }
+}
+
+async function checkDesktopAppUpdates() {
+  if (!nativeBridge.isAvailable() || state.desktopAppPending) {
+    return;
+  }
+  state.desktopAppPending = "updates";
+  state.desktopAppMessage = "Opening the secure update check...";
+  renderAll();
+  try {
+    state.desktopAppStatus = await nativeBridge.checkForUpdates();
+    state.desktopAppMessage = "Update check opened.";
+  } catch (error) {
+    state.desktopAppMessage = String(error?.message || "Unable to check for updates.");
+    showError(error);
+  } finally {
+    state.desktopAppPending = "";
+    renderAll();
+  }
+}
+
+async function openDesktopAppLogs() {
+  if (!nativeBridge.isAvailable() || state.desktopAppPending) {
+    return;
+  }
+  state.desktopAppPending = "logs";
+  state.desktopAppMessage = "";
+  renderAll();
+  try {
+    await nativeBridge.openLogs();
+    state.desktopAppMessage = "Logs opened in Finder.";
+  } catch (error) {
+    state.desktopAppMessage = String(error?.message || "Unable to open logs.");
+    showError(error);
+  } finally {
+    state.desktopAppPending = "";
+    renderAll();
+  }
+}
+
+async function copyDesktopAppDiagnostics() {
+  if (!nativeBridge.isAvailable() || state.desktopAppPending) {
+    return;
+  }
+  state.desktopAppPending = "diagnostics";
+  state.desktopAppMessage = "";
+  renderAll();
+  try {
+    const result = await nativeBridge.copyDiagnostics();
+    await copyText(result?.text || "");
+    state.desktopAppMessage = "Privacy-safe diagnostics copied.";
+  } catch (error) {
+    state.desktopAppMessage = String(error?.message || "Unable to copy diagnostics.");
+    showError(error);
+  } finally {
+    state.desktopAppPending = "";
+    renderAll();
+  }
 }
 
 function renderRemoteAssistSettings() {
@@ -14681,6 +14845,7 @@ function openSettingsModal() {
     });
   }
   void refreshVoiceInputDevices({ quiet: true });
+  void refreshDesktopAppStatus();
   void refreshRemoteAssistStatus();
 }
 
@@ -15701,6 +15866,15 @@ function bindEvents() {
   });
   elements.settingsRefreshVoiceDevicesButton?.addEventListener("click", () => {
     void refreshVoiceInputDevices({ requestPermission: true });
+  });
+  elements.settingsCheckUpdatesButton?.addEventListener("click", () => {
+    void checkDesktopAppUpdates();
+  });
+  elements.settingsOpenLogsButton?.addEventListener("click", () => {
+    void openDesktopAppLogs();
+  });
+  elements.settingsCopyDiagnosticsButton?.addEventListener("click", () => {
+    void copyDesktopAppDiagnostics();
   });
   elements.settingsRemoteAssistToggle?.addEventListener("change", (event) => {
     void setRemoteAssistEnabled(Boolean(event.target.checked));

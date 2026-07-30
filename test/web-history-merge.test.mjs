@@ -10,6 +10,15 @@ const webIndexPath = path.join(repoRoot, "web", "index.html");
 const webCssPath = path.join(repoRoot, "web", "app.css");
 const nativeMacSourcePath = path.join(repoRoot, "native", "macos", "Sources", "ClawDad", "main.swift");
 const nativeMacBuildPath = path.join(repoRoot, "native", "macos", "build-app.sh");
+const nativeMacPackagePath = path.join(repoRoot, "native", "macos", "Package.swift");
+const nativeMacUpdateControllerPath = path.join(
+  repoRoot,
+  "native",
+  "macos",
+  "Sources",
+  "ClawDad",
+  "ClawDadUpdateController.swift",
+);
 const iosContentPath = path.join(
   repoRoot,
   "apps",
@@ -426,6 +435,41 @@ test("macOS packaged shell carries a self-contained ClawDad runtime", async () =
     buildScript,
     /ditto "\$repo_root\/node_modules" "\$runtime_dir\/node_modules"/u,
   );
+});
+
+test("macOS desktop app exposes signed updates and privacy-safe diagnostics", async () => {
+  const [indexHtml, appSource, nativeSource, updateSource, buildScript, packageSource] =
+    await Promise.all([
+      readFile(webIndexPath, "utf8"),
+      readFile(webAppPath, "utf8"),
+      readFile(nativeMacSourcePath, "utf8"),
+      readFile(nativeMacUpdateControllerPath, "utf8"),
+      readFile(nativeMacBuildPath, "utf8"),
+      readFile(nativeMacPackagePath, "utf8"),
+    ]);
+
+  assert.match(
+    packageSource,
+    /\.package\([\s\S]*url: "https:\/\/github\.com\/sparkle-project\/Sparkle"/u,
+  );
+  assert.match(packageSource, /exact: "2\.9\.2"/u);
+  assert.match(updateSource, /SPUStandardUpdaterController/u);
+  assert.match(updateSource, /controller\.checkForUpdates\(sender\)/u);
+  assert.match(buildScript, /SUFeedURL/u);
+  assert.match(buildScript, /SUPublicEDKey/u);
+  assert.match(buildScript, /Sparkle\.framework\/Versions\/B\/XPCServices\/Installer\.xpc/u);
+  assert.match(nativeSource, /case "getDesktopAppStatus":/u);
+  assert.match(nativeSource, /case "checkForUpdates":/u);
+  assert.match(nativeSource, /case "openLogs":/u);
+  assert.match(nativeSource, /case "copyDiagnostics":/u);
+  assert.match(nativeSource, /ClawDad Desktop Diagnostics/u);
+  assert.match(indexHtml, /id="settingsDesktopAppSection"/u);
+  assert.match(indexHtml, /id="settingsCheckUpdatesButton"/u);
+  assert.match(indexHtml, /id="settingsOpenLogsButton"/u);
+  assert.match(indexHtml, /id="settingsCopyDiagnosticsButton"/u);
+  assert.match(appSource, /function renderDesktopAppSettings/u);
+  assert.match(appSource, /nativeBridge\.checkForUpdates\(\)/u);
+  assert.match(appSource, /Privacy-safe diagnostics copied\./u);
 });
 
 test("Remote Assist settings explain both macOS permission steps", async () => {

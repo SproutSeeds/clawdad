@@ -8,9 +8,14 @@ custom_domain = true
 
 [durable_objects]
 bindings = [
-  { name = "WORKSPACE_RELAY", class_name = "WorkspaceRelay" }
+  { name = "WORKSPACE_RELAY", class_name = "WorkspaceRelay" },
+  { name = "RELEASE_CATALOG", class_name = "ReleaseCatalog" }
 ]
 
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["WorkspaceRelay"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["ReleaseCatalog"]

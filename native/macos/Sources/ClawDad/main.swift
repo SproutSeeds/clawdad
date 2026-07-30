@@ -587,9 +587,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
   private var service: ClawDadService?
   private var remoteAssistHost: RemoteAssistHost?
   private var remoteAssistIndicator: NSPanel?
+  private let updateController = ClawDadUpdateController()
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.regular)
+    buildApplicationMenu()
     buildWindow()
     showLaunchScreen("Starting ClawDad...")
     startRemoteAssistHost()
@@ -626,6 +628,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     window.center()
     window.makeKeyAndOrderFront(nil)
     NSApp.activate(ignoringOtherApps: true)
+  }
+
+  private func buildApplicationMenu() {
+    let mainMenu = NSMenu()
+    let appMenuItem = NSMenuItem()
+    let appMenu = NSMenu()
+
+    appMenu.addItem(
+      withTitle: "About \(appName)",
+      action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
+      keyEquivalent: ""
+    )
+    let updateItem = NSMenuItem(
+      title: "Check for Updates...",
+      action: #selector(ClawDadUpdateController.checkForUpdates(_:)),
+      keyEquivalent: ""
+    )
+    updateItem.target = updateController
+    appMenu.addItem(updateItem)
+    appMenu.addItem(.separator())
+    appMenu.addItem(
+      withTitle: "Quit \(appName)",
+      action: #selector(NSApplication.terminate(_:)),
+      keyEquivalent: "q"
+    )
+
+    appMenuItem.submenu = appMenu
+    mainMenu.addItem(appMenuItem)
+    NSApp.mainMenu = mainMenu
   }
 
   private func showLaunchScreen(_ text: String) {
@@ -726,7 +757,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
       resolveNativeMessage(id: id, result: [
         "platform": "macos",
         "chooseFolder": true,
-        "remoteAssist": true
+        "remoteAssist": true,
+        "updates": true,
+        "diagnostics": true
       ])
     case "chooseFolder":
       chooseFolder(id: id, params: params)
@@ -765,6 +798,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         id: id,
         result: remoteAssistHost?.status.dictionary ?? [:]
       )
+    case "getDesktopAppStatus":
+      resolveNativeMessage(id: id, result: desktopAppStatus())
+    case "checkForUpdates":
+      updateController.checkForUpdates(nil)
+      resolveNativeMessage(id: id, result: desktopAppStatus())
+    case "openLogs":
+      openLogs()
+      resolveNativeMessage(id: id, result: ["opened": true])
+    case "copyDiagnostics":
+      resolveNativeMessage(id: id, result: [
+        "text": diagnosticsText()
+      ])
     default:
       resolveNativeMessage(id: id, error: "Unsupported native method: \(method)")
     }
@@ -804,6 +849,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     default:
       return "Choose Project Folder"
     }
+  }
+
+  private func desktopAppStatus() -> [String: Any] {
+    let bundle = Bundle.main
+    var status: [String: Any] = [
+      "version": bundle.object(
+        forInfoDictionaryKey: "CFBundleShortVersionString"
+      ) as? String ?? "development",
+      "build": bundle.object(
+        forInfoDictionaryKey: "CFBundleVersion"
+      ) as? String ?? "",
+      "runtimeVersion": service?.runtimeVersion ?? "",
+      "serviceReady": service != nil,
+      "logsAvailable": service != nil
+    ]
+    status["updates"] = updateController.statusDictionary
+    return status
+  }
+
+  private func openLogs() {
+    guard let logsURL = service?.supportDir.appendingPathComponent(
+      "logs",
+      isDirectory: true
+    ) else {
+      return
+    }
+    try? FileManager.default.createDirectory(
+      at: logsURL,
+      withIntermediateDirectories: true
+    )
+    NSWorkspace.shared.open(logsURL)
+  }
+
+  private func diagnosticsText() -> String {
+    let appStatus = desktopAppStatus()
+    let remoteStatus = remoteAssistHost?.status
+    let lines = [
+      "ClawDad Desktop Diagnostics",
+      "App: \(appStatus["version"] ?? "") (\(appStatus["build"] ?? ""))",
+      "Runtime: \(appStatus["runtimeVersion"] ?? "")",
+      "macOS: \(ProcessInfo.processInfo.operatingSystemVersionString)",
+      "Architecture: \(nativeArchitecture)",
+      "Service ready: \((appStatus["serviceReady"] as? Bool) == true ? "yes" : "no")",
+      "Remote Assist enabled: \(remoteStatus?.enabled == true ? "yes" : "no")",
+      "Remote Assist paired devices: \(remoteStatus?.pairedDeviceCount ?? 0)",
+      "Screen Recording: \(remoteStatus?.screenRecordingGranted == true ? "allowed" : "required")",
+      "Control Access: \(remoteStatus?.accessibilityGranted == true ? "allowed" : "required")",
+      "Relay connected: \(remoteStatus?.relayConnected == true ? "yes" : "no")",
+      "Remote session active: \(remoteStatus?.active == true ? "yes" : "no")"
+    ]
+    return lines.joined(separator: "\n")
   }
 
   private func resolveNativeMessage(id: String, result: [String: Any] = [:], error: String? = nil) {
@@ -930,6 +1026,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     remoteAssistHost?.stopActiveSession()
   }
 }
+
+#if arch(arm64)
+private let nativeArchitecture = "Apple silicon"
+#elseif arch(x86_64)
+private let nativeArchitecture = "Intel"
+#else
+private let nativeArchitecture = "Unknown"
+#endif
 
 let app = NSApplication.shared
 let delegate = AppDelegate()

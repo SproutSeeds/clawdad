@@ -29,6 +29,104 @@ function requireRemoteAssistBearer(request, env) {
   return header === `Bearer ${expected}`;
 }
 
+function requireReleaseBearer(request, env) {
+  const expected = String(env.CLAWDAD_RELEASE_TOKEN || "").trim();
+  if (!expected) {
+    return false;
+  }
+  const header = request.headers.get("authorization") || "";
+  return header === `Bearer ${expected}`;
+}
+
+const maxAppcastBytes = 1024 * 1024;
+
+export function validateSparkleAppcast(xml) {
+  const value = String(xml || "").trim();
+  if (!value) {
+    return "appcast XML is required";
+  }
+  if (new TextEncoder().encode(value).byteLength > maxAppcastBytes) {
+    return "appcast XML exceeds the 1 MB limit";
+  }
+  const requirements = [
+    [/<rss\b[^>]*>/iu, "appcast must contain an RSS document"],
+    [/<channel\b[^>]*>/iu, "appcast must contain a channel"],
+    [/<item\b[^>]*>/iu, "appcast must contain at least one release item"],
+    [
+      /(?:\bsparkle:version\s*=\s*["'][^"']+["']|<sparkle:version>\s*[^<]+\s*<\/sparkle:version>)/iu,
+      "release item must include sparkle:version",
+    ],
+    [/\bsparkle:edSignature\s*=\s*["'][^"']+["']/iu, "release enclosure must include a Sparkle EdDSA signature"],
+    [/\benclosure\b[^>]*\burl\s*=\s*["']https:\/\/[^"']+["']/iu, "release enclosure must use an HTTPS download URL"],
+  ];
+  for (const [pattern, message] of requirements) {
+    if (!pattern.test(value)) {
+      return message;
+    }
+  }
+  return "";
+}
+
+function appcastResponse(xml, updatedAt) {
+  return new Response(xml, {
+    status: 200,
+    headers: {
+      "content-type": "application/rss+xml; charset=utf-8",
+      "cache-control": "public, max-age=300, stale-while-revalidate=3600",
+      "last-modified": new Date(updatedAt).toUTCString(),
+      "x-content-type-options": "nosniff",
+    },
+  });
+}
+
+export class ReleaseCatalog {
+  constructor(state, env) {
+    this.state = state;
+    this.env = env;
+  }
+
+  async fetch(request) {
+    if (request.method === "GET") {
+      const release = await this.state.storage.get("mac-appcast");
+      if (!release?.xml || !release?.updatedAt) {
+        return json(404, {
+          ok: false,
+          error: "No ClawDad Mac release has been published yet",
+        });
+      }
+      return appcastResponse(release.xml, release.updatedAt);
+    }
+
+    if (request.method !== "PUT") {
+      return json(405, { ok: false, error: "method not allowed" });
+    }
+    if (!requireReleaseBearer(request, this.env)) {
+      return json(401, { ok: false, error: "unauthorized" });
+    }
+
+    const declaredLength = Number(request.headers.get("content-length") || 0);
+    if (declaredLength > maxAppcastBytes) {
+      return json(413, { ok: false, error: "appcast XML exceeds the 1 MB limit" });
+    }
+    const xml = await request.text();
+    const validationError = validateSparkleAppcast(xml);
+    if (validationError) {
+      return json(400, { ok: false, error: validationError });
+    }
+
+    const updatedAt = new Date().toISOString();
+    await this.state.storage.put("mac-appcast", {
+      xml: xml.trim(),
+      updatedAt,
+    });
+    return json(200, {
+      ok: true,
+      updatedAt,
+      bytes: new TextEncoder().encode(xml).byteLength,
+    });
+  }
+}
+
 export async function generateRemoteAssistIceServers(
   request,
   env,
@@ -291,6 +389,19 @@ export default {
     }
     if (url.pathname === "/remote-assist/ice-servers") {
       return generateRemoteAssistIceServers(request, env);
+    }
+    if (url.pathname === "/mac/appcast.xml" || url.pathname === "/admin/mac/appcast") {
+      if (!env.RELEASE_CATALOG) {
+        return json(503, {
+          ok: false,
+          error: "RELEASE_CATALOG binding is not configured",
+        });
+      }
+      if (url.pathname === "/admin/mac/appcast" && !requireReleaseBearer(request, env)) {
+        return json(401, { ok: false, error: "unauthorized" });
+      }
+      const objectId = env.RELEASE_CATALOG.idFromName("mac");
+      return env.RELEASE_CATALOG.get(objectId).fetch(request);
     }
 
     const route = routeMatch(url.pathname);

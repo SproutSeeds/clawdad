@@ -11,6 +11,7 @@
     "ios:build": "./bin/fetch-webrtc-dependency && xcodebuild -project apps/ios/ClawDadMobile/ClawDadMobile.xcodeproj -scheme ClawDadMobile -configuration Debug -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build",
     "ios:archive": "./bin/fetch-webrtc-dependency && xcodebuild -project apps/ios/ClawDadMobile/ClawDadMobile.xcodeproj -scheme ClawDadMobile -configuration Release -destination 'generic/platform=iOS' -archivePath apps/ios/ClawDadMobile/build/ClawDadMobile.xcarchive archive",
     "native:app": "zsh native/macos/build-app.sh",
+    "native:release": "zsh native/macos/package-release.sh",
     "native:build": "./bin/fetch-webrtc-dependency && swift build --package-path native/macos",
     "native:run": "./bin/fetch-webrtc-dependency && swift run --package-path native/macos ClawDad"
   },
@@ -60,6 +61,8 @@
     "docs/chimera-local-lane.md",
     "docs/iphone-companion.md",
     "docs/live-runtime-runbook.md",
+    "docs/mac-distribution.md",
+    "docs/releases/",
     "docs/tailscale-live-services.md",
     "ops/tailnet-app/",
     "assets/clawdad-mascot.jpg",

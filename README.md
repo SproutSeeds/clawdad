@@ -28,11 +28,16 @@ Keychain, and exposes the macOS folder picker to the web UI.
 ```bash
 npm run native:build
 npm run native:run
+npm run native:release
 ```
 
-Desktop usage is local-first. Tailscale remains useful for paired phone access,
-but it is transport for remote clients rather than the core desktop app
-architecture.
+Customer builds are signed with Developer ID, notarized and stapled by Apple,
+and updated through an EdDSA-signed Sparkle feed. See
+[Mac Distribution](docs/mac-distribution.md) for install, permission, update,
+diagnostic, and release verification details.
+
+Desktop usage is local-first. The native iPhone companion uses ClawDad Cloud;
+Tailscale remains an optional legacy/development transport.
 
 ## iPhone Companion
 

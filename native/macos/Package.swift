@@ -12,7 +12,11 @@ let package = Package(
   ],
   dependencies: [
     .package(path: "../ClawDadRemoteAssistProtocol"),
-    .package(path: "../../vendor/WebRTCPackage")
+    .package(path: "../../vendor/WebRTCPackage"),
+    .package(
+      url: "https://github.com/sparkle-project/Sparkle",
+      exact: "2.9.2"
+    )
   ],
   targets: [
     .executableTarget(
@@ -22,7 +26,8 @@ let package = Package(
           name: "ClawDadRemoteAssistProtocol",
           package: "ClawDadRemoteAssistProtocol"
         ),
-        .product(name: "WebRTC", package: "WebRTCPackage")
+        .product(name: "WebRTC", package: "WebRTCPackage"),
+        .product(name: "Sparkle", package: "Sparkle")
       ],
       path: "Sources/ClawDad"
     ),

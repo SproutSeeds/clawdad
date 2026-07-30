@@ -2607,6 +2607,37 @@ button.detail-backdrop:focus-visible:not(:disabled) {
   align-items: stretch;
 }
 
+.settings-desktop-app-section {
+  gap: 12px;
+}
+
+.settings-desktop-version {
+  margin-top: 3px;
+  color: rgba(255, 218, 185, 0.72);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.settings-desktop-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 0.85fr) minmax(0, 1.15fr);
+  gap: 8px;
+}
+
+.settings-desktop-actions .detail-action-button {
+  min-width: 0;
+  justify-content: center;
+  gap: 7px;
+  padding-inline: 10px;
+}
+
+.settings-desktop-actions svg {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+}
+
 .settings-remote-assist-section {
   gap: 12px;
 }
@@ -4313,6 +4344,7 @@ button.detail-backdrop:focus-visible:not(:disabled) {
   .settings-path-field,
   .settings-select-row,
   .settings-root-add,
+  .settings-desktop-actions,
   .settings-permission-grid,
   .directory-browser-path-row,
   .directory-browser-actions {

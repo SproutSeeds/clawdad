@@ -1,10 +1,44 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  ReleaseCatalog,
   WorkspaceRelay,
   cloudRelayTargetMatches,
   generateRemoteAssistIceServers,
+  validateSparkleAppcast,
 } from "../cloud/worker.mjs";
+
+const validAppcast = `<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>ClawDad Updates</title>
+    <item>
+      <title>ClawDad 0.7.0</title>
+      <sparkle:version>16</sparkle:version>
+      <enclosure
+        url="https://github.com/SproutSeeds/clawdad/releases/download/v0.7.0-beta.1/ClawDad-0.7.0-beta.1-mac.zip"
+        sparkle:shortVersionString="0.7.0"
+        sparkle:edSignature="signed-release"
+        length="1024"
+        type="application/octet-stream"
+      />
+    </item>
+  </channel>
+</rss>`;
+
+function memoryDurableObjectState() {
+  const values = new Map();
+  return {
+    storage: {
+      async get(key) {
+        return values.get(key);
+      },
+      async put(key, value) {
+        values.set(key, value);
+      },
+    },
+  };
+}
 
 test("cloud relay routes targeted envelopes only to the named host or device", () => {
   const host = { hostId: "cody-mac", deviceId: "" };
@@ -210,4 +244,60 @@ test("Remote Assist returns short-lived Cloudflare ICE servers", async () => {
   const payload = await response.json();
   assert.equal(payload.expiresIn, 3600);
   assert.equal(payload.iceServers.length, 2);
+});
+
+test("Mac update catalog rejects malformed or unsigned Sparkle feeds", () => {
+  assert.match(
+    validateSparkleAppcast("<rss><channel><item></item></channel></rss>"),
+    /sparkle:version/u,
+  );
+  assert.match(
+    validateSparkleAppcast(validAppcast.replace('sparkle:edSignature="signed-release"', "")),
+    /EdDSA signature/u,
+  );
+  assert.equal(validateSparkleAppcast(validAppcast), "");
+});
+
+test("Mac update catalog requires release authorization and publishes a public feed", async () => {
+  const catalog = new ReleaseCatalog(
+    memoryDurableObjectState(),
+    { CLAWDAD_RELEASE_TOKEN: "release-secret" },
+  );
+
+  const missing = await catalog.fetch(
+    new Request("https://clawdad.example/mac/appcast.xml"),
+  );
+  assert.equal(missing.status, 404);
+
+  const unauthorized = await catalog.fetch(
+    new Request("https://clawdad.example/admin/mac/appcast", {
+      method: "PUT",
+      body: validAppcast,
+    }),
+  );
+  assert.equal(unauthorized.status, 401);
+
+  const published = await catalog.fetch(
+    new Request("https://clawdad.example/admin/mac/appcast", {
+      method: "PUT",
+      headers: {
+        authorization: "Bearer release-secret",
+        "content-type": "application/rss+xml",
+      },
+      body: validAppcast,
+    }),
+  );
+  assert.equal(published.status, 200);
+  assert.equal((await published.json()).ok, true);
+
+  const publicFeed = await catalog.fetch(
+    new Request("https://clawdad.example/mac/appcast.xml"),
+  );
+  assert.equal(publicFeed.status, 200);
+  assert.equal(
+    publicFeed.headers.get("content-type"),
+    "application/rss+xml; charset=utf-8",
+  );
+  assert.match(publicFeed.headers.get("cache-control"), /stale-while-revalidate/u);
+  assert.equal(await publicFeed.text(), validAppcast);
 });
