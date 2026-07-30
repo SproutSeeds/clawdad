@@ -109,5 +109,6 @@ schemes:
         CLAWDAD_RUN_LIVE_IOS_SMOKE: "1"
         CLAWDAD_RUN_NAMED_THREAD_SMOKE: "1"
         CLAWDAD_RUN_STARTUP_RESTORE_SMOKE: "1"
+        CLAWDAD_RUN_THREAD_SCOPE_SMOKE: "1"
     management:
       isShown: false

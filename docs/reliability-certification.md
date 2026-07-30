@@ -4,14 +4,22 @@ Automated checks and physical-device checks are recorded separately. A row is
 complete only when its evidence column names the command, artifact, or observed
 result.
 
+Run `npm run certify:snapshot` before and after a physical test pass. The
+command writes a privacy-safe, mode-`0600` JSON snapshot under
+`~/.clawdad/certifications/` with release, Mac service, cloud, pairing,
+App Store, connected-device, and installed-build state. It does not collect
+messages, project contents, credentials, serial numbers, or device filesystem
+paths.
+
 ## Automated
 
 | Check | State | Evidence |
 | --- | --- | --- |
-| Node integration suite | Pass | `npm test`: 374 tests passed |
+| Node integration suite | Pass | `npm test`: 377 tests passed |
 | iPhone Swift unit suite | Pass | `swift test --package-path apps/ios/ClawDadMobile`: 13 tests passed |
 | Mac Swift unit suite | Pass | `swift test --package-path native/macos`: 8 tests passed |
 | Simulator build | Pass | `npm run ios:build` completed for the final build-19 source |
+| Certification snapshot | Pass | `npm run certify:snapshot` wrote a mode-`0600` privacy-safe artifact; npm, Mac, cloud, public pages, and TestFlight are ready, while the connected iPhone correctly reports build 15 instead of candidate build 19 |
 | Signed iPhone archive | Pass | `npm run ios:archive`; `ClawDadMobile.xcarchive` is version 0.7.0, build 19, and passes strict code-signature validation |
 | TestFlight processing | Pass | App Store Connect build 19 is `VALID`, export-compliance complete, localized, and assigned to `ClawDad Internal` |
 | Mac signing and notarization | Pass | `npm run native:release`; beta.2 app, ZIP, and DMG are signed, notarized, and stapled |

@@ -1,0 +1,462 @@
+#!/usr/bin/env node
+
+import { execFile as execFileCallback } from "node:child_process";
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+import {
+  CLAWDAD_IOS_BUNDLE_ID,
+  findInstalledApp,
+  physicalCertificationChecks,
+  sanitizeConnectedDevice,
+  summarizeCertificationSnapshot,
+} from "../lib/reliability-certification.mjs";
+
+const execFile = promisify(execFileCallback);
+const scriptDir = dirname(fileURLToPath(import.meta.url));
+const projectRoot = resolve(scriptDir, "..");
+const iosProjectPath = join(
+  projectRoot,
+  "apps",
+  "ios",
+  "ClawDadMobile",
+  "ClawDadMobile.xcodeproj",
+);
+
+function parseArguments(argv) {
+  const outputIndex = argv.indexOf("--output");
+  const deviceIndex = argv.indexOf("--device");
+  return {
+    output: outputIndex >= 0 ? argv[outputIndex + 1] : "",
+    deviceId: deviceIndex >= 0 ? argv[deviceIndex + 1] : "",
+    json: argv.includes("--json"),
+  };
+}
+
+async function run(command, args = [], options = {}) {
+  try {
+    const result = await execFile(command, args, {
+      cwd: options.cwd || projectRoot,
+      encoding: "utf8",
+      maxBuffer: 16 * 1024 * 1024,
+      timeout: options.timeout || 30_000,
+    });
+    return {
+      ok: true,
+      stdout: String(result.stdout || "").trim(),
+      stderr: String(result.stderr || "").trim(),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      stdout: String(error?.stdout || "").trim(),
+      stderr: String(error?.stderr || error?.message || "").trim(),
+    };
+  }
+}
+
+async function fetchJson(url) {
+  try {
+    const response = await fetch(url, {
+      signal: AbortSignal.timeout(10_000),
+      headers: { accept: "application/json" },
+    });
+    const payload = await response.json();
+    return {
+      ok: response.ok && payload?.ok !== false,
+      status: response.status,
+      payload,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      status: 0,
+      error: String(error?.message || error),
+    };
+  }
+}
+
+async function fetchHead(url) {
+  try {
+    const response = await fetch(url, {
+      signal: AbortSignal.timeout(10_000),
+      redirect: "follow",
+    });
+    return {
+      ok: response.ok,
+      status: response.status,
+      contentType: response.headers.get("content-type") || "",
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      status: 0,
+      error: String(error?.message || error),
+    };
+  }
+}
+
+async function readJsonCommand(command, args) {
+  const result = await run(command, args, { timeout: 45_000 });
+  if (!result.ok) {
+    return {
+      ok: false,
+      error: "command failed",
+    };
+  }
+  try {
+    return {
+      ok: true,
+      payload: JSON.parse(result.stdout),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: `invalid JSON: ${error.message}`,
+    };
+  }
+}
+
+async function readDeviceState(preferredDeviceId) {
+  const scratch = await mkdtemp(join(tmpdir(), "clawdad-certification-"));
+  try {
+    const devicesPath = join(scratch, "devices.json");
+    const devicesCommand = await run(
+      "xcrun",
+      ["devicectl", "list", "devices", "--json-output", devicesPath],
+      { timeout: 30_000 },
+    );
+    if (!devicesCommand.ok) {
+      return {
+        ok: false,
+        error: "devicectl did not list devices",
+        devices: [],
+        targetDevice: null,
+      };
+    }
+
+    const deviceDocument = JSON.parse(await readFile(devicesPath, "utf8"));
+    const rawDevices = Array.isArray(deviceDocument?.result?.devices)
+      ? deviceDocument.result.devices
+      : [];
+    const devices = rawDevices.map(sanitizeConnectedDevice);
+    const rawTarget =
+      rawDevices.find((device) => device.identifier === preferredDeviceId) ||
+      rawDevices.find(
+        (device) =>
+          device.hardwareProperties?.reality === "physical" &&
+          device.hardwareProperties?.platform === "iOS" &&
+          device.connectionProperties?.pairingState === "paired",
+      ) ||
+      null;
+    if (!rawTarget) {
+      return {
+        ok: true,
+        devices,
+        targetDevice: null,
+      };
+    }
+
+    const appsPath = join(scratch, "apps.json");
+    const appsCommand = await run(
+      "xcrun",
+      [
+        "devicectl",
+        "device",
+        "info",
+        "apps",
+        "--device",
+        rawTarget.identifier,
+        "--json-output",
+        appsPath,
+      ],
+      { timeout: 45_000 },
+    );
+    let installedApp = null;
+    if (appsCommand.ok) {
+      const appsDocument = JSON.parse(await readFile(appsPath, "utf8"));
+      installedApp = findInstalledApp(
+        appsDocument?.result?.apps || [],
+        CLAWDAD_IOS_BUNDLE_ID,
+      );
+    }
+    return {
+      ok: true,
+      devices,
+      targetDevice: {
+        ...sanitizeConnectedDevice(rawTarget),
+        installedApp,
+        appInventoryReadable: appsCommand.ok,
+      },
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: "device state unavailable",
+      devices: [],
+      targetDevice: null,
+    };
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+}
+
+async function readMacAppVersion() {
+  const infoPath = "/Applications/ClawDad.app/Contents/Info.plist";
+  const version = await run(
+    "/usr/libexec/PlistBuddy",
+    ["-c", "Print :CFBundleShortVersionString", infoPath],
+  );
+  const build = await run(
+    "/usr/libexec/PlistBuddy",
+    ["-c", "Print :CFBundleVersion", infoPath],
+  );
+  return {
+    installed: version.ok && build.ok,
+    version: version.ok ? version.stdout : "",
+    build: build.ok ? build.stdout : "",
+  };
+}
+
+async function readIosReleaseSettings() {
+  const result = await run(
+    "xcodebuild",
+    [
+      "-project",
+      iosProjectPath,
+      "-scheme",
+      "ClawDadMobile",
+      "-configuration",
+      "Release",
+      "-showBuildSettings",
+      "-json",
+    ],
+    { timeout: 45_000 },
+  );
+  if (!result.ok) {
+    return {
+      ok: false,
+      version: "",
+      build: "",
+      bundleIdentifier: "",
+    };
+  }
+  try {
+    const targets = JSON.parse(result.stdout);
+    const target =
+      targets.find((candidate) => candidate?.target === "ClawDadMobile") ||
+      targets[0];
+    const settings = target?.buildSettings || {};
+    return {
+      ok: Boolean(
+        settings.MARKETING_VERSION &&
+          settings.CURRENT_PROJECT_VERSION &&
+          settings.PRODUCT_BUNDLE_IDENTIFIER,
+      ),
+      version: String(settings.MARKETING_VERSION || ""),
+      build: String(settings.CURRENT_PROJECT_VERSION || ""),
+      bundleIdentifier: String(settings.PRODUCT_BUNDLE_IDENTIFIER || ""),
+    };
+  } catch {
+    return {
+      ok: false,
+      version: "",
+      build: "",
+      bundleIdentifier: "",
+    };
+  }
+}
+
+async function readLaunchAgent(label) {
+  const result = await run(
+    "launchctl",
+    ["print", `gui/${process.getuid()}/${label}`],
+  );
+  const pid = result.stdout.match(/\bpid = (\d+)/u)?.[1] || "";
+  const state = result.stdout.match(/\bstate = ([^\n]+)/u)?.[1]?.trim() || "";
+  return {
+    loaded: result.ok,
+    running: Boolean(pid),
+    pid,
+    state,
+  };
+}
+
+async function readPairingSummary() {
+  const configPath = join(homedir(), ".clawdad", "cloud.json");
+  try {
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    return {
+      configured: true,
+      cloudUrlConfigured: Boolean(config.cloudUrl),
+      accountConfigured: Boolean(config.accountId),
+      workspaceConfigured: Boolean(config.workspaceId),
+      hostConfigured: Boolean(config.hostId),
+      trustedDeviceCount: Object.keys(
+        config.trustedDevicePublicKeys || {},
+      ).length,
+      relayHostTokenConfigured: Boolean(config.relayHostToken),
+      hostKeyConfigured: Boolean(
+        config.hostPrivateKeyPath && config.hostPublicKeyPath,
+      ),
+    };
+  } catch (error) {
+    return {
+      configured: false,
+      error: "pairing state unavailable",
+    };
+  }
+}
+
+async function readNpmState(expectedVersion) {
+  const result = await readJsonCommand("npm", [
+    "view",
+    `clawdad@${expectedVersion}`,
+    "version",
+    "dist-tags",
+    "dist.integrity",
+    "--json",
+  ]);
+  if (!result.ok) {
+    return result;
+  }
+  return {
+    ok: true,
+    version: String(result.payload.version || ""),
+    betaTag: String(result.payload["dist-tags"]?.beta || ""),
+    latestTag: String(result.payload["dist-tags"]?.latest || ""),
+    integrityConfigured: Boolean(result.payload["dist.integrity"]),
+  };
+}
+
+async function readGitCommit() {
+  const result = await run("git", ["rev-parse", "HEAD"]);
+  return result.ok ? result.stdout : "";
+}
+
+function commandPayload(result) {
+  return result.ok ? result.payload : { error: result.error };
+}
+
+async function main() {
+  const options = parseArguments(process.argv.slice(2));
+  const packageDocument = JSON.parse(
+    await readFile(join(projectRoot, "package.json"), "utf8"),
+  );
+  const expectedVersion = String(packageDocument.version || "");
+
+  const [
+    npmState,
+    localHealth,
+    cloudHealth,
+    support,
+    privacy,
+    appcast,
+    iphone,
+    iosRelease,
+    macApp,
+    serverAgent,
+    cloudHostAgent,
+    pairing,
+    releaseStatus,
+    subscriptionStatus,
+    gitCommit,
+  ] = await Promise.all([
+    readNpmState(expectedVersion),
+    fetchJson("http://127.0.0.1:4477/healthz"),
+    fetchJson("https://clawdad-cloud.frg.earth/healthz"),
+    fetchHead("https://clawdad-cloud.frg.earth/support"),
+    fetchHead("https://clawdad-cloud.frg.earth/privacy"),
+    fetchHead("https://clawdad-cloud.frg.earth/mac/appcast.xml"),
+    readDeviceState(options.deviceId),
+    readIosReleaseSettings(),
+    readMacAppVersion(),
+    readLaunchAgent("com.sproutseeds.clawdad.server"),
+    readLaunchAgent("earth.frg.ClawDad.cloud-host"),
+    readPairingSummary(),
+    readJsonCommand(resolve(projectRoot, "bin", "clawdad-app-store"), [
+      "release-status",
+      "--json",
+    ]),
+    readJsonCommand(resolve(projectRoot, "bin", "clawdad-app-store"), [
+      "status",
+      "--json",
+    ]),
+    readGitCommit(),
+  ]);
+
+  const snapshot = {
+    schema: "clawdad.reliability-snapshot/1",
+    capturedAt: new Date().toISOString(),
+    release: {
+      expectedVersion,
+      expectedIosVersion: iosRelease.version,
+      expectedIosBuild: iosRelease.build,
+      expectedIosBundleIdentifier: iosRelease.bundleIdentifier,
+      iosBuildSettingsReadable: iosRelease.ok,
+      gitCommit,
+      npm: npmState,
+    },
+    mac: {
+      installedApp: macApp,
+      localHealth: localHealth.payload || localHealth,
+      serverLaunchAgent: serverAgent,
+      cloudHostLaunchAgent: cloudHostAgent,
+      pairing,
+    },
+    cloud: {
+      health: cloudHealth.payload || cloudHealth,
+      support,
+      privacy,
+      appcast,
+    },
+    iphone,
+    appStore: {
+      release: commandPayload(releaseStatus),
+      subscriptions: commandPayload(subscriptionStatus),
+    },
+    physicalCertification: Object.fromEntries(
+      physicalCertificationChecks.map((check) => [
+        check,
+        { state: "pending", evidence: "" },
+      ]),
+    ),
+  };
+  snapshot.summary = summarizeCertificationSnapshot(snapshot);
+
+  const timestamp = snapshot.capturedAt.replace(/[:.]/gu, "-");
+  const outputPath = resolve(
+    options.output ||
+      join(
+        homedir(),
+        ".clawdad",
+        "certifications",
+        `${timestamp}.json`,
+      ),
+  );
+  await mkdir(dirname(outputPath), { recursive: true });
+  await writeFile(outputPath, `${JSON.stringify(snapshot, null, 2)}\n`, {
+    mode: 0o600,
+  });
+
+  const result = {
+    ok: true,
+    output: outputPath,
+    summary: snapshot.summary,
+    targetDevice: snapshot.iphone?.targetDevice || null,
+  };
+  process.stdout.write(`${JSON.stringify(options.json ? snapshot : result, null, 2)}\n`);
+}
+
+main().catch((error) => {
+  process.stderr.write(`ClawDad certification snapshot failed: ${error.message}\n`);
+  process.exitCode = 1;
+});

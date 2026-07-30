@@ -14,6 +14,7 @@
     "appstore:release:plan": "node bin/clawdad-app-store release-plan",
     "appstore:release:status": "node bin/clawdad-app-store release-status",
     "appstore:release:configure": "node bin/clawdad-app-store release-configure",
+    "certify:snapshot": "node bin/clawdad-certify",
     "ios:generate": "xcodegen --spec apps/ios/ClawDadMobile/project.yml --project apps/ios/ClawDadMobile",
     "ios:build": "./bin/fetch-webrtc-dependency && xcodebuild -project apps/ios/ClawDadMobile/ClawDadMobile.xcodeproj -scheme ClawDadMobile -configuration Debug -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build",
     "ios:archive": "./bin/fetch-webrtc-dependency && xcodebuild -project apps/ios/ClawDadMobile/ClawDadMobile.xcodeproj -scheme ClawDadMobile -configuration Release -destination 'generic/platform=iOS' -archivePath apps/ios/ClawDadMobile/build/ClawDadMobile.xcarchive archive",
