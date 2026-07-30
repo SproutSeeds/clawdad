@@ -100,6 +100,17 @@ Regenerate and dimension-check the complete set with:
 zsh ./bin/clawdad-app-store-screenshots
 ```
 
+Preview the guarded App Store Connect upload with:
+
+```sh
+npm run appstore:release-screenshots -- --json
+```
+
+The exact reviewed files were uploaded on 2026-07-30 to the draft
+`APP_IPHONE_67` set and both assets reached `COMPLETE`. The command is
+checksum-idempotent and refuses to replace a populated 6.9-inch set unless
+`--replace-existing-screenshots` is supplied.
+
 The 2026-07-30 visual review found no clipped labels, overlapping controls,
 debug chrome, credentials, customer data, or real project paths. The workspace
 capture shows project/thread selection, Direct compose, voice, model effort, and
@@ -111,8 +122,6 @@ formatted Codex history and per-message copy controls.
 - Supply the direct, monitored Beta App Review phone number.
 - Confirm the Paid Applications Agreement, tax, and banking state.
 - Complete the app privacy questionnaire from the evidence worksheet.
-- Confirm the prepared screenshots after representative physical-device review,
-  then attach them to App Store version 1.0.
 - Attach both first subscriptions to App Store version 1.0 in the same review
   submission.
 - Provide Apple a durable, least-privilege reviewer Mac and pairing path. A

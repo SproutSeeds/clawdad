@@ -1,6 +1,6 @@
 {
   "schema": "clawdad.app-store-release/1",
-  "generatedAt": "2026-07-30T12:27:57.753Z",
+  "generatedAt": "2026-07-30T13:24:02.842Z",
   "app": {
     "id": "6783090068",
     "name": "ClawDad Mobile",
@@ -20,7 +20,7 @@
     "state": "PREPARE_FOR_SUBMISSION",
     "localizationId": "d44928ae-9da1-41cf-b828-c0df69ddcdb8",
     "configured": true,
-    "screenshotSetCount": 0,
+    "screenshotSetCount": 1,
     "reviewContactConfigured": false
   },
   "beta": {
@@ -56,7 +56,6 @@
     }
   },
   "remainingHumanGates": [
-    "App Store screenshots and representative visual review",
     "App privacy questionnaire confirmation",
     "Beta App Review phone number and reviewer pairing instructions",
     "Physical-device paid purchase, restore, and cancellation verification"

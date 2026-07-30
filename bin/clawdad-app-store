@@ -10,6 +10,7 @@ import {
   configurePaidBeta,
   configurePaidBetaReviewScreenshots,
   configureAppRelease,
+  configureAppStoreScreenshots,
   paidBetaCatalog,
   paidBetaPlan,
   readAppReleaseStatus,
@@ -29,10 +30,14 @@ function usage() {
     "  release-plan       Show App Store and TestFlight metadata configuration",
     "  release-status     Read App Store and TestFlight release status",
     "  release-configure  Apply App Store and TestFlight release configuration",
+    "  release-screenshots Upload reviewed App Store product screenshots",
     "  external-beta-submit  Assign the certified build and start Beta App Review",
     "",
     "External beta confirmation:",
     "  --confirm-physical-certification",
+    "",
+    "Screenshot replacement:",
+    "  --replace-existing-screenshots",
     "",
     "Environment:",
     "  APP_STORE_CONNECT_KEY_ID",
@@ -44,12 +49,16 @@ function usage() {
 
 function parseArguments(argv) {
   const command = argv.find((value) => !value.startsWith("-")) || "status";
-  const imageIndex = argv.indexOf("--image");
+  const images = argv.flatMap((value, index) => (
+    value === "--image" && argv[index + 1] ? [argv[index + 1]] : []
+  ));
   return {
     command,
     apply: argv.includes("--apply"),
     json: argv.includes("--json"),
-    image: imageIndex >= 0 ? argv[imageIndex + 1] : "",
+    images,
+    replaceExistingScreenshots:
+      argv.includes("--replace-existing-screenshots"),
     physicalCertificationConfirmed:
       argv.includes("--confirm-physical-certification"),
     help: argv.includes("--help") || argv.includes("-h"),
@@ -121,6 +130,7 @@ async function main() {
       "review-screenshots",
       "release-status",
       "release-configure",
+      "release-screenshots",
       "external-beta-submit",
     ].includes(options.command)
   ) {
@@ -138,7 +148,7 @@ async function main() {
   }
   if (options.command === "review-screenshots") {
     const imagePath = resolve(
-      options.image || "docs/app-store/subscription-review-1290x2796.png",
+      options.images[0] || "docs/app-store/subscription-review-1290x2796.png",
     );
     if (!options.apply) {
       print({
@@ -168,6 +178,59 @@ async function main() {
       image: imagePath,
       results: result.results,
       record: "ops/app-store-products.json",
+      status: result.status,
+    }, options.json);
+    return;
+  }
+  if (options.command === "release-screenshots") {
+    const imagePaths = (
+      options.images.length > 0
+        ? options.images
+        : [
+          "docs/app-store/screenshots/iphone-6.9/01-workspace.png",
+          "docs/app-store/screenshots/iphone-6.9/02-conversation.png",
+        ]
+    ).map((imagePath) => resolve(imagePath));
+    if (!options.apply) {
+      print({
+        applied: false,
+        message: [
+          "Review every image, then rerun release-screenshots with --apply.",
+          "Replacement of a populated set requires",
+          "--replace-existing-screenshots.",
+        ].join(" "),
+        images: imagePaths,
+        current: await readAppReleaseStatus(client, releaseCatalog),
+      }, options.json);
+      return;
+    }
+    const screenshots = await Promise.all(
+      imagePaths.map(async (imagePath) => ({
+        fileName: basename(imagePath),
+        contents: await readFile(imagePath),
+      })),
+    );
+    const result = await configureAppStoreScreenshots(client, {
+      catalog: releaseCatalog,
+      screenshots,
+      replaceExisting: options.replaceExistingScreenshots,
+    });
+    const record = {
+      schema: "clawdad.app-store-release/1",
+      ...result.status,
+    };
+    await writeFile(
+      resolve("ops/app-store-release.json"),
+      `${JSON.stringify(record, null, 2)}\n`,
+      { mode: 0o644 },
+    );
+    print({
+      applied: true,
+      images: imagePaths,
+      actions: result.actions,
+      displayType: result.displayType,
+      screenshots: result.screenshots,
+      record: "ops/app-store-release.json",
       status: result.status,
     }, options.json);
     return;

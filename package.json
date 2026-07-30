@@ -11,6 +11,7 @@
     "appstore:status": "node bin/clawdad-app-store status",
     "appstore:configure": "node bin/clawdad-app-store configure",
     "appstore:review-screenshots": "node bin/clawdad-app-store review-screenshots",
+    "appstore:release-screenshots": "node bin/clawdad-app-store release-screenshots",
     "appstore:release:plan": "node bin/clawdad-app-store release-plan",
     "appstore:release:status": "node bin/clawdad-app-store release-status",
     "appstore:release:configure": "node bin/clawdad-app-store release-configure",

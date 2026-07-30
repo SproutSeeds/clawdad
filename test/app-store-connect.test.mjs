@@ -11,6 +11,7 @@ import {
   buildSubscriptionCreateRequest,
   buildTrialCreateRequest,
   configureAppRelease,
+  configureAppStoreScreenshots,
   createAppStoreConnectToken,
   paidBetaCatalog,
   paidBetaPlan,
@@ -420,6 +421,8 @@ class FakeReleaseClient {
         },
       },
       betaReviewSubmissions: [],
+      screenshotSets: [],
+      screenshotsBySet: new Map(),
     };
   }
 
@@ -465,7 +468,15 @@ class FakeReleaseClient {
     if (path.startsWith("/v1/betaAppReviewSubmissions?")) {
       return this.resources.betaReviewSubmissions;
     }
-    if (path.includes("/appScreenshotSets?")) return [];
+    if (path.includes("/appScreenshotSets?")) {
+      return this.resources.screenshotSets;
+    }
+    const screenshotListMatch = path.match(
+      /^\/v1\/appScreenshotSets\/([^/]+)\/appScreenshots\?limit=50$/u,
+    );
+    if (screenshotListMatch) {
+      return this.resources.screenshotsBySet.get(screenshotListMatch[1]) || [];
+    }
     throw new Error(`Unexpected list request: ${path}`);
   }
 
@@ -476,6 +487,77 @@ class FakeReleaseClient {
       return { data: this.resources.app };
     }
     if (method === "GET" && path.endsWith("/appStoreReviewDetail")) {
+      return null;
+    }
+    if (method === "POST" && path === "/v1/appScreenshotSets") {
+      const resource = {
+        type: "appScreenshotSets",
+        id: `screenshot-set-${this.resources.screenshotSets.length + 1}`,
+        attributes: options.body.data.attributes,
+      };
+      this.resources.screenshotSets.push(resource);
+      this.resources.screenshotsBySet.set(resource.id, []);
+      return { data: resource };
+    }
+    if (method === "POST" && path === "/v1/appScreenshots") {
+      const screenshotSetId =
+        options.body.data.relationships.appScreenshotSet.data.id;
+      const screenshots =
+        this.resources.screenshotsBySet.get(screenshotSetId) || [];
+      const resource = {
+        type: "appScreenshots",
+        id: `app-screenshot-${screenshots.length + 1}`,
+        attributes: {
+          ...options.body.data.attributes,
+          uploadOperations: [{
+            method: "PUT",
+            url: `https://upload.example.test/${screenshots.length + 1}`,
+            offset: 0,
+            length: options.body.data.attributes.fileSize,
+            requestHeaders: [{
+              name: "Content-Type",
+              value: "image/png",
+            }],
+          }],
+          assetDeliveryState: { state: "AWAITING_UPLOAD" },
+        },
+      };
+      screenshots.push(resource);
+      this.resources.screenshotsBySet.set(screenshotSetId, screenshots);
+      return { data: resource };
+    }
+    if (method === "PATCH" && path.startsWith("/v1/appScreenshots/")) {
+      const screenshot = [...this.resources.screenshotsBySet.values()]
+        .flat()
+        .find((candidate) => path.endsWith(`/${candidate.id}`));
+      assert.ok(screenshot, `Missing fake screenshot for ${path}`);
+      Object.assign(screenshot.attributes, options.body.data.attributes, {
+        assetDeliveryState: { state: "COMPLETE" },
+      });
+      return { data: screenshot };
+    }
+    if (
+      method === "PATCH" &&
+      path.endsWith("/relationships/appScreenshots")
+    ) {
+      const screenshotSetId = path.split("/")[3];
+      const screenshots =
+        this.resources.screenshotsBySet.get(screenshotSetId) || [];
+      const byId = new Map(
+        screenshots.map((screenshot) => [screenshot.id, screenshot]),
+      );
+      this.resources.screenshotsBySet.set(
+        screenshotSetId,
+        options.body.data.map((entry) => byId.get(entry.id)),
+      );
+      return null;
+    }
+    if (method === "DELETE" && path.startsWith("/v1/appScreenshotSets/")) {
+      const screenshotSetId = path.split("/").at(-1);
+      this.resources.screenshotSets = this.resources.screenshotSets.filter(
+        (candidate) => candidate.id !== screenshotSetId,
+      );
+      this.resources.screenshotsBySet.delete(screenshotSetId);
       return null;
     }
     if (method === "PATCH") {
@@ -613,6 +695,76 @@ test("app release configuration is complete, scoped, and idempotent", async () =
   assert.deepEqual(second.actions, []);
   assert.equal(second.status.beta.assignedToGroup, true);
   assert.equal(second.status.beta.externalTesting.buildAssigned, false);
+});
+
+test("App Store screenshots upload in order and rerun by checksum", async () => {
+  const client = new FakeReleaseClient();
+  const screenshots = [
+    {
+      fileName: "01-workspace.png",
+      contents: Buffer.from("opaque workspace screenshot"),
+    },
+    {
+      fileName: "02-conversation.png",
+      contents: Buffer.from("opaque conversation screenshot"),
+    },
+  ];
+  const uploaded = [];
+  const fetchImpl = async (url, options) => {
+    uploaded.push({
+      url,
+      body: Buffer.from(options.body),
+    });
+    return { ok: true, status: 200 };
+  };
+
+  const first = await configureAppStoreScreenshots(client, {
+    screenshots,
+    fetchImpl,
+    pollAttempts: 1,
+    pollDelayMilliseconds: 0,
+  });
+  assert.deepEqual(first.actions, [
+    "Created the APP_IPHONE_67 screenshot set.",
+    "Uploaded 2 ordered APP_IPHONE_67 screenshots.",
+  ]);
+  assert.equal(first.status.version.screenshotSetCount, 1);
+  assert.equal(
+    first.status.remainingHumanGates.some(
+      (gate) => gate.startsWith("App Store screenshots"),
+    ),
+    false,
+  );
+  assert.deepEqual(
+    first.screenshots.map((screenshot) => screenshot.fileName),
+    ["01-workspace.png", "02-conversation.png"],
+  );
+  assert.deepEqual(
+    uploaded.map((upload) => upload.body),
+    screenshots.map((screenshot) => screenshot.contents),
+  );
+
+  const second = await configureAppStoreScreenshots(client, {
+    screenshots,
+    fetchImpl,
+    pollAttempts: 1,
+    pollDelayMilliseconds: 0,
+  });
+  assert.deepEqual(second.actions, []);
+  assert.equal(uploaded.length, 2);
+
+  await assert.rejects(
+    configureAppStoreScreenshots(client, {
+      screenshots: [{
+        fileName: "replacement.png",
+        contents: Buffer.from("different screenshot"),
+      }],
+      fetchImpl,
+      pollAttempts: 1,
+      pollDelayMilliseconds: 0,
+    }),
+    /explicitly allow replacement/u,
+  );
 });
 
 test("external beta submission requires certification and is retry-safe", async () => {

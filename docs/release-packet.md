@@ -49,8 +49,8 @@ Prepared: 2026-07-30
   verified at 207 files. Publication reached npm successfully and stopped at
   the account OTP challenge without publishing a partial version.
 - Two canonical 6.9-inch App Store screenshots are reproducible from synthetic
-  in-memory data and visually reviewed at `1290x2796`. Their final physical
-  review and App Store attachment remain human gates.
+  in-memory data, opaque, visually reviewed at `1290x2796`, and uploaded in
+  order to the draft App Store version with `COMPLETE` processing state.
 - The connected iPhone remains on `0.1.0 (15)`. Physical certification begins
   after TestFlight updates it to `0.7.0 (19)`.
 - The existing Cloudflare deployment token is healthy for Workers deployment
