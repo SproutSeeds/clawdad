@@ -11,11 +11,27 @@ App Store, connected-device, and installed-build state. It does not collect
 messages, project contents, credentials, serial numbers, or device filesystem
 paths. Service-health fields are allow-listed so project paths are excluded.
 
+Record each observed physical result in the private release-bound ledger:
+
+```sh
+node bin/clawdad-certify record \
+  --check freshTestFlightInstall \
+  --state pass \
+  --evidence "Build 19 launched from a clean TestFlight install."
+```
+
+Inspect progress with `node bin/clawdad-certify status --json`. A `pass` record
+is accepted only while the connected physical iPhone has the expected
+TestFlight/App Store version and build. The mode-`0600` ledger is preserved
+across snapshots and automatically stops applying when the release identity
+changes. Use `fail` or `blocked` with concrete evidence when a check exposes a
+problem; use `pending` to clear a result for a fresh rerun.
+
 ## Automated
 
 | Check | State | Evidence |
 | --- | --- | --- |
-| Node integration suite | Pass | `npm test`: 387 tests passed |
+| Node integration suite | Pass | `npm test`: 388 tests passed |
 | iPhone Swift unit suite | Pass | `swift test --package-path apps/ios/ClawDadMobile`: 13 tests passed |
 | Mac Swift unit suite | Pass | `swift test --package-path native/macos`: 8 tests passed |
 | Simulator build | Pass | `npm run ios:build` completed for the final build-19 source |

@@ -2,6 +2,7 @@
 
 import { execFile as execFileCallback } from "node:child_process";
 import {
+  chmod,
   mkdtemp,
   mkdir,
   readFile,
@@ -15,10 +16,13 @@ import { promisify } from "node:util";
 import {
   CLAWDAD_IOS_BUNDLE_ID,
   findInstalledApp,
+  normalizePhysicalCertification,
   physicalCertificationChecks,
   sanitizeConnectedDevice,
   sanitizeServiceHealth,
   summarizeCertificationSnapshot,
+  summarizePhysicalCertification,
+  updatePhysicalCertification,
 } from "../lib/reliability-certification.mjs";
 
 const execFile = promisify(execFileCallback);
@@ -35,11 +39,37 @@ const iosProjectPath = join(
 function parseArguments(argv) {
   const outputIndex = argv.indexOf("--output");
   const deviceIndex = argv.indexOf("--device");
+  const ledgerIndex = argv.indexOf("--ledger");
+  const checkIndex = argv.indexOf("--check");
+  const stateIndex = argv.indexOf("--state");
+  const evidenceIndex = argv.indexOf("--evidence");
+  const command = ["snapshot", "record", "status"].includes(argv[0])
+    ? argv[0]
+    : "snapshot";
   return {
+    command,
     output: outputIndex >= 0 ? argv[outputIndex + 1] : "",
     deviceId: deviceIndex >= 0 ? argv[deviceIndex + 1] : "",
+    ledger: ledgerIndex >= 0 ? argv[ledgerIndex + 1] : "",
+    check: checkIndex >= 0 ? argv[checkIndex + 1] : "",
+    state: stateIndex >= 0 ? argv[stateIndex + 1] : "",
+    evidence: evidenceIndex >= 0 ? argv[evidenceIndex + 1] : "",
     json: argv.includes("--json"),
+    help: argv.includes("--help") || argv.includes("-h"),
   };
+}
+
+function usage() {
+  return [
+    "Usage:",
+    "  clawdad-certify snapshot [--device ID] [--output PATH] [--json]",
+    "  clawdad-certify status [--ledger PATH] [--json]",
+    "  clawdad-certify record --check NAME --state STATE --evidence TEXT",
+    "    [--device ID] [--ledger PATH] [--json]",
+    "",
+    `Checks: ${physicalCertificationChecks.join(", ")}`,
+    "States: pending, pass, fail, blocked",
+  ].join("\n");
 }
 
 async function run(command, args = [], options = {}) {
@@ -347,12 +377,152 @@ function commandPayload(result) {
   return result.ok ? result.payload : { error: result.error };
 }
 
+function physicalLedgerPath(options) {
+  return resolve(
+    options.ledger ||
+      join(homedir(), ".clawdad", "certifications", "physical.json"),
+  );
+}
+
+function ledgerMatchesRelease(ledger, release) {
+  return (
+    ledger?.release?.expectedVersion === release.expectedVersion &&
+    ledger?.release?.expectedIosVersion === release.expectedIosVersion &&
+    ledger?.release?.expectedIosBuild === release.expectedIosBuild
+  );
+}
+
+async function readPhysicalLedger(path, release) {
+  try {
+    const ledger = JSON.parse(await readFile(path, "utf8"));
+    if (!ledgerMatchesRelease(ledger, release)) {
+      return {
+        schema: "clawdad.physical-certification/1",
+        release,
+        checks: normalizePhysicalCertification(),
+      };
+    }
+    return {
+      schema: "clawdad.physical-certification/1",
+      updatedAt: String(ledger.updatedAt || ""),
+      release,
+      device: ledger.device || null,
+      checks: normalizePhysicalCertification(ledger.checks),
+    };
+  } catch {
+    return {
+      schema: "clawdad.physical-certification/1",
+      release,
+      checks: normalizePhysicalCertification(),
+    };
+  }
+}
+
+async function recordPhysicalCertification({
+  options,
+  expectedVersion,
+}) {
+  if (!options.check || !options.state) {
+    throw new Error("record requires --check and --state.");
+  }
+  const iosRelease = await readIosReleaseSettings();
+  if (!iosRelease.ok) {
+    throw new Error("The iPhone release build settings are unavailable.");
+  }
+  const release = {
+    expectedVersion,
+    expectedIosVersion: iosRelease.version,
+    expectedIosBuild: iosRelease.build,
+  };
+  const iphone = await readDeviceState(options.deviceId);
+  const installed = iphone.targetDevice?.installedApp || null;
+  if (
+    options.state === "pass" &&
+    (
+      installed?.version !== release.expectedIosVersion ||
+      installed?.build !== release.expectedIosBuild ||
+      installed?.installation !== "store"
+    )
+  ) {
+    throw new Error(
+      `Pass evidence requires the TestFlight/App Store build ` +
+      `${release.expectedIosVersion} (${release.expectedIosBuild}) ` +
+      "on a connected physical iPhone.",
+    );
+  }
+  const path = physicalLedgerPath(options);
+  const ledger = await readPhysicalLedger(path, release);
+  const recordedAt = new Date().toISOString();
+  ledger.updatedAt = recordedAt;
+  ledger.device = iphone.targetDevice
+    ? {
+      model: iphone.targetDevice.model,
+      productType: iphone.targetDevice.productType,
+      osVersion: iphone.targetDevice.osVersion,
+      installedApp: iphone.targetDevice.installedApp,
+    }
+    : null;
+  ledger.checks = updatePhysicalCertification(ledger.checks, {
+    check: options.check,
+    state: options.state,
+    evidence: options.evidence,
+    recordedAt,
+  });
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, `${JSON.stringify(ledger, null, 2)}\n`, {
+    mode: 0o600,
+  });
+  await chmod(path, 0o600);
+  return {
+    ok: true,
+    ledger: path,
+    recorded: {
+      check: options.check,
+      ...ledger.checks[options.check],
+    },
+    summary: summarizePhysicalCertification(ledger.checks),
+    targetDevice: iphone.targetDevice,
+  };
+}
+
 async function main() {
   const options = parseArguments(process.argv.slice(2));
   const packageDocument = JSON.parse(
     await readFile(join(projectRoot, "package.json"), "utf8"),
   );
   const expectedVersion = String(packageDocument.version || "");
+  if (options.help) {
+    process.stdout.write(`${usage()}\n`);
+    return;
+  }
+  if (options.command === "record") {
+    const result = await recordPhysicalCertification({
+      options,
+      expectedVersion,
+    });
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return;
+  }
+  if (options.command === "status") {
+    const iosRelease = await readIosReleaseSettings();
+    if (!iosRelease.ok) {
+      throw new Error("The iPhone release build settings are unavailable.");
+    }
+    const release = {
+      expectedVersion,
+      expectedIosVersion: iosRelease.version,
+      expectedIosBuild: iosRelease.build,
+    };
+    const ledger = await readPhysicalLedger(
+      physicalLedgerPath(options),
+      release,
+    );
+    process.stdout.write(`${JSON.stringify({
+      ...ledger,
+      summary: summarizePhysicalCertification(ledger.checks),
+    }, null, 2)}\n`);
+    return;
+  }
 
   const [
     npmState,
@@ -393,6 +563,14 @@ async function main() {
     ]),
     readGitCommit(),
   ]);
+  const physicalLedger = await readPhysicalLedger(
+    physicalLedgerPath(options),
+    {
+      expectedVersion,
+      expectedIosVersion: iosRelease.version,
+      expectedIosBuild: iosRelease.build,
+    },
+  );
 
   const snapshot = {
     schema: "clawdad.reliability-snapshot/1",
@@ -424,12 +602,7 @@ async function main() {
       release: commandPayload(releaseStatus),
       subscriptions: commandPayload(subscriptionStatus),
     },
-    physicalCertification: Object.fromEntries(
-      physicalCertificationChecks.map((check) => [
-        check,
-        { state: "pending", evidence: "" },
-      ]),
-    ),
+    physicalCertification: physicalLedger.checks,
   };
   snapshot.summary = summarizeCertificationSnapshot(snapshot);
 
@@ -447,6 +620,7 @@ async function main() {
   await writeFile(outputPath, `${JSON.stringify(snapshot, null, 2)}\n`, {
     mode: 0o600,
   });
+  await chmod(outputPath, 0o600);
 
   const result = {
     ok: true,
@@ -458,6 +632,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  process.stderr.write(`ClawDad certification snapshot failed: ${error.message}\n`);
+  process.stderr.write(`ClawDad certification failed: ${error.message}\n`);
   process.exitCode = 1;
 });

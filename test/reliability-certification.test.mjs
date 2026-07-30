@@ -2,9 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   findInstalledApp,
+  normalizePhysicalCertification,
+  physicalCertificationChecks,
   sanitizeConnectedDevice,
   sanitizeServiceHealth,
   summarizeCertificationSnapshot,
+  summarizePhysicalCertification,
+  updatePhysicalCertification,
 } from "../lib/reliability-certification.mjs";
 
 test("connected device snapshots omit hardware secrets and retain readiness facts", () => {
@@ -54,6 +58,7 @@ test("installed app lookup retains only public app version fields", () => {
       bundleIdentifier: "earth.frg.clawdad.ios",
       version: "0.7.0",
       bundleVersion: "19",
+      builtByDeveloper: false,
       url: "file:///private/secret/path",
     },
   ]);
@@ -63,6 +68,7 @@ test("installed app lookup retains only public app version fields", () => {
     bundleIdentifier: "earth.frg.clawdad.ios",
     version: "0.7.0",
     build: "19",
+    installation: "store",
   });
   assert.equal(JSON.stringify(app).includes("private/secret"), false);
 });
@@ -115,6 +121,7 @@ test("certification readiness requires the published release and physical build"
         installedApp: {
           version: "0.7.0",
           build: "19",
+          installation: "store",
         },
       },
     },
@@ -127,6 +134,12 @@ test("certification readiness requires the published release and physical build"
     testFlightReady: true,
     deviceConnected: true,
     deviceBuildReady: true,
+    passed: 0,
+    total: 17,
+    foundingBetaPassed: 0,
+    foundingBetaTotal: 16,
+    foundingBetaPhysicalReady: false,
+    physicalCertificationComplete: false,
     readyForPhysicalCertification: true,
   });
 
@@ -134,5 +147,45 @@ test("certification readiness requires the published release and physical build"
   assert.equal(
     summarizeCertificationSnapshot(snapshot).readyForPhysicalCertification,
     false,
+  );
+});
+
+test("physical certification records evidence and reports completion", () => {
+  let checks = normalizePhysicalCertification();
+  assert.equal(Object.keys(checks).length, physicalCertificationChecks.length);
+  assert.equal(checks.freshTestFlightInstall.state, "pending");
+
+  for (const check of physicalCertificationChecks) {
+    checks = updatePhysicalCertification(checks, {
+      check,
+      state: "pass",
+      evidence: `Verified ${check} on build 19.`,
+      recordedAt: "2026-07-30T14:00:00.000Z",
+    });
+  }
+
+  assert.deepEqual(summarizePhysicalCertification(checks), {
+    passed: 17,
+    total: 17,
+    foundingBetaPassed: 16,
+    foundingBetaTotal: 16,
+    foundingBetaPhysicalReady: true,
+    physicalCertificationComplete: true,
+  });
+  assert.throws(
+    () => updatePhysicalCertification(checks, {
+      check: "voice",
+      state: "fail",
+      evidence: "",
+    }),
+    /Evidence is required/u,
+  );
+  assert.throws(
+    () => updatePhysicalCertification(checks, {
+      check: "unknown",
+      state: "pass",
+      evidence: "Nope",
+    }),
+    /Unknown physical certification check/u,
   );
 });
