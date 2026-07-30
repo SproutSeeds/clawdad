@@ -1,16 +1,27 @@
 .DS_Store
 ._*
 *.log
+node_modules/
 .clawdad/
+.wrangler/
 .playwright-mcp/
+native/macos/.build/
+native/macos/dist/
+native/ClawDadRemoteAssistProtocol/.build/
+apps/ios/ClawDadMobile/.build/
+apps/ios/ClawDadMobile/build/
+apps/ios/ClawDadMobile/ClawDadMobile.xcodeproj/xcuserdata/
+vendor/WebRTCPackage/WebRTC.xcframework/
+vendor/WebRTCPackage/WebRTC-M150.xcframework.zip
+*.xcuserstate
 
 # Local screenshot / visual-iteration scratch.
-clawdad-*.png
-collapsed-*.png
-formatted-*.png
-header-*.png
-session-thread-*.png
-wordmark-*.png
+/clawdad-*.png
+/collapsed-*.png
+/formatted-*.png
+/header-*.png
+/session-thread-*.png
+/wordmark-*.png
 
 # Project app icons are checked in even though scratch screenshots use clawdad-*.png names.
 !assets/clawdad-app-icon-*.png

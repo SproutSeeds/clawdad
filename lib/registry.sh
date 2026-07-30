@@ -54,9 +54,24 @@ _state_lock_cleanup() {
     return 0
   fi
 
-  local owner_file owner_pid owner_started owner_token
+  local owner_file owner_pid owner_started owner_token current_pid
   owner_file=$(_state_lock_owner_file)
   if ! { IFS=' ' read -r owner_pid owner_started owner_token < "$owner_file"; } 2>/dev/null || [[ "$owner_token" != "$CLAWDAD_STATE_LOCK_OWNER_TOKEN" ]]; then
+    CLAWDAD_STATE_LOCK_HELD=0
+    CLAWDAD_STATE_LOCK_DEPTH=0
+    CLAWDAD_STATE_LOCK_OWNER_TOKEN=""
+    return 0
+  fi
+
+  zmodload zsh/system 2>/dev/null || true
+  if (( ${+sysparams} )) && [[ -n "${sysparams[pid]:-}" ]]; then
+    current_pid="${sysparams[pid]}"
+  else
+    current_pid="${ZSH_PID:-$$}"
+  fi
+  if [[ "$owner_pid" != "$current_pid" ]]; then
+    # Command substitutions inherit EXIT traps in zsh. A child must never
+    # release the lock held by the shell that spawned it.
     CLAWDAD_STATE_LOCK_HELD=0
     CLAWDAD_STATE_LOCK_DEPTH=0
     CLAWDAD_STATE_LOCK_OWNER_TOKEN=""
@@ -586,7 +601,18 @@ state_rekey_session() {
             }
         )
       | if $old != $new then
-          .projects[$path].sessions |= del(.[$old])
+          .projects[$path].session_aliases = (
+            (.projects[$path].session_aliases // {})
+            | with_entries(
+                if .value == $old then
+                  .value = $new
+                else
+                  .
+                end
+              )
+            | .[$old] = $new
+          )
+          | .projects[$path].sessions |= del(.[$old])
         else
           .
         end

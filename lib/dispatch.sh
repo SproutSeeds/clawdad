@@ -1,9 +1,80 @@
 #!/usr/bin/env zsh
 # clawdad/lib/dispatch.sh — Provider-agnostic dispatch to spoke agents
 
+_CLAWDAD_DISPATCH_ADMISSION_LOCK_DIR=""
+_CLAWDAD_DISPATCH_ADMISSION_TOKEN=""
+
+_dispatch_admission_release() {
+  local lock_dir="${_CLAWDAD_DISPATCH_ADMISSION_LOCK_DIR:-}"
+  local token="${_CLAWDAD_DISPATCH_ADMISSION_TOKEN:-}"
+  [[ -n "$lock_dir" && -n "$token" ]] || return 0
+
+  local owner_file="$lock_dir/owner.json"
+  local current_token=""
+  if [[ -f "$owner_file" ]]; then
+    current_token=$("$CLAWDAD_JQ" -r '.token // ""' "$owner_file" 2>/dev/null || true)
+  fi
+  if [[ "$current_token" == "$token" ]]; then
+    rm -f "$owner_file" 2>/dev/null || true
+    rmdir "$lock_dir" 2>/dev/null || true
+  fi
+  _CLAWDAD_DISPATCH_ADMISSION_LOCK_DIR=""
+  _CLAWDAD_DISPATCH_ADMISSION_TOKEN=""
+}
+
+_dispatch_admission_acquire() {
+  local project_path="$1"
+  if [[ "${CLAWDAD_DISPATCH_ADMISSION_HELD:-}" == "1" ]]; then
+    return 0
+  fi
+
+  local mailbox_path="$project_path/.clawdad/mailbox"
+  local lock_dir="$mailbox_path/dispatch-admission.lock"
+  local owner_file="$lock_dir/owner.json"
+  local started_at now owner_pid self_pid token owner_tmp
+  mkdir -p "$mailbox_path"
+  started_at=$(date +%s)
+  zmodload zsh/system 2>/dev/null || true
+  if (( ${+sysparams} )) && [[ -n "${sysparams[pid]:-}" ]]; then
+    self_pid="${sysparams[pid]}"
+  else
+    self_pid="${ZSH_PID:-$$}"
+  fi
+  token="${self_pid}:$(gen_uuid)"
+
+  while true; do
+    if mkdir "$lock_dir" 2>/dev/null; then
+      owner_tmp=$(mktemp "$mailbox_path/.dispatch-admission-owner.XXXXXX")
+      "$CLAWDAD_JQ" -n \
+        --argjson pid "$self_pid" \
+        --arg token "$token" \
+        --arg acquiredAt "$(iso_timestamp)" \
+        '{pid: $pid, token: $token, acquiredAt: $acquiredAt}' > "$owner_tmp"
+      mv "$owner_tmp" "$owner_file"
+      _CLAWDAD_DISPATCH_ADMISSION_LOCK_DIR="$lock_dir"
+      _CLAWDAD_DISPATCH_ADMISSION_TOKEN="$token"
+      trap '_dispatch_admission_release' EXIT
+      return 0
+    fi
+
+    owner_pid=$("$CLAWDAD_JQ" -r '.pid // 0' "$owner_file" 2>/dev/null || printf '0')
+    if [[ ! "$owner_pid" == <-> ]] || (( owner_pid <= 0 )) || ! kill -0 "$owner_pid" 2>/dev/null; then
+      rm -f "$owner_file" 2>/dev/null || true
+      rmdir "$lock_dir" 2>/dev/null || true
+      continue
+    fi
+    now=$(date +%s)
+    if (( now - started_at >= 15 )); then
+      clawdad_error "Timed out waiting for dispatch admission at $lock_dir (owner pid $owner_pid)"
+      return 1
+    fi
+    sleep 0.05
+  done
+}
+
 _build_cmd_codex() {
   local message="$1" session_id="$2" session_seeded="$3"
-  local permission_mode="$4" model="$5" project_path="$6" attachment_manifest="${7:-}"
+  local permission_mode="$4" model="$5" project_path="$6" attachment_manifest="${7:-}" reasoning_effort="${8:-}"
 
   require_node
 
@@ -25,6 +96,10 @@ _build_cmd_codex() {
     cmd+=("--model" "$model")
   fi
 
+  if [[ -n "$reasoning_effort" ]]; then
+    cmd+=("--reasoning-effort" "$reasoning_effort")
+  fi
+
   if [[ -n "$attachment_manifest" ]]; then
     cmd+=("--attachment-manifest" "$attachment_manifest")
   fi
@@ -32,17 +107,17 @@ _build_cmd_codex() {
   local interjection_dir="$project_path/.clawdad/mailbox/interjections"
   cmd+=("--interjection-dir" "$interjection_dir")
 
-  local turn_timeout_ms="${CLAWDAD_CODEX_TURN_TIMEOUT_MS:-${CLAWDAD_WORKER_TIMEOUT_MS:-1800000}}"
+  local turn_timeout_ms="${CLAWDAD_CODEX_TURN_TIMEOUT_MS:-0}"
   if [[ -n "$turn_timeout_ms" ]]; then
     cmd+=("--turn-timeout-ms" "$turn_timeout_ms")
   fi
 
-  local turn_idle_timeout_ms="${CLAWDAD_CODEX_TURN_IDLE_TIMEOUT_MS:-300000}"
+  local turn_idle_timeout_ms="${CLAWDAD_CODEX_TURN_IDLE_TIMEOUT_MS:-0}"
   if [[ -n "$turn_idle_timeout_ms" ]]; then
     cmd+=("--turn-idle-timeout-ms" "$turn_idle_timeout_ms")
   fi
 
-  local tool_idle_timeout_ms="${CLAWDAD_CODEX_TOOL_IDLE_TIMEOUT_MS:-90000}"
+  local tool_idle_timeout_ms="${CLAWDAD_CODEX_TOOL_IDLE_TIMEOUT_MS:-0}"
   if [[ -n "$tool_idle_timeout_ms" ]]; then
     cmd+=("--tool-idle-timeout-ms" "$tool_idle_timeout_ms")
   fi
@@ -50,6 +125,21 @@ _build_cmd_codex() {
   local request_timeout_ms="${CLAWDAD_CODEX_REQUEST_TIMEOUT_MS:-120000}"
   if [[ -n "$request_timeout_ms" ]]; then
     cmd+=("--request-timeout-ms" "$request_timeout_ms")
+  fi
+
+  local resume_timeout_ms="${CLAWDAD_CODEX_RESUME_TIMEOUT_MS:-0}"
+  if [[ -n "$resume_timeout_ms" ]]; then
+    cmd+=("--resume-timeout-ms" "$resume_timeout_ms")
+  fi
+
+  local liveness_interval_ms="${CLAWDAD_CODEX_LIVENESS_INTERVAL_MS:-30000}"
+  if [[ -n "$liveness_interval_ms" ]]; then
+    cmd+=("--liveness-interval-ms" "$liveness_interval_ms")
+  fi
+
+  local liveness_probe_timeout_ms="${CLAWDAD_CODEX_LIVENESS_PROBE_TIMEOUT_MS:-10000}"
+  if [[ -n "$liveness_probe_timeout_ms" ]]; then
+    cmd+=("--liveness-probe-timeout-ms" "$liveness_probe_timeout_ms")
   fi
 }
 
@@ -109,13 +199,13 @@ _build_cmd_claude() {
 
 _build_dispatch_command() {
   local project_path="$1" message="$2" session_id="$3" dispatch_count="$4"
-  local provider="$5" session_seeded="$6" permission_mode="$7" model="$8" attachment_manifest="${9:-}"
+  local provider="$5" session_seeded="$6" permission_mode="$7" model="$8" attachment_manifest="${9:-}" reasoning_effort="${10:-}"
 
   cmd=()
 
   case "$provider" in
     codex)
-      _build_cmd_codex "$message" "$session_id" "$session_seeded" "$permission_mode" "$model" "$project_path" "$attachment_manifest"
+      _build_cmd_codex "$message" "$session_id" "$session_seeded" "$permission_mode" "$model" "$project_path" "$attachment_manifest" "$reasoning_effort"
       ;;
     chimera)
       _build_cmd_chimera "$project_path" "$message" "$session_id" "$session_seeded" "$permission_mode" "$model"
@@ -128,6 +218,33 @@ _build_dispatch_command() {
       return 1
       ;;
   esac
+}
+
+_dispatch_start_idle_sleep_assertion() {
+  local child_pid="$1"
+  local caffeinate_bin="${CLAWDAD_CAFFEINATE_BIN:-/usr/bin/caffeinate}"
+  _CLAWDAD_DISPATCH_POWER_PID=""
+
+  if [[ "${CLAWDAD_PREVENT_IDLE_SLEEP:-true}" == "false" || ! "$child_pid" == <-> ]]; then
+    return 0
+  fi
+  if [[ "$OSTYPE" != darwin* && -z "${CLAWDAD_CAFFEINATE_BIN:-}" ]]; then
+    return 0
+  fi
+  if [[ ! -x "$caffeinate_bin" ]]; then
+    return 0
+  fi
+
+  "$caffeinate_bin" -i -w "$child_pid" >/dev/null 2>&1 &
+  _CLAWDAD_DISPATCH_POWER_PID=$!
+}
+
+_dispatch_stop_idle_sleep_assertion() {
+  if [[ -n "${_CLAWDAD_DISPATCH_POWER_PID:-}" ]] && kill -0 "$_CLAWDAD_DISPATCH_POWER_PID" 2>/dev/null; then
+    kill -TERM "$_CLAWDAD_DISPATCH_POWER_PID" 2>/dev/null || true
+    wait "$_CLAWDAD_DISPATCH_POWER_PID" 2>/dev/null || true
+  fi
+  _CLAWDAD_DISPATCH_POWER_PID=""
 }
 
 _message_requests_artifact_handoff() {
@@ -204,6 +321,11 @@ _extract_codex_session_id() {
 _extract_codex_error_text() {
   local output="$1"
   printf '%s' "$output" | "$CLAWDAD_JQ" -r '.error_text // ""' 2>/dev/null
+}
+
+_extract_codex_result_text_only() {
+  local output="$1"
+  printf '%s' "$output" | "$CLAWDAD_JQ" -r '.result_text // ""' 2>/dev/null
 }
 
 _codex_error_is_transport_disconnect() {
@@ -303,6 +425,7 @@ dispatch_to_spoke() {
   local session_selector="${5:-}"
   local persist_active="${6:-true}"
   local attachment_manifest="${7:-}"
+  local reasoning_effort="${8:-}"
 
   # Resolve the active tracked session for this project bucket.
   local session_json
@@ -354,11 +477,15 @@ dispatch_to_spoke() {
     _validate_codex_session_binding "$project_path" "$session_id" "$session_seeded" || return 1
   fi
 
+  _dispatch_admission_acquire "$project_path" || return 1
+
   # Check if a dispatch is already in flight
   local current_status
   current_status=$(mailbox_read_status "$project_path")
   if [[ "$current_status" == "running" || "$current_status" == "dispatched" ]]; then
     clawdad_error "Project '$slug' already has a dispatch in flight. Use 'clawdad status $slug' to check."
+    _dispatch_admission_release
+    trap - EXIT
     return 1
   fi
 
@@ -390,7 +517,7 @@ dispatch_to_spoke() {
   local agent_message
   agent_message=$(_artifact_augmented_message "$project_path" "$message")
   agent_message=$(_attachment_augmented_message "$agent_message" "$attachment_manifest")
-  _build_dispatch_command "$project_path" "$agent_message" "$session_id" "$dispatch_count" "$provider" "$session_seeded" "$permission_mode" "$model" "$attachment_manifest" || return 1
+  _build_dispatch_command "$project_path" "$agent_message" "$session_id" "$dispatch_count" "$provider" "$session_seeded" "$permission_mode" "$model" "$attachment_manifest" "$reasoning_effort" || return 1
   if [[ "$provider" == "codex" && -z "${CLAWDAD_CODEX_EVENT_LOG_FILE:-}" ]]; then
     local codex_event_dir="$project_path/.clawdad/history/events"
     mkdir -p "$codex_event_dir" 2>/dev/null || true
@@ -410,10 +537,13 @@ dispatch_to_spoke() {
     "$model" \
     "$persist_active" \
     "$agent_message" \
-    "$attachment_manifest" >/dev/null 2>&1 </dev/null &
+    "$attachment_manifest" \
+    "$reasoning_effort" >/dev/null 2>&1 </dev/null &
   local bg_pid=$!
 
   mailbox_update_status "$project_path" "running" "$request_id" "$bg_pid" "" "$session_id"
+  _dispatch_admission_release
+  trap - EXIT
 
   clawdad_info "Dispatched request $request_id to $slug via $provider (pid: $bg_pid)"
   clawdad_log "dispatch: slug=$slug provider=$provider request_id=$request_id pid=$bg_pid cmd=${cmd[*]}"
@@ -422,7 +552,7 @@ dispatch_to_spoke() {
 _dispatch_background() {
   local project_path="$1" request_id="$2" session_id="$3" slug="$4" provider="$5"
   local session_seeded="${6:-}" dispatch_count="${7:-0}" permission_mode="${8:-$CLAWDAD_PERMISSION_MODE}"
-  local model="${9:-}" persist_active="${10:-true}" message="${11:-}" attachment_manifest="${12:-}"
+  local model="${9:-}" persist_active="${10:-true}" message="${11:-}" attachment_manifest="${12:-}" reasoning_effort="${13:-}"
 
   _CLAWDAD_DISPATCH_FINALIZED=false
   _CLAWDAD_DISPATCH_PROJECT_PATH="$project_path"
@@ -433,6 +563,7 @@ _dispatch_background() {
   _CLAWDAD_DISPATCH_ERROR=""
   _CLAWDAD_DISPATCH_CHILD_PID=""
   _CLAWDAD_DISPATCH_HEARTBEAT_PID=""
+  _CLAWDAD_DISPATCH_POWER_PID=""
 
   _dispatch_fail_unfinalized() {
     local exit_code=$?
@@ -453,6 +584,7 @@ _dispatch_background() {
     if [[ -n "${_CLAWDAD_DISPATCH_HEARTBEAT_PID:-}" ]] && kill -0 "$_CLAWDAD_DISPATCH_HEARTBEAT_PID" 2>/dev/null; then
       kill -TERM "$_CLAWDAD_DISPATCH_HEARTBEAT_PID" 2>/dev/null || true
     fi
+    _dispatch_stop_idle_sleep_assertion
     if mailbox_request_is_completed "$_CLAWDAD_DISPATCH_PROJECT_PATH" "$_CLAWDAD_DISPATCH_REQUEST_ID"; then
       clawdad_log "dispatch failure ignored after completed recovery: slug=$_CLAWDAD_DISPATCH_SLUG provider=$_CLAWDAD_DISPATCH_PROVIDER request_id=$_CLAWDAD_DISPATCH_REQUEST_ID exit=${exit_code:-1}"
       return 0
@@ -464,10 +596,10 @@ _dispatch_background() {
     history_update_result "$_CLAWDAD_DISPATCH_PROJECT_PATH" "$_CLAWDAD_DISPATCH_REQUEST_ID" "$_CLAWDAD_DISPATCH_SESSION_ID" "$_CLAWDAD_DISPATCH_SLUG" "$_CLAWDAD_DISPATCH_PROVIDER" "failed" "${exit_code:-1}" "$completed_at" "$error_msg" || \
       clawdad_log "history warning: failed to write abandoned response record for $_CLAWDAD_DISPATCH_SLUG request_id=$_CLAWDAD_DISPATCH_REQUEST_ID"
     mailbox_update_status "$_CLAWDAD_DISPATCH_PROJECT_PATH" "failed" "$_CLAWDAD_DISPATCH_REQUEST_ID" "" "$error_msg" "$_CLAWDAD_DISPATCH_SESSION_ID" || true
-    registry_update "$_CLAWDAD_DISPATCH_PROJECT_PATH" "status" "failed" || true
+    registry_update "$_CLAWDAD_DISPATCH_PROJECT_PATH" "status" "idle" || true
     registry_update "$_CLAWDAD_DISPATCH_PROJECT_PATH" "last_response" "$completed_at" || true
     registry_increment "$_CLAWDAD_DISPATCH_PROJECT_PATH" "dispatch_count" || true
-    state_update_session "$_CLAWDAD_DISPATCH_PROJECT_PATH" "$_CLAWDAD_DISPATCH_SESSION_ID" "status" "failed" || true
+    state_update_session "$_CLAWDAD_DISPATCH_PROJECT_PATH" "$_CLAWDAD_DISPATCH_SESSION_ID" "status" "idle" || true
     state_update_session "$_CLAWDAD_DISPATCH_PROJECT_PATH" "$_CLAWDAD_DISPATCH_SESSION_ID" "last_response" "$completed_at" || true
     state_increment_session "$_CLAWDAD_DISPATCH_PROJECT_PATH" "$_CLAWDAD_DISPATCH_SESSION_ID" "dispatch_count" || true
     clawdad_log "dispatch abandoned: slug=$_CLAWDAD_DISPATCH_SLUG provider=$_CLAWDAD_DISPATCH_PROVIDER request_id=$_CLAWDAD_DISPATCH_REQUEST_ID exit=${exit_code:-1} error=$error_msg"
@@ -478,7 +610,7 @@ _dispatch_background() {
   trap '_CLAWDAD_DISPATCH_ERROR="dispatch worker terminated"; _dispatch_fail_unfinalized; exit 143' TERM INT HUP
 
   local -a cmd
-  _build_dispatch_command "$project_path" "$message" "$session_id" "$dispatch_count" "$provider" "$session_seeded" "$permission_mode" "$model" "$attachment_manifest" || {
+  _build_dispatch_command "$project_path" "$message" "$session_id" "$dispatch_count" "$provider" "$session_seeded" "$permission_mode" "$model" "$attachment_manifest" "$reasoning_effort" || {
     _CLAWDAD_DISPATCH_ERROR="failed to build dispatch command"
     return 1
   }
@@ -505,6 +637,7 @@ _dispatch_background() {
   }
   "${cmd[@]}" >"$output_file" 2>&1 &
   _CLAWDAD_DISPATCH_CHILD_PID=$!
+  _dispatch_start_idle_sleep_assertion "$_CLAWDAD_DISPATCH_CHILD_PID"
   (
     heartbeat_child_pid="$_CLAWDAD_DISPATCH_CHILD_PID"
     heartbeat_interval="${CLAWDAD_DISPATCH_HEARTBEAT_INTERVAL_SECONDS:-30}"
@@ -528,6 +661,7 @@ _dispatch_background() {
     wait "$_CLAWDAD_DISPATCH_HEARTBEAT_PID" 2>/dev/null || true
   fi
   _CLAWDAD_DISPATCH_HEARTBEAT_PID=""
+  _dispatch_stop_idle_sleep_assertion
   output=$(cat "$output_file" 2>/dev/null || true)
   rm -f "$output_file" 2>/dev/null || true
 
@@ -607,6 +741,7 @@ _dispatch_background() {
     fi
 
     local error_msg
+    local failed_response
     case "$provider" in
       chimera)
         error_msg=$(_extract_chimera_error_text "$output")
@@ -626,11 +761,15 @@ _dispatch_background() {
       if [[ -n "$codex_error_text" && "$codex_error_text" != "null" ]]; then
         error_msg="$codex_error_text"
       fi
+      failed_response=$(_extract_codex_result_text_only "$output")
     fi
 
     case "$provider" in
       chimera|claude)
         mailbox_write_response "$project_path" "$request_id" "$effective_session_id" "$exit_code" "${error_msg:-$output}"
+        ;;
+      codex)
+        mailbox_write_response "$project_path" "$request_id" "$effective_session_id" "$exit_code" "${failed_response:-${error_msg:-$output}}"
         ;;
       *)
         mailbox_write_response "$project_path" "$request_id" "$effective_session_id" "$exit_code" "$output"
@@ -639,9 +778,9 @@ _dispatch_background() {
     history_update_result "$project_path" "$request_id" "$effective_session_id" "$slug" "$provider" "failed" "$exit_code" "$(iso_timestamp)" "${error_msg:-$output}" || \
       clawdad_log "history warning: failed to write failed response record for $slug request_id=$request_id"
     mailbox_update_status "$project_path" "failed" "$request_id" "" "$error_msg" "$effective_session_id"
-    registry_update "$project_path" "status" "failed"
+    registry_update "$project_path" "status" "idle"
     registry_increment "$project_path" "dispatch_count"
-    state_update_session "$project_path" "$effective_session_id" "status" "failed"
+    state_update_session "$project_path" "$effective_session_id" "status" "idle"
     state_update_session "$project_path" "$effective_session_id" "last_response" "$(iso_timestamp)"
     state_increment_session "$project_path" "$effective_session_id" "dispatch_count"
     if [[ "$provider" == "codex" ]] && _codex_error_is_transport_disconnect "${error_msg:-$output}"; then

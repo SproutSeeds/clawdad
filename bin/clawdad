@@ -58,6 +58,7 @@ Commands:
   secure-bootstrap [options]    Write a Tailscale-first secure server setup
   secure-doctor [options]       Verify the secure self-hosted setup
   prod-doctor [options]         Verify the live Clawdad app runtime
+  cloud-host [options]          Connect this desktop host to ClawDad Cloud
   chimera-doctor [options]      Verify the local Chimera/Ollama provider lane
   codex-hook                    Internal Codex hook entrypoint
   gen-token [options]           Generate a bearer token for the listener
@@ -92,6 +93,7 @@ Options for dispatch:
   --wait                        Block until response arrives
   --timeout <sec>               Optional max wait seconds (default: wait indefinitely)
   --model <model>               Override model for this dispatch
+  --reasoning-effort <effort>  Override Codex reasoning effort for this dispatch
   --permission-mode <mode>      Permission mode (default: plan)
 
 Options for delegate-set:
@@ -135,6 +137,8 @@ Environment:
   CLAWDAD_SERVER_AUTH_MODE      Listener auth mode: token, tailscale, hybrid
   CLAWDAD_SERVER_ALLOWED_USERS  Comma-separated Tailscale login allowlist
   CLAWDAD_SERVER_REQUIRED_CAPABILITY Required Tailscale app capability
+  CLAWDAD_CLOUD_CONFIG_FILE     Cloud host config path (default: ~/.clawdad/cloud.json)
+  CLAWDAD_CLOUD_URL             ClawDad Cloud base URL
 EOF
 }
 
@@ -558,7 +562,7 @@ cmd_dispatch() {
   require_jq
 
   local input="" message="" file="" wait=false timeout="$CLAWDAD_DISPATCH_TIMEOUT"
-  local model="" permission_mode="$CLAWDAD_PERMISSION_MODE" session_selector=""
+  local model="" reasoning_effort="" permission_mode="$CLAWDAD_PERMISSION_MODE" session_selector=""
   local attachment_manifest=""
 
   # Parse arguments
@@ -569,6 +573,7 @@ cmd_dispatch() {
       --wait) wait=true; shift ;;
       --timeout) timeout="$2"; shift 2 ;;
       --model) model="$2"; shift 2 ;;
+      --reasoning-effort) reasoning_effort="$2"; shift 2 ;;
       --permission-mode) permission_mode="$2"; shift 2 ;;
       --attachment-manifest) attachment_manifest="$2"; shift 2 ;;
       --stdin) message=$(cat); shift ;;
@@ -629,7 +634,7 @@ cmd_dispatch() {
     persist_active="false"
   fi
 
-  dispatch_to_spoke "$project_path" "$message" "$permission_mode" "$model" "$session_selector" "$persist_active" "$attachment_manifest"
+  dispatch_to_spoke "$project_path" "$message" "$permission_mode" "$model" "$session_selector" "$persist_active" "$attachment_manifest" "$reasoning_effort"
 
   if $wait; then
     local slug
@@ -958,6 +963,10 @@ cmd_prod_doctor() {
   run_server_helper prod-doctor "$@"
 }
 
+cmd_cloud_host() {
+  run_server_helper cloud-host "$@"
+}
+
 cmd_gen_token() {
   run_server_helper gen-token "$@"
 }
@@ -1062,6 +1071,7 @@ main() {
     secure-bootstrap) cmd_secure_bootstrap "$@" ;;
     secure-doctor) cmd_secure_doctor "$@" ;;
     prod-doctor) cmd_prod_doctor "$@" ;;
+    cloud-host) cmd_cloud_host "$@" ;;
     chimera-doctor) cmd_chimera_doctor "$@" ;;
     gen-token)  cmd_gen_token "$@" ;;
     print-launch-agent) cmd_print_launch_agent "$@" ;;

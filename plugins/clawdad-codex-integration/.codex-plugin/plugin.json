@@ -1,6 +1,6 @@
 {
   "name": "clawdad-codex-integration",
-  "version": "0.6.50",
+  "version": "0.7.0-beta.1",
   "description": "Clawdad workflows, hooks, and guardrails for Codex projects.",
   "x-clawdadManaged": true,
   "author": {

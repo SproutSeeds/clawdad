@@ -7,13 +7,13 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="Clawdad">
-    <meta property="og:title" content="Clawdad">
+    <meta name="apple-mobile-web-app-title" content="ClawDad">
+    <meta property="og:title" content="ClawDad">
     <meta property="og:type" content="website">
     <meta property="og:image" content="/assets/clawdad-mascot-app.png?v=20260406h">
     <meta name="twitter:card" content="summary">
     <meta name="twitter:image" content="/assets/clawdad-mascot-app.png?v=20260406h">
-    <title>Clawdad</title>
+    <title>ClawDad</title>
     <link rel="manifest" href="/manifest.webmanifest?v=20260414d">
     <link rel="apple-touch-icon" sizes="180x180" href="/assets/clawdad-apple-touch-icon.png?v=20260414d">
     <link rel="icon" type="image/png" sizes="192x192" href="/assets/clawdad-app-icon-192.png?v=20260414d">
@@ -24,12 +24,29 @@
   </head>
   <body>
     <main class="app-shell">
+      <button
+        id="settingsButton"
+        class="thread-button settings-button"
+        type="button"
+        aria-label="Open settings"
+        aria-controls="settingsModal"
+        aria-haspopup="dialog"
+      >
+        <svg viewBox="0 0 18 18" fill="none" aria-hidden="true">
+          <path d="M7.95 2.35h2.1l.38 1.65c.34.12.66.25.96.42l1.45-.9 1.48 1.48-.9 1.45c.17.3.31.62.42.96l1.65.38v2.1l-1.65.38c-.11.34-.25.66-.42.96l.9 1.45-1.48 1.48-1.45-.9c-.3.17-.62.31-.96.42l-.38 1.65h-2.1l-.38-1.65a5.02 5.02 0 0 1-.96-.42l-1.45.9-1.48-1.48.9-1.45a5.02 5.02 0 0 1-.42-.96l-1.65-.38v-2.1l1.65-.38c.11-.34.25-.66.42-.96l-.9-1.45 1.48-1.48 1.45.9c.3-.17.62-.3.96-.42l.38-1.65Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"></path>
+          <circle cx="9" cy="9" r="2.05" stroke="currentColor" stroke-width="1.2"></circle>
+        </svg>
+      </button>
       <header class="wordmark-wrap" aria-hidden="true">
         <div class="wordmark-lockup">
-          <div class="wordmark">
-            <span class="wordmark-line wordmark-line-top" data-text="Claw">Claw</span>
-            <span class="wordmark-line wordmark-line-bottom" data-text="Dad">Dad</span>
-          </div>
+          <img
+            class="wordmark-image"
+            src="/assets/clawdad-wordmark.png?v=20260728a"
+            loading="eager"
+            fetchpriority="high"
+            decoding="async"
+            alt=""
+          >
           <button
             id="headerCarouselButton"
             class="mascot-carousel"
@@ -51,39 +68,37 @@
       </header>
 
       <form id="dispatchForm" class="composer">
-        <div class="workspace-tabs" aria-label="Clawdad workspace navigation">
-          <button
-            id="projectWorkspaceTab"
-            class="workspace-tab is-active"
-            type="button"
-            aria-pressed="true"
-            aria-controls="projectWorkspacePane"
-          >
-            Project
-          </button>
-          <button
-            id="autoWorkspaceTab"
-            class="workspace-tab"
-            type="button"
-            aria-pressed="false"
-            aria-controls="autoWorkspacePane"
-          >
-            Delegation
-            <span id="activeRunsOrb" class="control-orb" hidden aria-hidden="true"></span>
-          </button>
-        </div>
-
-        <div id="projectWorkspacePane" class="workspace-pane" role="tabpanel" aria-labelledby="projectWorkspaceTab">
-          <div class="project-subtabs" aria-label="Project views">
-            <button class="project-subtab is-active" type="button" aria-pressed="true">Message</button>
-            <button id="projectSummaryButton" class="project-subtab" type="button" aria-label="Open selected project summary" disabled>
-              Summary
-            </button>
-            <button id="projectCodexButton" class="project-subtab" type="button" aria-label="Open selected project Codex integration" disabled>
-              Codex
-            </button>
-          </div>
-
+        <div id="projectWorkspacePane" class="workspace-pane">
+          <section id="workspaceSetupPanel" class="workspace-setup-panel" aria-labelledby="workspaceSetupTitle" hidden>
+            <div class="workspace-setup-copy">
+              <div id="workspaceSetupTitle" class="workspace-setup-title">Choose your projects folder</div>
+              <div id="workspaceSetupText" class="workspace-setup-text">
+                Scratchpad opens here. Folders inside this directory appear as projects.
+              </div>
+            </div>
+            <div id="workspaceSetupForm" class="workspace-setup-form">
+              <label class="sr-only" for="workspaceRootInput">Projects folder</label>
+              <input
+                id="workspaceRootInput"
+                name="workspaceRoot"
+                type="text"
+                placeholder="/Volumes/Code_2TB/code"
+                autocomplete="off"
+                spellcheck="false"
+              >
+              <button id="workspaceRootChooseButton" class="detail-action-button settings-picker-button" type="button">
+                <svg viewBox="0 0 18 18" fill="none" aria-hidden="true">
+                  <path d="M2.75 5.25h4.4l1.15 1.2h6.95v6.8a1.5 1.5 0 0 1-1.5 1.5h-11a1.5 1.5 0 0 1-1.5-1.5v-6.5a1.5 1.5 0 0 1 1.5-1.5Z" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"></path>
+                  <path d="M5.25 10h6.5M8.5 6.45V10" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"></path>
+                </svg>
+                <span class="button-text">Browse</span>
+              </button>
+              <button id="workspaceSetupSaveButton" class="thread-button workspace-setup-save" type="button">
+                <span class="button-text">Save</span>
+              </button>
+            </div>
+            <div id="workspaceSetupState" class="workspace-setup-state" aria-live="polite"></div>
+          </section>
           <label class="sr-only" for="projectSelect">Project</label>
           <label class="sr-only" for="sessionSelect">Session</label>
           <div class="controls">
@@ -100,16 +115,6 @@
                 <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
                   <path d="M8 3.25v9.5M3.25 8h9.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"></path>
                 </svg>
-              </button>
-              <button
-                id="projectDelegateButton"
-                class="thread-button delegate-open-button"
-                type="button"
-                aria-label="Open Auto-Claw for selected project"
-                disabled
-              >
-                <span class="delegate-auto-glyph" aria-hidden="true">&infin;</span>
-                <span class="button-text">Auto-Claw</span>
               </button>
             </div>
             <div class="session-control">
@@ -230,16 +235,20 @@
               <div class="composer-tools-mode-group" aria-label="Message mode">
                 <div class="composer-tools-label">Message mode</div>
                 <div class="composer-mode-options">
-                  <button class="composer-mode-option" type="button" data-dispatch-mode="linear">
-                    <span class="button-text">Linear</span>
+                  <button class="composer-mode-option" type="button" data-dispatch-mode="direct">
+                    <span class="button-text">Direct</span>
                   </button>
                   <button class="composer-mode-option" type="button" data-dispatch-mode="queue">
                     <span class="button-text">Queue</span>
                   </button>
-                  <button class="composer-mode-option" type="button" data-dispatch-mode="interject">
-                    <span class="button-text">Interject</span>
-                  </button>
                 </div>
+              </div>
+              <div class="composer-tools-mode-group" aria-label="Access mode">
+                <label class="composer-tools-label" for="composerAccessSelect">Access</label>
+                <select id="composerAccessSelect" class="composer-access-select" name="access">
+                  <option value="repo">Repo scoped</option>
+                  <option value="full">Full access</option>
+                </select>
               </div>
             </section>
             <section
@@ -287,7 +296,7 @@
               </div>
             </section>
             <button id="dispatchButton" type="submit">
-              <span class="button-text">Send (Linear)</span>
+              <span class="button-text">Send (Direct)</span>
             </button>
             <button
               id="composerVoiceButton"
@@ -303,7 +312,7 @@
           </div>
         </div>
 
-        <section id="autoWorkspacePane" class="workspace-pane auto-workspace" role="tabpanel" aria-labelledby="autoWorkspaceTab" hidden>
+        <section id="autoWorkspacePane" class="workspace-pane auto-workspace" aria-label="Delegation dashboard" hidden>
           <div class="delegation-dashboard-head">
             <div class="delegation-dashboard-title">Delegation Dashboard</div>
             <div id="activeRunsInlineMeta" class="active-runs-inline-meta"></div>
@@ -517,6 +526,251 @@
             <span class="button-text">Add</span>
           </button>
         </form>
+      </section>
+    </div>
+
+    <div id="settingsModal" class="detail-modal" hidden>
+      <button id="settingsBackdrop" class="detail-backdrop" type="button" aria-label="Close settings"></button>
+      <section class="detail-panel settings-panel" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+        <div class="detail-head">
+          <div class="detail-meta">
+            <div id="settingsTitle" class="detail-project">Settings</div>
+            <div id="settingsState" class="detail-session is-empty" aria-live="polite"></div>
+          </div>
+          <button id="settingsClose" class="detail-close" type="button" aria-label="Close settings">×</button>
+        </div>
+
+        <form id="settingsForm" class="settings-form">
+          <section class="settings-section" aria-labelledby="settingsWorkspaceTitle">
+            <div class="settings-section-head">
+              <div id="settingsWorkspaceTitle" class="settings-section-title">Workspace</div>
+            </div>
+
+            <label class="settings-label" for="settingsScratchpadInput">Scratchpad Focus</label>
+            <div class="settings-path-field">
+              <input
+                id="settingsScratchpadInput"
+                name="scratchpadFocus"
+                type="text"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="/Volumes/Code_2TB/code"
+              >
+              <button id="settingsScratchpadChooseButton" class="detail-action-button settings-picker-button" type="button">
+                <svg viewBox="0 0 18 18" fill="none" aria-hidden="true">
+                  <path d="M2.75 5.25h4.4l1.15 1.2h6.95v6.8a1.5 1.5 0 0 1-1.5 1.5h-11a1.5 1.5 0 0 1-1.5-1.5v-6.5a1.5 1.5 0 0 1 1.5-1.5Z" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"></path>
+                  <path d="M5.25 10h6.5M8.5 6.45V10" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"></path>
+                </svg>
+                <span class="button-text">Browse</span>
+              </button>
+            </div>
+
+            <div class="settings-section-subhead">Project Folders</div>
+            <div id="settingsProjectRootsList" class="settings-root-list"></div>
+
+            <div class="settings-root-add">
+              <label class="sr-only" for="settingsNewRootInput">Add project folder</label>
+              <input
+                id="settingsNewRootInput"
+                name="newProjectRoot"
+                type="text"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="/Users/cody/Projects"
+              >
+              <button id="settingsChooseRootButton" class="detail-action-button settings-picker-button" type="button">
+                <svg viewBox="0 0 18 18" fill="none" aria-hidden="true">
+                  <path d="M2.75 5.25h4.4l1.15 1.2h6.95v6.8a1.5 1.5 0 0 1-1.5 1.5h-11a1.5 1.5 0 0 1-1.5-1.5v-6.5a1.5 1.5 0 0 1 1.5-1.5Z" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"></path>
+                  <path d="M9 8.05v4.4M6.8 10.25h4.4" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"></path>
+                </svg>
+                <span class="button-text">Browse Folders</span>
+              </button>
+              <button id="settingsAddRootButton" class="detail-action-button" type="button">
+                <span class="button-text">Add</span>
+              </button>
+            </div>
+          </section>
+
+          <section class="settings-section settings-voice-section" aria-labelledby="settingsVoiceTitle">
+            <div class="settings-section-head">
+              <div id="settingsVoiceTitle" class="settings-section-title">Voice</div>
+            </div>
+
+            <label class="settings-label" for="settingsVoiceInputSelect">Microphone</label>
+            <div class="settings-select-row">
+              <select id="settingsVoiceInputSelect" name="voiceInputDevice">
+                <option value="">Default microphone</option>
+              </select>
+              <button id="settingsRefreshVoiceDevicesButton" class="detail-action-button settings-picker-button" type="button">
+                <svg viewBox="0 0 18 18" fill="none" aria-hidden="true">
+                  <path d="M14.1 5.2A5.8 5.8 0 0 0 4.25 4.1L3 5.35M3.85 12.8a5.8 5.8 0 0 0 9.85 1.1l1.3-1.25" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"></path>
+                  <path d="M3 2.65v2.7h2.7M15 15.35v-2.7h-2.7" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"></path>
+                </svg>
+                <span class="button-text">Refresh Mics</span>
+              </button>
+            </div>
+            <div id="settingsVoiceStatus" class="settings-root-meta" aria-live="polite"></div>
+          </section>
+
+          <section
+            id="settingsRemoteAssistSection"
+            class="settings-section settings-remote-assist-section"
+            aria-labelledby="settingsRemoteAssistTitle"
+            hidden
+          >
+            <div class="settings-section-head">
+              <div>
+                <div id="settingsRemoteAssistTitle" class="settings-section-title">Remote Assist</div>
+                <div class="settings-section-subhead">Open this Mac from ClawDad on iPhone</div>
+              </div>
+              <label class="settings-switch">
+                <input id="settingsRemoteAssistToggle" type="checkbox">
+                <span class="settings-switch-track" aria-hidden="true">
+                  <span class="settings-switch-thumb"></span>
+                </span>
+                <span class="sr-only">Allow Remote Assist</span>
+              </label>
+            </div>
+            <div id="settingsRemoteAssistStatus" class="settings-pairing-status" aria-live="polite"></div>
+            <button
+              id="settingsRemoteAssistInfoButton"
+              class="settings-inline-info-button"
+              type="button"
+              aria-expanded="false"
+              aria-controls="settingsRemoteAssistInfo"
+              title="How to enable Remote Assist permissions"
+            >
+              <span class="button-text">More Info</span>
+            </button>
+            <div id="settingsRemoteAssistInfo" class="settings-permission-help" hidden>
+              <div class="settings-permission-help-step">
+                <span class="settings-permission-help-index" aria-hidden="true">1.</span>
+                <div>
+                  <div class="settings-permission-help-title">Allow Screen Recording</div>
+                  <p>
+                    Click Screen Recording below. In System Settings, open
+                    Privacy &amp; Security &gt; Screen &amp; System Audio Recording,
+                    then turn on ClawDad. Relaunch ClawDad if macOS asks.
+                  </p>
+                </div>
+              </div>
+              <div class="settings-permission-help-step">
+                <span class="settings-permission-help-index" aria-hidden="true">2.</span>
+                <div>
+                  <div class="settings-permission-help-title">Allow Control Access</div>
+                  <p>
+                    Click Control Access below. In System Settings, open
+                    Privacy &amp; Security &gt; Accessibility, then turn on ClawDad.
+                    The description "Allow assistive applications to control the
+                    computer" is the correct setting. Approve Touch ID or your
+                    password if prompted.
+                  </p>
+                </div>
+              </div>
+              <p class="settings-permission-help-ready">
+                Remote Assist is ready when the toggle is on and both permission
+                buttons say Allowed. Then tap the desktop icon in ClawDad on iPhone.
+              </p>
+            </div>
+            <div class="settings-permission-grid">
+              <button id="settingsRemoteAssistScreenButton" class="detail-action-button is-quiet" type="button">
+                <span class="button-text">Screen Recording</span>
+                <span id="settingsRemoteAssistScreenState" class="settings-permission-state"></span>
+              </button>
+              <button id="settingsRemoteAssistControlButton" class="detail-action-button is-quiet" type="button">
+                <span class="button-text">Control Access</span>
+                <span id="settingsRemoteAssistControlState" class="settings-permission-state"></span>
+              </button>
+            </div>
+            <button id="settingsRemoteAssistStopButton" class="detail-action-button is-quiet" type="button" hidden>
+              <span class="button-text">Stop Remote Assist</span>
+            </button>
+          </section>
+
+          <section class="settings-section settings-pairing-section" aria-labelledby="settingsPairingTitle">
+            <div class="settings-section-head">
+              <div>
+                <div id="settingsPairingTitle" class="settings-section-title">Phone Pairing</div>
+                <div class="settings-section-subhead">Connect ClawDad on iPhone</div>
+              </div>
+              <button id="settingsPairIphoneButton" class="detail-action-button settings-picker-button" type="button">
+                <svg viewBox="0 0 18 18" fill="none" aria-hidden="true">
+                  <path d="M5.25 2.75h7.5v12.5h-7.5a1.5 1.5 0 0 1-1.5-1.5v-9.5a1.5 1.5 0 0 1 1.5-1.5Z" stroke="currentColor" stroke-width="1.25"></path>
+                  <path d="M7.25 5.25h3M7.25 12.75h3M13.75 7.25h1.5M14.5 6.5v1.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"></path>
+                </svg>
+                <span class="button-text">Pair iPhone</span>
+              </button>
+            </div>
+            <div id="settingsPairingStatus" class="settings-pairing-status" aria-live="polite"></div>
+            <div id="settingsPairingQr" class="settings-pairing-qr" hidden></div>
+            <div id="settingsPairingExpiry" class="settings-root-meta"></div>
+          </section>
+
+          <div class="settings-actions">
+            <button id="settingsCancelButton" class="detail-action-button is-quiet" type="button">
+              <span class="button-text">Cancel</span>
+            </button>
+            <button id="settingsSaveButton" class="detail-action-button" type="submit">
+              <span class="button-text">Save</span>
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
+
+    <div id="directoryBrowserModal" class="detail-modal" hidden>
+      <button id="directoryBrowserBackdrop" class="detail-backdrop" type="button" aria-label="Close folder browser"></button>
+      <section class="detail-panel directory-browser-panel" role="dialog" aria-modal="true" aria-labelledby="directoryBrowserTitle">
+        <div class="detail-head">
+          <div class="detail-meta">
+            <div id="directoryBrowserTitle" class="detail-project">Choose Folder</div>
+            <div id="directoryBrowserState" class="detail-session is-empty" aria-live="polite"></div>
+          </div>
+          <button id="directoryBrowserClose" class="detail-close" type="button" aria-label="Close folder browser">×</button>
+        </div>
+
+        <div class="directory-browser-body">
+          <div id="directoryBrowserRoots" class="directory-browser-roots" aria-label="Suggested folders"></div>
+
+          <div class="directory-browser-path-row">
+            <button id="directoryBrowserUpButton" class="detail-action-button settings-picker-button" type="button">
+              <span class="button-text">Up</span>
+            </button>
+            <label class="sr-only" for="directoryBrowserPathInput">Folder path</label>
+            <input
+              id="directoryBrowserPathInput"
+              name="directoryBrowserPath"
+              type="text"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="/Volumes/Code_2TB/code"
+            >
+            <button id="directoryBrowserGoButton" class="detail-action-button" type="button">
+              <span class="button-text">Go</span>
+            </button>
+          </div>
+
+          <label class="sr-only" for="directoryBrowserSearchInput">Search folders</label>
+          <input
+            id="directoryBrowserSearchInput"
+            name="directoryBrowserSearch"
+            type="search"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="Search folders in this location"
+          >
+
+          <div id="directoryBrowserList" class="directory-browser-list" aria-label="Folders"></div>
+
+          <div class="directory-browser-actions">
+            <button id="directoryBrowserCancelButton" class="detail-action-button is-quiet" type="button">
+              <span class="button-text">Cancel</span>
+            </button>
+            <button id="directoryBrowserUseButton" class="detail-action-button settings-picker-button" type="button">
+              <span class="button-text">Use This Folder</span>
+            </button>
+          </div>
+        </div>
       </section>
     </div>
 

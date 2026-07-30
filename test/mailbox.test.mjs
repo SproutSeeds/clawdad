@@ -230,3 +230,70 @@ test("history_update_result ignores late failed result after answered request", 
     assert.equal(record.response, "completed answer");
   });
 });
+
+test("history_write_request marks dispatch working without erasing queue provenance", async () => {
+  await withTempProject(async ({ projectPath, homePath }) => {
+    const requestId = "req-queued-preserve";
+    const sessionId = "sess-queued-preserve";
+    const sentAt = "2026-07-26T05:07:56Z";
+    const historyRoot = path.join(projectPath, ".clawdad", "history");
+    const recordFile = path.join(
+      historyRoot,
+      "sessions",
+      sessionId,
+      `20260726T050756Z--${requestId}.json`,
+    );
+    const indexFile = path.join(historyRoot, "requests", `${requestId}.json`);
+    await mkdir(path.dirname(recordFile), { recursive: true });
+    await mkdir(path.dirname(indexFile), { recursive: true });
+    await writeFile(
+      recordFile,
+      JSON.stringify({
+        requestId,
+        projectPath,
+        sessionId,
+        sessionSlug: "Testing",
+        provider: "codex",
+        message: "Run after the active turn.",
+        sentAt,
+        answeredAt: null,
+        status: "queued",
+        exitCode: null,
+        response: "",
+        scheduleMode: "queue",
+        deliveryMechanism: "queued_worker",
+        queuedAhead: 1,
+      }, null, 2),
+      "utf8",
+    );
+    await writeFile(
+      indexFile,
+      JSON.stringify({
+        requestId,
+        sessionId,
+        sentAt,
+        file: recordFile,
+      }, null, 2),
+      "utf8",
+    );
+
+    await runMailboxScript({
+      projectPath,
+      homePath,
+      env: {
+        REQUEST_ID: requestId,
+        SESSION_ID: sessionId,
+        SENT_AT: sentAt,
+      },
+      script:
+        'history_write_request "$PROJECT_PATH" "$REQUEST_ID" "$SESSION_ID" "Testing" "codex" "Run after the active turn." "$SENT_AT"',
+    });
+
+    const record = JSON.parse(await readFile(recordFile, "utf8"));
+    assert.equal(record.status, "working");
+    assert.equal(record.scheduleMode, "queue");
+    assert.equal(record.deliveryMechanism, "queued_worker");
+    assert.equal(record.queuedAhead, 1);
+    assert.equal(record.message, "Run after the active turn.");
+  });
+});

@@ -73,6 +73,72 @@ test("README docs links are included in the npm package files whitelist", async 
   }
 });
 
+test("npm package excludes generated Swift and Xcode build caches", async () => {
+  const iosNpmIgnore = await readFile(
+    path.join(rootDir, "apps", "ios", "ClawDadMobile", ".npmignore"),
+    "utf8",
+  );
+  const macNpmIgnore = await readFile(
+    path.join(rootDir, "native", "macos", ".npmignore"),
+    "utf8",
+  );
+  const remoteProtocolNpmIgnore = await readFile(
+    path.join(rootDir, "native", "ClawDadRemoteAssistProtocol", ".npmignore"),
+    "utf8",
+  );
+  const ignoredIosPaths = iosNpmIgnore
+    .split(/\r?\n/u)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
+  assert.ok(ignoredIosPaths.includes(".build/"));
+  assert.ok(ignoredIosPaths.includes("build/"));
+  assert.ok(ignoredIosPaths.includes("DerivedData/"));
+  assert.match(macNpmIgnore, /^\.build\/$/mu);
+  assert.match(remoteProtocolNpmIgnore, /^\.build\/$/mu);
+});
+
+test("npm package includes the pinned WebRTC wrapper without its downloaded binary", async () => {
+  const packageJson = JSON.parse(
+    await readFile(path.join(rootDir, "package.json"), "utf8"),
+  );
+  const packageFiles = Array.isArray(packageJson.files) ? packageJson.files : [];
+
+  assert.equal(
+    packageFilesInclude(packageFiles, "vendor/WebRTCPackage/Package.swift"),
+    true,
+  );
+  assert.equal(
+    packageFilesInclude(packageFiles, "vendor/WebRTCPackage/README.md"),
+    true,
+  );
+
+  const rootIgnore = await readFile(path.join(rootDir, ".gitignore"), "utf8");
+  assert.match(
+    rootIgnore,
+    /^vendor\/WebRTCPackage\/WebRTC\.xcframework\/$/mu,
+  );
+
+  const vendorNpmIgnore = await readFile(
+    path.join(rootDir, "vendor", "WebRTCPackage", ".npmignore"),
+    "utf8",
+  );
+  assert.match(vendorNpmIgnore, /^WebRTC\.xcframework\/$/mu);
+  assert.match(vendorNpmIgnore, /^WebRTC-M150\.xcframework\.zip$/mu);
+
+  const macNpmIgnore = await readFile(
+    path.join(rootDir, "native", "macos", ".npmignore"),
+    "utf8",
+  );
+  assert.match(macNpmIgnore, /^dist\/$/mu);
+
+  const cloudNpmIgnore = await readFile(
+    path.join(rootDir, "cloud", ".npmignore"),
+    "utf8",
+  );
+  assert.match(cloudNpmIgnore, /^\.wrangler\/$/mu);
+});
+
 test("web app icon assets exist and are included in the npm package files whitelist", async () => {
   const [manifestText, indexHtml, packageJsonText] = await Promise.all([
     readFile(path.join(rootDir, "web", "manifest.webmanifest"), "utf8"),

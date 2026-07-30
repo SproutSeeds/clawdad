@@ -1,22 +1,56 @@
-# clawdad
+# ClawDad
 
 <p align="center">
-  <img src="assets/clawdad-readme-carousel.gif" alt="Clawdad carousel" width="420">
+  <img src="assets/clawdad-readme-carousel.gif" alt="ClawDad carousel" width="420">
 </p>
 
 Multi-agent orchestration CLI for AI coding agents. Manages persistent spoke agents across your projects from a single hub, using [ORP](https://orp.earth) as the canonical data store.
 
 Codex-first orchestration for OpenAI-powered coding work, with Chimera still available as an experimental path.
 
-Clawdad's product line is one front door for agent-operated work. Hermes Agent,
+ClawDad's product line is one front door for agent-operated work. Hermes Agent,
 OpenClaw, and other always-on agent runtimes are useful systems to study, but
-Clawdad should borrow their gateway, skills, notification, and backend ideas
+ClawDad should borrow their gateway, skills, notification, and backend ideas
 without letting them become parallel sources of truth. See
 [Borrowing From Agent Runtimes](docs/BORROWING_FROM_AGENT_RUNTIMES.md).
 
 <p align="center">
-  <img src="assets/clawdad-mobile-demo.gif" alt="Clawdad mobile app selecting a project and dispatching a message" width="340">
+  <img src="assets/clawdad-mobile-demo.gif" alt="ClawDad mobile app selecting a project and dispatching a message" width="340">
 </p>
+
+## Native Mac Shell
+
+ClawDad is moving to a local-first native Mac shell. The current Swift/AppKit
+shell lives in `native/macos`: it supervises a loopback `clawdad serve`
+process, loads the web UI in `WKWebView`, stores the native app token in
+Keychain, and exposes the macOS folder picker to the web UI.
+
+```bash
+npm run native:build
+npm run native:run
+```
+
+Desktop usage is local-first. Tailscale remains useful for paired phone access,
+but it is transport for remote clients rather than the core desktop app
+architecture.
+
+## iPhone Companion
+
+ClawDad now has an iPhone-first companion lane under
+`apps/ios/ClawDadMobile`. The app talks to ClawDad Cloud over HTTPS/WebSocket,
+while the Mac stays the execution authority through `clawdad cloud-host`.
+
+```bash
+npm run ios:generate
+npm run ios:build
+npm run cloud:deploy:staging
+clawdad cloud-host
+```
+
+For the current internal TestFlight lane, use bundle id
+`earth.frg.clawdad.ios`, product name `ClawDad`, version `0.7.0`, build `16`.
+The iPhone app pairs by scanning the Pair iPhone QR from desktop Settings, then
+sends signed messages through the cloud relay back to the Mac host.
 
 ## Install
 
@@ -90,7 +124,7 @@ If you ever just want the local CLI and not the phone app yet, you can stop afte
 - cross-project queue for in-flight and completed work
 - saved project summary snapshots with manual refresh
 - server-backed quick prompts that append reusable text into the composer
-- Doc Reader-backed message audio, with speaker, pause, and stop playback controls
+- ClawDad local speech, with speaker, pause, stop playback, and composer dictation controls
 - Codex delegate mode with semantic hard stops and a weekly compute reserve guard
 
 Tap the summary icon beside the project picker to open the latest saved snapshot or request a fresh one.
@@ -99,23 +133,27 @@ The quick prompt button beside Send opens editable preset prompts. Selecting a
 prompt appends its text to the current composer message instead of replacing it;
 custom prompts are saved in Clawdad state and can be edited later.
 
-Completed agent responses and sent message cards are registered in Doc Reader's
-Library and prepare local text-to-speech audio in the background. The speaker
-icon plays the prepared WAV immediately when audio is ready, switches to pause
-during playback, and shows a stop control beside it. If audio is still being
-prepared, the same control keeps polling Doc Reader and starts playback when the
-Library item becomes ready. By default Clawdad calls the Doc Reader web app as
-the speech system of record:
+Completed agent responses and sent message cards prepare local text-to-speech
+audio in the background. The speaker icon plays the prepared WAV immediately
+when audio is ready, switches to pause during playback, and shows a stop control
+beside it. If audio is still being prepared, the same control keeps polling the
+ClawDad speech status and starts playback when the audio becomes ready. By
+default ClawDad uses the local speech sidecar directly for Kokoro TTS and Whisper
+STT, while preserving the older Doc Reader library route as a compatibility
+source:
 `CLAWDAD_TTS_PROVIDER=doc-reader`,
 `CLAWDAD_DOC_READER_URL=http://127.0.0.1:8766`,
 `CLAWDAD_DOC_READER_TTS_ENGINE=kokoro`,
+`CLAWDAD_DOC_READER_TTS_FALLBACK_URL=http://127.0.0.1:8772`,
 `CLAWDAD_STT_PROVIDER=doc-reader`, and
-`CLAWDAD_DOC_READER_STT_URL=http://127.0.0.1:8766`.
-Legacy generated WAV parts under `.clawdad/audio/messages/` remain playable for
-old history entries, while new Clawdad speech is stored in Doc Reader's Library.
-OpenAI speech remains available only when
-`CLAWDAD_TTS_PROVIDER=openai` or `CLAWDAD_STT_PROVIDER=openai` is configured;
-that opt-in path resolves keys from environment, Keychain, or ORP secrets.
+`CLAWDAD_DOC_READER_STT_URL=http://127.0.0.1:8772`, with
+`CLAWDAD_DOC_READER_STT_FALLBACK_URL=http://127.0.0.1:8766` for older local
+web installs.
+The `doc-reader` provider token is still accepted for existing configs, but the
+desktop experience treats speech as ClawDad local speech. Legacy generated WAV
+parts under `.clawdad/audio/messages/` remain playable for old history entries.
+OpenAI speech helpers are retained only for legacy cached audio and low-level
+compatibility tests.
 
 ## CLI Quick Start
 
@@ -358,6 +396,8 @@ local lane needs a quick health check. See [Chimera Local Lane](docs/chimera-loc
 - `secure-doctor` also checks node key expiry, local Tailscale CLI/daemon drift, public Funnel exposure, tagged Service readiness, and any sibling app health URLs configured under `tailscale.liveApps`
 - `secure-doctor --ensure` runs the shared tailnet startup orchestration check and starts configured dependencies such as Doc Reader before reporting readiness
 - `prod-doctor` is the quick production check before or after a release; see [Live Runtime Runbook](docs/live-runtime-runbook.md)
+- Project creation initializes local git and makes an initial commit by default through `projectGitAutoInit`.
+- Private GitHub remotes for new project creation are enabled with `projectGithubRemote: true`; set `projectGithubOwner` for an organization/user owner and `projectGithubVisibility` when you want to override the default `private` visibility.
 
 The mobile app and automation routes live under the same origin:
 

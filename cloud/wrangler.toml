@@ -1,0 +1,16 @@
+name = "clawdad-cloud"
+main = "worker.mjs"
+compatibility_date = "2026-06-01"
+
+[[routes]]
+pattern = "clawdad-cloud.frg.earth"
+custom_domain = true
+
+[durable_objects]
+bindings = [
+  { name = "WORKSPACE_RELAY", class_name = "WorkspaceRelay" }
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["WorkspaceRelay"]

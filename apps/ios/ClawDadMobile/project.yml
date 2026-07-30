@@ -1,0 +1,111 @@
+name: ClawDadMobile
+options:
+  minimumXcodeGenVersion: 2.44.1
+  createIntermediateGroups: true
+  deploymentTarget:
+    iOS: "18.0"
+
+configs:
+  Debug: debug
+  Staging: release
+  Release: release
+
+packages:
+  ClawDadRemoteAssistProtocol:
+    path: ../../../native/ClawDadRemoteAssistProtocol
+  WebRTC:
+    path: ../../../vendor/WebRTCPackage
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: ""
+    MARKETING_VERSION: "0.7.0"
+    CURRENT_PROJECT_VERSION: "16"
+
+targets:
+  ClawDadMobile:
+    type: application
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - path: Sources/ClawDadMobile
+      - path: Resources
+    dependencies:
+      - package: ClawDadRemoteAssistProtocol
+      - package: WebRTC
+    settings:
+      base:
+        PRODUCT_NAME: ClawDad
+        PRODUCT_BUNDLE_IDENTIFIER: earth.frg.clawdad.ios
+        INFOPLIST_FILE: Resources/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        TARGETED_DEVICE_FAMILY: "1"
+        SUPPORTED_DEVICE_FAMILIES: "1"
+        SUPPORTS_MACCATALYST: "NO"
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: "NO"
+      configs:
+        Debug:
+          CLAWDAD_CLOUD_URL: "http://127.0.0.1:8787"
+        Staging:
+          CLAWDAD_CLOUD_URL: "https://clawdad-cloud.frg.earth"
+        Release:
+          CLAWDAD_CLOUD_URL: "https://clawdad-cloud.frg.earth"
+
+  ClawDadMobileUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - path: UITests
+    dependencies:
+      - target: ClawDadMobile
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: earth.frg.clawdad.ios.uitests
+        GENERATE_INFOPLIST_FILE: "YES"
+        TARGETED_DEVICE_FAMILY: "1"
+
+schemes:
+  ClawDadMobile:
+    build:
+      targets:
+        ClawDadMobile: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - ClawDadMobileUITests
+    archive:
+      config: Release
+  ClawDadMobile-Staging:
+    build:
+      targets:
+        ClawDadMobile: all
+    run:
+      config: Staging
+    test:
+      config: Staging
+      targets:
+        - ClawDadMobileUITests
+    archive:
+      config: Staging
+  ClawDadMobile-LiveSmoke:
+    build:
+      targets:
+        ClawDadMobile: all
+    run:
+      config: Staging
+    test:
+      config: Staging
+      targets:
+        - ClawDadMobileUITests
+      environmentVariables:
+        CLAWDAD_RUN_LIVE_IOS_SMOKE: "1"
+        CLAWDAD_RUN_NAMED_THREAD_SMOKE: "1"
+        CLAWDAD_RUN_STARTUP_RESTORE_SMOKE: "1"
+    management:
+      isShown: false

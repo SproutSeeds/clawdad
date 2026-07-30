@@ -1,6 +1,31 @@
 const state = {
   projects: [],
   projectRoots: [],
+  workspace: null,
+  workspaceSetupPending: false,
+  workspaceSetupStatus: "",
+  workspaceSetupDraft: "",
+  settingsModalOpen: false,
+  settingsWorkspaceFocusDraft: "",
+  settingsWorkspaceRootDrafts: [],
+  settingsWorkspaceNewRootDraft: "",
+  settingsWorkspaceStatus: "",
+  settingsWorkspacePending: false,
+  cloudPairingPending: false,
+  cloudPairingStatus: "",
+  cloudPairingQrSvg: "",
+  cloudPairingExpiresAt: "",
+  directoryPickerPending: "",
+  directoryBrowserOpen: false,
+  directoryBrowserPurpose: "",
+  directoryBrowserPath: "",
+  directoryBrowserPathDraft: "",
+  directoryBrowserParent: "",
+  directoryBrowserEntries: [],
+  directoryBrowserRoots: [],
+  directoryBrowserQuery: "",
+  directoryBrowserLoading: false,
+  directoryBrowserStatus: "",
   selectedProject: "",
   selectedSessionId: "",
   workspaceMode: "project",
@@ -70,7 +95,8 @@ const state = {
   projectsLoading: true,
   projectRootsLoading: false,
   dispatchPending: false,
-  dispatchMode: "linear",
+  dispatchMode: "direct",
+  accessMode: "repo",
   sessionSwitchPending: false,
   projectModalPending: false,
   projectsRefreshPromise: null,
@@ -118,6 +144,14 @@ const state = {
   voiceChunks: [],
   voiceState: "idle",
   voiceError: "",
+  voiceInputDeviceId: "",
+  voiceInputDevices: [],
+  voiceInputDevicesLoading: false,
+  voiceSettingsStatus: "",
+  voiceActiveInputLabel: "",
+  remoteAssistStatus: null,
+  remoteAssistPending: false,
+  remoteAssistInfoOpen: false,
   queueArchiveConfirmEntryId: "",
 };
 
@@ -138,6 +172,56 @@ const elements = {
   activeRunsInlineList: document.querySelector("#activeRunsInlineList"),
   projectSelect: document.querySelector("#projectSelect"),
   projectAddButton: document.querySelector("#projectAddButton"),
+  workspaceSetupPanel: document.querySelector("#workspaceSetupPanel"),
+  workspaceSetupForm: document.querySelector("#workspaceSetupForm"),
+  workspaceRootInput: document.querySelector("#workspaceRootInput"),
+  workspaceRootChooseButton: document.querySelector("#workspaceRootChooseButton"),
+  workspaceSetupSaveButton: document.querySelector("#workspaceSetupSaveButton"),
+  workspaceSetupState: document.querySelector("#workspaceSetupState"),
+  settingsButton: document.querySelector("#settingsButton"),
+  settingsModal: document.querySelector("#settingsModal"),
+  settingsBackdrop: document.querySelector("#settingsBackdrop"),
+  settingsClose: document.querySelector("#settingsClose"),
+  settingsForm: document.querySelector("#settingsForm"),
+  settingsState: document.querySelector("#settingsState"),
+  settingsScratchpadInput: document.querySelector("#settingsScratchpadInput"),
+  settingsScratchpadChooseButton: document.querySelector("#settingsScratchpadChooseButton"),
+  settingsProjectRootsList: document.querySelector("#settingsProjectRootsList"),
+  settingsNewRootInput: document.querySelector("#settingsNewRootInput"),
+  settingsChooseRootButton: document.querySelector("#settingsChooseRootButton"),
+  settingsAddRootButton: document.querySelector("#settingsAddRootButton"),
+  settingsVoiceInputSelect: document.querySelector("#settingsVoiceInputSelect"),
+  settingsRefreshVoiceDevicesButton: document.querySelector("#settingsRefreshVoiceDevicesButton"),
+  settingsVoiceStatus: document.querySelector("#settingsVoiceStatus"),
+  settingsRemoteAssistSection: document.querySelector("#settingsRemoteAssistSection"),
+  settingsRemoteAssistToggle: document.querySelector("#settingsRemoteAssistToggle"),
+  settingsRemoteAssistStatus: document.querySelector("#settingsRemoteAssistStatus"),
+  settingsRemoteAssistInfoButton: document.querySelector("#settingsRemoteAssistInfoButton"),
+  settingsRemoteAssistInfo: document.querySelector("#settingsRemoteAssistInfo"),
+  settingsRemoteAssistScreenButton: document.querySelector("#settingsRemoteAssistScreenButton"),
+  settingsRemoteAssistScreenState: document.querySelector("#settingsRemoteAssistScreenState"),
+  settingsRemoteAssistControlButton: document.querySelector("#settingsRemoteAssistControlButton"),
+  settingsRemoteAssistControlState: document.querySelector("#settingsRemoteAssistControlState"),
+  settingsRemoteAssistStopButton: document.querySelector("#settingsRemoteAssistStopButton"),
+  settingsPairIphoneButton: document.querySelector("#settingsPairIphoneButton"),
+  settingsPairingQr: document.querySelector("#settingsPairingQr"),
+  settingsPairingStatus: document.querySelector("#settingsPairingStatus"),
+  settingsPairingExpiry: document.querySelector("#settingsPairingExpiry"),
+  settingsCancelButton: document.querySelector("#settingsCancelButton"),
+  settingsSaveButton: document.querySelector("#settingsSaveButton"),
+  directoryBrowserModal: document.querySelector("#directoryBrowserModal"),
+  directoryBrowserBackdrop: document.querySelector("#directoryBrowserBackdrop"),
+  directoryBrowserClose: document.querySelector("#directoryBrowserClose"),
+  directoryBrowserTitle: document.querySelector("#directoryBrowserTitle"),
+  directoryBrowserState: document.querySelector("#directoryBrowserState"),
+  directoryBrowserRoots: document.querySelector("#directoryBrowserRoots"),
+  directoryBrowserUpButton: document.querySelector("#directoryBrowserUpButton"),
+  directoryBrowserPathInput: document.querySelector("#directoryBrowserPathInput"),
+  directoryBrowserGoButton: document.querySelector("#directoryBrowserGoButton"),
+  directoryBrowserSearchInput: document.querySelector("#directoryBrowserSearchInput"),
+  directoryBrowserList: document.querySelector("#directoryBrowserList"),
+  directoryBrowserCancelButton: document.querySelector("#directoryBrowserCancelButton"),
+  directoryBrowserUseButton: document.querySelector("#directoryBrowserUseButton"),
   projectDelegateButton: document.querySelector("#projectDelegateButton"),
   sessionControl: document.querySelector(".session-control"),
   sessionSelect: document.querySelector("#sessionSelect"),
@@ -155,6 +239,7 @@ const elements = {
   composerAttachmentList: document.querySelector("#composerAttachmentList"),
   quickPromptButton: document.querySelector("#quickPromptButton"),
   currentTerminalButton: document.querySelector("#currentTerminalButton"),
+  composerAccessSelect: document.querySelector("#composerAccessSelect"),
   terminalPanel: document.querySelector("#terminalPanel"),
   terminalPanelBack: document.querySelector("#terminalPanelBack"),
   terminalPanelTitle: document.querySelector("#terminalPanelTitle"),
@@ -331,13 +416,16 @@ let terminalPanelRequestSequence = 0;
 let terminalPanelStickToBottom = true;
 const quickPromptTitleMax = 80;
 const quickPromptTextMax = 12_000;
+const composerAccessModeKey = "clawdad-composer-access-mode-v1";
+const voiceInputDeviceKey = "clawdad-voice-input-device-v1";
 const newSessionSelectValue = "__clawdad_new_session__";
-const dispatchModes = ["linear", "queue", "interject"];
+const dispatchModes = ["direct", "queue"];
+const accessModes = ["repo", "full"];
 const dispatchModeDetails = {
-  linear: {
-    label: "Linear",
-    aria: "Dispatch mode: Linear",
-    title: "Linear mode: send only when the selected session is idle",
+  direct: {
+    label: "Direct",
+    aria: "Dispatch mode: Direct",
+    title: "Direct mode: send now or steer the active turn after its current tool call",
     icon: '<path d="M4 5.25h7.5M8.75 2.75 11.5 5.25 8.75 7.75M6.5 12.75H14M11.25 10.25 14 12.75l-2.75 2.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"></path>',
   },
   queue: {
@@ -345,12 +433,6 @@ const dispatchModeDetails = {
     aria: "Dispatch mode: Queue message",
     title: "Queue mode: send after the active turn finishes",
     icon: '<path d="M4.2 4.4h9.6M4.2 9h9.6M4.2 13.6h5.9M12.15 11.55l2.05 2.05-2.05 2.05" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"></path>',
-  },
-  interject: {
-    label: "Interject",
-    aria: "Dispatch mode: Interject message",
-    title: "Interject mode: steer the active turn after the next tool boundary",
-    icon: '<path d="M3.8 9h6.1M8.15 4.8 12.35 9l-4.2 4.2M13.4 4.2v9.6" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"></path>',
   },
 };
 const queuedDispatchGraceMs = 15000;
@@ -371,16 +453,80 @@ const terminalStreamPollMs = 2400;
 const artifactRefreshFreshMs = 60 * 1000;
 const threadEntryCacheLimit = 80;
 const ttsInlineTextLimit = 50_000;
+const audioLoadingSpinnerFrameMs = 680;
 const headerCarouselIntervalMs = 11000;
 const headerCarouselVersion = "20260406m";
 const headerCatchphraseSwapMs = 150;
-const featuredProjectRules = Object.freeze({
-  "global-mind": {
-    displayName: "Global Mind",
-    accent: "gold",
-    role: "global-mind",
-  },
+const featuredProjectRules = Object.freeze({});
+const nativeBridgeTimeoutMs = 30_000;
+const nativeBridge = (() => {
+  const pending = new Map();
+  const messageHandler = () => window.webkit?.messageHandlers?.clawdadNative || null;
+  const bridge = {
+    isAvailable() {
+      return Boolean(messageHandler());
+    },
+    call(method, params = {}) {
+      const handler = messageHandler();
+      if (!handler) {
+        return Promise.reject(new Error("Native ClawDad bridge is unavailable"));
+      }
+      const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+      return new Promise((resolve, reject) => {
+        const timer = window.setTimeout(() => {
+          pending.delete(id);
+          reject(new Error("Native ClawDad bridge timed out"));
+        }, nativeBridgeTimeoutMs);
+        pending.set(id, { resolve, reject, timer });
+        handler.postMessage({ id, method, params });
+      });
+    },
+    getCapabilities() {
+      return bridge.call("getCapabilities");
+    },
+    chooseFolder(params = {}) {
+      return bridge.call("chooseFolder", params);
+    },
+    getRemoteAssistStatus() {
+      return bridge.call("getRemoteAssistStatus");
+    },
+    setRemoteAssistEnabled(enabled) {
+      return bridge.call("setRemoteAssistEnabled", { enabled: Boolean(enabled) });
+    },
+    requestRemoteAssistPermissions() {
+      return bridge.call("requestRemoteAssistPermissions");
+    },
+    openRemoteAssistPrivacy(pane) {
+      return bridge.call("openRemoteAssistPrivacy", { pane });
+    },
+    stopRemoteAssist() {
+      return bridge.call("stopRemoteAssist");
+    },
+    __resolve(payload = {}) {
+      const entry = pending.get(payload.id);
+      if (!entry) {
+        return;
+      }
+      window.clearTimeout(entry.timer);
+      pending.delete(payload.id);
+      if (payload.ok) {
+        entry.resolve(payload.result || {});
+      } else {
+        entry.reject(new Error(payload.error || "Native ClawDad bridge failed"));
+      }
+    },
+  };
+  window.ClawDadNative = bridge;
+  return bridge;
+})();
+
+window.addEventListener("clawdad-native-remote-assist-status", (event) => {
+  state.remoteAssistStatus = event.detail && typeof event.detail === "object"
+    ? event.detail
+    : null;
+  renderAll();
 });
+
 const pendingSessionPhrases = [
   "loading up a fresh beaux",
   "stirrin' a new bayou lane",
@@ -509,6 +655,8 @@ let detailHistoryRenderSnapshot = null;
 let delegateRunRenderSnapshot = null;
 let activeMessageAudio = null;
 let audioNoticeTimer = null;
+let audioLoadingSpinnerFrameRequest = 0;
+let audioLoadingSpinnerFrameStartedAt = 0;
 const audioPreparePromises = new Map();
 const audioPrepareTimers = new Map();
 const audioPreparePlaybackPromises = new Map();
@@ -541,7 +689,7 @@ const controlLockMs = 2600;
 const ttsPreparePollMs = 3500;
 const ttsClickPreparePollMs = 700;
 const ttsClickPrepareTimeoutMs = 45_000;
-const audioPlaybackStartTimeoutMs = 12000;
+const audioPlaybackStartTimeoutMs = 3500;
 
 function copyIconMarkup() {
   return `
@@ -590,9 +738,12 @@ function audioErrorIconMarkup() {
 
 function audioLoadingMarkup() {
   return `
-    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <circle cx="8" cy="8" r="5.2" stroke="currentColor" stroke-width="1.4" opacity=".25"></circle>
-      <path d="M13.2 8A5.2 5.2 0 0 0 8 2.8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"></path>
+    <svg class="audio-loading-spinner" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <circle class="audio-loading-spinner__track" cx="8" cy="8" r="5.1" stroke="currentColor" stroke-width="1.35"></circle>
+      <g class="audio-loading-spinner__rotor">
+        <circle class="audio-loading-spinner__arc" cx="8" cy="8" r="5.1" stroke="currentColor" stroke-width="1.65" stroke-linecap="round"></circle>
+        <circle class="audio-loading-spinner__dot" cx="8" cy="2.9" r="1.05" fill="currentColor"></circle>
+      </g>
     </svg>
   `;
 }
@@ -991,6 +1142,14 @@ function hydrateProjectVisuals(project) {
     return project;
   }
 
+  if (project.specialRole) {
+    return {
+      ...project,
+      featured: Boolean(project.featured),
+      featuredAccent: project.featuredAccent || "",
+    };
+  }
+
   const visualMeta = featuredProjectMeta(
     project.path,
     String(project.displayName || project.slug || basenameFromPath(project.path) || ""),
@@ -1108,7 +1267,7 @@ function advanceProcessingPhraseCycle() {
 function processingCopyActive() {
   if (
     state.threadEntries.some(
-      (entry) => threadEntryStatus(entry) === "queued" && threadEntryVisibleInQueue(entry, state.threadEntries),
+      (entry) => threadEntryIsPending(entry) && threadEntryVisibleInQueue(entry, state.threadEntries),
     )
   ) {
     return true;
@@ -1119,7 +1278,7 @@ function processingCopyActive() {
   }
 
   return currentThreadEntries().some(
-    (entry) => threadEntryStatus(entry) === "queued" && threadEntryVisibleInQueue(entry, state.threadEntries),
+    (entry) => threadEntryIsPending(entry) && threadEntryVisibleInQueue(entry, state.threadEntries),
   );
 }
 
@@ -2017,6 +2176,74 @@ function currentRootRepos() {
   return Array.isArray(currentProjectRoot()?.repos) ? currentProjectRoot().repos : [];
 }
 
+function normalizeWorkspacePayload(value) {
+  const workspace = value && typeof value === "object" ? value : {};
+  const roots = Array.isArray(workspace.roots) ? workspace.roots.filter((root) => root?.path) : [];
+  return {
+    configured: Boolean(workspace.configured),
+    setupRequired: Boolean(workspace.setupRequired),
+    primaryRoot: String(workspace.primaryRoot || ""),
+    primaryRootLabel: String(workspace.primaryRootLabel || workspace.primaryRoot || ""),
+    roots,
+    suggestions: Array.isArray(workspace.suggestions)
+      ? workspace.suggestions.map((entry) => String(entry || "").trim()).filter(Boolean)
+      : [],
+  };
+}
+
+function normalizeWorkspaceRootDrafts(values = []) {
+  const roots = [];
+  const seen = new Set();
+  const visit = (value) => {
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    const text = String(value || "").trim();
+    if (!text || seen.has(text)) {
+      return;
+    }
+    seen.add(text);
+    roots.push(text);
+  };
+  visit(values);
+  return roots;
+}
+
+function workspaceRootPaths(workspace = state.workspace) {
+  return normalizeWorkspaceRootDrafts(
+    (workspace?.roots || []).map((root) => root.path),
+  );
+}
+
+function syncSettingsWorkspaceDraftsFromWorkspace() {
+  const focus = state.workspace?.primaryRoot || state.workspaceSetupDraft || "";
+  state.settingsWorkspaceFocusDraft = focus;
+  state.settingsWorkspaceRootDrafts = workspaceRootPaths();
+  state.settingsWorkspaceNewRootDraft = "";
+}
+
+function applyWorkspacePayload(workspace) {
+  state.workspace = normalizeWorkspacePayload(workspace);
+  if (!state.workspaceSetupDraft) {
+    state.workspaceSetupDraft =
+      state.workspace.primaryRoot ||
+      state.workspace.suggestions[0] ||
+      "";
+  }
+  if (!state.settingsModalOpen && !state.settingsWorkspaceFocusDraft) {
+    syncSettingsWorkspaceDraftsFromWorkspace();
+  }
+}
+
+function workspaceRootForProjectPath(projectPath) {
+  const target = String(projectPath || "");
+  const matches = (state.workspace?.roots || [])
+    .filter((root) => target !== root.path && target.startsWith(`${root.path}/`))
+    .sort((left, right) => right.path.length - left.path.length);
+  return matches[0] || null;
+}
+
 function currentSessionImportProject() {
   return projectByPath(state.sessionImportModalProject) || null;
 }
@@ -2615,11 +2842,8 @@ function normalizeHistoryScheduleMode(value) {
   if (["queue", "queued", "next"].includes(normalized)) {
     return "queue";
   }
-  if (["interject", "interrupt", "steer"].includes(normalized)) {
-    return "interject";
-  }
-  if (normalized === "linear") {
-    return "linear";
+  if (["direct", "linear", "interject", "interrupt", "steer"].includes(normalized)) {
+    return "direct";
   }
   return "";
 }
@@ -2736,12 +2960,16 @@ function mergeHistoryAudioMetadata(existingAudio, incomingAudio) {
 function normalizeHistoryItem(item) {
   const sessionId = String(item?.sessionId || "").trim();
   const provider = String(item?.provider || "").trim() || sessionForEntry(item)?.provider || "session";
-  const normalizedStatus = String(item?.status || "queued").trim().toLowerCase() || "queued";
+  const rawStatus = String(item?.status || "queued").trim().toLowerCase() || "queued";
+  const normalizedStatus = ["running", "dispatched", "dispatching", "starting"].includes(rawStatus)
+    ? "working"
+    : rawStatus;
   const answeredAt = String(item?.answeredAt || "").trim() || null;
   const scheduleMode = normalizeHistoryScheduleMode(item?.scheduleMode || item?.dispatchMode);
   const archivedAt = String(item?.archivedAt || "").trim() || null;
   const audio = normalizeHistoryAudioMetadata(item?.audio);
   const requestState = String(item?.requestState || item?.lifecycleState || "").trim().toLowerCase();
+  const deliveryMechanism = String(item?.deliveryMechanism || "").trim().toLowerCase();
   return {
     requestId: String(item?.requestId || "").trim() || makeEntryId(),
     queueId: String(item?.queueId || "").trim() || null,
@@ -2760,18 +2988,25 @@ function normalizeHistoryItem(item) {
     exitCode: typeof item?.exitCode === "number" ? item.exitCode : null,
     scheduleMode,
     requestState,
+    deliveryMechanism,
     handoffPending: Boolean(item?.handoffPending),
     archivedAt,
     attachments: normalizeHistoryAttachments(item?.attachments),
     ...(audio ? { audio } : {}),
     seenAt:
       String(item?.seenAt || "").trim() ||
-      (normalizedStatus === "queued" ? null : answeredAt || String(item?.sentAt || "").trim() || new Date().toISOString()),
+      (normalizedStatus === "queued" || normalizedStatus === "working"
+        ? null
+        : answeredAt || String(item?.sentAt || "").trim() || new Date().toISOString()),
   };
 }
 
 function threadEntryStatus(entry) {
   return String(entry?.status || "").trim().toLowerCase();
+}
+
+function threadEntryIsPending(entry) {
+  return threadEntryStatus(entry) === "queued" || threadEntryStatus(entry) === "working";
 }
 
 function threadEntryIsHistoryBackfill(entry) {
@@ -2804,8 +3039,8 @@ function threadEntryHasLaterSessionActivity(entry, items = state.threadEntries) 
   });
 }
 
-function queuedThreadEntryVisibleInQueue(entry, items = state.threadEntries) {
-  if (threadEntryStatus(entry) !== "queued") {
+function pendingThreadEntryVisibleInQueue(entry, items = state.threadEntries) {
+  if (!threadEntryIsPending(entry)) {
     return false;
   }
   if (threadEntryHasLaterSessionActivity(entry, items)) {
@@ -2824,8 +3059,15 @@ function queuedThreadEntryVisibleInQueue(entry, items = state.threadEntries) {
   return !entryAgePastAttachGraceWindow(entry);
 }
 
-function threadEntryIsInterjection(entry) {
-  return normalizeHistoryScheduleMode(entry?.scheduleMode || entry?.dispatchMode) === "interject";
+function threadEntryIsDirectAcknowledgement(entry) {
+  const rawMode = String(entry?.scheduleMode || entry?.dispatchMode || "").trim().toLowerCase();
+  const requestState = String(entry?.requestState || "").trim().toLowerCase();
+  const deliveryMechanism = String(entry?.deliveryMechanism || "").trim().toLowerCase();
+  return (
+    ["interject", "interrupt", "steer"].includes(rawMode) ||
+    (normalizeHistoryScheduleMode(rawMode) === "direct" &&
+      (requestState === "direct" || deliveryMechanism === "turn_steer"))
+  );
 }
 
 function historyEntryQueuedForLater(entry, items = []) {
@@ -2842,26 +3084,7 @@ function historyEntryQueuedForLater(entry, items = []) {
     return false;
   }
 
-  const itemList = Array.isArray(items) ? items : [];
-  const entryIndex = itemList.findIndex((candidate) => candidate === entry);
-  const earlierItems =
-    entryIndex >= 0
-      ? itemList.slice(0, entryIndex)
-      : itemList.filter((candidate) => {
-          const entryMs = entrySentAtMs(entry);
-          const candidateMs = entrySentAtMs(candidate);
-          return entryMs > 0 && candidateMs > 0 && candidateMs < entryMs;
-        });
-
-  return earlierItems.some((candidate) => {
-    if (
-      String(candidate?.projectPath || "").trim() !== projectPath ||
-      String(candidate?.sessionId || "").trim() !== sessionId
-    ) {
-      return false;
-    }
-    return threadEntryStatus(candidate) === "queued";
-  });
+  return true;
 }
 
 function threadEntryIsArchived(entry) {
@@ -2873,10 +3096,10 @@ function threadEntryVisibleInQueue(entry, items = state.threadEntries) {
     return false;
   }
   const status = threadEntryStatus(entry);
-  if (status === "queued") {
-    return queuedThreadEntryVisibleInQueue(entry, items);
+  if (status === "queued" || status === "working") {
+    return pendingThreadEntryVisibleInQueue(entry, items);
   }
-  if (status === "answered" && threadEntryIsInterjection(entry)) {
+  if (status === "answered" && threadEntryIsDirectAcknowledgement(entry)) {
     return false;
   }
   return status === "answered";
@@ -2884,7 +3107,7 @@ function threadEntryVisibleInQueue(entry, items = state.threadEntries) {
 
 function historyItemStatusRank(status) {
   const normalized = String(status || "").trim().toLowerCase();
-  return { queued: 1, failed: 2, answered: 3 }[normalized] || 0;
+  return { queued: 1, working: 2, failed: 3, answered: 4 }[normalized] || 0;
 }
 
 function historyItemHasAnsweredResponse(item) {
@@ -2941,8 +3164,9 @@ function comparableHistoryMessage(value) {
 }
 
 function isUnattachedLocalHistoryItem(item) {
+  const status = String(item?.status || "").trim().toLowerCase();
   return (
-    String(item?.status || "").trim().toLowerCase() === "queued" &&
+    (status === "queued" || status === "working") &&
     !String(item?.response || "").trim()
   );
 }
@@ -3077,7 +3301,7 @@ function mergeHistoryItem(existing, incoming) {
   const existingAttachments = normalizeHistoryAttachments(existing?.attachments);
   const audio = mergeHistoryAudioMetadata(existing?.audio, incoming?.audio);
   const shouldKeepReturnedEntryUnread =
-    threadEntryStatus(existing) === "queued" &&
+    threadEntryIsPending(existing) &&
     (status === "answered" || status === "failed");
 
   return {
@@ -3132,7 +3356,7 @@ function historyAudioSignature(entry) {
 function historyDisplayTimestampMs(entry) {
   const status = threadEntryStatus(entry);
   const primary =
-    status === "queued"
+    status === "queued" || status === "working"
       ? entry?.sentAt
       : entry?.answeredAt || entry?.sentAt;
   const value = new Date(primary || 0).getTime();
@@ -3175,7 +3399,11 @@ function mergeHistoryItems(existingItems = [], incomingItems = []) {
 
 function trimThreadEntries(items = []) {
   const normalizedItems = Array.isArray(items) ? items : [];
-  const queued = normalizedItems.filter((entry) => !threadEntryIsArchived(entry) && queuedThreadEntryVisibleInQueue(entry, normalizedItems));
+  const pending = normalizedItems.filter(
+    (entry) =>
+      !threadEntryIsArchived(entry) &&
+      pendingThreadEntryVisibleInQueue(entry, normalizedItems),
+  );
   const archived = normalizedItems
     .filter(threadEntryIsArchived)
     .sort((left, right) => {
@@ -3183,7 +3411,7 @@ function trimThreadEntries(items = []) {
       const rightMs = new Date(right.archivedAt || right.answeredAt || right.sentAt || 0).getTime();
       return (Number.isFinite(rightMs) ? rightMs : 0) - (Number.isFinite(leftMs) ? leftMs : 0);
     })
-    .slice(0, Math.max(0, threadEntryCacheLimit - queued.length));
+    .slice(0, Math.max(0, threadEntryCacheLimit - pending.length));
   const returned = normalizedItems
     .filter((entry) => threadEntryStatus(entry) === "answered" && !threadEntryIsArchived(entry))
     .sort((left, right) => {
@@ -3191,9 +3419,9 @@ function trimThreadEntries(items = []) {
       const rightMs = new Date(right.answeredAt || right.sentAt || 0).getTime();
       return (Number.isFinite(rightMs) ? rightMs : 0) - (Number.isFinite(leftMs) ? leftMs : 0);
     })
-    .slice(0, Math.max(0, threadEntryCacheLimit - queued.length - archived.length));
+    .slice(0, Math.max(0, threadEntryCacheLimit - pending.length - archived.length));
 
-  return mergeHistoryItems([], [...queued, ...returned, ...archived]);
+  return mergeHistoryItems([], [...pending, ...returned, ...archived]);
 }
 
 function threadEntryFromHistoryItem(item) {
@@ -3207,7 +3435,7 @@ function threadEntryFromHistoryItem(item) {
     ...normalized,
     id: requestId ? `history:${requestId}` : makeEntryId(),
     seenAt:
-      normalized.status === "queued"
+      normalized.status === "queued" || normalized.status === "working"
         ? normalized.seenAt || null
         : normalized.seenAt || normalized.answeredAt || normalized.sentAt || new Date().toISOString(),
   };
@@ -3897,7 +4125,10 @@ function syncProjectRepoSelection(preferredPath = "", { preferCurrent = true } =
 function cacheableThreadEntries(items = state.threadEntries) {
   return (Array.isArray(items) ? items : []).filter((entry) => {
     const status = threadEntryStatus(entry);
-    return status !== "failed" && (status !== "queued" || !threadEntryIsHistoryBackfill(entry));
+    return (
+      status !== "failed" &&
+      (!threadEntryIsPending(entry) || !threadEntryIsHistoryBackfill(entry))
+    );
   });
 }
 
@@ -4002,6 +4233,7 @@ function cacheProjects(payload) {
         selectedProject: state.selectedProject || "",
         selectedSessionId: state.selectedSessionId || "",
         defaultProject: payload.defaultProject || "",
+        workspace: payload.workspace || state.workspace || null,
         projects: Array.isArray(payload.projects) ? payload.projects : [],
       }),
     );
@@ -4025,6 +4257,7 @@ function restoreCachedProjects() {
       return false;
     }
 
+    applyWorkspacePayload(payload.workspace);
     state.projects = projects;
     state.projectsLoading = true;
     syncSelectedProject(payload.selectedProject || payload.defaultProject || "", {
@@ -4057,13 +4290,16 @@ function queueEntryThreadKey(entry) {
 
 function queueEntryStatusRank(entry) {
   const status = threadEntryStatus(entry);
-  if (status === "queued") {
+  if (status === "working") {
     return 0;
   }
-  if (status === "answered") {
+  if (status === "queued") {
     return 1;
   }
-  return 2;
+  if (status === "answered") {
+    return 2;
+  }
+  return 3;
 }
 
 function queueEntryActivityMs(entry) {
@@ -4108,11 +4344,11 @@ function pendingEntryForSession(projectPath, sessionId) {
         if (
           entry.projectPath !== projectPath ||
           entry.sessionId !== sessionId ||
-          threadEntryStatus(entry) !== "queued"
+          !threadEntryIsPending(entry)
         ) {
           return false;
         }
-        return queuedThreadEntryVisibleInQueue(entry, state.threadEntries);
+        return pendingThreadEntryVisibleInQueue(entry, state.threadEntries);
       },
     ) || null
   );
@@ -4192,6 +4428,12 @@ function historyStatusFromLifecycle(status) {
   }
   if (normalized === "answered" || normalized === "failed") {
     return normalized;
+  }
+  if (["working", "running", "dispatched", "dispatching", "starting"].includes(normalized)) {
+    return "working";
+  }
+  if (normalized === "queued") {
+    return "queued";
   }
   return "";
 }
@@ -4279,8 +4521,8 @@ function completeThreadEntry(entry, patch) {
 }
 
 function sessionStatusLabel(entry) {
-  if (threadEntryStatus(entry) === "queued") {
-    return currentProcessingPhrase();
+  if (threadEntryIsPending(entry)) {
+    return pendingThreadEntryLabel(entry);
   }
   if (threadEntryStatus(entry) === "failed") {
     return "failed";
@@ -4797,7 +5039,7 @@ async function openTerminalStreamPanel(entry, trigger = null) {
     requestStatus: {
       requestId,
       sessionId,
-      state: threadEntryStatus(entry) === "queued" ? "running" : threadEntryStatus(entry),
+      state: threadEntryStatus(entry),
       status: threadEntryStatus(entry) === "answered" ? "completed" : threadEntryStatus(entry),
       terminal: entryHasReturned(entry),
       active: !entryHasReturned(entry),
@@ -4929,10 +5171,10 @@ function ttsUnavailableMessage(status = state.ttsStatus) {
     return "Text-to-speech provider is not configured.";
   }
   if (normalized.errorCode === "local_service_not_configured") {
-    return "Local text-to-speech is missing a Doc Reader service URL.";
+    return "ClawDad local text-to-speech is missing a local speech service URL.";
   }
   if (normalized.errorCode === "local_service_unavailable") {
-    return "Local text-to-speech is unavailable. Check the Doc Reader speech services and try again.";
+    return "ClawDad local text-to-speech is unavailable. Start the local speech service and try again.";
   }
   if (normalized.errorCode === "disabled") {
     return "Text-to-speech is disabled on this Clawdad server.";
@@ -5203,7 +5445,7 @@ function decorateAudioButton(button, audioKey) {
   const playbackError = ready && status === "idle" && String(availability.playbackError || "").trim();
   const unavailable = availability.status === "unavailable" && !ready;
   const failed = availability.status === "error" && !ready;
-  const loading = status === "loading";
+  const loading = status === "loading" || preparing;
   button.dataset.audioAction = "tts";
   button.disabled = false;
   button.removeAttribute("aria-disabled");
@@ -5281,6 +5523,34 @@ function decorateAudioButton(button, audioKey) {
   button.title = button.dataset.audioPlayLabel || "Play audio";
 }
 
+function updateAudioLoadingSpinnerFrame(timestamp = window.performance?.now?.() || Date.now()) {
+  const rotors = Array.from(document.querySelectorAll(".message-audio-button.is-loading .audio-loading-spinner__rotor"));
+  if (rotors.length === 0) {
+    audioLoadingSpinnerFrameRequest = 0;
+    audioLoadingSpinnerFrameStartedAt = 0;
+    return;
+  }
+
+  if (!audioLoadingSpinnerFrameStartedAt) {
+    audioLoadingSpinnerFrameStartedAt = timestamp;
+  }
+  const elapsedMs = Math.max(0, timestamp - audioLoadingSpinnerFrameStartedAt);
+  const angle = ((elapsedMs % audioLoadingSpinnerFrameMs) / audioLoadingSpinnerFrameMs) * 360;
+  for (const rotor of rotors) {
+    rotor.style.transform = `rotate(${angle.toFixed(2)}deg)`;
+  }
+  audioLoadingSpinnerFrameRequest = window.requestAnimationFrame(updateAudioLoadingSpinnerFrame);
+}
+
+function syncAudioLoadingSpinnerAnimation() {
+  const hasLoadingSpinner = Boolean(document.querySelector(".message-audio-button.is-loading .audio-loading-spinner__rotor"));
+  if (!hasLoadingSpinner || audioLoadingSpinnerFrameRequest) {
+    return;
+  }
+  audioLoadingSpinnerFrameStartedAt = window.performance?.now?.() || Date.now();
+  audioLoadingSpinnerFrameRequest = window.requestAnimationFrame(updateAudioLoadingSpinnerFrame);
+}
+
 function ttsFallbackText(text) {
   const value = String(text || "");
   return value.length <= ttsInlineTextLimit ? value : "";
@@ -5292,8 +5562,104 @@ function createMessageAudioPlayback(audioKey) {
     audio: new Audio(),
     paused: false,
     stopped: false,
+    priming: false,
     finishCurrent: null,
   };
+}
+
+function createSilentWavObjectUrl({ durationMs = 120, sampleRate = 8000 } = {}) {
+  const samples = Math.max(1, Math.round((sampleRate * durationMs) / 1000));
+  const bytesPerSample = 2;
+  const dataBytes = samples * bytesPerSample;
+  const buffer = new ArrayBuffer(44 + dataBytes);
+  const view = new DataView(buffer);
+  let offset = 0;
+  const writeAscii = (value) => {
+    for (let index = 0; index < value.length; index += 1) {
+      view.setUint8(offset + index, value.charCodeAt(index));
+    }
+    offset += value.length;
+  };
+  writeAscii("RIFF");
+  view.setUint32(offset, 36 + dataBytes, true);
+  offset += 4;
+  writeAscii("WAVE");
+  writeAscii("fmt ");
+  view.setUint32(offset, 16, true);
+  offset += 4;
+  view.setUint16(offset, 1, true);
+  offset += 2;
+  view.setUint16(offset, 1, true);
+  offset += 2;
+  view.setUint32(offset, sampleRate, true);
+  offset += 4;
+  view.setUint32(offset, sampleRate * bytesPerSample, true);
+  offset += 4;
+  view.setUint16(offset, bytesPerSample, true);
+  offset += 2;
+  view.setUint16(offset, 16, true);
+  offset += 2;
+  writeAscii("data");
+  view.setUint32(offset, dataBytes, true);
+  return URL.createObjectURL(new Blob([buffer], { type: "audio/wav" }));
+}
+
+function primeMessageAudioPlayback(audioKey) {
+  if (!audioKey) {
+    return null;
+  }
+  const playback =
+    activeMessageAudio?.key === audioKey && !activeMessageAudio.stopped
+      ? activeMessageAudio
+      : reserveMessageAudioPlayback(audioKey);
+  if (!playback?.audio || playback.priming) {
+    return playback;
+  }
+
+  playback.priming = true;
+  const audio = playback.audio;
+  const priorVolume = typeof audio.volume === "number" ? audio.volume : 1;
+  const objectUrl = createSilentWavObjectUrl();
+  let cleanupTimer = null;
+  const cleanup = () => {
+    if (cleanupTimer) {
+      window.clearTimeout(cleanupTimer);
+      cleanupTimer = null;
+    }
+    audio.removeEventListener("ended", cleanup);
+    audio.removeEventListener("error", cleanup);
+    if (playback.priming) {
+      playback.priming = false;
+    }
+    if (audio.src === objectUrl) {
+      try {
+        audio.pause();
+        audio.removeAttribute("src");
+        audio.load();
+      } catch (_error) {
+        // Best effort only; real playback will replace the source.
+      }
+    }
+    audio.volume = priorVolume;
+    URL.revokeObjectURL(objectUrl);
+  };
+
+  audio.addEventListener("ended", cleanup, { once: true });
+  audio.addEventListener("error", cleanup, { once: true });
+  audio.preload = "auto";
+  audio.volume = 0;
+  audio.src = objectUrl;
+  audio.load();
+  try {
+    const playPromise = audio.play();
+    if (playPromise && typeof playPromise.finally === "function") {
+      playPromise.finally(cleanup).catch(() => {});
+    }
+  } catch (_error) {
+    cleanup();
+  }
+  cleanupTimer = window.setTimeout(cleanup, 900);
+  return playback;
 }
 
 function reserveMessageAudioPlayback(audioKey) {
@@ -5523,6 +5889,7 @@ function playAudioElement(audioKey, playback, url) {
     audio.addEventListener("error", onError, { once: true });
     audio.addEventListener("playing", onPlaying, { once: true });
     audio.preload = "auto";
+    audio.volume = 1;
     audio.src = url;
     audio.load();
     let playPromise;
@@ -5664,7 +6031,12 @@ async function prepareAndPlayMessageAudio(audioKey, payload) {
 function playMessageAudio(audioKey, payload) {
   const status = audioPlaybackStatus(audioKey);
   if (status === "loading") {
-    return Promise.resolve(false);
+    stopActiveMessageAudio({ render: false });
+    const parts = audioPartsFromAvailability(audioKey);
+    if (parts.length > 0) {
+      return startReadyMessageAudioPlayback(audioKey, parts);
+    }
+    return prepareAndPlayMessageAudio(audioKey, payload);
   }
   if (status === "playing") {
     pauseActiveMessageAudio(audioKey);
@@ -5721,6 +6093,7 @@ function buildAudioButton({ audioKey, label, payload }) {
       showAudioStatus(availability.error || ttsUnavailableMessage() || "Text-to-speech is unavailable.");
       return;
     }
+    primeMessageAudioPlayback(audioKey);
     const playbackPromise = playMessageAudio(audioKey, payload);
     if (playbackPromise && typeof playbackPromise.catch === "function") {
       void playbackPromise.catch((error) => {
@@ -5801,24 +6174,48 @@ function appendProjectOptionGroup(label, projects) {
 }
 
 function groupedProjectOptions() {
-  const featured = [];
-  const liveDelegates = [];
-  const projects = [];
+  const scratchpad = [];
+  const rootGroups = new Map();
+  const pinned = [];
 
   for (const project of state.projects) {
-    if (project?.featured || project?.specialRole === "global-mind") {
-      featured.push(project);
-    } else if (projectHasLiveDelegate(project)) {
-      liveDelegates.push(project);
-    } else {
-      projects.push(project);
+    if (project?.specialRole === "scratchpad") {
+      scratchpad.push(project);
+      continue;
     }
+
+    const rootPath = project.workspaceRootPath || workspaceRootForProjectPath(project.path)?.path || "";
+    const rootLabel = project.workspaceRootLabel || workspaceRootForProjectPath(project.path)?.label || rootPath;
+    if (!rootPath) {
+      pinned.push(project);
+      continue;
+    }
+
+    const group = rootGroups.get(rootPath) || {
+      path: rootPath,
+      label: rootLabel,
+      projects: [],
+    };
+    group.projects.push(project);
+    rootGroups.set(rootPath, group);
   }
 
   return {
-    featured: featured.sort(compareProjects),
-    liveDelegates: liveDelegates.sort(compareProjects),
-    projects: projects.sort(compareProjects),
+    scratchpad: scratchpad.sort(compareProjects),
+    roots: [...rootGroups.values()]
+      .sort((left, right) => {
+        const leftPrimary = state.workspace?.primaryRoot && left.path === state.workspace.primaryRoot;
+        const rightPrimary = state.workspace?.primaryRoot && right.path === state.workspace.primaryRoot;
+        if (leftPrimary !== rightPrimary) {
+          return leftPrimary ? -1 : 1;
+        }
+        return left.label.localeCompare(right.label);
+      })
+      .map((group) => ({
+        ...group,
+        projects: group.projects.sort(compareProjects),
+      })),
+    pinned: pinned.sort(compareProjects),
   };
 }
 
@@ -5826,16 +6223,26 @@ function renderProjectOptions() {
   if (controlInteractionLocked("project-select")) {
     return;
   }
-  const disabled = state.dispatchPending || (state.projectsLoading && state.projects.length === 0);
+  const setupRequired = Boolean(state.workspace?.setupRequired);
+  const catalogBlocking = catalogBlocksInteraction();
+  const disabled = setupRequired || state.dispatchPending || catalogBlocking;
   const renderKey = JSON.stringify({
     disabled,
-    loading: Boolean(state.projectsLoading && state.projects.length === 0),
+    setupRequired,
+    loading: catalogBlocking,
     selectedProject: state.selectedProject,
+    workspace: [
+      state.workspace?.setupRequired ? 1 : 0,
+      state.workspace?.primaryRoot || "",
+      ...(state.workspace?.roots || []).map((root) => `${root.path}:${root.label}`),
+    ],
     projects: state.projects.map((project) => [
       project.path,
       project.displayName || project.slug || project.path,
       Number(Boolean(project.featured)),
       project.specialRole || "",
+      project.workspaceRootPath || "",
+      Number(Boolean(project.untracked)),
       projectDelegateStatusKey(project),
       projectActivityTimestampMs(project),
     ]),
@@ -5844,8 +6251,12 @@ function renderProjectOptions() {
     return;
   }
   elements.projectSelect.innerHTML = "";
+  if (elements.projectAddButton) {
+    elements.projectAddButton.disabled = setupRequired;
+    elements.projectAddButton.title = setupRequired ? "Choose a projects folder first" : "Add project";
+  }
 
-  if (state.projectsLoading && state.projects.length === 0) {
+  if (catalogBlocking) {
     const option = document.createElement("option");
     option.value = "";
     option.textContent = "Loading projects…";
@@ -5858,7 +6269,7 @@ function renderProjectOptions() {
   if (state.projects.length === 0) {
     const option = document.createElement("option");
     option.value = "";
-    option.textContent = "No projects";
+    option.textContent = setupRequired ? "Choose projects folder" : "No projects";
     elements.projectSelect.append(option);
     elements.projectSelect.disabled = true;
     elements.projectSelect.dataset.renderKey = renderKey;
@@ -5866,15 +6277,318 @@ function renderProjectOptions() {
   }
 
   const projectGroups = groupedProjectOptions();
-  for (const project of projectGroups.featured) {
+  for (const project of projectGroups.scratchpad) {
     appendProjectOption(elements.projectSelect, project);
   }
-  appendProjectOptionGroup("\u25cf Active delegation", projectGroups.liveDelegates);
-  appendProjectOptionGroup("Projects", projectGroups.projects);
+  for (const group of projectGroups.roots) {
+    appendProjectOptionGroup(group.label, group.projects);
+  }
+  appendProjectOptionGroup("Pinned Projects", projectGroups.pinned);
 
   elements.projectSelect.disabled = disabled;
   elements.projectSelect.value = state.selectedProject;
   elements.projectSelect.dataset.renderKey = renderKey;
+}
+
+function renderWorkspaceSetup() {
+  if (!elements.workspaceSetupPanel) {
+    return;
+  }
+
+  const setupRequired = Boolean(state.workspace?.setupRequired);
+  elements.workspaceSetupPanel.hidden = !setupRequired;
+  if (!setupRequired) {
+    return;
+  }
+
+  if (elements.workspaceRootInput && elements.workspaceRootInput.value !== state.workspaceSetupDraft) {
+    elements.workspaceRootInput.value = state.workspaceSetupDraft;
+  }
+  if (elements.workspaceRootInput) {
+    elements.workspaceRootInput.disabled = state.workspaceSetupPending || Boolean(state.directoryPickerPending);
+  }
+  if (elements.workspaceRootChooseButton) {
+    const isChoosing = state.directoryPickerPending === "setup";
+    elements.workspaceRootChooseButton.disabled =
+      state.workspaceSetupPending || Boolean(state.directoryPickerPending);
+    elements.workspaceRootChooseButton.querySelector(".button-text").textContent =
+      isChoosing ? "Opening..." : "Browse";
+  }
+  if (elements.workspaceSetupSaveButton) {
+    elements.workspaceSetupSaveButton.disabled =
+      state.workspaceSetupPending || Boolean(state.directoryPickerPending) || !state.workspaceSetupDraft.trim();
+  }
+
+  const status = state.workspaceSetupStatus ||
+    (state.workspace?.suggestions?.length
+      ? `Try ${state.workspace.suggestions[0]}`
+      : "");
+  setText(elements.workspaceSetupState, status, { empty: !status });
+}
+
+function settingsWorkspaceRootDrafts() {
+  return normalizeWorkspaceRootDrafts(state.settingsWorkspaceRootDrafts);
+}
+
+function buildSettingsRootRow(rootPath) {
+  const isFocus = rootPath === state.settingsWorkspaceFocusDraft;
+  const row = document.createElement("div");
+  row.className = "settings-root-row";
+
+  const main = document.createElement("div");
+  main.className = "settings-root-main";
+
+  const pathLabel = document.createElement("div");
+  pathLabel.className = "settings-root-path";
+  pathLabel.textContent = rootPath;
+
+  const meta = document.createElement("div");
+  meta.className = "settings-root-meta";
+  meta.textContent = isFocus ? "Project folder + Scratchpad focus" : "Project folder";
+
+  main.append(pathLabel, meta);
+
+  const actions = document.createElement("div");
+  actions.className = "settings-root-actions";
+
+  if (!isFocus) {
+    const focusButton = document.createElement("button");
+    focusButton.className = "detail-action-button";
+    focusButton.type = "button";
+    focusButton.textContent = "Set as Scratchpad";
+    focusButton.disabled = state.settingsWorkspacePending;
+    focusButton.addEventListener("click", () => {
+      state.settingsWorkspaceFocusDraft = rootPath;
+      state.settingsWorkspaceStatus = "";
+      renderAll();
+    });
+    actions.append(focusButton);
+  }
+
+  const removeButton = document.createElement("button");
+  removeButton.className = "detail-action-button is-quiet";
+  removeButton.type = "button";
+  removeButton.textContent = "Remove";
+  removeButton.disabled = state.settingsWorkspacePending;
+  removeButton.addEventListener("click", () => {
+    state.settingsWorkspaceRootDrafts = state.settingsWorkspaceRootDrafts
+      .filter((entry) => entry !== rootPath);
+    state.settingsWorkspaceStatus = "";
+    renderAll();
+  });
+  actions.append(removeButton);
+
+  row.append(main, actions);
+  return row;
+}
+
+function renderSettingsModal() {
+  if (!elements.settingsModal) {
+    return;
+  }
+  if (!state.settingsModalOpen) {
+    elements.settingsModal.hidden = true;
+    return;
+  }
+
+  const roots = settingsWorkspaceRootDrafts();
+  elements.settingsModal.hidden = false;
+  setText(elements.settingsState, state.settingsWorkspaceStatus, {
+    empty: !state.settingsWorkspaceStatus,
+  });
+
+  if (elements.settingsScratchpadInput.value !== state.settingsWorkspaceFocusDraft) {
+    elements.settingsScratchpadInput.value = state.settingsWorkspaceFocusDraft;
+  }
+  elements.settingsScratchpadInput.disabled =
+    state.settingsWorkspacePending || Boolean(state.directoryPickerPending);
+  if (elements.settingsScratchpadChooseButton) {
+    const isChoosing = state.directoryPickerPending === "scratchpad";
+    elements.settingsScratchpadChooseButton.disabled =
+      state.settingsWorkspacePending || Boolean(state.directoryPickerPending);
+    elements.settingsScratchpadChooseButton.querySelector(".button-text").textContent =
+      isChoosing ? "Opening..." : "Browse";
+  }
+
+  clearNode(elements.settingsProjectRootsList);
+  if (roots.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "settings-root-row";
+    const main = document.createElement("div");
+    main.className = "settings-root-main";
+    const pathLabel = document.createElement("div");
+    pathLabel.className = "settings-root-path";
+    pathLabel.textContent = "No project folders";
+    main.append(pathLabel);
+    empty.append(main);
+    elements.settingsProjectRootsList.append(empty);
+  } else {
+    for (const rootPath of roots) {
+      elements.settingsProjectRootsList.append(buildSettingsRootRow(rootPath));
+    }
+  }
+
+  if (elements.settingsNewRootInput.value !== state.settingsWorkspaceNewRootDraft) {
+    elements.settingsNewRootInput.value = state.settingsWorkspaceNewRootDraft;
+  }
+  elements.settingsNewRootInput.disabled =
+    state.settingsWorkspacePending || Boolean(state.directoryPickerPending);
+  const newRoot = state.settingsWorkspaceNewRootDraft.trim();
+  elements.settingsAddRootButton.disabled =
+    state.settingsWorkspacePending || Boolean(state.directoryPickerPending) || !newRoot || roots.includes(newRoot);
+  if (elements.settingsChooseRootButton) {
+    const isChoosing = state.directoryPickerPending === "project-root";
+    elements.settingsChooseRootButton.disabled =
+      state.settingsWorkspacePending || Boolean(state.directoryPickerPending);
+    elements.settingsChooseRootButton.querySelector(".button-text").textContent =
+      isChoosing ? "Opening..." : "Browse Folders";
+  }
+  renderVoiceSettings();
+  renderRemoteAssistSettings();
+  if (elements.settingsPairIphoneButton) {
+    elements.settingsPairIphoneButton.disabled =
+      state.settingsWorkspacePending || state.cloudPairingPending || Boolean(state.directoryPickerPending);
+    elements.settingsPairIphoneButton.querySelector(".button-text").textContent =
+      state.cloudPairingPending ? "Generating..." : "Pair iPhone";
+  }
+  if (elements.settingsPairingStatus) {
+    setText(elements.settingsPairingStatus, state.cloudPairingStatus, {
+      empty: !state.cloudPairingStatus,
+    });
+  }
+  if (elements.settingsPairingQr) {
+    elements.settingsPairingQr.hidden = !state.cloudPairingQrSvg;
+    if (state.cloudPairingQrSvg && elements.settingsPairingQr.innerHTML !== state.cloudPairingQrSvg) {
+      elements.settingsPairingQr.innerHTML = state.cloudPairingQrSvg;
+    } else if (!state.cloudPairingQrSvg) {
+      clearNode(elements.settingsPairingQr);
+    }
+  }
+  if (elements.settingsPairingExpiry) {
+    const expiresAtMs = Date.parse(state.cloudPairingExpiresAt || "");
+    const expiryText = Number.isFinite(expiresAtMs)
+      ? `Expires ${new Date(expiresAtMs).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+      : "";
+    setText(elements.settingsPairingExpiry, expiryText, { empty: !expiryText });
+  }
+  elements.settingsCancelButton.disabled =
+    state.settingsWorkspacePending || Boolean(state.directoryPickerPending);
+  elements.settingsSaveButton.disabled =
+    state.settingsWorkspacePending || Boolean(state.directoryPickerPending) || !state.settingsWorkspaceFocusDraft.trim();
+  elements.settingsSaveButton.querySelector(".button-text").textContent =
+    state.settingsWorkspacePending ? "Saving…" : "Save";
+}
+
+function directoryBrowserTitleForPurpose(purpose = state.directoryBrowserPurpose) {
+  if (purpose === "scratchpad") {
+    return "Choose Scratchpad Focus";
+  }
+  if (purpose === "setup") {
+    return "Choose Projects Folder";
+  }
+  return "Choose Project Folder";
+}
+
+function directoryBrowserFilteredEntries() {
+  const query = state.directoryBrowserQuery.trim().toLowerCase();
+  if (!query) {
+    return state.directoryBrowserEntries;
+  }
+  return state.directoryBrowserEntries.filter((entry) =>
+    String(entry.name || "").toLowerCase().includes(query) ||
+    String(entry.path || "").toLowerCase().includes(query),
+  );
+}
+
+function buildDirectoryBrowserRootButton(root) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "directory-browser-root-button";
+  button.textContent = root.label || root.path;
+  button.disabled = state.directoryBrowserLoading || root.path === state.directoryBrowserPath;
+  button.addEventListener("click", () => {
+    void loadDirectoryBrowserPath(root.path);
+  });
+  return button;
+}
+
+function buildDirectoryBrowserEntry(entry) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "directory-browser-entry";
+  button.disabled = state.directoryBrowserLoading;
+
+  const name = document.createElement("span");
+  name.className = "directory-browser-entry-name";
+  name.textContent = entry.name || entry.path;
+
+  const pathLabel = document.createElement("span");
+  pathLabel.className = "directory-browser-entry-path";
+  pathLabel.textContent = entry.label || entry.path;
+
+  button.append(name, pathLabel);
+  button.addEventListener("click", () => {
+    void loadDirectoryBrowserPath(entry.path);
+  });
+  return button;
+}
+
+function renderDirectoryBrowserModal() {
+  if (!elements.directoryBrowserModal) {
+    return;
+  }
+  if (!state.directoryBrowserOpen) {
+    elements.directoryBrowserModal.hidden = true;
+    return;
+  }
+
+  elements.directoryBrowserModal.hidden = false;
+  setText(elements.directoryBrowserTitle, directoryBrowserTitleForPurpose(), { empty: false });
+  const stateText = state.directoryBrowserLoading
+    ? "Loading folders..."
+    : state.directoryBrowserStatus;
+  setText(elements.directoryBrowserState, stateText, { empty: !stateText });
+
+  clearNode(elements.directoryBrowserRoots);
+  for (const root of state.directoryBrowserRoots) {
+    elements.directoryBrowserRoots.append(buildDirectoryBrowserRootButton(root));
+  }
+
+  if (elements.directoryBrowserPathInput.value !== state.directoryBrowserPathDraft) {
+    elements.directoryBrowserPathInput.value = state.directoryBrowserPathDraft;
+  }
+  elements.directoryBrowserPathInput.disabled = state.directoryBrowserLoading;
+  elements.directoryBrowserGoButton.disabled =
+    state.directoryBrowserLoading || !state.directoryBrowserPathDraft.trim();
+  elements.directoryBrowserUpButton.disabled =
+    state.directoryBrowserLoading || !state.directoryBrowserParent;
+
+  if (elements.directoryBrowserSearchInput.value !== state.directoryBrowserQuery) {
+    elements.directoryBrowserSearchInput.value = state.directoryBrowserQuery;
+  }
+  elements.directoryBrowserSearchInput.disabled = state.directoryBrowserLoading;
+
+  clearNode(elements.directoryBrowserList);
+  const entries = directoryBrowserFilteredEntries();
+  if (state.directoryBrowserLoading) {
+    const loading = document.createElement("div");
+    loading.className = "directory-browser-empty";
+    loading.textContent = "Loading folders...";
+    elements.directoryBrowserList.append(loading);
+  } else if (entries.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "directory-browser-empty";
+    empty.textContent = state.directoryBrowserQuery ? "No matching folders" : "No folders here";
+    elements.directoryBrowserList.append(empty);
+  } else {
+    for (const entry of entries) {
+      elements.directoryBrowserList.append(buildDirectoryBrowserEntry(entry));
+    }
+  }
+
+  elements.directoryBrowserUseButton.disabled =
+    state.directoryBrowserLoading || !state.directoryBrowserPath;
+  elements.directoryBrowserCancelButton.disabled = false;
 }
 
 function updateProjectControlAppearance() {
@@ -6011,6 +6725,8 @@ function updateBodyModalState() {
       Boolean(state.artifactModalProject) ||
       Boolean(state.delegateModalProject) ||
       Boolean(state.sessionTitleModalProject) ||
+      Boolean(state.settingsModalOpen) ||
+      Boolean(state.directoryBrowserOpen) ||
       terminalPanelIsOpen() ||
       Boolean(state.queueArchiveConfirmEntryId),
   );
@@ -6341,6 +7057,7 @@ async function refreshProjectRoots() {
     renderAll();
     try {
       const payload = await fetchJson("/v1/project-roots");
+      applyWorkspacePayload(payload.workspace);
       state.projectRoots = Array.isArray(payload.roots) ? payload.roots : [];
       syncProjectRootSelection(state.projectModalRoot, { preferCurrent: false });
       syncProjectRepoSelection(state.projectModalRepoPath, { preferCurrent: false });
@@ -6352,6 +7069,45 @@ async function refreshProjectRoots() {
   })();
 
   return state.projectRootsRefreshPromise;
+}
+
+async function saveWorkspaceSetup() {
+  if (state.directoryPickerPending || state.directoryBrowserOpen) {
+    return;
+  }
+  const primaryRoot = state.workspaceSetupDraft.trim();
+  if (!primaryRoot) {
+    state.workspaceSetupStatus = "Choose a projects folder";
+    renderAll();
+    return;
+  }
+
+  state.workspaceSetupPending = true;
+  state.workspaceSetupStatus = "Checking folder…";
+  renderAll();
+  try {
+    const payload = await fetchJson("/v1/workspace", {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        primaryRoot,
+        projectRoots: [primaryRoot],
+      }),
+    });
+    applyWorkspacePayload(payload.workspace);
+    state.workspaceSetupStatus = "";
+    state.workspaceSetupDraft = state.workspace?.primaryRoot || primaryRoot;
+    await refreshProjectRoots();
+    await refreshProjects();
+  } catch (error) {
+    state.workspaceSetupStatus = error.message;
+    showError(error);
+  } finally {
+    state.workspaceSetupPending = false;
+    renderAll();
+  }
 }
 
 async function refreshImportableSessions(projectPath, { force = false } = {}) {
@@ -6438,7 +7194,7 @@ function renderQueueList() {
     const clickable = Boolean(entry.projectPath && entry.sessionId);
     const unread = entryIsUnread(entry);
     const card = document.createElement("article");
-    card.className = `queue-card ${status === "queued" ? "processing" : status === "answered" ? "done" : "failed"}`;
+    card.className = `queue-card ${threadEntryIsPending(entry) ? "processing" : status === "answered" ? "done" : "failed"}`;
     card.classList.toggle("is-unread", unread);
     if (clickable) {
       card.classList.add("clickable");
@@ -6482,7 +7238,7 @@ function renderQueueList() {
     }
 
     const chip = document.createElement("div");
-    chip.className = `queue-chip ${status === "queued" ? "processing" : status === "answered" ? "done" : "failed"}`;
+    chip.className = `queue-chip ${threadEntryIsPending(entry) ? "processing" : status === "answered" ? "done" : "failed"}`;
     chip.textContent = sessionStatusLabel(entry);
     headStatus.append(chip);
 
@@ -6793,12 +7549,13 @@ function buildHistoryGroup(entry, { items = [] } = {}) {
     return group;
   }
 
+  const pending = threadEntryIsPending(entry);
   const inboundText =
-    entry.status === "queued"
+    pending
       ? `${pendingLabel}…`
       : entry.response || (entry.status === "failed" ? "Failed." : "");
   const inboundMeta =
-    entry.status === "queued"
+    pending
       ? pendingLabel
       : formatTimestamp(entry.answeredAt) || (entry.status === "failed" ? "failed" : "");
 
@@ -6809,11 +7566,11 @@ function buildHistoryGroup(entry, { items = [] } = {}) {
       copyKey: entryCopyKey(entry, "history-response", inboundText),
       copyLabel: "Copy response",
       text: inboundText,
-      copyTextValue: entry.status === "queued" ? "" : inboundText,
+      copyTextValue: pending ? "" : inboundText,
       metaText: inboundMeta,
       failed: entry.status === "failed",
-      audioKind: entry.status === "queued" ? "" : "response",
-      audioText: entry.status === "queued" ? "" : inboundText,
+      audioKind: pending ? "" : "response",
+      audioText: pending ? "" : inboundText,
     }),
   );
 
@@ -8130,7 +8887,7 @@ function setWorkspaceMode(mode) {
 function renderWorkspaceTabs() {
   const mode = state.workspaceMode === "auto" ? "auto" : "project";
   const activeCount = activeDelegateProjects().length;
-  const hasProject = !state.projectsLoading && Boolean(state.selectedProject);
+  const hasProject = !catalogBlocksInteraction() && Boolean(state.selectedProject);
 
   if (elements.projectWorkspaceTab) {
     elements.projectWorkspaceTab.classList.toggle("is-active", mode === "project");
@@ -9457,6 +10214,327 @@ function makeComposerAttachment(file) {
   };
 }
 
+function normalizeVoiceInputDeviceId(value) {
+  return String(value || "").trim();
+}
+
+function restoreVoiceInputDevice() {
+  try {
+    state.voiceInputDeviceId = normalizeVoiceInputDeviceId(localStorage.getItem(voiceInputDeviceKey));
+  } catch {
+    state.voiceInputDeviceId = "";
+  }
+}
+
+function persistVoiceInputDevice() {
+  try {
+    const deviceId = normalizeVoiceInputDeviceId(state.voiceInputDeviceId);
+    if (deviceId) {
+      localStorage.setItem(voiceInputDeviceKey, deviceId);
+    } else {
+      localStorage.removeItem(voiceInputDeviceKey);
+    }
+  } catch {
+    // Ignore storage failures; the current session selection still works.
+  }
+}
+
+function voiceInputDeviceLabel(deviceId = state.voiceInputDeviceId) {
+  const normalized = normalizeVoiceInputDeviceId(deviceId);
+  if (!normalized) {
+    return "Default microphone";
+  }
+  const device = state.voiceInputDevices.find((entry) => entry.deviceId === normalized);
+  return device?.label || "Selected microphone";
+}
+
+function voiceCaptureConstraints() {
+  const deviceId = normalizeVoiceInputDeviceId(state.voiceInputDeviceId);
+  return deviceId ? { audio: { deviceId: { exact: deviceId } } } : { audio: true };
+}
+
+function voiceCaptureFallbackConstraints() {
+  return { audio: true };
+}
+
+function voiceErrorMessage(error) {
+  const name = String(error?.name || "");
+  const message = String(error?.message || "").trim();
+  if (name === "NotAllowedError" || name === "SecurityError") {
+    return "Microphone access is blocked. Allow ClawDad in macOS Privacy & Security > Microphone.";
+  }
+  if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+    return "No microphone was found.";
+  }
+  if (name === "OverconstrainedError" || name === "ConstraintNotSatisfiedError") {
+    return "The selected microphone is unavailable.";
+  }
+  if (name === "NotReadableError" || name === "TrackStartError") {
+    return "The microphone is already in use or could not start.";
+  }
+  return message || "Voice recording failed.";
+}
+
+async function refreshVoiceInputDevices({ requestPermission = false, quiet = false } = {}) {
+  if (!navigator.mediaDevices?.enumerateDevices) {
+    state.voiceInputDevices = [];
+    state.voiceSettingsStatus = "Microphone listing is unavailable in this app view.";
+    renderAll();
+    return [];
+  }
+
+  state.voiceInputDevicesLoading = true;
+  if (!quiet) {
+    state.voiceSettingsStatus = requestPermission ? "Checking microphone permission..." : "Checking microphones...";
+  }
+  renderAll();
+
+  let permissionStream = null;
+  try {
+    if (requestPermission && navigator.mediaDevices?.getUserMedia) {
+      permissionStream = await navigator.mediaDevices.getUserMedia(voiceCaptureFallbackConstraints());
+    }
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const inputs = devices
+      .filter((device) => device.kind === "audioinput")
+      .map((device, index) => ({
+        deviceId: normalizeVoiceInputDeviceId(device.deviceId),
+        groupId: normalizeVoiceInputDeviceId(device.groupId),
+        label: String(device.label || `Microphone ${index + 1}`).trim(),
+      }))
+      .filter((device, index, source) =>
+        device.deviceId && source.findIndex((candidate) => candidate.deviceId === device.deviceId) === index,
+      );
+    state.voiceInputDevices = inputs;
+
+    if (state.voiceInputDeviceId && inputs.length > 0 && !inputs.some((entry) => entry.deviceId === state.voiceInputDeviceId)) {
+      state.voiceInputDeviceId = "";
+      persistVoiceInputDevice();
+      state.voiceSettingsStatus = "Selected microphone is unavailable. Using default microphone.";
+    } else if (!quiet) {
+      state.voiceSettingsStatus = inputs.length > 0
+        ? `${inputs.length} microphone${inputs.length === 1 ? "" : "s"} available.`
+        : "No microphones found.";
+    }
+    return inputs;
+  } catch (error) {
+    state.voiceSettingsStatus = voiceErrorMessage(error);
+    if (!quiet) {
+      showError(new Error(state.voiceSettingsStatus));
+    }
+    return [];
+  } finally {
+    for (const track of permissionStream?.getTracks?.() || []) {
+      track.stop();
+    }
+    state.voiceInputDevicesLoading = false;
+    renderAll();
+  }
+}
+
+function renderVoiceSettings() {
+  const select = elements.settingsVoiceInputSelect;
+  if (!select) {
+    return;
+  }
+
+  const selectedDeviceId = normalizeVoiceInputDeviceId(state.voiceInputDeviceId);
+  const existingValue = select.value;
+  clearNode(select);
+  const defaultOption = document.createElement("option");
+  defaultOption.value = "";
+  defaultOption.textContent = "Default microphone";
+  select.append(defaultOption);
+  for (const device of state.voiceInputDevices) {
+    const option = document.createElement("option");
+    option.value = device.deviceId;
+    option.textContent = device.label || "Microphone";
+    select.append(option);
+  }
+  select.value = selectedDeviceId && state.voiceInputDevices.some((device) => device.deviceId === selectedDeviceId)
+    ? selectedDeviceId
+    : "";
+  if (existingValue !== select.value) {
+    select.dataset.lastValue = select.value;
+  }
+  select.disabled = state.voiceInputDevicesLoading;
+
+  if (elements.settingsRefreshVoiceDevicesButton) {
+    elements.settingsRefreshVoiceDevicesButton.disabled = state.voiceInputDevicesLoading;
+    elements.settingsRefreshVoiceDevicesButton.querySelector(".button-text").textContent =
+      state.voiceInputDevicesLoading ? "Checking..." : "Refresh Mics";
+  }
+
+  const status = state.voiceSettingsStatus ||
+    (selectedDeviceId ? `Using ${voiceInputDeviceLabel(selectedDeviceId)}` : "Using system default microphone.");
+  setText(elements.settingsVoiceStatus, status, { empty: !status });
+}
+
+function renderRemoteAssistSettings() {
+  const section = elements.settingsRemoteAssistSection;
+  if (!section) {
+    return;
+  }
+  const available = nativeBridge.isAvailable();
+  section.hidden = !available;
+  if (!available) {
+    return;
+  }
+
+  const status = state.remoteAssistStatus;
+  const pending = state.remoteAssistPending;
+  const screenAllowed = status?.screenRecordingGranted === true;
+  const controlAllowed = status?.accessibilityGranted === true;
+
+  if (elements.settingsRemoteAssistToggle) {
+    elements.settingsRemoteAssistToggle.checked = status?.enabled === true;
+    elements.settingsRemoteAssistToggle.disabled = pending || !status;
+  }
+  setText(
+    elements.settingsRemoteAssistStatus,
+    pending ? "Updating Remote Assist..." : String(status?.message || "Checking Remote Assist..."),
+    { empty: false },
+  );
+
+  if (elements.settingsRemoteAssistInfoButton) {
+    elements.settingsRemoteAssistInfoButton.setAttribute(
+      "aria-expanded",
+      String(state.remoteAssistInfoOpen),
+    );
+    setText(
+      elements.settingsRemoteAssistInfoButton.querySelector(".button-text"),
+      state.remoteAssistInfoOpen ? "Hide Info" : "More Info",
+    );
+  }
+  if (elements.settingsRemoteAssistInfo) {
+    elements.settingsRemoteAssistInfo.hidden = !state.remoteAssistInfoOpen;
+  }
+
+  setText(
+    elements.settingsRemoteAssistScreenState,
+    screenAllowed ? "Allowed" : "Required",
+  );
+  elements.settingsRemoteAssistScreenState?.classList.toggle("is-allowed", screenAllowed);
+  if (elements.settingsRemoteAssistScreenButton) {
+    elements.settingsRemoteAssistScreenButton.disabled = pending || screenAllowed;
+  }
+
+  setText(
+    elements.settingsRemoteAssistControlState,
+    controlAllowed ? "Allowed" : "Required",
+  );
+  elements.settingsRemoteAssistControlState?.classList.toggle("is-allowed", controlAllowed);
+  if (elements.settingsRemoteAssistControlButton) {
+    elements.settingsRemoteAssistControlButton.disabled = pending || controlAllowed;
+  }
+
+  if (elements.settingsRemoteAssistStopButton) {
+    elements.settingsRemoteAssistStopButton.hidden = status?.active !== true;
+    elements.settingsRemoteAssistStopButton.disabled = pending;
+  }
+}
+
+async function refreshRemoteAssistStatus({ quiet = false } = {}) {
+  if (!nativeBridge.isAvailable()) {
+    return;
+  }
+  if (!quiet) {
+    state.remoteAssistPending = true;
+    renderAll();
+  }
+  try {
+    state.remoteAssistStatus = await nativeBridge.getRemoteAssistStatus();
+  } catch (error) {
+    if (!quiet) {
+      showError(error);
+    }
+  } finally {
+    state.remoteAssistPending = false;
+    renderAll();
+  }
+}
+
+async function setRemoteAssistEnabled(enabled) {
+  if (!nativeBridge.isAvailable() || state.remoteAssistPending) {
+    return;
+  }
+  state.remoteAssistPending = true;
+  renderAll();
+  try {
+    state.remoteAssistStatus = await nativeBridge.setRemoteAssistEnabled(enabled);
+  } catch (error) {
+    showError(error);
+  } finally {
+    state.remoteAssistPending = false;
+    renderAll();
+  }
+}
+
+async function openRemoteAssistPrivacy(pane) {
+  if (!nativeBridge.isAvailable() || state.remoteAssistPending) {
+    return;
+  }
+  state.remoteAssistPending = true;
+  renderAll();
+  try {
+    state.remoteAssistStatus = await nativeBridge.openRemoteAssistPrivacy(pane);
+  } catch (error) {
+    showError(error);
+  } finally {
+    state.remoteAssistPending = false;
+    renderAll();
+  }
+}
+
+async function stopRemoteAssist() {
+  if (!nativeBridge.isAvailable() || state.remoteAssistPending) {
+    return;
+  }
+  state.remoteAssistPending = true;
+  renderAll();
+  try {
+    state.remoteAssistStatus = await nativeBridge.stopRemoteAssist();
+  } catch (error) {
+    showError(error);
+  } finally {
+    state.remoteAssistPending = false;
+    renderAll();
+  }
+}
+
+function setRemoteAssistInfoOpen(open, { restoreFocus = false } = {}) {
+  state.remoteAssistInfoOpen = Boolean(open);
+  renderRemoteAssistSettings();
+  if (restoreFocus) {
+    window.requestAnimationFrame(() => {
+      elements.settingsRemoteAssistInfoButton?.focus();
+    });
+  }
+}
+
+async function getVoiceRecordingStream() {
+  const selectedDeviceId = normalizeVoiceInputDeviceId(state.voiceInputDeviceId);
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia(voiceCaptureConstraints());
+    void refreshVoiceInputDevices({ quiet: true });
+    return stream;
+  } catch (error) {
+    if (
+      selectedDeviceId &&
+      ["NotFoundError", "DevicesNotFoundError", "OverconstrainedError", "ConstraintNotSatisfiedError"].includes(String(error?.name || ""))
+    ) {
+      state.voiceInputDeviceId = "";
+      persistVoiceInputDevice();
+      state.voiceSettingsStatus = "Selected microphone is unavailable. Retrying with default microphone.";
+      renderAll();
+      const stream = await navigator.mediaDevices.getUserMedia(voiceCaptureFallbackConstraints());
+      void refreshVoiceInputDevices({ quiet: true });
+      return stream;
+    }
+    throw error;
+  }
+}
+
 function voiceRecordingSupported() {
   return Boolean(
     window.isSecureContext &&
@@ -9500,6 +10578,7 @@ function updateComposerVoiceButton() {
   const recording = state.voiceState === "recording";
   const transcribing = state.voiceState === "transcribing";
   const disabled = transcribing || state.dispatchPending;
+  const inputLabel = state.voiceActiveInputLabel || voiceInputDeviceLabel();
   button.classList.toggle("is-recording", recording);
   button.classList.toggle("is-loading", transcribing);
   button.disabled = disabled;
@@ -9515,8 +10594,8 @@ function updateComposerVoiceButton() {
   button.title = transcribing
     ? "Transcribing voice message"
     : recording
-      ? "Stop recording"
-      : "Record voice message";
+      ? `Stop recording from ${inputLabel}`
+      : `Record voice message with ${inputLabel}`;
   const label = button.querySelector(".button-text");
   if (label) {
     label.textContent = transcribing ? "Transcribing" : recording ? "Stop talking" : "Talk";
@@ -9571,12 +10650,13 @@ async function startVoiceRecording() {
   }
 
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const stream = await getVoiceRecordingStream();
     const mimeType = preferredVoiceMimeType();
     const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
     state.voiceStream = stream;
     state.voiceChunks = [];
     state.voiceRecorder = recorder;
+    state.voiceActiveInputLabel = stream.getAudioTracks?.()[0]?.label || voiceInputDeviceLabel();
 
     recorder.addEventListener("dataavailable", (event) => {
       if (event.data?.size > 0) {
@@ -9587,6 +10667,7 @@ async function startVoiceRecording() {
       const chunks = [...state.voiceChunks];
       state.voiceChunks = [];
       state.voiceRecorder = null;
+      state.voiceActiveInputLabel = "";
       stopVoiceStream();
       const type = mimeType || chunks[0]?.type || "audio/webm";
       const blob = new Blob(chunks, { type });
@@ -9598,17 +10679,24 @@ async function startVoiceRecording() {
     recorder.addEventListener("error", (event) => {
       stopVoiceStream();
       state.voiceRecorder = null;
-      setVoiceState("idle", event.error?.message || "Voice recording failed");
+      state.voiceActiveInputLabel = "";
+      setVoiceState("idle", voiceErrorMessage(event.error) || "Voice recording failed");
       showError(new Error(state.voiceError || "Voice recording failed"));
     }, { once: true });
 
     recorder.start();
     setVoiceState("recording");
+    if (state.voiceActiveInputLabel) {
+      showAudioStatus(`Recording with ${state.voiceActiveInputLabel}`);
+    }
   } catch (error) {
     stopVoiceStream();
     state.voiceRecorder = null;
-    setVoiceState("idle", error.message);
-    showError(error);
+    state.voiceActiveInputLabel = "";
+    const message = voiceErrorMessage(error);
+    setVoiceState("idle", message);
+    state.voiceSettingsStatus = message;
+    showError(new Error(message));
   } finally {
     renderAll();
   }
@@ -9618,6 +10706,7 @@ function stopVoiceRecording() {
   const recorder = state.voiceRecorder;
   if (!recorder || recorder.state === "inactive") {
     setVoiceState("idle");
+    state.voiceActiveInputLabel = "";
     stopVoiceStream();
     renderAll();
     return;
@@ -10062,6 +11151,8 @@ function renderFilesWorkspace() {
   const artifactStates = Object.values(state.artifactsByProject);
   const loadingCount = artifactStates.filter((artifactState) => artifactState?.loading).length;
   const items = allArtifactItems();
+  const catalogBlocking = catalogBlocksInteraction();
+  const catalogRefreshing = catalogIsRefreshing();
 
   if (elements.filesWorkspaceMeta) {
     elements.filesWorkspaceMeta.textContent =
@@ -10070,14 +11161,21 @@ function renderFilesWorkspace() {
         : "Recent agent files";
   }
   if (elements.filesWorkspaceRefreshButton) {
-    elements.filesWorkspaceRefreshButton.disabled = state.projectsLoading || loadingCount > 0;
+    elements.filesWorkspaceRefreshButton.disabled = catalogBlocking || loadingCount > 0;
+    elements.filesWorkspaceRefreshButton.title = catalogBlocking
+      ? "Loading projects"
+      : catalogRefreshing
+        ? "Refreshing projects"
+        : loadingCount > 0
+          ? "Refreshing files"
+          : "Refresh files";
     const label = elements.filesWorkspaceRefreshButton.querySelector(".button-text");
     if (label) {
       label.textContent = loadingCount > 0 ? "Refreshing..." : "Refresh";
     }
   }
 
-  if (state.projectsLoading) {
+  if (catalogBlocking) {
     setText(elements.filesWorkspaceState, "Loading projects", { empty: false });
   } else if (loadingCount > 0 && items.length === 0) {
     setText(elements.filesWorkspaceState, "Checking for files", { empty: false });
@@ -10104,7 +11202,7 @@ function renderFilesWorkspace() {
   }
 
   clearNode(elements.filesWorkspaceList);
-  if (state.projectsLoading || (loadingCount > 0 && items.length === 0)) {
+  if (catalogBlocking || (loadingCount > 0 && items.length === 0)) {
     const card = document.createElement("div");
     card.className = "history-state-card";
     card.textContent = "Looking for files...";
@@ -10671,6 +11769,14 @@ function catalogIsBootstrapping() {
   return state.projectsLoading && state.projects.length === 0;
 }
 
+function catalogIsRefreshing() {
+  return state.projectsLoading && state.projects.length > 0;
+}
+
+function catalogBlocksInteraction() {
+  return catalogIsBootstrapping();
+}
+
 function updateMailboxState() {
   const pending = pendingEntryForSession(state.selectedProject, state.selectedSessionId);
   if (pending) {
@@ -10715,11 +11821,59 @@ function updateQueueUnreadOrb() {
 }
 
 function normalizeDispatchMode(value) {
-  return dispatchModes.includes(value) ? value : "linear";
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["queue", "queued", "next"].includes(normalized)) {
+    return "queue";
+  }
+  return "direct";
+}
+
+function normalizeAccessMode(value) {
+  return accessModes.includes(value) ? value : "repo";
+}
+
+function permissionModeForAccessMode(value = state.accessMode) {
+  return normalizeAccessMode(value) === "full" ? "full" : "approve";
+}
+
+function restoreComposerAccessMode() {
+  try {
+    state.accessMode = normalizeAccessMode(localStorage.getItem(composerAccessModeKey));
+  } catch {
+    state.accessMode = "repo";
+  }
+}
+
+function persistComposerAccessMode() {
+  try {
+    localStorage.setItem(composerAccessModeKey, normalizeAccessMode(state.accessMode));
+  } catch {
+    // Ignore storage failures; the current in-memory selection still applies.
+  }
+}
+
+function setAccessMode(mode, { persist = true } = {}) {
+  state.accessMode = normalizeAccessMode(mode);
+  if (persist) {
+    persistComposerAccessMode();
+  }
+  updateAccessModeControl();
+}
+
+function updateAccessModeControl() {
+  if (!elements.composerAccessSelect) {
+    return;
+  }
+  const mode = normalizeAccessMode(state.accessMode);
+  state.accessMode = mode;
+  if (elements.composerAccessSelect.value !== mode) {
+    elements.composerAccessSelect.value = mode;
+  }
+  elements.composerAccessSelect.title = mode === "full" ? "Full access" : "Repo scoped";
 }
 
 function dispatchModeAllowsBusySend(mode = state.dispatchMode) {
-  return normalizeDispatchMode(mode) !== "linear";
+  return dispatchModes.includes(normalizeDispatchMode(mode));
 }
 
 function setDispatchMode(mode, { closeTools = false } = {}) {
@@ -10750,10 +11904,10 @@ function renderComposerToolsMenu() {
 function updateDispatchModeButton() {
   const mode = normalizeDispatchMode(state.dispatchMode);
   state.dispatchMode = mode;
-  const details = dispatchModeDetails[mode] || dispatchModeDetails.linear;
+  const details = dispatchModeDetails[mode] || dispatchModeDetails.direct;
   if (elements.composerToolsButton) {
     elements.composerToolsButton.classList.toggle("is-queue", mode === "queue");
-    elements.composerToolsButton.classList.toggle("is-interject", mode === "interject");
+    elements.composerToolsButton.classList.toggle("is-direct", mode === "direct");
     elements.composerToolsButton.setAttribute("aria-label", `Open composer tools. ${details.aria}`);
     elements.composerToolsButton.title = details.title;
   }
@@ -10762,11 +11916,12 @@ function updateDispatchModeButton() {
     button.classList.toggle("is-active", active);
     button.setAttribute("aria-pressed", String(active));
   }
+  updateAccessModeControl();
 }
 
 function dispatchButtonText({ catalogBlocking = false, sessionBusy = false, allowBusySend = true } = {}) {
   const mode = normalizeDispatchMode(state.dispatchMode);
-  const details = dispatchModeDetails[mode] || dispatchModeDetails.linear;
+  const details = dispatchModeDetails[mode] || dispatchModeDetails.direct;
   const modeLabel = details.label;
   if (state.dispatchPending) {
     return "Sending…";
@@ -10785,7 +11940,7 @@ function updateSendAvailability() {
   const hasPending = Boolean(pendingEntryForSession(state.selectedProject, state.selectedSessionId));
   const sessionBusy = hasPending || sessionIsBusy(session);
   const allowBusySend = dispatchModeAllowsBusySend();
-  const catalogBlocking = catalogIsBootstrapping();
+  const catalogBlocking = catalogBlocksInteraction();
   const hasDraft = Boolean(String(elements.messageInput?.value || "").trim()) || state.composerAttachments.length > 0;
   const canSend =
     !catalogBlocking &&
@@ -10809,7 +11964,7 @@ function updateSendAvailability() {
 function updateThreadButtonAvailability() {
   const session = currentSession();
   elements.sessionThreadButton.disabled =
-    state.projectsLoading ||
+    catalogBlocksInteraction() ||
     state.sessionCreatePending ||
     !state.selectedProject ||
     !state.selectedSessionId ||
@@ -10825,7 +11980,7 @@ function updateComposerTerminalButtonAvailability() {
   const launchKey = terminalSessionKey(entry.projectPath, entry.sessionId);
   const session = currentSession();
   const disabled =
-    state.projectsLoading ||
+    catalogBlocksInteraction() ||
     state.sessionCreatePending ||
     Boolean(session?.pendingCreation) ||
     !canOpenSessionInTerminal(entry);
@@ -10846,7 +12001,7 @@ function updateComposerTerminalButtonAvailability() {
 }
 
 function updateSummaryButtonAvailability() {
-  const disabled = state.projectsLoading || !state.selectedProject;
+  const disabled = catalogBlocksInteraction() || !state.selectedProject;
   if (elements.projectSummaryButton) {
     elements.projectSummaryButton.disabled = disabled;
   }
@@ -10870,7 +12025,7 @@ function updateDelegateButtonAvailability() {
   const statusState = String(defaultLane?.status?.state || "").trim().toLowerCase();
   const live = statusState === "running";
   const blocked = statusState === "blocked" || statusState === "failed";
-  const disabled = state.projectsLoading || !project?.path;
+  const disabled = catalogBlocksInteraction() || !project?.path;
   const label = elements.projectDelegateButton.querySelector(".button-text");
 
   elements.projectDelegateButton.disabled = disabled;
@@ -10900,7 +12055,7 @@ function updateActiveRunsButtonAvailability() {
     elements.activeRunsOrb.hidden = activeCount === 0;
   }
   if (elements.activeRunsButton) {
-    elements.activeRunsButton.disabled = catalogIsBootstrapping() || activeCount === 0;
+    elements.activeRunsButton.disabled = catalogBlocksInteraction() || activeCount === 0;
     elements.activeRunsButton.setAttribute(
       "aria-label",
       activeCount > 0
@@ -10912,7 +12067,7 @@ function updateActiveRunsButtonAvailability() {
 }
 
 function updateArtifactsButtonAvailability() {
-  const projectDisabled = state.projectsLoading || !state.selectedProject;
+  const projectDisabled = catalogBlocksInteraction() || !state.selectedProject;
   if (elements.projectArtifactsButton) {
     elements.projectArtifactsButton.disabled = projectDisabled;
   }
@@ -10938,7 +12093,7 @@ function updateImportButtonAvailability() {
   elements.sessionImportButton.tabIndex = canShow ? 0 : -1;
   elements.sessionImportButton.disabled =
     !canShow ||
-    state.projectsLoading ||
+    catalogBlocksInteraction() ||
     state.sessionSwitchPending ||
     state.sessionCreatePending ||
     Boolean(importState.loading);
@@ -10952,7 +12107,7 @@ function updateImportButtonAvailability() {
 function updateSessionRenameAvailability() {
   const session = currentSession();
   elements.sessionRenameButton.disabled =
-    state.projectsLoading ||
+    catalogBlocksInteraction() ||
     state.sessionSwitchPending ||
     state.sessionCreatePending ||
     !state.selectedProject ||
@@ -11112,6 +12267,9 @@ function renderTerminalPanel() {
 function renderAll() {
   pruneCopyFeedback();
   renderWorkspaceTabs();
+  renderWorkspaceSetup();
+  renderSettingsModal();
+  renderDirectoryBrowserModal();
   renderProjectOptions();
   updateProjectControlAppearance();
   renderSessionOptions();
@@ -11150,11 +12308,12 @@ function renderAll() {
   updateBodyModalState();
   refreshCopyButtons();
   updateComposerTerminalButtonAvailability();
+  syncAudioLoadingSpinnerAnimation();
 }
 
 async function reconcileThreadEntries() {
   const pendingEntries = state.threadEntries.filter(
-    (entry) => threadEntryStatus(entry) === "queued" && threadEntryVisibleInQueue(entry, state.threadEntries),
+    (entry) => threadEntryIsPending(entry) && threadEntryVisibleInQueue(entry, state.threadEntries),
   );
   if (pendingEntries.length === 0) {
     renderAll();
@@ -11253,6 +12412,15 @@ async function reconcileThreadEntries() {
         });
         continue;
       }
+      if (exactStatus === "working") {
+        updateThreadEntry(entry.id, {
+          status: "working",
+          requestState: "working",
+          handoffPending: false,
+          sessionId: exactHistoryItem?.sessionId || entry.sessionId,
+        });
+        continue;
+      }
     }
 
     if (!project || !session) {
@@ -11343,6 +12511,11 @@ async function reconcileThreadEntries() {
     }
 
     if (status === "running" || status === "dispatched") {
+      updateThreadEntry(entry.id, {
+        status: "working",
+        requestState: "working",
+        handoffPending: false,
+      });
       continue;
     }
 
@@ -11420,7 +12593,7 @@ async function reconcileThreadEntries() {
     const historyState = historyStateFor(modalThread.projectPath, modalThread.sessionId);
     const hasPendingHistory =
       Boolean(pendingEntryForSession(modalThread.projectPath, modalThread.sessionId)) ||
-      historyState.items.some((entry) => entry.status === "queued");
+      historyState.items.some((entry) => threadEntryIsPending(entry));
     if (hasPendingHistory) {
       void loadSessionHistory(modalThread.projectPath, modalThread.sessionId, {
         reset: true,
@@ -11438,13 +12611,16 @@ async function refreshProjects() {
     state.projectsLoading = true;
     renderAll();
     try {
-      const payload = await fetchJson("/v1/projects");
+      const fullCatalog = state.activeRunsModalOpen || state.workspaceMode === "auto";
+      const payload = await fetchJson(fullCatalog ? "/v1/projects" : "/v1/projects?lean=1");
+      applyWorkspacePayload(payload.workspace);
       state.projects = Array.isArray(payload.projects)
         ? payload.projects.map(hydrateProjectVisuals).sort(compareProjects)
         : [];
       syncSelectedProject(payload.defaultProject || state.selectedProject);
       syncSelectedSession(state.selectedSessionId);
       cacheProjects(payload);
+      renderAll();
       if (payload.autoImportScheduled && !state.projectAutoImportRefreshTimer) {
         state.projectAutoImportRefreshTimer = window.setTimeout(() => {
           state.projectAutoImportRefreshTimer = null;
@@ -11452,10 +12628,7 @@ async function refreshProjects() {
         }, 2500);
       }
       await reconcileThreadEntries();
-      hydrateReturnedThreadEntries({ prefetch: true });
-      void refreshRecentHistory({
-        force: state.threadEntries.length === 0,
-      });
+      hydrateReturnedThreadEntries();
       if (state.selectedProject) {
         if (state.sessionImportModalProject === state.selectedProject) {
           void refreshImportableSessions(state.selectedProject).catch(() => {});
@@ -13478,6 +14651,260 @@ function closeProjectModal() {
   renderAll();
 }
 
+function openSettingsModal() {
+  state.summaryModalProject = "";
+  state.codexIntegrationModalProject = "";
+  state.sessionImportModalProject = "";
+  state.activeRunsModalOpen = false;
+  state.artifactModalProject = "";
+  state.delegateModalProject = "";
+  state.sessionTitleModalProject = "";
+  state.sessionTitleModalSessionId = "";
+  state.quickPromptModalOpen = false;
+  state.composerToolsOpen = false;
+  state.modalThread = null;
+  state.projectModalOpen = false;
+  state.settingsModalOpen = true;
+  state.remoteAssistInfoOpen = false;
+  state.settingsWorkspaceStatus = "";
+  state.settingsWorkspacePending = false;
+  syncSettingsWorkspaceDraftsFromWorkspace();
+  renderAll();
+  window.requestAnimationFrame(() => {
+    elements.settingsScratchpadInput?.focus();
+    elements.settingsScratchpadInput?.select();
+  });
+  if (state.projectRoots.length === 0) {
+    void refreshProjectRoots().catch((error) => {
+      state.settingsWorkspaceStatus = error.message;
+      renderAll();
+    });
+  }
+  void refreshVoiceInputDevices({ quiet: true });
+  void refreshRemoteAssistStatus();
+}
+
+function closeSettingsModal({ restoreFocus = true } = {}) {
+  if (state.directoryPickerPending || state.directoryBrowserOpen) {
+    return;
+  }
+  state.settingsModalOpen = false;
+  state.remoteAssistInfoOpen = false;
+  state.settingsWorkspacePending = false;
+  state.settingsWorkspaceStatus = "";
+  state.settingsWorkspaceNewRootDraft = "";
+  renderAll();
+  if (restoreFocus) {
+    elements.settingsButton?.focus();
+  }
+}
+
+function addSettingsWorkspaceRoot() {
+  const rootPath = state.settingsWorkspaceNewRootDraft.trim();
+  if (!rootPath) {
+    return;
+  }
+  state.settingsWorkspaceRootDrafts = normalizeWorkspaceRootDrafts([
+    ...state.settingsWorkspaceRootDrafts,
+    rootPath,
+  ]);
+  state.settingsWorkspaceNewRootDraft = "";
+  state.settingsWorkspaceStatus = "";
+  renderAll();
+}
+
+function closeDirectoryBrowser({ restoreFocus = true } = {}) {
+  const purpose = state.directoryBrowserPurpose;
+  state.directoryBrowserOpen = false;
+  state.directoryBrowserPurpose = "";
+  state.directoryBrowserPath = "";
+  state.directoryBrowserPathDraft = "";
+  state.directoryBrowserParent = "";
+  state.directoryBrowserEntries = [];
+  state.directoryBrowserRoots = [];
+  state.directoryBrowserQuery = "";
+  state.directoryBrowserLoading = false;
+  state.directoryBrowserStatus = "";
+  renderAll();
+  if (!restoreFocus) {
+    return;
+  }
+  if (purpose === "scratchpad") {
+    elements.settingsScratchpadChooseButton?.focus();
+  } else if (purpose === "setup") {
+    elements.workspaceRootChooseButton?.focus();
+  } else {
+    elements.settingsChooseRootButton?.focus();
+  }
+}
+
+async function loadDirectoryBrowserPath(folderPath = "") {
+  const requestedPath = String(folderPath || state.directoryBrowserPathDraft || "").trim();
+  state.directoryBrowserLoading = true;
+  state.directoryBrowserStatus = requestedPath ? `Opening ${requestedPath}` : "Loading folders";
+  renderAll();
+  try {
+    const query = requestedPath ? `?path=${encodeURIComponent(requestedPath)}` : "";
+    const payload = await fetchJson(`/v1/workspace/directories${query}`);
+    state.directoryBrowserPath = String(payload.path || "");
+    state.directoryBrowserPathDraft = state.directoryBrowserPath;
+    state.directoryBrowserParent = String(payload.parent || "");
+    state.directoryBrowserEntries = Array.isArray(payload.entries) ? payload.entries : [];
+    state.directoryBrowserRoots = Array.isArray(payload.roots) ? payload.roots : [];
+    state.directoryBrowserQuery = "";
+    state.directoryBrowserStatus = payload.truncated
+      ? "Showing first folders only. Search or type a deeper path."
+      : "";
+  } catch (error) {
+    state.directoryBrowserStatus = error.message;
+    showError(error);
+  } finally {
+    state.directoryBrowserLoading = false;
+    renderAll();
+  }
+}
+
+function applyWorkspaceDirectorySelection(selectedPath, purpose = state.directoryBrowserPurpose) {
+  if (purpose === "setup") {
+    state.workspaceSetupDraft = selectedPath;
+    state.workspaceSetupStatus = "";
+  } else if (purpose === "scratchpad") {
+    state.settingsWorkspaceFocusDraft = selectedPath;
+    state.settingsWorkspaceStatus = "";
+  } else {
+    state.settingsWorkspaceRootDrafts = normalizeWorkspaceRootDrafts([
+      ...state.settingsWorkspaceRootDrafts,
+      selectedPath,
+    ]);
+    state.settingsWorkspaceNewRootDraft = "";
+    state.settingsWorkspaceStatus = "";
+  }
+}
+
+function openWorkspaceDirectoryBrowser({ purpose, defaultPath = "" } = {}) {
+  const browserPurpose = purpose || "project-root";
+  state.directoryBrowserOpen = true;
+  state.directoryBrowserPurpose = browserPurpose;
+  state.directoryBrowserPath = "";
+  state.directoryBrowserPathDraft = String(defaultPath || "").trim();
+  state.directoryBrowserParent = "";
+  state.directoryBrowserEntries = [];
+  state.directoryBrowserRoots = [];
+  state.directoryBrowserQuery = "";
+  state.directoryBrowserLoading = false;
+  state.directoryBrowserStatus = "";
+  renderAll();
+  window.requestAnimationFrame(() => {
+    elements.directoryBrowserSearchInput?.focus();
+  });
+  void loadDirectoryBrowserPath(state.directoryBrowserPathDraft);
+}
+
+async function chooseWorkspaceDirectory({ purpose, defaultPath = "" } = {}) {
+  const pickerPurpose = purpose || "project-root";
+  if (!nativeBridge.isAvailable()) {
+    openWorkspaceDirectoryBrowser({ purpose: pickerPurpose, defaultPath });
+    return;
+  }
+
+  state.directoryPickerPending = pickerPurpose;
+  renderAll();
+  try {
+    const result = await nativeBridge.chooseFolder({
+      purpose: pickerPurpose,
+      defaultPath: String(defaultPath || "").trim(),
+    });
+    if (!result?.cancelled && result?.path) {
+      applyWorkspaceDirectorySelection(String(result.path), pickerPurpose);
+    }
+  } catch (error) {
+    showError(error);
+    openWorkspaceDirectoryBrowser({ purpose: pickerPurpose, defaultPath });
+  } finally {
+    state.directoryPickerPending = "";
+    renderAll();
+  }
+}
+
+function useDirectoryBrowserFolder() {
+  const selectedPath = state.directoryBrowserPath.trim();
+  if (!selectedPath) {
+    state.directoryBrowserStatus = "Choose a folder first";
+    renderAll();
+    return;
+  }
+
+  applyWorkspaceDirectorySelection(selectedPath, state.directoryBrowserPurpose);
+  closeDirectoryBrowser();
+}
+
+async function saveWorkspaceSettings() {
+  if (state.directoryPickerPending || state.directoryBrowserOpen) {
+    return;
+  }
+  const primaryRoot = state.settingsWorkspaceFocusDraft.trim();
+  const projectRoots = settingsWorkspaceRootDrafts();
+  if (!primaryRoot) {
+    state.settingsWorkspaceStatus = "Choose a Scratchpad Focus";
+    renderAll();
+    return;
+  }
+
+  state.settingsWorkspacePending = true;
+  state.settingsWorkspaceStatus = "Checking folders…";
+  renderAll();
+  try {
+    const payload = await fetchJson("/v1/workspace", {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        primaryRoot,
+        projectRoots,
+      }),
+    });
+    applyWorkspacePayload(payload.workspace);
+    syncSettingsWorkspaceDraftsFromWorkspace();
+    state.settingsWorkspaceStatus = "Saved";
+    await refreshProjectRoots();
+    await refreshProjects();
+  } catch (error) {
+    state.settingsWorkspaceStatus = error.message;
+    showError(error);
+  } finally {
+    state.settingsWorkspacePending = false;
+    renderAll();
+  }
+}
+
+async function startCloudPairing() {
+  if (state.cloudPairingPending) {
+    return;
+  }
+  state.cloudPairingPending = true;
+  state.cloudPairingStatus = "Generating secure QR...";
+  state.cloudPairingQrSvg = "";
+  state.cloudPairingExpiresAt = "";
+  renderAll();
+  try {
+    const payload = await fetchJson("/v1/cloud/pairing", {
+      method: "POST",
+    });
+    state.cloudPairingQrSvg = String(payload.qrSvg || "");
+    state.cloudPairingExpiresAt = String(payload.pairing?.expiresAt || "");
+    state.cloudPairingStatus = state.cloudPairingQrSvg
+      ? "Scan this with ClawDad on iPhone."
+      : "Pairing code generated.";
+  } catch (error) {
+    state.cloudPairingStatus = error.message;
+    showError(error);
+  } finally {
+    state.cloudPairingPending = false;
+    renderAll();
+  }
+}
+
 function optimisticPendingSession({ projectPath, provider }) {
   return {
     slug: "",
@@ -13552,6 +14979,41 @@ function optimisticProjectForCreate({ mode, root, repoPath, projectName, provide
       registeredAt: null,
     },
   };
+}
+
+async function ensureProjectTrackedFromSelection(project) {
+  if (!project?.untracked || !project.path) {
+    return project;
+  }
+  const rootPath = project.workspaceRootPath || workspaceRootForProjectPath(project.path)?.path || "";
+  if (!rootPath) {
+    throw new Error("Project folder is outside configured workspace roots");
+  }
+
+  const payload = await fetchJson("/v1/projects", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      mode: "existing",
+      root: rootPath,
+      path: project.path,
+      provider: project.provider || "codex",
+    }),
+  });
+
+  if (payload.projectDetails) {
+    upsertProject(hydrateProjectVisuals(payload.projectDetails));
+    state.selectedProject = payload.projectDetails.path;
+    syncSelectedSession(payload.sessionId || payload.projectDetails.activeSessionId || "", {
+      preferCurrent: false,
+    });
+  } else {
+    await refreshProjects();
+  }
+  void refreshProjectRoots().catch(() => {});
+  return currentProject();
 }
 
 async function handleProjectCreate(event) {
@@ -13662,6 +15124,7 @@ async function handleDispatch(event) {
   const projectDetails = currentProject();
   const sessionDetails = currentSession();
   const dispatchMode = normalizeDispatchMode(state.dispatchMode);
+  const permissionMode = permissionModeForAccessMode();
   const allowBusySend = dispatchModeAllowsBusySend(dispatchMode);
 
   if (!project) {
@@ -13699,7 +15162,7 @@ async function handleDispatch(event) {
     queueId: null,
     requestState: dispatchMode === "queue" ? "queued" : "starting",
     handoffPending: true,
-    status: "queued",
+    status: dispatchMode === "queue" ? "queued" : "working",
     scheduleMode: dispatchMode,
     sentAt: new Date().toISOString(),
     answeredAt: null,
@@ -13732,6 +15195,7 @@ async function handleDispatch(event) {
           formData.append("message", dispatchMessage);
           formData.append("wait", "false");
           formData.append("dispatchMode", dispatchMode);
+          formData.append("permissionMode", permissionMode);
           for (const attachment of composerAttachments) {
             formData.append("attachments", attachment.file, attachment.fileName);
           }
@@ -13751,14 +15215,16 @@ async function handleDispatch(event) {
             message: dispatchMessage,
             wait: false,
             dispatchMode,
+            permissionMode,
           }),
         };
     const payload = await fetchJson("/v1/dispatch", requestOptions);
+    const directAccepted = Boolean(payload.direct || payload.interjected);
     const effectiveScheduleMode =
-      normalizeHistoryScheduleMode(payload.dispatchMode || payload.scheduleMode) ||
-      (payload.interjected ? "interject" : dispatchMode);
+      normalizeHistoryScheduleMode(payload.effectiveDispatchMode || payload.dispatchMode || payload.scheduleMode) ||
+      (directAccepted ? "direct" : dispatchMode);
     const payloadRequestId = String(payload.requestId || payload.queueId || "").trim();
-    const handoffPending = Boolean(payload.handoffPending) && !payload.interjected;
+    const handoffPending = Boolean(payload.handoffPending) && !directAccepted;
 
     updateThreadEntry(entry.id, {
       requestId: payloadRequestId,
@@ -13766,21 +15232,12 @@ async function handleDispatch(event) {
       requestState: String(payload.requestState || (handoffPending ? "starting" : "running")).trim().toLowerCase(),
       handoffPending,
       scheduleMode: effectiveScheduleMode,
+      status: effectiveScheduleMode === "queue" ? "queued" : "working",
+      deliveryMechanism: String(payload.deliveryMechanism || "").trim().toLowerCase(),
       attachments: Array.isArray(payload.attachments) && payload.attachments.length > 0
         ? payload.attachments
         : entry.attachments,
     });
-    if (payload.interjected) {
-      completeThreadEntry(entryById(entry.id) || entry, {
-        status: "answered",
-        requestState: "interjected",
-        handoffPending: false,
-        scheduleMode: "interject",
-        answeredAt: new Date().toISOString(),
-        response: "Interjected into the active Codex turn.",
-        seenAt: null,
-      });
-    }
     hydrateHistoryFromThreadEntry(entryById(entry.id) || entry);
 
     elements.messageInput.value = "";
@@ -13835,6 +15292,9 @@ function bindEvents() {
       setDispatchMode(button.dataset.dispatchMode, { closeTools: true });
     });
   }
+  elements.composerAccessSelect?.addEventListener("change", (event) => {
+    setAccessMode(event.target.value);
+  });
   elements.projectSummaryButton?.addEventListener("click", () => {
     void openProjectSummary();
   });
@@ -14194,6 +15654,103 @@ function bindEvents() {
   elements.projectModalBackdrop.addEventListener("click", closeProjectModal);
   elements.projectModalClose.addEventListener("click", closeProjectModal);
   elements.projectModalForm.addEventListener("submit", handleProjectCreate);
+  elements.settingsButton?.addEventListener("click", openSettingsModal);
+  elements.settingsBackdrop?.addEventListener("click", () => closeSettingsModal());
+  elements.settingsClose?.addEventListener("click", () => closeSettingsModal());
+  elements.settingsCancelButton?.addEventListener("click", () => closeSettingsModal());
+  elements.settingsScratchpadInput?.addEventListener("input", (event) => {
+    state.settingsWorkspaceFocusDraft = String(event.target.value || "");
+    state.settingsWorkspaceStatus = "";
+    renderAll();
+  });
+  elements.settingsScratchpadChooseButton?.addEventListener("click", () => {
+    void chooseWorkspaceDirectory({
+      purpose: "scratchpad",
+      defaultPath: state.settingsWorkspaceFocusDraft || state.workspace?.primaryRoot || "",
+    });
+  });
+  elements.settingsNewRootInput?.addEventListener("input", (event) => {
+    state.settingsWorkspaceNewRootDraft = String(event.target.value || "");
+    state.settingsWorkspaceStatus = "";
+    renderAll();
+  });
+  elements.settingsNewRootInput?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      addSettingsWorkspaceRoot();
+    }
+  });
+  elements.settingsChooseRootButton?.addEventListener("click", () => {
+    void chooseWorkspaceDirectory({
+      purpose: "project-root",
+      defaultPath:
+        state.settingsWorkspaceNewRootDraft ||
+        state.settingsWorkspaceFocusDraft ||
+        state.workspace?.primaryRoot ||
+        "",
+    });
+  });
+  elements.settingsAddRootButton?.addEventListener("click", addSettingsWorkspaceRoot);
+  elements.settingsVoiceInputSelect?.addEventListener("change", (event) => {
+    state.voiceInputDeviceId = normalizeVoiceInputDeviceId(event.target.value);
+    state.voiceSettingsStatus = state.voiceInputDeviceId
+      ? `Using ${voiceInputDeviceLabel(state.voiceInputDeviceId)}.`
+      : "Using system default microphone.";
+    persistVoiceInputDevice();
+    renderAll();
+  });
+  elements.settingsRefreshVoiceDevicesButton?.addEventListener("click", () => {
+    void refreshVoiceInputDevices({ requestPermission: true });
+  });
+  elements.settingsRemoteAssistToggle?.addEventListener("change", (event) => {
+    void setRemoteAssistEnabled(Boolean(event.target.checked));
+  });
+  elements.settingsRemoteAssistInfoButton?.addEventListener("click", () => {
+    setRemoteAssistInfoOpen(!state.remoteAssistInfoOpen);
+  });
+  elements.settingsRemoteAssistScreenButton?.addEventListener("click", () => {
+    void openRemoteAssistPrivacy("screen");
+  });
+  elements.settingsRemoteAssistControlButton?.addEventListener("click", () => {
+    void openRemoteAssistPrivacy("accessibility");
+  });
+  elements.settingsRemoteAssistStopButton?.addEventListener("click", () => {
+    void stopRemoteAssist();
+  });
+  elements.settingsPairIphoneButton?.addEventListener("click", () => {
+    void startCloudPairing();
+  });
+  elements.settingsForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void saveWorkspaceSettings();
+  });
+  elements.directoryBrowserBackdrop?.addEventListener("click", () => closeDirectoryBrowser());
+  elements.directoryBrowserClose?.addEventListener("click", () => closeDirectoryBrowser());
+  elements.directoryBrowserCancelButton?.addEventListener("click", () => closeDirectoryBrowser());
+  elements.directoryBrowserUseButton?.addEventListener("click", useDirectoryBrowserFolder);
+  elements.directoryBrowserUpButton?.addEventListener("click", () => {
+    if (state.directoryBrowserParent) {
+      void loadDirectoryBrowserPath(state.directoryBrowserParent);
+    }
+  });
+  elements.directoryBrowserGoButton?.addEventListener("click", () => {
+    void loadDirectoryBrowserPath(state.directoryBrowserPathDraft);
+  });
+  elements.directoryBrowserPathInput?.addEventListener("input", (event) => {
+    state.directoryBrowserPathDraft = String(event.target.value || "");
+    state.directoryBrowserStatus = "";
+    renderAll();
+  });
+  elements.directoryBrowserPathInput?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      void loadDirectoryBrowserPath(state.directoryBrowserPathDraft);
+    }
+  });
+  elements.directoryBrowserSearchInput?.addEventListener("input", (event) => {
+    state.directoryBrowserQuery = String(event.target.value || "");
+    renderAll();
+  });
   elements.sessionThreadButton.addEventListener("click", async () => {
     try {
       await openSessionThread();
@@ -14242,16 +15799,42 @@ function bindEvents() {
     });
   });
 
+  elements.workspaceRootInput?.addEventListener("input", (event) => {
+    state.workspaceSetupDraft = event.target.value;
+    state.workspaceSetupStatus = "";
+    renderAll();
+  });
+  elements.workspaceRootInput?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      void saveWorkspaceSetup();
+    }
+  });
+  elements.workspaceRootChooseButton?.addEventListener("click", () => {
+    void chooseWorkspaceDirectory({
+      purpose: "setup",
+      defaultPath: state.workspaceSetupDraft || state.workspace?.suggestions?.[0] || "",
+    });
+  });
+  elements.workspaceSetupSaveButton?.addEventListener("click", () => {
+    void saveWorkspaceSetup();
+  });
+
   elements.projectSelect.addEventListener("change", async (event) => {
     clearControlInteraction("project-select");
     state.selectedProject = event.target.value;
     syncSelectedSession("", { preferCurrent: false });
     renderAll();
-    void refreshRecentHistory({ force: true, project: state.selectedProject }).catch(() => {});
     try {
+      const selected = currentProject();
+      if (selected?.untracked) {
+        await ensureProjectTrackedFromSelection(selected);
+      }
+      void refreshRecentHistory({ force: true, project: state.selectedProject }).catch(() => {});
       await refreshThreads();
     } catch (error) {
       showError(error);
+      await refreshProjects().catch(() => {});
     }
   });
 
@@ -14391,6 +15974,21 @@ function bindEvents() {
       closeSessionTitleModal();
       return;
     }
+    if (event.key === "Escape" && state.directoryBrowserOpen) {
+      event.preventDefault();
+      closeDirectoryBrowser();
+      return;
+    }
+    if (event.key === "Escape" && state.remoteAssistInfoOpen) {
+      event.preventDefault();
+      setRemoteAssistInfoOpen(false, { restoreFocus: true });
+      return;
+    }
+    if (event.key === "Escape" && state.settingsModalOpen) {
+      event.preventDefault();
+      closeSettingsModal();
+      return;
+    }
     if (event.key === "Escape" && state.quickPromptModalOpen) {
       event.preventDefault();
       closeQuickPromptModal();
@@ -14415,6 +16013,8 @@ async function boot() {
   hydrateReturnedThreadEntries();
   restoreQueueCollapsed();
   restoreArtifactShelfCollapsed();
+  restoreComposerAccessMode();
+  restoreVoiceInputDevice();
   restoreCachedProjects();
   renderAll();
   void refreshTtsStatus({ quiet: true });

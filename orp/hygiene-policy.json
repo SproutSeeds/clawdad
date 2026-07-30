@@ -79,7 +79,12 @@
         "test/**",
         "__tests__/**",
         "public/**",
-        "web/**"
+        "web/**",
+        "apps/**",
+        "cloud/**",
+        "plugins/**",
+        "native/**",
+        "vendor/**"
       ]
     },
     {

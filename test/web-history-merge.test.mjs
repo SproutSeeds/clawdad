@@ -8,6 +8,88 @@ const repoRoot = path.resolve(import.meta.dirname, "..");
 const webAppPath = path.join(repoRoot, "web", "app.js");
 const webIndexPath = path.join(repoRoot, "web", "index.html");
 const webCssPath = path.join(repoRoot, "web", "app.css");
+const nativeMacSourcePath = path.join(repoRoot, "native", "macos", "Sources", "ClawDad", "main.swift");
+const nativeMacBuildPath = path.join(repoRoot, "native", "macos", "build-app.sh");
+const iosContentPath = path.join(
+  repoRoot,
+  "apps",
+  "ios",
+  "ClawDadMobile",
+  "Sources",
+  "ClawDadMobile",
+  "ContentView.swift",
+);
+const iosCloudClientPath = path.join(
+  repoRoot,
+  "apps",
+  "ios",
+  "ClawDadMobile",
+  "Sources",
+  "ClawDadMobile",
+  "CloudClient.swift",
+);
+const iosRemoteAssistPath = path.join(
+  repoRoot,
+  "apps",
+  "ios",
+  "ClawDadMobile",
+  "Sources",
+  "ClawDadMobile",
+  "RemoteAssist.swift",
+);
+const nativeMacInputPath = path.join(
+  repoRoot,
+  "native",
+  "macos",
+  "Sources",
+  "ClawDad",
+  "MacInputController.swift",
+);
+const nativeMacRemotePeerPath = path.join(
+  repoRoot,
+  "native",
+  "macos",
+  "Sources",
+  "ClawDad",
+  "MacRemotePeer.swift",
+);
+const nativeMacKeyboardLayoutPath = path.join(
+  repoRoot,
+  "native",
+  "macos",
+  "Sources",
+  "ClawDad",
+  "MacKeyboardLayout.swift",
+);
+const remoteSessionStateProtocolPath = path.join(
+  repoRoot,
+  "native",
+  "ClawDadRemoteAssistProtocol",
+  "Sources",
+  "ClawDadRemoteAssistProtocol",
+  "RemoteSessionStateProtocol.swift",
+);
+const iosInfoPlistPath = path.join(repoRoot, "apps", "ios", "ClawDadMobile", "Resources", "Info.plist");
+const iosMascotContentsPath = path.join(
+  repoRoot,
+  "apps",
+  "ios",
+  "ClawDadMobile",
+  "Resources",
+  "Assets.xcassets",
+  "ClawDadMascot.imageset",
+  "Contents.json",
+);
+const iosMascotImagePath = path.join(
+  repoRoot,
+  "apps",
+  "ios",
+  "ClawDadMobile",
+  "Resources",
+  "Assets.xcassets",
+  "ClawDadMascot.imageset",
+  "clawdad-mascot.png",
+);
 
 async function loadHistoryMergeHelpers() {
   const source = await readFile(webAppPath, "utf8");
@@ -32,6 +114,8 @@ function providerLabel(provider) { return String(provider || "session"); }
 function sessionFingerprint(sessionId) { return String(sessionId || "").slice(-4); }
 ${source.slice(start, end)}
 globalThis.mergeHistoryItems = mergeHistoryItems;
+globalThis.normalizeHistoryItem = normalizeHistoryItem;
+globalThis.historyEntryQueuedForLater = historyEntryQueuedForLater;
 `,
     context,
   );
@@ -173,6 +257,53 @@ test("web history merge clears stale cached synthetic answered transcript cards"
   assert.equal(merged[0].exitCode, null);
 });
 
+test("web history merge keeps one working Direct turn and separates a true Queue item", async () => {
+  const { mergeHistoryItems, historyEntryQueuedForLater } = await loadHistoryMergeHelpers();
+  const directRequest = {
+    requestId: "1477ec45-ae50-4ad4-a7f6-34096043bec7",
+    projectPath: "/repo/go-to-market",
+    sessionId: "019f9cd2-7a08-7653-bb33-a004f5135c2e",
+    provider: "codex",
+    message: "What did we most recently work on?",
+    sentAt: "2026-07-26T05:07:42.000Z",
+    answeredAt: null,
+    status: "working",
+    response: "",
+    scheduleMode: "direct",
+    deliveryMechanism: "dispatch_worker",
+  };
+  const providerCopy = {
+    ...directRequest,
+    requestId: "codex:019f9cd2-7a08-7653-bb33-a004f5135c2e:20260726T050742000Z",
+    sentAt: "2026-07-26T05:07:42.040Z",
+    scheduleMode: "",
+    deliveryMechanism: "",
+  };
+  const queuedRequest = {
+    requestId: "9be10cb6-fcd8-46c3-9052-6cd4ee680c9b",
+    projectPath: directRequest.projectPath,
+    sessionId: directRequest.sessionId,
+    provider: "codex",
+    message: "Also, what should we do next?",
+    sentAt: "2026-07-26T05:07:56.000Z",
+    answeredAt: null,
+    status: "queued",
+    response: "",
+    scheduleMode: "queue",
+    deliveryMechanism: "queued_worker",
+  };
+
+  const merged = mergeHistoryItems([directRequest], [providerCopy, queuedRequest]);
+  assert.equal(merged.length, 2);
+  assert.equal(merged[0].requestId, directRequest.requestId);
+  assert.equal(merged[0].status, "working");
+  assert.equal(merged[0].scheduleMode, "direct");
+  assert.equal(historyEntryQueuedForLater(merged[0], merged), false);
+  assert.equal(merged[1].requestId, queuedRequest.requestId);
+  assert.equal(merged[1].status, "queued");
+  assert.equal(historyEntryQueuedForLater(merged[1], merged), true);
+});
+
 test("web history merge preserves prepared message and response audio metadata", async () => {
   const { mergeHistoryItems } = await loadHistoryMergeHelpers();
   const base = {
@@ -230,6 +361,8 @@ test("web composer exposes voice transcription controls", async () => {
 
   assert.match(indexHtml, /id="composerVoiceButton"/u);
   assert.match(indexHtml, /id="composerVoiceCaptureInput"/u);
+  assert.match(indexHtml, /id="settingsVoiceInputSelect"/u);
+  assert.match(indexHtml, /id="settingsRefreshVoiceDevicesButton"/u);
   const actionsStart = indexHtml.indexOf('class="composer-actions"');
   const sendStart = indexHtml.indexOf('id="dispatchButton"', actionsStart);
   const voiceStart = indexHtml.indexOf('id="composerVoiceButton"', actionsStart);
@@ -239,9 +372,85 @@ test("web composer exposes voice transcription controls", async () => {
   assert.ok(voiceStart > sendStart);
   assert.doesNotMatch(indexHtml.slice(toolsMenuStart, toolsMenuEnd), /id="composerVoiceButton"/u);
   assert.match(appSource, /navigator\.mediaDevices\.getUserMedia/u);
+  assert.match(appSource, /navigator\.mediaDevices\.enumerateDevices/u);
+  assert.match(appSource, /const voiceInputDeviceKey = "clawdad-voice-input-device-v1"/u);
+  assert.match(appSource, /function refreshVoiceInputDevices/u);
+  assert.match(appSource, /function getVoiceRecordingStream/u);
+  assert.match(appSource, /deviceId: \{ exact: deviceId \}/u);
   assert.match(appSource, /new MediaRecorder/u);
   assert.match(appSource, /\/v1\/stt\/transcribe/u);
   assert.match(appSource, /insertTranscriptIntoComposer/u);
+});
+
+test("macOS native wrapper grants microphone capture for composer dictation", async () => {
+  const [nativeSource, buildScript] = await Promise.all([
+    readFile(nativeMacSourcePath, "utf8"),
+    readFile(nativeMacBuildPath, "utf8"),
+  ]);
+
+  assert.match(nativeSource, /WKUIDelegate/u);
+  assert.match(nativeSource, /webView\.uiDelegate = self/u);
+  assert.match(nativeSource, /requestMediaCapturePermissionFor origin: WKSecurityOrigin/u);
+  assert.match(nativeSource, /type == \.microphone \|\| type == \.cameraAndMicrophone/u);
+  assert.match(nativeSource, /decisionHandler\(\.grant\)/u);
+  assert.match(buildScript, /NSMicrophoneUsageDescription/u);
+  assert.match(buildScript, /record voice messages and transcribe them into the composer/u);
+});
+
+test("macOS packaged shell carries a self-contained ClawDad runtime", async () => {
+  const [nativeSource, buildScript] = await Promise.all([
+    readFile(nativeMacSourcePath, "utf8"),
+    readFile(nativeMacBuildPath, "utf8"),
+  ]);
+
+  assert.match(
+    nativeSource,
+    /resources\.appendingPathComponent\("runtime", isDirectory: true\)/u,
+  );
+  assert.match(nativeSource, /\/v1\/native\/capabilities/u);
+  assert.match(nativeSource, /json\["remoteAssist"\] as\? Bool/u);
+  assert.match(nativeSource, /json\["nativeRuntimeVersion"\] as\? String/u);
+  assert.match(nativeSource, /\/bin\/launchctl/u);
+  assert.match(nativeSource, /waitForManagedServiceRemoval/u);
+  assert.match(nativeSource, /consecutiveAbsentChecks >= 2/u);
+  assert.match(nativeSource, /process\.arguments = \["list", managedServiceLabel\]/u);
+  assert.match(nativeSource, /CLAWDAD_NATIVE_RUNTIME_VERSION/u);
+  assert.match(nativeSource, /prepareBundledRuntime/u);
+  assert.match(nativeSource, /\.runtime-\\\(UUID\(\)\.uuidString\.lowercased\(\)\)/u);
+  assert.match(nativeSource, /runtimeRootIsValid/u);
+  assert.match(buildScript, /Contents\/Resources\/runtime/u);
+  assert.match(buildScript, /runtime_dir\/\.bundle-version/u);
+  assert.match(buildScript, /ditto "\$repo_root\/lib" "\$runtime_dir\/lib"/u);
+  assert.match(buildScript, /ditto "\$repo_root\/web" "\$runtime_dir\/web"/u);
+  assert.match(
+    buildScript,
+    /ditto "\$repo_root\/node_modules" "\$runtime_dir\/node_modules"/u,
+  );
+});
+
+test("Remote Assist settings explain both macOS permission steps", async () => {
+  const [indexHtml, appSource, cssSource] = await Promise.all([
+    readFile(webIndexPath, "utf8"),
+    readFile(webAppPath, "utf8"),
+    readFile(webCssPath, "utf8"),
+  ]);
+
+  assert.match(
+    indexHtml,
+    /id="settingsRemoteAssistInfoButton"[\s\S]*aria-controls="settingsRemoteAssistInfo"[\s\S]*title="How to enable Remote Assist permissions"/u,
+  );
+  const infoButtonStart = indexHtml.indexOf('id="settingsRemoteAssistInfoButton"');
+  const infoButtonEnd = indexHtml.indexOf("</button>", infoButtonStart);
+  assert.doesNotMatch(indexHtml.slice(infoButtonStart, infoButtonEnd), /<svg/u);
+  assert.match(indexHtml, /Privacy &amp; Security &gt; Screen &amp; System Audio Recording/u);
+  assert.match(indexHtml, /Privacy &amp; Security &gt; Accessibility/u);
+  assert.match(indexHtml, /Allow assistive applications to control the[\s\S]*computer/u);
+  assert.match(indexHtml, /both permission[\s\S]*buttons say Allowed/u);
+  assert.match(appSource, /remoteAssistInfoOpen: false/u);
+  assert.match(appSource, /setRemoteAssistInfoOpen\(false, \{ restoreFocus: true \}\)/u);
+  assert.match(cssSource, /\.settings-inline-info-button[\s\S]*background: transparent !important[\s\S]*cursor: pointer/u);
+  assert.match(cssSource, /\.settings-inline-info-button:hover[\s\S]*text-decoration: underline/u);
+  assert.match(cssSource, /\.settings-permission-help\[hidden\][\s\S]*display: none/u);
 });
 
 test("web composer exposes quick copy for the current prompt draft", async () => {
@@ -258,6 +467,236 @@ test("web composer exposes quick copy for the current prompt draft", async () =>
   assert.match(appSource, /updateMessageCopyButton\(\);/u);
   assert.match(cssSource, /\.message-input-wrap/u);
   assert.match(cssSource, /\.composer-copy-button/u);
+});
+
+test("iPhone composer copies drafts and records voice notes through paired ClawDad STT", async () => {
+  const [contentSource, cloudSource, infoPlist] = await Promise.all([
+    readFile(iosContentPath, "utf8"),
+    readFile(iosCloudClientPath, "utf8"),
+    readFile(iosInfoPlistPath, "utf8"),
+  ]);
+  const composerSource = contentSource.slice(
+    contentSource.indexOf("private var composerPanel"),
+    contentSource.indexOf("private var threadPreviewPanel"),
+  );
+
+  assert.match(contentSource, /composerCopied \? "checkmark" : "doc\.on\.doc"/u);
+  assert.match(contentSource, /copyTextToPasteboard\(message\)/u);
+  assert.match(contentSource, /AVAudioRecorder/u);
+  assert.match(contentSource, /AVAudioApplication\.requestRecordPermission/u);
+  assert.match(contentSource, /\.record,\s*mode: \.default/u);
+  assert.doesNotMatch(contentSource, /mode: \.spokenAudio/u);
+  assert.match(contentSource, /voiceRecorder\.state == \.recording \? "stop\.fill" : "mic\.fill"/u);
+  assert.match(contentSource, /session\.transcribeVoice\(/u);
+  assert.match(contentSource, /voiceDraftBase = message\.trimmingCharacters/u);
+  assert.match(contentSource, /let draft = currentDraft\.isEmpty \? voiceDraftBase : currentDraft/u);
+  assert.match(contentSource, /message = draft \+ "\\n\\n" \+ transcript/u);
+  assert.doesNotMatch(composerSource, /Text\(dispatchMode\.label\)/u);
+  assert.doesNotMatch(composerSource, /Text\(accessMode\.label\)/u);
+  assert.doesNotMatch(composerSource, /Text\(destinationSummary\)/u);
+  assert.match(cloudSource, /type: "speech\.transcribe\.request"/u);
+  assert.match(cloudSource, /case "speech\.transcribe\.accepted":/u);
+  assert.match(cloudSource, /case "speech\.transcription":/u);
+  assert.match(cloudSource, /voiceTranscriptionTimeoutTask/u);
+  assert.match(cloudSource, /The transcript did not return\./u);
+  assert.match(cloudSource, /The connection dropped before your transcript returned\./u);
+  assert.match(infoPlist, /<key>NSMicrophoneUsageDescription<\/key>/u);
+});
+
+test("iPhone Remote Assist supports full-screen landscape rotation", async () => {
+  const [remoteAssistSource, infoPlist] = await Promise.all([
+    readFile(iosRemoteAssistPath, "utf8"),
+    readFile(iosInfoPlistPath, "utf8"),
+  ]);
+
+  assert.match(infoPlist, /UIInterfaceOrientationPortrait/u);
+  assert.match(infoPlist, /UIInterfaceOrientationLandscapeLeft/u);
+  assert.match(infoPlist, /UIInterfaceOrientationLandscapeRight/u);
+  assert.match(remoteAssistSource, /Color\.black\.ignoresSafeArea\(\)/u);
+  assert.match(remoteAssistSource, /\.statusBarHidden\(true\)/u);
+  assert.match(remoteAssistSource, /\.persistentSystemOverlays\(\.hidden\)/u);
+  assert.match(remoteAssistSource, /view\.videoContentMode = \.scaleAspectFit/u);
+});
+
+test("Remote Assist exposes acknowledged input and bidirectional clipboard controls", async () => {
+  const [
+    remoteAssistSource,
+    macInputSource,
+    macPeerSource,
+    macKeyboardLayoutSource,
+    sessionStateProtocolSource,
+  ] = await Promise.all([
+    readFile(iosRemoteAssistPath, "utf8"),
+    readFile(nativeMacInputPath, "utf8"),
+    readFile(nativeMacRemotePeerPath, "utf8"),
+    readFile(nativeMacKeyboardLayoutPath, "utf8"),
+    readFile(remoteSessionStateProtocolPath, "utf8"),
+  ]);
+
+  assert.match(remoteAssistSource, /controller\.pressEnter\(\)/u);
+  assert.match(remoteAssistSource, /PasteButton\(payloadType: String\.self\)/u);
+  assert.match(remoteAssistSource, /controller\.copyMacSelectionToPhone\(\)/u);
+  assert.match(remoteAssistSource, /focusRequest: controller\.keyboardFocusRequest/u);
+  assert.match(remoteAssistSource, /self\.requestKeyboardFocus\(\)/u);
+  assert.match(remoteAssistSource, /func deleteBackward\(\) \{\s*onDelete\?\(\)/u);
+  assert.match(remoteAssistSource, /UILongPressGestureRecognizer/u);
+  assert.match(remoteAssistSource, /controller\.sendPointerDown\(x: point\.x, y: point\.y\)/u);
+  assert.match(remoteAssistSource, /controller\.sendPointerDrag\(x: point\.x, y: point\.y\)/u);
+  assert.match(remoteAssistSource, /controller\.sendPointerUp\(x: point\.x, y: point\.y\)/u);
+  assert.match(remoteAssistSource, /if self\.handleInputResponse\(data\)/u);
+  assert.match(remoteAssistSource, /if self\.handleSessionState\(data\)/u);
+  assert.match(remoteAssistSource, /self\.handleClipboardResponse\(data\)/u);
+  assert.match(remoteAssistSource, /remoteScreenLocked/u);
+  assert.match(remoteAssistSource, /Mac locked: secure keyboard mode/u);
+  assert.match(remoteAssistSource, /RemoteInputCodec\.encode\(message\)/u);
+  assert.match(remoteAssistSource, /pendingInputRequests\[message\.requestId\]/u);
+  assert.match(remoteAssistSource, /UIPasteboard\.general\.string = text/u);
+  assert.match(macInputSource, /let pasteboard = NSPasteboard\.general/u);
+  assert.match(macInputSource, /resolveEditableTarget\(\)/u);
+  assert.match(macInputSource, /AXUIElementCopyElementAtPosition/u);
+  assert.match(macInputSource, /kAXSelectedTextAttribute/u);
+  assert.match(macInputSource, /MacConsoleSessionState\.isLocked\(\)/u);
+  assert.match(macInputSource, /MacKeyboardLayout\.keyStrokes\(for: text\)/u);
+  assert.match(macInputSource, /isLoginWindow\(pid:/u);
+  assert.match(macInputSource, /enqueueTypedClipboardPaste/u);
+  assert.match(macInputSource, /pressCommandShortcut\(keyCode: 9, targetPID:/u);
+  assert.match(macInputSource, /pressCommandShortcut\(keyCode: 8, targetPID:/u);
+  assert.match(macInputSource, /case "down":[\s\S]*\.leftMouseDown/u);
+  assert.match(macInputSource, /case "drag":[\s\S]*\.leftMouseDragged/u);
+  assert.match(macInputSource, /case "up":[\s\S]*\.leftMouseUp/u);
+  assert.match(macPeerSource, /self\?\.sendControl\(response\)/u);
+  assert.match(macPeerSource, /publishSessionState\(force: true\)/u);
+  assert.match(macPeerSource, /RemoteSessionStateCodec\.encode\(message\)/u);
+  assert.match(macKeyboardLayoutSource, /TISCopyCurrentKeyboardLayoutInputSource/u);
+  assert.match(macKeyboardLayoutSource, /UCKeyTranslate/u);
+  assert.match(sessionStateProtocolSource, /messageType = "session\.state"/u);
+});
+
+test("ClawDad presents its transparent mascot and floating controls with optional thread naming", async () => {
+  const [contentSource, cloudSource, cssSource, mascotContents, mascotImage] = await Promise.all([
+    readFile(iosContentPath, "utf8"),
+    readFile(iosCloudClientPath, "utf8"),
+    readFile(webCssPath, "utf8"),
+    readFile(iosMascotContentsPath, "utf8"),
+    readFile(iosMascotImagePath),
+  ]);
+  const loadingSource = contentSource.slice(
+    contentSource.indexOf("private var startupLoadingView"),
+    contentSource.indexOf("private var settingsOverlay"),
+  );
+  const headerSource = contentSource.slice(
+    contentSource.indexOf("private var brandHeader"),
+    contentSource.indexOf("private var composerPanel"),
+  );
+  const iconStyleSource = contentSource.slice(
+    contentSource.indexOf("struct ClawDadIconButtonStyle"),
+    contentSource.indexOf("struct ClawDadVoiceButtonStyle"),
+  );
+  const clawStyleSource = contentSource.slice(
+    contentSource.indexOf("struct ClawDadClawButtonStyle"),
+    contentSource.indexOf("struct ClawDadSegmentButtonStyle"),
+  );
+
+  assert.match(loadingSource, /Image\("ClawDadMascot"\)[\s\S]*\.scaledToFit\(\)/u);
+  assert.match(headerSource, /Image\("ClawDadMascot"\)[\s\S]*\.scaledToFit\(\)/u);
+  assert.doesNotMatch(loadingSource, /\.clipShape\(|RoundedRectangle[\s\S]*\.stroke/u);
+  assert.doesNotMatch(headerSource, /\.clipShape\(|RoundedRectangle[\s\S]*\.stroke/u);
+  assert.match(mascotContents, /"filename"\s*:\s*"clawdad-mascot\.png"/u);
+  assert.ok(mascotImage.length > 100_000, "The transparent mascot asset should contain finished artwork.");
+
+  assert.match(contentSource, /@State private var showingNewThreadPrompt = false/u);
+  assert.match(contentSource, /\.alert\("Start New Thread", isPresented: \$showingNewThreadPrompt\)/u);
+  assert.match(contentSource, /TextField\("Optional thread name", text: \$newThreadName\)/u);
+  assert.match(contentSource, /Button\("Start Thread"\)\s*\{\s*createNewThread\(\)/u);
+  assert.equal(contentSource.match(/presentNewThreadPrompt\(\)/gu)?.length, 3);
+  assert.match(cloudSource, /func createSession\(title: String = ""\)/u);
+  assert.match(cloudSource, /title\.trimmingCharacters\(in: \.whitespacesAndNewlines\)\.prefix\(80\)/u);
+  assert.match(cloudSource, /"title": \.string\(normalizedTitle\)/u);
+
+  assert.doesNotMatch(iconStyleSource, /\.background\(|RoundedRectangle/u);
+  assert.doesNotMatch(clawStyleSource, /\.background\(|RoundedRectangle/u);
+  assert.match(
+    cssSource,
+    /\.composer-tools-button\.thread-button,[\s\S]*?background: transparent;[\s\S]*?box-shadow: none;/u,
+  );
+  assert.match(
+    cssSource,
+    /\.message-audio-button\.copy-button,[\s\S]*?background: transparent;[\s\S]*?box-shadow: none;/u,
+  );
+});
+
+test("iPhone cold launch hides the fallback workspace until saved selection hydration", async () => {
+  const [contentSource, cloudSource] = await Promise.all([
+    readFile(iosContentPath, "utf8"),
+    readFile(iosCloudClientPath, "utf8"),
+  ]);
+
+  assert.match(
+    cloudSource,
+    /@Published private\(set\) var startupWorkspaceReady = false/u,
+  );
+  assert.match(
+    cloudSource,
+    /self\.startupWorkspaceReady = self\.pairedHostId\.isEmpty \|\| self\.pairedHostId != self\.hostId/u,
+  );
+  assert.match(
+    cloudSource,
+    /var startupLoading: Bool \{\s*paired && !startupWorkspaceReady\s*\}/u,
+  );
+
+  const catalogStart = cloudSource.indexOf('case "catalog.snapshot":');
+  const catalogEnd = cloudSource.indexOf('case "models.snapshot":', catalogStart);
+  assert.ok(catalogStart >= 0 && catalogEnd > catalogStart);
+  const catalogSource = cloudSource.slice(catalogStart, catalogEnd);
+  assert.match(catalogSource, /selectedProjectPath = first\.path/u);
+  assert.match(catalogSource, /startupWorkspaceReady = true/u);
+  assert.ok(
+    catalogSource.indexOf("startupWorkspaceReady = true") >
+      catalogSource.indexOf("selectedProjectPath = first.path"),
+  );
+
+  const connectStart = cloudSource.indexOf("private func connectAsync()");
+  const reconnectStart = cloudSource.indexOf("private func handleConnectionLoss", connectStart);
+  assert.ok(connectStart >= 0 && reconnectStart > connectStart);
+  assert.doesNotMatch(
+    cloudSource.slice(connectStart, reconnectStart),
+    /startupWorkspaceReady\s*=/u,
+  );
+
+  assert.match(
+    contentSource,
+    /if session\.startupLoading \{\s*startupLoadingView\s*\.transition\(\.opacity\)\s*\} else \{\s*workspaceSurface\s*\.transition\(\.opacity\)/u,
+  );
+  assert.match(
+    contentSource,
+    /\.animation\(reduceMotion \? nil : \.easeInOut\(duration: 0\.38\), value: session\.startupLoading\)/u,
+  );
+  assert.match(contentSource, /accessibilityIdentifier\("clawdad\.startup\.loading"\)/u);
+  assert.match(contentSource, /accessibilityIdentifier\("clawdad\.workspace\.ready"\)/u);
+  assert.match(contentSource, /private var settingsOverlay: some View/u);
+});
+
+test("iPhone keeps transport activity off the workspace and connection status in Settings", async () => {
+  const contentSource = await readFile(iosContentPath, "utf8");
+  const workspaceStart = contentSource.indexOf("private var workspaceSurface");
+  const workspaceEnd = contentSource.indexOf("private var startupLoadingView", workspaceStart);
+  const settingsStart = contentSource.indexOf("struct SettingsView");
+  assert.ok(workspaceStart >= 0 && workspaceEnd > workspaceStart && settingsStart >= 0);
+
+  const workspaceSource = contentSource.slice(workspaceStart, workspaceEnd);
+  const settingsSource = contentSource.slice(settingsStart);
+  assert.doesNotMatch(workspaceSource, /activityPanel|Text\("Recent"\)|session\.state\.label/u);
+  assert.doesNotMatch(contentSource, /private var activityPanel/u);
+  assert.match(settingsSource, /Text\("Connection"\)/u);
+  assert.match(settingsSource, /private var connectionTitle: String/u);
+  assert.match(settingsSource, /private var connectionDetail: String/u);
+});
+
+test("web thread detail modal opens centered in the window", async () => {
+  const cssSource = await readFile(webCssPath, "utf8");
+  assert.match(cssSource, /#detailModal\s*\{[\s\S]*display: grid;[\s\S]*place-items: center;/u);
+  assert.match(cssSource, /#detailModal \.detail-panel\s*\{[\s\S]*position: relative;[\s\S]*left: auto;[\s\S]*bottom: auto;[\s\S]*transform: none;/u);
+  assert.match(cssSource, /#detailModal\[hidden\]\s*\{[\s\S]*display: none;/u);
 });
 
 test("web response audio no longer exposes the queue auto-audio toggle", async () => {
@@ -378,31 +817,33 @@ test("web dashboard queue visibility excludes failed cards still present in memo
   assert.equal(context.threadEntryVisibleInQueue({ status: "FAILED" }), false);
 });
 
-test("web dashboard queue visibility excludes completed interjection acknowledgments", async () => {
+test("web dashboard queue visibility excludes completed Direct acknowledgments", async () => {
   const context = await loadThreadCacheHelpers();
   const answer = {
     requestId: "answer-request",
     projectPath: "/repo/clawdad",
     sessionId: "session-a",
     status: "answered",
-    scheduleMode: "linear",
+    scheduleMode: "direct",
+    requestState: "completed",
     sentAt: "2026-05-05T12:00:00.000Z",
     answeredAt: "2026-05-05T12:01:00.000Z",
     response: "Finished.",
   };
-  const interjectionAck = {
+  const directAck = {
     ...answer,
-    requestId: "interject-request",
-    scheduleMode: "interject",
+    requestId: "direct-request",
+    scheduleMode: "direct",
+    requestState: "direct",
     sentAt: "2026-05-05T12:02:00.000Z",
     answeredAt: "2026-05-05T12:02:01.000Z",
-    response: "Interjected into the active Codex turn.",
+    response: "Sent directly into the active Codex turn.",
   };
 
-  context.state.threadEntries = [answer, interjectionAck];
+  context.state.threadEntries = [answer, directAck];
 
   assert.equal(context.threadEntryVisibleInQueue(answer), true);
-  assert.equal(context.threadEntryVisibleInQueue(interjectionAck), false);
+  assert.equal(context.threadEntryVisibleInQueue(directAck), false);
   assert.deepEqual(context.queueEntries().map((entry) => entry.requestId), [answer.requestId]);
 });
 
@@ -579,12 +1020,15 @@ test("web project dropdown render key tracks activity sort changes", async () =>
   assert.notEqual(renderEnd, -1);
 
   const groupedBody = source.slice(groupedStart, renderStart);
-  assert.match(groupedBody, /featured: featured\.sort\(compareProjects\)/u);
-  assert.match(groupedBody, /liveDelegates: liveDelegates\.sort\(compareProjects\)/u);
-  assert.match(groupedBody, /projects: projects\.sort\(compareProjects\)/u);
+  assert.match(groupedBody, /scratchpad: scratchpad\.sort\(compareProjects\)/u);
+  assert.match(groupedBody, /roots: \[\.\.\.rootGroups\.values\(\)\]/u);
+  assert.match(groupedBody, /projects: group\.projects\.sort\(compareProjects\)/u);
+  assert.match(groupedBody, /pinned: pinned\.sort\(compareProjects\)/u);
 
   const renderBody = source.slice(renderStart, renderEnd);
   assert.match(renderBody, /projectActivityTimestampMs\(project\)/u);
+  assert.match(renderBody, /project\.workspaceRootPath/u);
+  assert.match(renderBody, /project\.untracked/u);
 });
 
 test("web entry copy keys stay scoped to a single card", async () => {
@@ -686,6 +1130,53 @@ test("web project switch leaves Codex session import discovery lazy", async () =
   assert.doesNotMatch(refreshProjects, /refreshImportableSessions\(state\.selectedProject,\s*\{\s*force:\s*true/u);
 });
 
+test("web background catalog refresh keeps active controls interactive", async () => {
+  const source = await readFile(webAppPath, "utf8");
+  assert.match(
+    source,
+    /function catalogIsRefreshing\(\) \{\s*return state\.projectsLoading && state\.projects\.length > 0;\s*\}/u,
+  );
+  assert.match(
+    source,
+    /function catalogBlocksInteraction\(\) \{\s*return catalogIsBootstrapping\(\);\s*\}/u,
+  );
+
+  const controlsStart = source.indexOf("function updateThreadButtonAvailability");
+  const controlsEnd = source.indexOf("function updateQueueChrome", controlsStart);
+  assert.notEqual(controlsStart, -1);
+  assert.notEqual(controlsEnd, -1);
+  assert.ok(controlsEnd > controlsStart);
+
+  const controls = source.slice(controlsStart, controlsEnd);
+  assert.match(controls, /catalogBlocksInteraction\(\)/u);
+  assert.doesNotMatch(controls, /state\.projectsLoading/u);
+
+  const workspaceTabsStart = source.indexOf("function renderWorkspaceTabs");
+  const workspaceTabsEnd = source.indexOf("function renderSelectedProjectDelegateCard", workspaceTabsStart);
+  assert.notEqual(workspaceTabsStart, -1);
+  assert.notEqual(workspaceTabsEnd, -1);
+  assert.ok(workspaceTabsEnd > workspaceTabsStart);
+  const workspaceTabs = source.slice(workspaceTabsStart, workspaceTabsEnd);
+  assert.match(workspaceTabs, /const hasProject = !catalogBlocksInteraction\(\) && Boolean\(state\.selectedProject\);/u);
+  assert.doesNotMatch(workspaceTabs, /state\.projectsLoading/u);
+});
+
+test("web files workspace only blocks for catalog bootstrap", async () => {
+  const source = await readFile(webAppPath, "utf8");
+  const start = source.indexOf("function renderFilesWorkspace");
+  const end = source.indexOf("function renderArtifactsModal", start);
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  assert.ok(end > start);
+
+  const filesWorkspace = source.slice(start, end);
+  assert.match(filesWorkspace, /const catalogBlocking = catalogBlocksInteraction\(\);/u);
+  assert.match(filesWorkspace, /const catalogRefreshing = catalogIsRefreshing\(\);/u);
+  assert.match(filesWorkspace, /elements\.filesWorkspaceRefreshButton\.disabled = catalogBlocking \|\| loadingCount > 0;/u);
+  assert.doesNotMatch(filesWorkspace, /if \(state\.projectsLoading\)/u);
+  assert.doesNotMatch(filesWorkspace, /state\.projectsLoading \|\|/u);
+});
+
 test("web queue cards open in-app terminal streams while thread cards generate and play message audio", async () => {
   const [source, html, css] = await Promise.all([
     readFile(webAppPath, "utf8"),
@@ -763,6 +1254,9 @@ test("web queue cards open in-app terminal streams while thread cards generate a
   assert.doesNotMatch(source, /settleMessageAudioUnlock/u);
   assert.match(source, /const audioPlaybackStartTimeoutMs/u);
   assert.match(source, /function reserveMessageAudioPlayback/u);
+  assert.match(source, /function primeMessageAudioPlayback/u);
+  assert.match(source, /createSilentWavObjectUrl/u);
+  assert.match(source, /primeMessageAudioPlayback\(audioKey\);/u);
   assert.match(source, /function startReadyMessageAudioPlayback/u);
   assert.match(source, /function prepareAndPlayMessageAudio/u);
   assert.match(source, /function prepareMessageAudioPartsForPlayback/u);
@@ -775,6 +1269,15 @@ test("web queue cards open in-app terminal streams while thread cards generate a
   assert.match(source, /showAudioStatus\("Starting audio"\)/u);
   assert.match(source, /Audio is ready\. Tap the speaker again to play it\./u);
   assert.match(source, /handleMessageAudioPlaybackError\(audioKey, error\)/u);
+  assert.match(source, /class="audio-loading-spinner"/u);
+  assert.match(source, /audio-loading-spinner__rotor/u);
+  assert.match(source, /audio-loading-spinner__arc/u);
+  assert.match(source, /function syncAudioLoadingSpinnerAnimation/u);
+  assert.match(source, /requestAnimationFrame\(updateAudioLoadingSpinnerFrame\)/u);
+  assert.match(source, /syncAudioLoadingSpinnerAnimation\(\);/u);
+  assert.match(css, /\.audio-loading-spinner__rotor/u);
+  assert.match(css, /@keyframes audio-spinner-dash/u);
+  assert.match(css, /@keyframes audio-loading-dot/u);
   assert.match(
     source,
     /audio\.src = url;\s*audio\.load\(\);\s*let playPromise;\s*try \{\s*playPromise = audio\.play\(\);/u,
@@ -1042,7 +1545,7 @@ test("web composer can attach files and dispatch them with FormData", async () =
   assert.match(updateSend, /hasDraft/u);
 });
 
-test("web composer exposes linear queue and interject dispatch modes", async () => {
+test("web composer exposes Direct and Queue dispatch modes", async () => {
   const [source, html, css] = await Promise.all([
     readFile(webAppPath, "utf8"),
     readFile(webIndexPath, "utf8"),
@@ -1052,10 +1555,13 @@ test("web composer exposes linear queue and interject dispatch modes", async () 
   assert.match(html, /id="composerToolsButton"/u);
   assert.match(html, /src="\/assets\/clawdad-claw-hyperreal-icon\.png"/u);
   assert.doesNotMatch(html, /id="composerToolsModeLabel"/u);
-  assert.match(html, /id="dispatchButton"[^>]*>\s*<span class="button-text">Send \(Linear\)<\/span>/u);
-  assert.match(html, /data-dispatch-mode="linear"/u);
+  assert.match(html, /id="dispatchButton"[^>]*>\s*<span class="button-text">Send \(Direct\)<\/span>/u);
+  assert.match(html, /data-dispatch-mode="direct"/u);
   assert.match(html, /data-dispatch-mode="queue"/u);
-  assert.match(html, /data-dispatch-mode="interject"/u);
+  assert.doesNotMatch(html, /data-dispatch-mode="(?:linear|interject)"/u);
+  assert.match(html, /id="composerAccessSelect"/u);
+  assert.match(html, /<option value="repo">Repo scoped<\/option>/u);
+  assert.match(html, /<option value="full">Full access<\/option>/u);
   const actionsStart = html.indexOf('class="composer-actions"');
   const sendStart = html.indexOf('id="dispatchButton"', actionsStart);
   const modeStart = html.indexOf('id="composerToolsButton"', actionsStart);
@@ -1065,25 +1571,33 @@ test("web composer exposes linear queue and interject dispatch modes", async () 
   assert.ok(modeStart < sendStart);
   assert.ok(toolsMenuStart > modeStart);
   assert.ok(toolsMenuStart < sendStart);
-  assert.match(source, /dispatchMode: "linear"/u);
-  assert.match(source, /const dispatchModes = \["linear", "queue", "interject"\]/u);
+  assert.match(source, /dispatchMode: "direct"/u);
+  assert.match(source, /accessMode: "repo"/u);
+  assert.match(source, /const dispatchModes = \["direct", "queue"\]/u);
+  assert.match(source, /const accessModes = \["repo", "full"\]/u);
+  assert.match(source, /function permissionModeForAccessMode/u);
   assert.match(source, /function cycleDispatchMode\(\)/u);
   assert.match(source, /function setDispatchMode\(mode/u);
+  assert.match(source, /function setAccessMode\(mode/u);
   assert.match(source, /function dispatchModeAllowsBusySend/u);
   assert.match(source, /function dispatchButtonText/u);
   assert.match(source, /return `Send \(\$\{modeLabel\}\)`/u);
   assert.match(source, /return `Working \(\$\{modeLabel\}\)`/u);
   assert.match(source, /elements\.composerToolsButton\?\.addEventListener\("click", toggleComposerToolsMenu\)/u);
   assert.match(source, /for \(const button of elements\.dispatchModeButtons\)/u);
+  assert.match(source, /elements\.composerAccessSelect\?\.addEventListener\("change"/u);
   assert.match(source, /formData\.append\("dispatchMode", dispatchMode\)/u);
+  assert.match(source, /formData\.append\("permissionMode", permissionMode\)/u);
+  assert.match(source, /permissionMode,/u);
   assert.match(source, /dispatchMode,/u);
   assert.match(source, /!allowBusySend && pendingEntryForSession/u);
   assert.match(source, /!allowBusySend && sessionIsBusy/u);
-  assert.match(source, /payload\.interjected/u);
+  assert.match(source, /const directAccepted = Boolean\(payload\.direct \|\| payload\.interjected\)/u);
   assert.match(source, /payload\.requestId \|\| payload\.queueId/u);
   assert.match(source, /handoffPending/u);
   assert.match(css, /\.composer-tools-button/u);
   assert.match(css, /\.composer-mode-options/u);
+  assert.match(css, /\.composer-access-select/u);
   assert.match(css, /grid-template-columns: 48px minmax\(0, 1fr\) 48px;/u);
 });
 
@@ -1149,11 +1663,11 @@ test("web history merge preserves outbound attachment summaries", async () => {
   ]);
 });
 
-test("web history merge preserves interjection schedule metadata", async () => {
+test("web history merge preserves Direct schedule metadata", async () => {
   const { mergeHistoryItems } = await loadHistoryMergeHelpers();
   const merged = mergeHistoryItems([], [
     {
-      requestId: "interject-1",
+      requestId: "direct-1",
       projectPath: "/repo/clawdad",
       sessionId: "session-a",
       provider: "codex",
@@ -1161,12 +1675,12 @@ test("web history merge preserves interjection schedule metadata", async () => {
       sentAt: "2026-05-05T12:00:00.000Z",
       answeredAt: "2026-05-05T12:00:01.000Z",
       status: "answered",
-      scheduleMode: "interject",
-      response: "Interjected into the active Codex turn.",
+      scheduleMode: "direct",
+      response: "Sent directly into the active Codex turn.",
     },
   ]);
 
-  assert.equal(merged[0].scheduleMode, "interject");
+  assert.equal(merged[0].scheduleMode, "direct");
 });
 
 test("web history merge orders answered cards by response activity time", async () => {
@@ -1270,7 +1784,7 @@ test("web history merge treats a returned queued card as unread even after pendi
   assert.equal(merged[0].seenAt, null);
 });
 
-test("web detail marks later queue-mode messages as queued and not sent yet", async () => {
+test("web detail marks explicit queue-mode messages as queued and not sent yet", async () => {
   const [source, css] = await Promise.all([
     readFile(webAppPath, "utf8"),
     readFile(path.join(repoRoot, "web", "app.css"), "utf8"),
@@ -1308,13 +1822,13 @@ test("web detail marks later queue-mode messages as queued and not sent yet", as
 
   assert.equal(historyEntryQueuedForLater(active, [active, waiting]), false);
   assert.equal(historyEntryQueuedForLater(waiting, [active, waiting]), true);
-  assert.equal(historyEntryQueuedForLater(soloWaiting, [soloWaiting]), false);
+  assert.equal(historyEntryQueuedForLater(soloWaiting, [soloWaiting]), true);
   assert.match(source, /function pendingThreadEntryLabel/u);
   assert.match(source, /handoffPending/u);
   assert.match(source, /return "Starting"/u);
   assert.match(source, /Queued", "not sent yet"/u);
   assert.match(source, /if \(queuedForLater\) \{\s*return group;\s*\}/u);
-  assert.match(source, /normalizeHistoryScheduleMode\(payload\.dispatchMode \|\| payload\.scheduleMode\)/u);
+  assert.match(source, /normalizeHistoryScheduleMode\(payload\.effectiveDispatchMode \|\| payload\.dispatchMode \|\| payload\.scheduleMode\)/u);
   assert.match(css, /\.thread-card\.outbound\.queued-pending/u);
 });
 

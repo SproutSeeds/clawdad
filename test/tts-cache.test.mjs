@@ -615,6 +615,171 @@ test("TTS status reports Doc Reader fallback health", async () => {
   }
 });
 
+test("TTS status falls through to direct local speech fallback when library lacks speech services", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-tts-direct-status-"));
+  const home = path.join(root, "home");
+  const configPath = path.join(root, "server.json");
+  const fakeLibrary = await startFakeDocReaderLibrary({
+    healthPayload: {
+      ok: true,
+      app: "doc-reader",
+      running: false,
+      paused: false,
+      stt_enabled: true,
+    },
+  });
+  const primary = await startFakeDocReaderSpeech({ healthStatus: 503 });
+  const fallback = await startFakeDocReaderSpeech();
+  await mkdir(home, { recursive: true });
+
+  const port = await freePort();
+  await writeJson(configPath, {
+    host: "127.0.0.1",
+    port,
+    authMode: "tailscale",
+    allowedUsers: ["tester@example.com"],
+  });
+
+  const child = spawn(process.execPath, [serverScript, "serve", "--config", configPath], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      HOME: home,
+      CLAWDAD_HOME: home,
+      CLAWDAD_TTS_ENABLED: "true",
+      CLAWDAD_TTS_PROVIDER: "doc-reader",
+      CLAWDAD_DOC_READER_URL: fakeLibrary.baseUrl,
+      CLAWDAD_DOC_READER_TTS_URL: primary.baseUrl,
+      CLAWDAD_DOC_READER_TTS_FALLBACK_URL: fallback.baseUrl,
+      CLAWDAD_DOC_READER_TTS_ENGINE: "kokoro",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  try {
+    const baseUrl = `http://127.0.0.1:${port}`;
+    await waitForHealth(baseUrl, child);
+    const response = await fetch(`${baseUrl}/v1/tts/status`, {
+      headers: { "tailscale-user-login": "tester@example.com" },
+    });
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.ttsStatus.available, true);
+    assert.equal(payload.ttsStatus.degraded, true);
+    assert.equal(payload.ttsStatus.label, "ClawDad local speech fallback");
+    assert.equal(payload.ttsStatus.services.primary.available, false);
+    assert.equal(payload.ttsStatus.services.fallback.available, true);
+    assert.equal(fallback.healthCalls.length, 1);
+  } finally {
+    await stopServer(child);
+    await fakeLibrary.close();
+    await primary.close();
+    await fallback.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("TTS message endpoint uses direct local speech when library lacks speech services", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-tts-direct-message-"));
+  const home = path.join(root, "home");
+  const projectPath = path.join(root, "project");
+  const configPath = path.join(root, "server.json");
+  const fakeLibrary = await startFakeDocReaderLibrary({
+    healthPayload: {
+      ok: true,
+      app: "doc-reader",
+      running: false,
+      paused: false,
+      stt_enabled: true,
+    },
+  });
+  const primary = await startFakeDocReaderSpeech({ healthStatus: 503, speechStatus: 503 });
+  const fallback = await startFakeDocReaderSpeech({ audioPrefix: "direct-wav" });
+  await mkdir(home, { recursive: true });
+  await mkdir(projectPath, { recursive: true });
+  await writeJson(path.join(home, "state.json"), {
+    version: 3,
+    projects: {
+      [projectPath]: {
+        status: "idle",
+        active_session_id: "session-1",
+        sessions: {
+          "session-1": {
+            slug: "Main",
+            provider: "codex",
+            status: "idle",
+          },
+        },
+      },
+    },
+  });
+
+  const port = await freePort();
+  await writeJson(configPath, {
+    host: "127.0.0.1",
+    port,
+    authMode: "tailscale",
+    allowedUsers: ["tester@example.com"],
+  });
+
+  const child = spawn(process.execPath, [serverScript, "serve", "--config", configPath], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      HOME: home,
+      CLAWDAD_HOME: home,
+      CLAWDAD_TTS_ENABLED: "true",
+      CLAWDAD_TTS_PROVIDER: "doc-reader",
+      CLAWDAD_DOC_READER_URL: fakeLibrary.baseUrl,
+      CLAWDAD_DOC_READER_TTS_URL: primary.baseUrl,
+      CLAWDAD_DOC_READER_TTS_FALLBACK_URL: fallback.baseUrl,
+      CLAWDAD_DOC_READER_TTS_ENGINE: "kokoro",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  try {
+    const baseUrl = `http://127.0.0.1:${port}`;
+    await waitForHealth(baseUrl, child);
+    const response = await fetch(`${baseUrl}/v1/tts/message`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "tailscale-user-login": "tester@example.com",
+      },
+      body: JSON.stringify({
+        project: projectPath,
+        sessionId: "session-1",
+        requestId: "request-direct",
+        kind: "response",
+        text: "This should return playable direct local audio.",
+      }),
+    });
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.ok, true);
+    assert.equal(payload.audio.provider, "doc-reader");
+    assert.equal(payload.audio.state, "ready");
+    assert.equal(payload.audio.parts.length, 1);
+    assert.equal(fakeLibrary.itemCalls.length, 0);
+    assert.equal(primary.speechCalls.length, 1);
+    assert.equal(fallback.speechCalls.length, 1);
+
+    const audioResponse = await fetch(new URL(payload.audio.parts[0].url, baseUrl), {
+      headers: { "tailscale-user-login": "tester@example.com" },
+    });
+    assert.equal(audioResponse.status, 200);
+    assert.equal(audioResponse.headers.get("content-type"), "audio/wav");
+    assert.equal(await audioResponse.text(), "direct-wav-1");
+  } finally {
+    await stopServer(child);
+    await fakeLibrary.close();
+    await primary.close();
+    await fallback.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("TTS message endpoint synthesizes sent and received text with Doc Reader", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-tts-doc-reader-message-"));
   const home = path.join(root, "home");
@@ -1156,7 +1321,7 @@ test("TTS async polling surfaces Doc Reader failures instead of spinning", async
   }
 });
 
-test("TTS message endpoint synthesizes, caches, and serves message audio", async () => {
+test("TTS message endpoint rejects OpenAI provider config before synthesis", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-tts-server-"));
   const home = path.join(root, "home");
   const projectPath = path.join(root, "project");
@@ -1250,50 +1415,14 @@ test("TTS message endpoint synthesizes, caches, and serves message audio", async
         kind: "response",
       }),
     });
-    assert.equal(firstResponse.status, 200);
+    assert.equal(firstResponse.status, 409);
     const firstPayload = await firstResponse.json();
-    assert.equal(firstPayload.ok, true);
-    assert.equal(firstPayload.cached, false);
-    assert.equal(firstPayload.audio.parts.length, 1);
-    assert.equal(fakeOpenAi.calls.length, 1);
-    assert.equal(fakeOpenAi.calls[0].authorization, "Bearer server-key");
-    assert.equal(fakeOpenAi.calls[0].url, "/v1/audio/speech");
-    assert.equal(fakeOpenAi.calls[0].body.model, "gpt-4o-mini-tts");
-    assert.equal(fakeOpenAi.calls[0].body.voice, "cedar");
-    assert.equal(fakeOpenAi.calls[0].body.input, "The repo now has a cached audio response path.");
-    assert.equal(fakeOpenAi.calls[0].body.response_format, "mp3");
-
-    const audioResponse = await fetch(new URL(firstPayload.audio.parts[0].url, baseUrl), {
-      headers: { "tailscale-user-login": "tester@example.com" },
-    });
-    assert.equal(audioResponse.status, 200);
-    assert.equal(await audioResponse.text(), "fake-mp3-1");
-
-    const rangeResponse = await fetch(new URL(firstPayload.audio.parts[0].url, baseUrl), {
-      headers: {
-        "tailscale-user-login": "tester@example.com",
-        range: "bytes=0-3",
-      },
-    });
-    assert.equal(rangeResponse.status, 206);
-    assert.equal(rangeResponse.headers.get("accept-ranges"), "bytes");
-    assert.equal(rangeResponse.headers.get("content-range"), "bytes 0-3/10");
-    assert.equal(await rangeResponse.text(), "fake");
-
-    const secondResponse = await fetch(`${baseUrl}/v1/tts/message`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        project: projectPath,
-        sessionId,
-        requestId,
-        kind: "response",
-      }),
-    });
-    assert.equal(secondResponse.status, 200);
-    const secondPayload = await secondResponse.json();
-    assert.equal(secondPayload.cached, true);
-    assert.equal(fakeOpenAi.calls.length, 1);
+    assert.equal(firstPayload.ok, false);
+    assert.equal(firstPayload.errorCode, "doc_reader_required");
+    assert.match(firstPayload.error, /local speech/u);
+    assert.equal(firstPayload.ttsStatus.provider, "openai");
+    assert.equal(firstPayload.ttsStatus.available, false);
+    assert.equal(fakeOpenAi.calls.length, 0);
   } finally {
     await stopServer(child);
     await fakeOpenAi.close();
@@ -1301,7 +1430,7 @@ test("TTS message endpoint synthesizes, caches, and serves message audio", async
   }
 });
 
-test("TTS message endpoint prepares response audio asynchronously", async () => {
+test("TTS async message endpoint rejects OpenAI provider config", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-tts-async-"));
   const home = path.join(root, "home");
   const projectPath = path.join(root, "project");
@@ -1396,43 +1525,12 @@ test("TTS message endpoint prepares response audio asynchronously", async () => 
         async: true,
       }),
     });
-    assert.equal(firstResponse.status, 202);
+    assert.equal(firstResponse.status, 409);
     const firstPayload = await firstResponse.json();
-    assert.equal(firstPayload.ok, true);
-    assert.equal(firstPayload.audio.state, "generating");
-
-    const readyPayload = await waitForCondition(async () => {
-      const response = await fetch(`${baseUrl}/v1/tts/message`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          project: projectPath,
-          sessionId,
-          requestId,
-          kind: "response",
-          async: true,
-        }),
-      });
-      const payload = await response.json();
-      return response.status === 200 && payload.audio?.state === "ready" ? payload : null;
-    });
-    assert.equal(readyPayload.cached, true);
-    assert.equal(readyPayload.audio.parts.length, 1);
-    assert.equal(fakeOpenAi.calls.length, 1);
-
-    const thirdResponse = await fetch(`${baseUrl}/v1/tts/message`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        project: projectPath,
-        sessionId,
-        requestId,
-        kind: "response",
-        async: true,
-      }),
-    });
-    assert.equal(thirdResponse.status, 200);
-    assert.equal(fakeOpenAi.calls.length, 1);
+    assert.equal(firstPayload.ok, false);
+    assert.equal(firstPayload.errorCode, "doc_reader_required");
+    assert.match(firstPayload.error, /local speech/u);
+    assert.equal(fakeOpenAi.calls.length, 0);
   } finally {
     await stopServer(child);
     await fakeOpenAi.close();
@@ -1481,7 +1579,7 @@ test("history endpoints return saved audio metadata without synthesizing old res
   }
 });
 
-test("TTS insufficient-funds failures mark status unavailable and stop immediate retries", async () => {
+test("TTS rejects OpenAI provider before insufficient-funds calls", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-tts-quota-breaker-"));
   const home = path.join(root, "home");
   const projectPath = path.join(root, "project");
@@ -1524,13 +1622,13 @@ test("TTS insufficient-funds failures mark status unavailable and stop immediate
         kind: "response",
       }),
     });
-    assert.equal(firstResponse.status, 402);
+    assert.equal(firstResponse.status, 409);
     const firstPayload = await firstResponse.json();
     assert.equal(firstPayload.ok, false);
-    assert.equal(firstPayload.errorCode, "insufficient_funds");
-    assert.match(firstPayload.error, /insufficient OpenAI funds or credits/u);
+    assert.equal(firstPayload.errorCode, "doc_reader_required");
+    assert.match(firstPayload.error, /local speech/u);
     assert.equal(firstPayload.ttsStatus.available, false);
-    assert.equal(fakeOpenAi.calls.length, 1);
+    assert.equal(fakeOpenAi.calls.length, 0);
 
     const secondResponse = await fetch(`${server.baseUrl}/v1/tts/message`, {
       method: "POST",
@@ -1542,10 +1640,10 @@ test("TTS insufficient-funds failures mark status unavailable and stop immediate
         kind: "response",
       }),
     });
-    assert.equal(secondResponse.status, 402);
+    assert.equal(secondResponse.status, 409);
     const secondPayload = await secondResponse.json();
-    assert.equal(secondPayload.errorCode, "insufficient_funds");
-    assert.equal(fakeOpenAi.calls.length, 1);
+    assert.equal(secondPayload.errorCode, "doc_reader_required");
+    assert.equal(fakeOpenAi.calls.length, 0);
 
     const statusResponse = await fetch(`${server.baseUrl}/v1/tts/status`, {
       headers: { "tailscale-user-login": "tester@example.com" },
@@ -1553,7 +1651,7 @@ test("TTS insufficient-funds failures mark status unavailable and stop immediate
     assert.equal(statusResponse.status, 200);
     const statusPayload = await statusResponse.json();
     assert.equal(statusPayload.ttsStatus.available, false);
-    assert.equal(statusPayload.ttsStatus.errorCode, "insufficient_funds");
+    assert.equal(statusPayload.ttsStatus.errorCode, "doc_reader_required");
   } finally {
     if (child) {
       await stopServer(child);
@@ -1563,7 +1661,7 @@ test("TTS insufficient-funds failures mark status unavailable and stop immediate
   }
 });
 
-test("TTS message endpoint retries after insufficient-funds window clears", async () => {
+test("TTS OpenAI provider rejection does not retry after wait", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-tts-quota-retry-"));
   const home = path.join(root, "home");
   const projectPath = path.join(root, "project");
@@ -1606,8 +1704,8 @@ test("TTS message endpoint retries after insufficient-funds window clears", asyn
         kind: "response",
       }),
     });
-    assert.equal(firstResponse.status, 402);
-    assert.equal(fakeOpenAi.calls.length, 1);
+    assert.equal(firstResponse.status, 409);
+    assert.equal(fakeOpenAi.calls.length, 0);
 
     await new Promise((resolve) => setTimeout(resolve, 60));
 
@@ -1621,11 +1719,11 @@ test("TTS message endpoint retries after insufficient-funds window clears", asyn
         kind: "response",
       }),
     });
-    assert.equal(secondResponse.status, 200);
+    assert.equal(secondResponse.status, 409);
     const secondPayload = await secondResponse.json();
-    assert.equal(secondPayload.ok, true);
-    assert.equal(secondPayload.audio.state, "ready");
-    assert.equal(fakeOpenAi.calls.length, 2);
+    assert.equal(secondPayload.ok, false);
+    assert.equal(secondPayload.errorCode, "doc_reader_required");
+    assert.equal(fakeOpenAi.calls.length, 0);
   } finally {
     if (child) {
       await stopServer(child);

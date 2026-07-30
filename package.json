@@ -1,9 +1,18 @@
 {
   "name": "clawdad",
-  "version": "0.6.95",
+  "version": "0.7.0-beta.1",
   "description": "Multi-agent orchestration CLI for AI coding agents. Manages persistent spoke agents across projects using ORP as the canonical data store.",
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "cloud:host": "node lib/server.mjs cloud-host",
+    "cloud:dev": "npx wrangler dev --config cloud/wrangler.toml",
+    "cloud:deploy:staging": "npx wrangler deploy --config cloud/wrangler.toml",
+    "ios:generate": "xcodegen --spec apps/ios/ClawDadMobile/project.yml --project apps/ios/ClawDadMobile",
+    "ios:build": "./bin/fetch-webrtc-dependency && xcodebuild -project apps/ios/ClawDadMobile/ClawDadMobile.xcodeproj -scheme ClawDadMobile -configuration Debug -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build",
+    "ios:archive": "./bin/fetch-webrtc-dependency && xcodebuild -project apps/ios/ClawDadMobile/ClawDadMobile.xcodeproj -scheme ClawDadMobile -configuration Release -destination 'generic/platform=iOS' -archivePath apps/ios/ClawDadMobile/build/ClawDadMobile.xcarchive archive",
+    "native:app": "zsh native/macos/build-app.sh",
+    "native:build": "./bin/fetch-webrtc-dependency && swift build --package-path native/macos",
+    "native:run": "./bin/fetch-webrtc-dependency && swift run --package-path native/macos ClawDad"
   },
   "bin": {
     "clawdad": "bin/clawdad"
@@ -39,12 +48,17 @@
   },
   "files": [
     "bin/",
+    "cloud/",
+    "apps/ios/",
     "lib/",
     "test/",
     "web/",
+    "native/",
+    "vendor/WebRTCPackage/",
     "templates/",
     "docs/BORROWING_FROM_AGENT_RUNTIMES.md",
     "docs/chimera-local-lane.md",
+    "docs/iphone-companion.md",
     "docs/live-runtime-runbook.md",
     "docs/tailscale-live-services.md",
     "ops/tailnet-app/",
@@ -56,6 +70,7 @@
     "assets/clawdad-mascot-cutout.png",
     "assets/clawdad-claw-hyperreal-icon.png",
     "assets/clawdad-claw.svg",
+    "assets/clawdad-wordmark.png",
     "assets/clawdad-wordmark.svg",
     "assets/clawdad-header-*.jpg",
     "assets/clawdad-readme-carousel.gif",
@@ -64,6 +79,7 @@
   ],
   "dependencies": {
     "@sproutseeds/tailnet-app": "^0.3.0",
-    "open-research-protocol": ">=0.4.27"
+    "open-research-protocol": ">=0.4.27",
+    "qrcode": "^1.5.4"
   }
 }

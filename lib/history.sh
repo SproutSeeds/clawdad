@@ -82,29 +82,59 @@ history_write_request() {
     fi
   fi
 
-  record_payload=$(
-    "$CLAWDAD_JQ" -n \
-      --arg requestId "$request_id" \
-      --arg projectPath "$project_path" \
-      --arg sessionId "$session_id" \
-      --arg sessionSlug "$slug" \
-      --arg provider "$provider" \
-      --arg message "$message" \
-      --arg sentAt "$sent_at" \
-      '{
-        requestId: $requestId,
-        projectPath: $projectPath,
-        sessionId: $sessionId,
-        sessionSlug: $sessionSlug,
-        provider: $provider,
-        message: $message,
-        sentAt: $sentAt,
-        answeredAt: null,
-        status: "queued",
-        exitCode: null,
-        response: ""
-      }'
-  ) || return 1
+  if [[ -f "$record_file" ]]; then
+    record_payload=$(
+      "$CLAWDAD_JQ" \
+        --arg requestId "$request_id" \
+        --arg projectPath "$project_path" \
+        --arg sessionId "$session_id" \
+        --arg sessionSlug "$slug" \
+        --arg provider "$provider" \
+        --arg message "$message" \
+        --arg sentAt "$sent_at" \
+        '
+          .requestId = $requestId
+          | .projectPath = $projectPath
+          | .sessionId = $sessionId
+          | .sessionSlug = $sessionSlug
+          | .provider = $provider
+          | .message = $message
+          | .sentAt = $sentAt
+          | .answeredAt = null
+          | .status = "working"
+          | .exitCode = null
+          | .response = ""
+          | .scheduleMode = (.scheduleMode // "direct")
+          | .deliveryMechanism = (.deliveryMechanism // "dispatch_worker")
+        ' "$record_file"
+    ) || return 1
+  else
+    record_payload=$(
+      "$CLAWDAD_JQ" -n \
+        --arg requestId "$request_id" \
+        --arg projectPath "$project_path" \
+        --arg sessionId "$session_id" \
+        --arg sessionSlug "$slug" \
+        --arg provider "$provider" \
+        --arg message "$message" \
+        --arg sentAt "$sent_at" \
+        '{
+          requestId: $requestId,
+          projectPath: $projectPath,
+          sessionId: $sessionId,
+          sessionSlug: $sessionSlug,
+          provider: $provider,
+          message: $message,
+          sentAt: $sentAt,
+          answeredAt: null,
+          status: "working",
+          exitCode: null,
+          response: "",
+          scheduleMode: "direct",
+          deliveryMechanism: "dispatch_worker"
+        }'
+    ) || return 1
+  fi
 
   index_payload=$(
     "$CLAWDAD_JQ" -n \
@@ -201,7 +231,9 @@ history_update_result() {
           answeredAt: $answeredAt,
           status: $status,
           exitCode: $exitCode,
-          response: $response
+          response: $response,
+          scheduleMode: "direct",
+          deliveryMechanism: "dispatch_worker"
         }'
     ) || return 1
   fi
