@@ -57,8 +57,10 @@ Prepared: 2026-07-30
   TestFlight app is not currently installed. Physical certification begins
   after a clean removal of build 15, TestFlight installation, and installation
   of `0.7.0 (19)` from `ClawDad Internal`.
-- The existing Cloudflare deployment token is healthy for Workers deployment
-  but lacks `Calls Write`; TURN activation needs a narrowly scoped token.
+- The Workspace relay hibernation and TURN budget controls are implemented on
+  the branch with TURN disabled by default. Realtime account activation,
+  production TURN key creation, analytics-read provisioning, and forced-TURN
+  physical verification remain gated.
 - Session Doctor is healthy apart from four missing historical project paths
   awaiting an explicit keep-or-retire decision:
   `ai-shorts-studio`, `campus-ready`, `gw2-companion`, and `richboy-tyria`.
@@ -71,8 +73,9 @@ Prepared: 2026-07-30
 - Confirm Paid Applications Agreement, banking, tax, and app privacy answers.
 - Attach the first subscriptions and a public build to App Store version 1.0.
 - Supply App Review contact details and a durable reviewer pairing path.
-- Create a Cloudflare API token limited to `Calls Write`, then complete
-  restrictive-network TURN testing.
+- Confirm Cloudflare Realtime billing activation, provision the production TURN
+  and analytics credentials, create the external $5 budget notification, then
+  complete restrictive-network TURN testing.
 - Choose whether the four missing historical project entries should be retired
   from ClawDad or restored on disk.
 

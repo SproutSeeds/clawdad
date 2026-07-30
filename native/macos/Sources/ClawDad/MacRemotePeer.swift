@@ -113,6 +113,27 @@ final class MacRemotePeer: NSObject {
     }
   }
 
+  @discardableResult
+  func updateIceServers(
+    _ servers: [RemoteIceServerConfiguration]
+  ) -> Bool {
+    guard let peerConnection else {
+      return false
+    }
+    let configuration = peerConnection.configuration
+    configuration.iceServers = servers.map { server in
+      if let username = server.username, let credential = server.credential {
+        return RTCIceServer(
+          urlStrings: server.urls,
+          username: username,
+          credential: credential
+        )
+      }
+      return RTCIceServer(urlStrings: server.urls)
+    }
+    return peerConnection.setConfiguration(configuration)
+  }
+
   func stop() {
     inputController.cancelPendingOperations()
     sessionStateTask?.cancel()

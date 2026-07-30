@@ -3,10 +3,12 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
   ReleaseCatalog,
+  TurnBudget,
   WorkspaceRelay,
   cloudRelayTargetMatches,
   generateRemoteAssistIceServers,
   publicClawDadPage,
+  turnCustomerIdentifier,
   validateSparkleAppcast,
 } from "../cloud/worker.mjs";
 
@@ -30,6 +32,7 @@ const validAppcast = `<?xml version="1.0" encoding="utf-8"?>
 
 function memoryDurableObjectState() {
   const values = new Map();
+  const webSockets = new Set();
   return {
     storage: {
       async get(key) {
@@ -47,7 +50,71 @@ function memoryDurableObjectState() {
         );
       },
     },
+    acceptWebSocket(socket) {
+      webSockets.add(socket);
+    },
+    getWebSockets() {
+      return [...webSockets].filter((socket) => !socket.closed);
+    },
   };
+}
+
+function memoryWebSocket() {
+  let attachment;
+  const messages = [];
+  return {
+    messages,
+    closed: false,
+    closeCode: null,
+    closeReason: "",
+    send(message) {
+      messages.push(JSON.parse(message));
+    },
+    close(code, reason) {
+      this.closed = true;
+      this.closeCode = code;
+      this.closeReason = reason;
+    },
+    serializeAttachment(value) {
+      attachment = structuredClone(value);
+    },
+    deserializeAttachment() {
+      return attachment == null ? attachment : structuredClone(attachment);
+    },
+  };
+}
+
+function durableObjectBinding(instance) {
+  return {
+    idFromName(name) {
+      return name;
+    },
+    get() {
+      return {
+        fetch(request) {
+          return instance.fetch(request);
+        },
+      };
+    },
+  };
+}
+
+function allowedTurnBudgetBinding(overrides = {}) {
+  return durableObjectBinding({
+    async fetch() {
+      return new Response(JSON.stringify({
+        allowed: true,
+        reason: "within_budget",
+        level: "normal",
+        globalEgressBytes: 0,
+        customerEgressBytes: 0,
+        ...overrides,
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
 }
 
 function relayAccessRequest(pathname, {
@@ -98,6 +165,8 @@ test("production relay disables persistent request logging", async () => {
   assert.match(config, /^logpush = false$/mu);
   assert.match(config, /^\[observability\]\nenabled = false$/mu);
   assert.doesNotMatch(source, /\bconsole\.[a-z]+\s*\(/iu);
+  assert.match(source, /this\.state\.acceptWebSocket\(server\)/u);
+  assert.doesNotMatch(source, /\bserver\.accept\(\)/u);
 });
 
 test("workspace relay claims an opaque workspace and protects host controls", async () => {
@@ -405,6 +474,62 @@ test("cloud relay heartbeat pong reports whether the paired Mac is online", () =
   assert.deepEqual(pong.body.availableHostIds, ["cody-mac"]);
 });
 
+test("workspace relay restores authenticated sockets after hibernation", () => {
+  const state = memoryDurableObjectState();
+  const phoneSocket = memoryWebSocket();
+  const hostSocket = memoryWebSocket();
+  const phoneMetadata = {
+    accountId: "acct-1",
+    workspaceId: "scratchpad",
+    hostId: "",
+    deviceId: "cody-phone",
+    role: "device",
+    connectedAt: new Date().toISOString(),
+  };
+  const hostMetadata = {
+    accountId: "acct-1",
+    workspaceId: "scratchpad",
+    hostId: "cody-mac",
+    deviceId: "",
+    role: "host",
+    connectedAt: new Date().toISOString(),
+  };
+  phoneSocket.serializeAttachment(phoneMetadata);
+  hostSocket.serializeAttachment(hostMetadata);
+  state.acceptWebSocket(phoneSocket);
+  state.acceptWebSocket(hostSocket);
+
+  const awakenedRelay = new WorkspaceRelay(state, {});
+  awakenedRelay.webSocketMessage(phoneSocket, JSON.stringify({
+    id: "hibernated-envelope",
+    protocolVersion: "clawdad.cloud.v1",
+    type: "status.request",
+    accountId: "acct-1",
+    workspaceId: "scratchpad",
+    sourceDeviceId: "cody-phone",
+    targetHostId: "cody-mac",
+    body: {},
+  }));
+
+  assert.equal(awakenedRelay.sessions.size, 2);
+  assert.equal(hostSocket.messages.length, 1);
+  assert.equal(hostSocket.messages[0].id, "hibernated-envelope");
+  assert.equal(hostSocket.messages[0].relay.sourceRole, "device");
+  assert.ok(phoneSocket.deserializeAttachment().lastSeenAt);
+});
+
+test("workspace relay closes a hibernated socket with missing metadata", () => {
+  const state = memoryDurableObjectState();
+  const socket = memoryWebSocket();
+  state.acceptWebSocket(socket);
+
+  const awakenedRelay = new WorkspaceRelay(state, {});
+  awakenedRelay.webSocketMessage(socket, "{}");
+
+  assert.equal(socket.closed, true);
+  assert.equal(socket.closeCode, 4003);
+});
+
 test("Remote Assist ICE credentials require the private host bearer", async () => {
   const response = await generateRemoteAssistIceServers(
     new Request("https://clawdad.example/remote-assist/ice-servers", {
@@ -425,6 +550,7 @@ test("Remote Assist ICE credentials require the private host bearer", async () =
 
 test("Remote Assist returns short-lived Cloudflare ICE servers", async () => {
   let upstreamRequest = null;
+  const identifierSecret = "turn-identifier-secret-with-thirty-two-characters";
   const response = await generateRemoteAssistIceServers(
     new Request("https://clawdad.example/remote-assist/ice-servers", {
       method: "POST",
@@ -436,6 +562,8 @@ test("Remote Assist returns short-lived Cloudflare ICE servers", async () => {
       CLAWDAD_REMOTE_ASSIST_TOKEN: "host-secret",
       CLAWDAD_TURN_KEY_ID: "turn-key",
       CLAWDAD_TURN_KEY_API_TOKEN: "turn-secret",
+      CLAWDAD_TURN_ENABLED: "true",
+      CLAWDAD_TURN_IDENTIFIER_SECRET: identifierSecret,
     },
     async (url, options) => {
       upstreamRequest = { url, options };
@@ -453,6 +581,15 @@ test("Remote Assist returns short-lived Cloudflare ICE servers", async () => {
         headers: { "content-type": "application/json" },
       });
     },
+    {
+      subject: {
+        accountId: "acct_12345678901234567890",
+      },
+      budgetEvaluator: async () => ({
+        allowed: true,
+        level: "normal",
+      }),
+    },
   );
 
   assert.equal(response.status, 200);
@@ -461,16 +598,76 @@ test("Remote Assist returns short-lived Cloudflare ICE servers", async () => {
     upstreamRequest.options.headers.authorization,
     "Bearer turn-secret",
   );
-  assert.deepEqual(JSON.parse(upstreamRequest.options.body), { ttl: 3600 });
+  const upstreamBody = JSON.parse(upstreamRequest.options.body);
+  assert.equal(upstreamBody.ttl, 900);
+  assert.match(upstreamBody.customIdentifier, /^clawdad_[a-f0-9]{32}$/u);
   const payload = await response.json();
-  assert.equal(payload.expiresIn, 3600);
+  assert.equal(payload.expiresIn, 900);
+  assert.equal(payload.refreshAfter, 720);
+  assert.equal(payload.relayAvailable, true);
   assert.equal(payload.iceServers.length, 2);
 });
 
-test("workspace host credential authorizes Remote Assist ICE without a shared app token", async (t) => {
+test("Remote Assist only advertises relay when Cloudflare returns TURN URLs", async () => {
+  const response = await generateRemoteAssistIceServers(
+    new Request("https://clawdad.example/remote-assist/ice-servers", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer host-secret",
+      },
+    }),
+    {
+      CLAWDAD_REMOTE_ASSIST_TOKEN: "host-secret",
+      CLAWDAD_TURN_KEY_ID: "turn-key",
+      CLAWDAD_TURN_KEY_API_TOKEN: "turn-secret",
+      CLAWDAD_TURN_ENABLED: "true",
+      CLAWDAD_TURN_IDENTIFIER_SECRET:
+        "turn-identifier-secret-with-thirty-two-characters",
+    },
+    async () => new Response(JSON.stringify({
+      iceServers: [{ urls: ["stun:stun.cloudflare.com:3478"] }],
+    }), {
+      status: 201,
+      headers: { "content-type": "application/json" },
+    }),
+    {
+      subject: {
+        accountId: "acct_12345678901234567890",
+      },
+      budgetEvaluator: async () => ({
+        allowed: true,
+        level: "normal",
+      }),
+    },
+  );
+
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.equal(payload.relayAvailable, false);
+  assert.equal(payload.relayReason, "credential_generation_failed");
+  assert.deepEqual(payload.iceServers, [{
+    urls: ["stun:stun.cloudflare.com:3478"],
+  }]);
+});
+
+test("workspace host credential authorizes attributed ICE for a trusted phone", async () => {
   const relay = new WorkspaceRelay(memoryDurableObjectState(), {
     CLAWDAD_TURN_KEY_ID: "turn-key",
     CLAWDAD_TURN_KEY_API_TOKEN: "turn-secret",
+    CLAWDAD_TURN_ENABLED: "true",
+    CLAWDAD_TURN_IDENTIFIER_SECRET:
+      "turn-identifier-secret-with-thirty-two-characters",
+    TURN_BUDGET: allowedTurnBudgetBinding(),
+    CLAWDAD_TURN_CREDENTIAL_FETCH: async () => new Response(JSON.stringify({
+      iceServers: [{
+        urls: ["turns:turn.cloudflare.com:443?transport=tcp"],
+        username: "temporary-user",
+        credential: "temporary-credential",
+      }],
+    }), {
+      status: 201,
+      headers: { "content-type": "application/json" },
+    }),
   });
   const hostToken = "host-token-with-at-least-thirty-two-characters";
   const workspace = "/workspaces/ws_12345678901234567890";
@@ -482,32 +679,245 @@ test("workspace host credential authorizes Remote Assist ICE without a shared ap
       hostId: "mac-host",
     },
   }));
-  const originalFetch = globalThis.fetch;
-  t.after(() => {
-    globalThis.fetch = originalFetch;
-  });
-  globalThis.fetch = async () => new Response(JSON.stringify({
-    iceServers: [{
-      urls: ["turns:turn.cloudflare.com:443?transport=tcp"],
-      username: "temporary-user",
-      credential: "temporary-credential",
-    }],
-  }), {
-    status: 201,
-    headers: { "content-type": "application/json" },
-  });
+  const pairingToken = "pairing-token-with-at-least-thirty-two-chars";
+  await relay.fetch(relayAccessRequest(
+    `${workspace}/access/pairing-tickets`,
+    {
+      method: "POST",
+      token: hostToken,
+      body: {
+        pairingToken,
+        expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+      },
+    },
+  ));
+  await relay.fetch(relayAccessRequest(
+    `${workspace}/access/devices/ios-phone`,
+    {
+      method: "PUT",
+      token: hostToken,
+      body: {
+        pairingToken,
+        deviceName: "CodyVerse",
+        platform: "ios",
+      },
+    },
+  ));
 
   const response = await relay.fetch(relayAccessRequest(
     `${workspace}/remote-assist/ice-servers`,
     {
       method: "POST",
       token: hostToken,
-      body: {},
+      body: { targetDeviceId: "ios-phone" },
     },
   ));
 
   assert.equal(response.status, 200);
-  assert.equal((await response.json()).iceServers.length, 1);
+  const payload = await response.json();
+  assert.equal(payload.relayAvailable, true);
+  assert.equal(payload.iceServers.length, 1);
+});
+
+test("Remote Assist keeps direct STUN available while TURN is disabled", async () => {
+  const response = await generateRemoteAssistIceServers(
+    new Request("https://clawdad.example/remote-assist/ice-servers", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer host-secret",
+      },
+    }),
+    {
+      CLAWDAD_REMOTE_ASSIST_TOKEN: "host-secret",
+      CLAWDAD_TURN_ENABLED: "false",
+    },
+    async () => {
+      throw new Error("disabled TURN must not make an upstream request");
+    },
+  );
+
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.equal(payload.relayAvailable, false);
+  assert.equal(payload.relayReason, "relay_disabled");
+  assert.deepEqual(payload.iceServers, [{
+    urls: ["stun:stun.cloudflare.com:3478"],
+  }]);
+});
+
+test("TURN customer identifiers are stable pseudonyms", async () => {
+  const env = {
+    CLAWDAD_TURN_IDENTIFIER_SECRET:
+      "turn-identifier-secret-with-thirty-two-characters",
+  };
+  const first = await turnCustomerIdentifier(env, {
+    accountId: "acct_12345678901234567890",
+  });
+  const repeated = await turnCustomerIdentifier(env, {
+    accountId: "acct_12345678901234567890",
+  });
+  const other = await turnCustomerIdentifier(env, {
+    accountId: "acct_09876543210987654321",
+  });
+
+  assert.match(first, /^clawdad_[a-f0-9]{32}$/u);
+  assert.equal(first, repeated);
+  assert.notEqual(first, other);
+  assert.doesNotMatch(first, /acct/u);
+});
+
+test("TURN budget allows and caches usage below customer and global limits", async () => {
+  const state = memoryDurableObjectState();
+  let analyticsRequests = 0;
+  const budget = new TurnBudget(state, {
+    CLAWDAD_TURN_ENABLED: "true",
+    CLAWDAD_CLOUDFLARE_ACCOUNT_ID: "cloudflare-account",
+    CLAWDAD_TURN_ANALYTICS_API_TOKEN: "analytics-token",
+    CLAWDAD_TURN_KEY_ID: "turn-key",
+    CLAWDAD_TURN_ANALYTICS_FETCH: async (_url, options) => {
+      analyticsRequests += 1;
+      const query = JSON.parse(options.body).query;
+      const egressBytes = query.includes("customIdentifier")
+        ? 8 * 1_000_000_000
+        : 70 * 1_000_000_000;
+      return new Response(JSON.stringify({
+        data: {
+          viewer: {
+            accounts: [{
+              callsTurnUsageAdaptiveGroups: [{
+                sum: { egressBytes },
+              }],
+            }],
+          },
+        },
+        errors: null,
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  const customIdentifier = "clawdad_0123456789abcdef0123456789abcdef";
+  const request = () => new Request("https://turn-budget.internal/authorize", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ customIdentifier }),
+  });
+
+  const first = await budget.fetch(request());
+  const firstPayload = await first.json();
+  const repeated = await budget.fetch(request());
+  const repeatedPayload = await repeated.json();
+
+  assert.equal(firstPayload.allowed, true);
+  assert.equal(firstPayload.level, "normal");
+  assert.equal(firstPayload.customerEgressBytes, 8_000_000_000);
+  assert.equal(firstPayload.globalEgressBytes, 70_000_000_000);
+  assert.equal(repeatedPayload.allowed, true);
+  assert.equal(analyticsRequests, 2);
+});
+
+test("TURN budget blocks customer and global monthly overages", async () => {
+  const customIdentifier = "clawdad_0123456789abcdef0123456789abcdef";
+  const decision = async (globalEgressBytes, customerEgressBytes) => {
+    const budget = new TurnBudget(memoryDurableObjectState(), {
+      CLAWDAD_TURN_ENABLED: "true",
+      CLAWDAD_CLOUDFLARE_ACCOUNT_ID: "cloudflare-account",
+      CLAWDAD_TURN_ANALYTICS_API_TOKEN: "analytics-token",
+      CLAWDAD_TURN_KEY_ID: "turn-key",
+      CLAWDAD_TURN_ANALYTICS_FETCH: async (_url, options) => {
+        const query = JSON.parse(options.body).query;
+        const egressBytes = query.includes("customIdentifier")
+          ? customerEgressBytes
+          : globalEgressBytes;
+        return new Response(JSON.stringify({
+          data: {
+            viewer: {
+              accounts: [{
+                callsTurnUsageAdaptiveGroups: [{
+                  sum: { egressBytes },
+                }],
+              }],
+            },
+          },
+          errors: null,
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+    const response = await budget.fetch(
+      new Request("https://turn-budget.internal/authorize", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ customIdentifier }),
+      }),
+    );
+    return response.json();
+  };
+
+  const customerBlocked = await decision(
+    91_000_000_000,
+    21_000_000_000,
+  );
+  assert.equal(customerBlocked.allowed, false);
+  assert.equal(customerBlocked.reason, "customer_monthly_limit");
+  assert.equal(customerBlocked.level, "urgent");
+
+  const globalBlocked = await decision(
+    96_000_000_000,
+    1_000_000_000,
+  );
+  assert.equal(globalBlocked.allowed, false);
+  assert.equal(globalBlocked.reason, "global_monthly_limit");
+  assert.equal(globalBlocked.level, "paused");
+});
+
+test("TURN admin controls pause globally without consulting analytics", async () => {
+  let analyticsRequests = 0;
+  const budget = new TurnBudget(memoryDurableObjectState(), {
+    CLAWDAD_TURN_ENABLED: "true",
+    CLAWDAD_TURN_ADMIN_TOKEN: "admin-secret",
+    CLAWDAD_TURN_ANALYTICS_FETCH: async () => {
+      analyticsRequests += 1;
+      throw new Error("analytics should not be called while paused");
+    },
+  });
+  const unauthorized = await budget.fetch(
+    new Request("https://turn-budget.internal/control", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ globalPaused: true }),
+    }),
+  );
+  assert.equal(unauthorized.status, 401);
+
+  const updated = await budget.fetch(
+    new Request("https://turn-budget.internal/control", {
+      method: "PUT",
+      headers: {
+        authorization: "Bearer admin-secret",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ globalPaused: true }),
+    }),
+  );
+  assert.equal(updated.status, 200);
+
+  const decision = await budget.fetch(
+    new Request("https://turn-budget.internal/authorize", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        customIdentifier: "clawdad_0123456789abcdef0123456789abcdef",
+      }),
+    }),
+  );
+  const payload = await decision.json();
+  assert.equal(payload.allowed, false);
+  assert.equal(payload.reason, "admin_global_pause");
+  assert.equal(analyticsRequests, 0);
 });
 
 test("Mac update catalog rejects malformed or unsigned Sparkle feeds", () => {

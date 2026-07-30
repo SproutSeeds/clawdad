@@ -195,6 +195,16 @@ const minimumRelayTokenLength = 32;
 const accessHostKey = "access:host";
 const accessDevicePrefix = "access:device:";
 const accessPairingPrefix = "access:pairing:";
+const turnControlKey = "turn:control";
+const turnUsageCachePrefix = "turn:usage:";
+const bytesPerGigabyte = 1_000_000_000;
+const defaultTurnCredentialTtlSeconds = 15 * 60;
+const defaultTurnAnalyticsCacheSeconds = 5 * 60;
+const defaultTurnIceServers = Object.freeze([
+  Object.freeze({
+    urls: Object.freeze(["stun:stun.cloudflare.com:3478"]),
+  }),
+]);
 
 function bearerToken(request) {
   const header = String(request.headers.get("authorization") || "").trim();
@@ -267,6 +277,172 @@ function relayAccessEnforced(env) {
   return String(env.CLAWDAD_RELAY_ACCESS_ENFORCED ?? "true")
     .trim()
     .toLowerCase() !== "false";
+}
+
+function envBoolean(env, name, fallback = false) {
+  const value = String(env?.[name] ?? "").trim().toLowerCase();
+  if (!value) {
+    return fallback;
+  }
+  return ["1", "true", "yes", "on"].includes(value);
+}
+
+function envNumber(env, name, fallback, {
+  minimum = 0,
+  maximum = Number.MAX_SAFE_INTEGER,
+} = {}) {
+  const parsed = Number(env?.[name]);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.min(maximum, Math.max(minimum, parsed));
+}
+
+function turnBudgetConfiguration(env) {
+  const warningBytes = envNumber(
+    env,
+    "CLAWDAD_TURN_GLOBAL_WARNING_BYTES",
+    75 * bytesPerGigabyte,
+  );
+  const urgentBytes = Math.max(
+    warningBytes,
+    envNumber(
+      env,
+      "CLAWDAD_TURN_GLOBAL_URGENT_BYTES",
+      90 * bytesPerGigabyte,
+    ),
+  );
+  const pauseBytes = Math.max(
+    urgentBytes,
+    envNumber(
+      env,
+      "CLAWDAD_TURN_GLOBAL_PAUSE_BYTES",
+      95 * bytesPerGigabyte,
+    ),
+  );
+  return {
+    enabled: envBoolean(env, "CLAWDAD_TURN_ENABLED", false),
+    killSwitch: envBoolean(env, "CLAWDAD_TURN_KILL_SWITCH", false),
+    credentialTtlSeconds: Math.round(envNumber(
+      env,
+      "CLAWDAD_TURN_CREDENTIAL_TTL_SECONDS",
+      defaultTurnCredentialTtlSeconds,
+      { minimum: 300, maximum: 86_400 },
+    )),
+    analyticsCacheSeconds: Math.round(envNumber(
+      env,
+      "CLAWDAD_TURN_ANALYTICS_CACHE_SECONDS",
+      defaultTurnAnalyticsCacheSeconds,
+      { minimum: 30, maximum: 3_600 },
+    )),
+    perCustomerLimitBytes: Math.round(envNumber(
+      env,
+      "CLAWDAD_TURN_CUSTOMER_LIMIT_BYTES",
+      20 * bytesPerGigabyte,
+      { minimum: bytesPerGigabyte },
+    )),
+    warningBytes: Math.round(warningBytes),
+    urgentBytes: Math.round(urgentBytes),
+    pauseBytes: Math.round(pauseBytes),
+  };
+}
+
+function turnDirectResponse(reason, configuration = {}) {
+  return json(200, {
+    iceServers: defaultTurnIceServers,
+    expiresIn: 0,
+    refreshAfter: 0,
+    relayAvailable: false,
+    relayReason: String(reason || "relay_disabled"),
+    budgetLevel: String(configuration.budgetLevel || "unavailable"),
+  });
+}
+
+function requireTurnAdminBearer(request, env) {
+  const expected = String(env.CLAWDAD_TURN_ADMIN_TOKEN || "").trim();
+  return Boolean(expected) && bearerToken(request) === expected;
+}
+
+function validTurnIdentifier(value) {
+  return /^clawdad_[a-f0-9]{32}$/u.test(String(value || "").trim());
+}
+
+async function hmacHex(secret, value) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const signature = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    new TextEncoder().encode(value),
+  );
+  return [...new Uint8Array(signature)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+export async function turnCustomerIdentifier(env, subject = {}) {
+  const secret = String(env.CLAWDAD_TURN_IDENTIFIER_SECRET || "").trim();
+  const accountId = String(subject.accountId || "").trim();
+  if (secret.length < 32 || !validAccessIdentifier(accountId)) {
+    return "";
+  }
+  const digest = await hmacHex(secret, `clawdad-turn-customer:v1:${accountId}`);
+  return `clawdad_${digest.slice(0, 32)}`;
+}
+
+function utcMonthRange(now = new Date()) {
+  const year = now.getUTCFullYear();
+  const month = String(now.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(now.getUTCDate()).padStart(2, "0");
+  return {
+    month: `${year}-${month}`,
+    dateFrom: `${year}-${month}-01`,
+    dateTo: `${year}-${month}-${day}`,
+  };
+}
+
+function turnBudgetLevel(egressBytes, configuration) {
+  if (egressBytes >= configuration.pauseBytes) {
+    return "paused";
+  }
+  if (egressBytes >= configuration.urgentBytes) {
+    return "urgent";
+  }
+  if (egressBytes >= configuration.warningBytes) {
+    return "warning";
+  }
+  return "normal";
+}
+
+async function turnBudgetDecision(env, customIdentifier) {
+  if (!env.TURN_BUDGET) {
+    return {
+      allowed: false,
+      reason: "budget_service_unavailable",
+      level: "unavailable",
+    };
+  }
+  const objectId = env.TURN_BUDGET.idFromName("global");
+  const response = await env.TURN_BUDGET.get(objectId).fetch(
+    new Request("https://turn-budget.internal/authorize", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ customIdentifier }),
+    }),
+  );
+  if (!response.ok) {
+    return {
+      allowed: false,
+      reason: "budget_service_unavailable",
+      level: "unavailable",
+    };
+  }
+  return response.json();
 }
 
 async function accessJson(request) {
@@ -375,11 +551,418 @@ export class ReleaseCatalog {
   }
 }
 
+export class TurnBudget {
+  constructor(state, env) {
+    this.state = state;
+    this.env = env;
+    this.fetchImpl = (
+      typeof env.CLAWDAD_TURN_ANALYTICS_FETCH === "function"
+        ? env.CLAWDAD_TURN_ANALYTICS_FETCH
+        : fetch
+    );
+  }
+
+  async control() {
+    return (
+      await this.state.storage.get(turnControlKey) ||
+      {
+        globalPaused: false,
+        customers: {},
+        updatedAt: "",
+      }
+    );
+  }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname === "/authorize") {
+      return this.authorize(request);
+    }
+    if (!requireTurnAdminBearer(request, this.env)) {
+      return json(401, { ok: false, error: "unauthorized" });
+    }
+    if (url.pathname === "/status") {
+      return this.status(request);
+    }
+    if (url.pathname === "/control") {
+      return this.updateControl(request);
+    }
+    return json(404, { ok: false, error: "not found" });
+  }
+
+  async authorize(request) {
+    if (request.method !== "POST") {
+      return json(405, { ok: false, error: "method not allowed" });
+    }
+    let payload;
+    try {
+      payload = await accessJson(request);
+    } catch {
+      return json(400, { ok: false, error: "invalid budget request" });
+    }
+    const customIdentifier = String(payload.customIdentifier || "").trim();
+    if (!validTurnIdentifier(customIdentifier)) {
+      return json(400, {
+        ok: false,
+        error: "valid customer identifier is required",
+      });
+    }
+
+    const configuration = turnBudgetConfiguration(this.env);
+    const control = await this.control();
+    const customerControl = control.customers?.[customIdentifier] || {};
+    if (!configuration.enabled) {
+      return json(200, {
+        allowed: false,
+        reason: "relay_disabled",
+        level: "disabled",
+      });
+    }
+    if (configuration.killSwitch) {
+      return json(200, {
+        allowed: false,
+        reason: "global_kill_switch",
+        level: "paused",
+      });
+    }
+    if (control.globalPaused) {
+      return json(200, {
+        allowed: false,
+        reason: "admin_global_pause",
+        level: "paused",
+      });
+    }
+    if (customerControl.paused) {
+      return json(200, {
+        allowed: false,
+        reason: "admin_customer_pause",
+        level: "paused",
+      });
+    }
+
+    let usage;
+    try {
+      usage = await this.usageSnapshot(customIdentifier);
+    } catch {
+      return json(200, {
+        allowed: false,
+        reason: "usage_unavailable",
+        level: "unavailable",
+      });
+    }
+
+    const customerLimitBytes = Number.isFinite(customerControl.limitBytes)
+      ? customerControl.limitBytes
+      : configuration.perCustomerLimitBytes;
+    const level = turnBudgetLevel(usage.globalEgressBytes, configuration);
+    if (usage.globalEgressBytes >= configuration.pauseBytes) {
+      return json(200, {
+        allowed: false,
+        reason: "global_monthly_limit",
+        level,
+        ...usage,
+        customerLimitBytes,
+        globalPauseBytes: configuration.pauseBytes,
+      });
+    }
+    if (usage.customerEgressBytes >= customerLimitBytes) {
+      return json(200, {
+        allowed: false,
+        reason: "customer_monthly_limit",
+        level,
+        ...usage,
+        customerLimitBytes,
+        globalPauseBytes: configuration.pauseBytes,
+      });
+    }
+
+    return json(200, {
+      allowed: true,
+      reason: "within_budget",
+      level,
+      ...usage,
+      customerLimitBytes,
+      globalPauseBytes: configuration.pauseBytes,
+    });
+  }
+
+  async status(request) {
+    if (request.method !== "GET") {
+      return json(405, { ok: false, error: "method not allowed" });
+    }
+    const url = new URL(request.url);
+    const customIdentifier = String(
+      url.searchParams.get("customIdentifier") || "",
+    ).trim();
+    if (customIdentifier && !validTurnIdentifier(customIdentifier)) {
+      return json(400, {
+        ok: false,
+        error: "customer identifier is invalid",
+      });
+    }
+    if (url.searchParams.get("refresh") === "true") {
+      await this.clearUsageCache(customIdentifier);
+    }
+
+    const configuration = turnBudgetConfiguration(this.env);
+    const control = await this.control();
+    let usage = null;
+    let usageError = "";
+    if (configuration.enabled) {
+      try {
+        usage = await this.usageSnapshot(customIdentifier);
+      } catch {
+        usageError = "TURN analytics are unavailable";
+      }
+    }
+    const globalEgressBytes = usage?.globalEgressBytes || 0;
+    return json(200, {
+      ok: true,
+      enabled: configuration.enabled,
+      killSwitch: configuration.killSwitch,
+      globalPaused: Boolean(control.globalPaused),
+      level: (
+        configuration.enabled
+          ? turnBudgetLevel(globalEgressBytes, configuration)
+          : "disabled"
+      ),
+      usage,
+      usageError,
+      thresholds: {
+        perCustomerLimitBytes: configuration.perCustomerLimitBytes,
+        warningBytes: configuration.warningBytes,
+        urgentBytes: configuration.urgentBytes,
+        pauseBytes: configuration.pauseBytes,
+      },
+      credentialTtlSeconds: configuration.credentialTtlSeconds,
+      analyticsCacheSeconds: configuration.analyticsCacheSeconds,
+      customerControl: (
+        customIdentifier
+          ? control.customers?.[customIdentifier] || null
+          : null
+      ),
+      updatedAt: control.updatedAt || "",
+    });
+  }
+
+  async updateControl(request) {
+    if (request.method !== "PUT" && request.method !== "POST") {
+      return json(405, { ok: false, error: "method not allowed" });
+    }
+    let payload;
+    try {
+      payload = await accessJson(request);
+    } catch {
+      return json(400, { ok: false, error: "invalid control request" });
+    }
+    const current = await this.control();
+    const next = {
+      ...current,
+      customers: { ...(current.customers || {}) },
+      updatedAt: new Date().toISOString(),
+    };
+    if (typeof payload.globalPaused === "boolean") {
+      next.globalPaused = payload.globalPaused;
+    }
+
+    const customIdentifier = String(payload.customIdentifier || "").trim();
+    if (customIdentifier) {
+      if (!validTurnIdentifier(customIdentifier)) {
+        return json(400, {
+          ok: false,
+          error: "customer identifier is invalid",
+        });
+      }
+      const customer = {
+        ...(next.customers[customIdentifier] || {}),
+      };
+      if (typeof payload.customerPaused === "boolean") {
+        customer.paused = payload.customerPaused;
+      }
+      if (payload.customerLimitBytes === null) {
+        delete customer.limitBytes;
+      } else if (payload.customerLimitBytes !== undefined) {
+        const limitBytes = Number(payload.customerLimitBytes);
+        if (
+          !Number.isFinite(limitBytes) ||
+          limitBytes < bytesPerGigabyte
+        ) {
+          return json(400, {
+            ok: false,
+            error: "customer limit must be at least 1 GB",
+          });
+        }
+        customer.limitBytes = Math.round(limitBytes);
+      }
+      if (payload.note !== undefined) {
+        customer.note = String(payload.note || "").trim().slice(0, 200);
+      }
+      customer.updatedAt = next.updatedAt;
+      if (
+        !customer.paused &&
+        !Number.isFinite(customer.limitBytes) &&
+        !customer.note
+      ) {
+        delete next.customers[customIdentifier];
+      } else {
+        next.customers[customIdentifier] = customer;
+      }
+    }
+
+    await this.state.storage.put(turnControlKey, next);
+    if (payload.clearUsageCache === true) {
+      await this.clearUsageCache(customIdentifier);
+    }
+    return json(200, {
+      ok: true,
+      globalPaused: Boolean(next.globalPaused),
+      customerControl: (
+        customIdentifier
+          ? next.customers[customIdentifier] || null
+          : null
+      ),
+      updatedAt: next.updatedAt,
+    });
+  }
+
+  async clearUsageCache(customIdentifier = "") {
+    const entries = await this.state.storage.list({
+      prefix: turnUsageCachePrefix,
+    });
+    for (const key of entries.keys()) {
+      if (!customIdentifier || key.endsWith(`:${customIdentifier}`)) {
+        await this.state.storage.delete(key);
+      }
+    }
+  }
+
+  async usageSnapshot(customIdentifier = "") {
+    const global = await this.cachedUsage("");
+    const customer = customIdentifier
+      ? await this.cachedUsage(customIdentifier)
+      : null;
+    return {
+      month: global.month,
+      globalEgressBytes: global.egressBytes,
+      customerEgressBytes: customer?.egressBytes || 0,
+      measuredAt: (
+        customer?.measuredAt &&
+        customer.measuredAt < global.measuredAt
+          ? customer.measuredAt
+          : global.measuredAt
+      ),
+    };
+  }
+
+  async cachedUsage(customIdentifier) {
+    const configuration = turnBudgetConfiguration(this.env);
+    const range = utcMonthRange();
+    const suffix = customIdentifier || "global";
+    const key = `${turnUsageCachePrefix}${range.month}:${suffix}`;
+    const cached = await this.state.storage.get(key);
+    const cacheAgeMs = Date.now() - Date.parse(cached?.measuredAt || "");
+    if (
+      cached &&
+      Number.isFinite(cacheAgeMs) &&
+      cacheAgeMs >= 0 &&
+      cacheAgeMs < configuration.analyticsCacheSeconds * 1000
+    ) {
+      return cached;
+    }
+
+    const egressBytes = await this.queryEgressBytes(
+      range,
+      customIdentifier,
+    );
+    const next = {
+      month: range.month,
+      egressBytes,
+      measuredAt: new Date().toISOString(),
+    };
+    await this.state.storage.put(key, next);
+    return next;
+  }
+
+  async queryEgressBytes(range, customIdentifier) {
+    const accountId = String(
+      this.env.CLAWDAD_CLOUDFLARE_ACCOUNT_ID || "",
+    ).trim();
+    const analyticsToken = String(
+      this.env.CLAWDAD_TURN_ANALYTICS_API_TOKEN || "",
+    ).trim();
+    const keyId = String(this.env.CLAWDAD_TURN_KEY_ID || "").trim();
+    if (!accountId || !analyticsToken || !keyId) {
+      throw new Error("TURN analytics are not configured");
+    }
+
+    const filter = [
+      `date_geq: ${JSON.stringify(range.dateFrom)}`,
+      `date_leq: ${JSON.stringify(range.dateTo)}`,
+      `keyId: ${JSON.stringify(keyId)}`,
+      ...(customIdentifier
+        ? [`customIdentifier: ${JSON.stringify(customIdentifier)}`]
+        : []),
+    ].join(", ");
+    const query = `query ClawDadTurnUsage {
+      viewer {
+        accounts(filter: { accountTag: ${JSON.stringify(accountId)} }) {
+          callsTurnUsageAdaptiveGroups(
+            limit: 1
+            filter: { ${filter} }
+            orderBy: []
+          ) {
+            sum {
+              egressBytes
+            }
+          }
+        }
+      }
+    }`;
+    const response = await this.fetchImpl(
+      "https://api.cloudflare.com/client/v4/graphql",
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${analyticsToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ query }),
+      },
+    );
+    if (!response.ok) {
+      throw new Error("TURN analytics request failed");
+    }
+    const payload = await response.json();
+    if (Array.isArray(payload?.errors) && payload.errors.length > 0) {
+      throw new Error("TURN analytics returned an error");
+    }
+    const accounts = payload?.data?.viewer?.accounts;
+    if (!Array.isArray(accounts) || accounts.length === 0) {
+      throw new Error("TURN analytics returned no account");
+    }
+    const groups = accounts[0]?.callsTurnUsageAdaptiveGroups;
+    if (!Array.isArray(groups)) {
+      throw new Error("TURN analytics returned no usage groups");
+    }
+    return Math.max(
+      0,
+      Math.round(groups.reduce(
+        (total, group) => total + Number(group?.sum?.egressBytes || 0),
+        0,
+      )),
+    );
+  }
+}
+
 export async function generateRemoteAssistIceServers(
   request,
   env,
   fetchImpl = fetch,
-  { authorized = false } = {},
+  {
+    authorized = false,
+    subject = null,
+    budgetEvaluator = turnBudgetDecision,
+  } = {},
 ) {
   if (request.method !== "POST") {
     return json(405, { ok: false, error: "method not allowed" });
@@ -388,13 +971,32 @@ export async function generateRemoteAssistIceServers(
     return json(401, { ok: false, error: "unauthorized" });
   }
 
+  const configuration = turnBudgetConfiguration(env);
+  if (!configuration.enabled) {
+    return turnDirectResponse("relay_disabled");
+  }
+
   const turnKeyId = String(env.CLAWDAD_TURN_KEY_ID || "").trim();
   const turnKeyApiToken = String(env.CLAWDAD_TURN_KEY_API_TOKEN || "").trim();
   if (!turnKeyId || !turnKeyApiToken) {
-    return json(503, {
-      ok: false,
-      error: "Remote Assist relay fallback is not configured",
-    });
+    return turnDirectResponse("relay_not_configured");
+  }
+
+  const customIdentifier = await turnCustomerIdentifier(env, subject || {});
+  if (!customIdentifier) {
+    return turnDirectResponse("customer_attribution_unavailable");
+  }
+  let budget;
+  try {
+    budget = await budgetEvaluator(env, customIdentifier);
+  } catch {
+    return turnDirectResponse("budget_service_unavailable");
+  }
+  if (!budget?.allowed) {
+    return turnDirectResponse(
+      budget?.reason || "budget_service_unavailable",
+      { budgetLevel: budget?.level || "unavailable" },
+    );
   }
 
   const response = await fetchImpl(
@@ -405,28 +1007,45 @@ export async function generateRemoteAssistIceServers(
         authorization: `Bearer ${turnKeyApiToken}`,
         "content-type": "application/json",
       },
-      body: JSON.stringify({ ttl: 3600 }),
+      body: JSON.stringify({
+        ttl: configuration.credentialTtlSeconds,
+        customIdentifier,
+      }),
     },
   );
   if (!response.ok) {
-    return json(502, {
-      ok: false,
-      error: "Could not create Remote Assist relay credentials",
+    return turnDirectResponse("credential_generation_failed", {
+      budgetLevel: budget.level,
     });
   }
   const payload = await response.json();
   const iceServers = Array.isArray(payload?.iceServers)
     ? payload.iceServers
     : [];
-  if (iceServers.length === 0) {
-    return json(502, {
-      ok: false,
-      error: "Remote Assist relay returned no ICE servers",
+  const hasRelayServer = iceServers.some((server) => {
+    const urls = Array.isArray(server?.urls)
+      ? server.urls
+      : [server?.urls];
+    return urls.some((url) => (
+      typeof url === "string"
+      && (url.startsWith("turn:") || url.startsWith("turns:"))
+    ));
+  });
+  if (!hasRelayServer) {
+    return turnDirectResponse("credential_generation_failed", {
+      budgetLevel: budget.level,
     });
   }
   return json(200, {
     iceServers,
-    expiresIn: 3600,
+    expiresIn: configuration.credentialTtlSeconds,
+    refreshAfter: Math.max(
+      60,
+      configuration.credentialTtlSeconds - 3 * 60,
+    ),
+    relayAvailable: true,
+    relayReason: "",
+    budgetLevel: budget.level || "normal",
   });
 }
 
@@ -495,6 +1114,53 @@ export class WorkspaceRelay {
     this.state = state;
     this.env = env;
     this.sessions = new Map();
+    for (const socket of this.state.getWebSockets?.() || []) {
+      const metadata = this.deserializeSocketMetadata(socket);
+      if (metadata) {
+        this.sessions.set(socket, metadata);
+      }
+    }
+  }
+
+  deserializeSocketMetadata(socket) {
+    try {
+      const metadata = socket.deserializeAttachment?.();
+      if (
+        metadata &&
+        typeof metadata === "object" &&
+        !Array.isArray(metadata)
+      ) {
+        return metadata;
+      }
+    } catch {
+      // A malformed attachment is treated as an unauthenticated connection.
+    }
+    return null;
+  }
+
+  persistSocketMetadata(socket, metadata) {
+    this.sessions.set(socket, metadata);
+    socket.serializeAttachment?.(metadata);
+  }
+
+  activeSessions() {
+    const sockets = this.state.getWebSockets?.();
+    if (!Array.isArray(sockets)) {
+      return this.sessions;
+    }
+
+    const active = new Map();
+    for (const socket of sockets) {
+      const metadata = (
+        this.sessions.get(socket) ||
+        this.deserializeSocketMetadata(socket)
+      );
+      if (metadata) {
+        active.set(socket, metadata);
+      }
+    }
+    this.sessions = active;
+    return active;
   }
 
   async hostAccess() {
@@ -695,7 +1361,7 @@ export class WorkspaceRelay {
       await this.state.storage.put(`${accessDevicePrefix}${deviceId}`, record);
       await this.state.storage.delete(pairingKey);
 
-      for (const metadata of this.sessions.values()) {
+      for (const [socket, metadata] of this.activeSessions()) {
         if (
           metadata.role === "device" &&
           metadata.deviceId === deviceId &&
@@ -703,6 +1369,7 @@ export class WorkspaceRelay {
         ) {
           metadata.credentialKind = "device";
           metadata.credentialHash = relayAccessTokenHash;
+          this.persistSocketMetadata(socket, metadata);
         }
       }
 
@@ -773,7 +1440,7 @@ export class WorkspaceRelay {
       tokenHash: "",
       revokedAt,
     });
-    for (const [socket, metadata] of this.sessions.entries()) {
+    for (const [socket, metadata] of this.activeSessions()) {
       if (metadata.role === "device" && metadata.deviceId === deviceId) {
         try {
           socket.close(4003, "device access revoked");
@@ -944,14 +1611,51 @@ export class WorkspaceRelay {
       return this.listDevices(request);
     }
     if (route.action === "/remote-assist/ice-servers") {
-      if (!await this.requestHasHostAccess(request)) {
+      const hostAccess = await this.hostAccess();
+      if (!await this.requestHasHostAccess(request, hostAccess)) {
         return json(401, { ok: false, error: "host authorization required" });
+      }
+      let payload;
+      try {
+        payload = await accessJson(request.clone());
+      } catch {
+        return json(400, {
+          ok: false,
+          error: "invalid Remote Assist credential request",
+        });
+      }
+      const targetDeviceId = String(payload.targetDeviceId || "").trim();
+      const targetDevice = targetDeviceId
+        ? await this.state.storage.get(
+            `${accessDevicePrefix}${targetDeviceId}`,
+          )
+        : null;
+      if (
+        !targetDevice ||
+        targetDevice.revokedAt ||
+        !targetDevice.tokenHash
+      ) {
+        return json(403, {
+          ok: false,
+          error: "trusted target device is required",
+        });
       }
       return generateRemoteAssistIceServers(
         request,
         this.env,
-        fetch,
-        { authorized: true },
+        (
+          typeof this.env.CLAWDAD_TURN_CREDENTIAL_FETCH === "function"
+            ? this.env.CLAWDAD_TURN_CREDENTIAL_FETCH
+            : fetch
+        ),
+        {
+          authorized: true,
+          subject: {
+            accountId: hostAccess.accountId,
+            workspaceId: route.workspaceId,
+            deviceId: targetDeviceId,
+          },
+        },
       );
     }
     const deviceId = accessDeviceId(route.action);
@@ -981,20 +1685,10 @@ export class WorkspaceRelay {
 
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    server.accept();
-    this.sessions.set(server, metadata);
+    this.state.acceptWebSocket(server);
+    this.persistSocketMetadata(server, metadata);
 
-    server.addEventListener("message", (event) => {
-      this.forward(server, event.data, metadata);
-    });
-    server.addEventListener("close", () => {
-      this.sessions.delete(server);
-    });
-    server.addEventListener("error", () => {
-      this.sessions.delete(server);
-    });
-
-    const availableHostIds = [...this.sessions.values()]
+    const availableHostIds = [...this.activeSessions().values()]
       .filter((session) => session.role === "host" && session.hostId)
       .map((session) => session.hostId);
     server.send(JSON.stringify({
@@ -1025,6 +1719,41 @@ export class WorkspaceRelay {
       webSocket: client,
       headers: responseHeaders,
     });
+  }
+
+  webSocketMessage(socket, message) {
+    const metadata = (
+      this.sessions.get(socket) ||
+      this.deserializeSocketMetadata(socket)
+    );
+    if (!metadata) {
+      try {
+        socket.close(4003, "relay session metadata missing");
+      } catch {
+        // The runtime will clean up a socket that is already closed.
+      }
+      return;
+    }
+    this.persistSocketMetadata(socket, metadata);
+    this.forward(socket, message, metadata);
+  }
+
+  webSocketClose(socket, code, reason) {
+    this.sessions.delete(socket);
+    try {
+      socket.close(code, reason);
+    } catch {
+      // The runtime may already have completed the close handshake.
+    }
+  }
+
+  webSocketError(socket) {
+    this.sessions.delete(socket);
+    try {
+      socket.close(1011, "relay websocket error");
+    } catch {
+      // The runtime may already have discarded the failed socket.
+    }
   }
 
   forward(sourceSocket, rawData, sourceMetadata) {
@@ -1068,8 +1797,9 @@ export class WorkspaceRelay {
 
     const targetHostId = String(payload.targetHostId || "").trim();
     sourceMetadata.lastSeenAt = new Date().toISOString();
+    this.persistSocketMetadata(sourceSocket, sourceMetadata);
     if (payload.type === "ping") {
-      const availableHostIds = [...this.sessions.values()]
+      const availableHostIds = [...this.activeSessions().values()]
         .filter((session) => (
           session.workspaceId === sourceMetadata.workspaceId &&
           session.role === "host" &&
@@ -1104,7 +1834,7 @@ export class WorkspaceRelay {
     });
 
     let forwardedCount = 0;
-    for (const [socket, metadata] of this.sessions.entries()) {
+    for (const [socket, metadata] of this.activeSessions()) {
       if (socket === sourceSocket || metadata.workspaceId !== sourceMetadata.workspaceId) {
         continue;
       }
@@ -1147,6 +1877,38 @@ export default {
     }
     if (url.pathname === "/remote-assist/ice-servers") {
       return generateRemoteAssistIceServers(request, env);
+    }
+    if (
+      url.pathname === "/admin/turn/status" ||
+      url.pathname === "/admin/turn/control"
+    ) {
+      if (!env.TURN_BUDGET) {
+        return json(503, {
+          ok: false,
+          error: "TURN_BUDGET binding is not configured",
+        });
+      }
+      if (!requireTurnAdminBearer(request, env)) {
+        return json(401, { ok: false, error: "unauthorized" });
+      }
+      const objectId = env.TURN_BUDGET.idFromName("global");
+      const targetPath = (
+        url.pathname === "/admin/turn/status"
+          ? "/status"
+          : "/control"
+      );
+      const target = new URL(request.url);
+      target.pathname = targetPath;
+      const body = request.method === "GET"
+        ? undefined
+        : await request.clone().arrayBuffer();
+      return env.TURN_BUDGET.get(objectId).fetch(
+        new Request(target, {
+          method: request.method,
+          headers: request.headers,
+          body,
+        }),
+      );
     }
     if (url.pathname === "/mac/appcast.xml" || url.pathname === "/admin/mac/appcast") {
       if (!env.RELEASE_CATALOG) {

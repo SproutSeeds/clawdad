@@ -71,6 +71,7 @@ final class RemoteAssistHost: NSObject {
   private var receiveTask: Task<Void, Never>?
   private var heartbeatTask: Task<Void, Never>?
   private var reconnectTask: Task<Void, Never>?
+  private var credentialRefreshTask: Task<Void, Never>?
   private var currentPeer: MacRemotePeer?
   private var currentSessionId = ""
   private var currentDeviceId = ""
@@ -183,6 +184,8 @@ final class RemoteAssistHost: NSObject {
     let sessionId = currentSessionId
     let deviceId = currentDeviceId
     let peer = currentPeer
+    credentialRefreshTask?.cancel()
+    credentialRefreshTask = nil
     currentPeer = nil
     currentSessionId = ""
     currentDeviceId = ""
@@ -382,7 +385,10 @@ final class RemoteAssistHost: NSObject {
           ],
           targetDeviceId: envelope.sourceDeviceId
         )
-        let iceServers = await configuration.resolvedIceServers()
+        let iceResolution = await configuration.resolvedIceServers(
+          targetDeviceId: envelope.sourceDeviceId
+        )
+        let iceServers = iceResolution.iceServers
         guard currentSessionId == sessionId,
               currentDeviceId == envelope.sourceDeviceId else {
           return
@@ -437,9 +443,18 @@ final class RemoteAssistHost: NSObject {
             "sdp": .string(offer.sdp),
             "width": .number(Double(offer.width)),
             "height": .number(Double(offer.height)),
-            "iceServers": .array(iceServerValues(iceServers))
+            "iceServers": .array(iceServerValues(iceServers)),
+            "iceRelayAvailable": .bool(iceResolution.relayAvailable),
+            "iceExpiresIn": .number(Double(iceResolution.expiresIn)),
+            "iceRefreshAfter": .number(Double(iceResolution.refreshAfter))
           ],
           targetDeviceId: envelope.sourceDeviceId
+        )
+        startCredentialRefresh(
+          configuration: configuration,
+          sessionId: sessionId,
+          deviceId: envelope.sourceDeviceId,
+          initialResolution: iceResolution
         )
       } catch {
         guard currentSessionId == sessionId,
@@ -472,6 +487,96 @@ final class RemoteAssistHost: NSObject {
       }
       return .object(object)
     }
+  }
+
+  private func startCredentialRefresh(
+    configuration: RemoteCloudConfiguration,
+    sessionId: String,
+    deviceId: String,
+    initialResolution: RemoteIceServerResolution
+  ) {
+    credentialRefreshTask?.cancel()
+    credentialRefreshTask = nil
+    guard initialResolution.relayAvailable,
+          initialResolution.refreshAfter > 0 else {
+      return
+    }
+
+    credentialRefreshTask = Task { @MainActor [weak self] in
+      guard let self else {
+        return
+      }
+      var refreshDelay = initialResolution.refreshAfter
+      while !Task.isCancelled {
+        do {
+          try await Task.sleep(
+            nanoseconds: UInt64(max(30, refreshDelay)) * 1_000_000_000
+          )
+        } catch {
+          return
+        }
+        guard !Task.isCancelled,
+              self.currentSessionId == sessionId,
+              self.currentDeviceId == deviceId,
+              let peer = self.currentPeer else {
+          return
+        }
+
+        let resolution = await configuration.resolvedIceServers(
+          targetDeviceId: deviceId
+        )
+        guard !Task.isCancelled,
+              self.currentSessionId == sessionId,
+              self.currentDeviceId == deviceId,
+              self.currentPeer === peer else {
+          return
+        }
+        guard resolution.relayAvailable else {
+          if self.relayDecisionStopsActiveSession(resolution.relayReason) {
+            self.stopActiveSession(
+              reason: "Remote Assist relay fallback reached its configured limit. Reopen Remote Assist to try a direct connection.",
+              notifyPhone: true
+            )
+            return
+          }
+          refreshDelay = 30
+          continue
+        }
+        guard peer.updateIceServers(resolution.iceServers) else {
+          refreshDelay = 30
+          continue
+        }
+
+        do {
+          try await self.sendRemoteEnvelope(
+            type: "remote.assist.ice-servers",
+            body: [
+              "sessionId": .string(sessionId),
+              "iceServers": .array(
+                self.iceServerValues(resolution.iceServers)
+              ),
+              "expiresIn": .number(Double(resolution.expiresIn)),
+              "refreshAfter": .number(Double(resolution.refreshAfter))
+            ],
+            targetDeviceId: deviceId
+          )
+          refreshDelay = max(30, resolution.refreshAfter)
+        } catch {
+          refreshDelay = 30
+        }
+      }
+    }
+  }
+
+  private func relayDecisionStopsActiveSession(_ reason: String) -> Bool {
+    [
+      "global_kill_switch",
+      "admin_global_pause",
+      "admin_customer_pause",
+      "global_monthly_limit",
+      "customer_monthly_limit",
+      "relay_disabled"
+    ].contains(reason)
   }
 
   private func handleAnswer(_ envelope: RemoteCloudEnvelope) {

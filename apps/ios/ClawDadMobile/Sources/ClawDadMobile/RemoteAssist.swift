@@ -364,6 +364,15 @@ final class RemoteAssistController: NSObject, ObservableObject {
         sdpMid: envelope.body["sdpMid"]?.stringValue
       )
       addRemoteCandidate(candidate)
+    case "remote.assist.ice-servers":
+      let refreshedIceServers = parseIceServers(
+        envelope.body["iceServers"]
+      )
+      guard !refreshedIceServers.isEmpty else {
+        return
+      }
+      remoteIceServers = refreshedIceServers
+      updatePeerIceServers(refreshedIceServers)
     case "remote.assist.stop":
       fail(envelope.body["reason"]?.stringValue ?? "Your Mac ended Remote Assist.")
       tearDownPeer()
@@ -432,6 +441,15 @@ final class RemoteAssistController: NSObject, ObservableObject {
     Task {
       try? await peerConnection.add(candidate)
     }
+  }
+
+  private func updatePeerIceServers(_ servers: [RTCIceServer]) {
+    guard let peerConnection else {
+      return
+    }
+    let configuration = peerConnection.configuration
+    configuration.iceServers = servers
+    _ = peerConnection.setConfiguration(configuration)
   }
 
   private func createAnswer(on peer: RTCPeerConnection) async throws -> RTCSessionDescription {

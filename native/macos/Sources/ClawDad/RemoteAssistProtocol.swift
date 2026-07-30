@@ -112,6 +112,14 @@ struct RemoteIceServerConfiguration: Codable, Equatable {
   var credential: String?
 }
 
+struct RemoteIceServerResolution: Equatable {
+  var iceServers: [RemoteIceServerConfiguration]
+  var relayAvailable: Bool
+  var relayReason: String
+  var expiresIn: Int
+  var refreshAfter: Int
+}
+
 struct RemoteCloudConfiguration {
   var cloudUrl: String
   var accountId: String
@@ -194,17 +202,27 @@ struct RemoteCloudConfiguration {
     return url
   }
 
-  func resolvedIceServers() async -> [RemoteIceServerConfiguration] {
+  func resolvedIceServers(
+    targetDeviceId: String
+  ) async -> RemoteIceServerResolution {
+    let fallback = RemoteIceServerResolution(
+      iceServers: iceServers,
+      relayAvailable: false,
+      relayReason: "request_unavailable",
+      expiresIn: 0,
+      refreshAfter: 0
+    )
     guard !relayHostToken.isEmpty,
+          !targetDeviceId.isEmpty,
           var components = URLComponents(string: cloudUrl) else {
-      return iceServers
+      return fallback
     }
     components.path = "/workspaces/\(workspaceId)/remote-assist/ice-servers"
     components.queryItems = [
       URLQueryItem(name: "accountId", value: accountId)
     ]
     guard let url = components.url else {
-      return iceServers
+      return fallback
     }
 
     var request = URLRequest(url: url)
@@ -215,21 +233,31 @@ struct RemoteCloudConfiguration {
       forHTTPHeaderField: "Authorization"
     )
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    request.httpBody = Data("{}".utf8)
+    request.httpBody = try? JSONSerialization.data(
+      withJSONObject: ["targetDeviceId": targetDeviceId]
+    )
 
     do {
       let (data, response) = try await URLSession.shared.data(for: request)
       guard let http = response as? HTTPURLResponse,
             (200..<300).contains(http.statusCode) else {
-        return iceServers
+        return fallback
       }
       let payload = try JSONDecoder().decode(
         RemoteIceServerResponse.self,
         from: data
       )
-      return payload.iceServers.isEmpty ? iceServers : payload.iceServers
+      return RemoteIceServerResolution(
+        iceServers: payload.iceServers.isEmpty
+          ? iceServers
+          : payload.iceServers,
+        relayAvailable: payload.relayAvailable ?? false,
+        relayReason: payload.relayReason ?? "",
+        expiresIn: max(0, payload.expiresIn ?? 0),
+        refreshAfter: max(0, payload.refreshAfter ?? 0)
+      )
     } catch {
-      return iceServers
+      return fallback
     }
   }
 
@@ -278,6 +306,10 @@ struct RemoteCloudConfiguration {
 
 private struct RemoteIceServerResponse: Decodable {
   var iceServers: [RemoteIceServerConfiguration]
+  var relayAvailable: Bool?
+  var relayReason: String?
+  var expiresIn: Int?
+  var refreshAfter: Int?
 }
 
 enum RemoteCloudCodec {

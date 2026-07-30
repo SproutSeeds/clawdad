@@ -6,6 +6,16 @@ logpush = false
 [observability]
 enabled = false
 
+[vars]
+CLAWDAD_TURN_ENABLED = "false"
+CLAWDAD_TURN_KILL_SWITCH = "false"
+CLAWDAD_TURN_CREDENTIAL_TTL_SECONDS = "900"
+CLAWDAD_TURN_ANALYTICS_CACHE_SECONDS = "300"
+CLAWDAD_TURN_CUSTOMER_LIMIT_BYTES = "20000000000"
+CLAWDAD_TURN_GLOBAL_WARNING_BYTES = "75000000000"
+CLAWDAD_TURN_GLOBAL_URGENT_BYTES = "90000000000"
+CLAWDAD_TURN_GLOBAL_PAUSE_BYTES = "95000000000"
+
 [[routes]]
 pattern = "clawdad-cloud.frg.earth"
 custom_domain = true
@@ -13,7 +23,8 @@ custom_domain = true
 [durable_objects]
 bindings = [
   { name = "WORKSPACE_RELAY", class_name = "WorkspaceRelay" },
-  { name = "RELEASE_CATALOG", class_name = "ReleaseCatalog" }
+  { name = "RELEASE_CATALOG", class_name = "ReleaseCatalog" },
+  { name = "TURN_BUDGET", class_name = "TurnBudget" }
 ]
 
 [[migrations]]
@@ -23,3 +34,7 @@ new_sqlite_classes = ["WorkspaceRelay"]
 [[migrations]]
 tag = "v2"
 new_sqlite_classes = ["ReleaseCatalog"]
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["TurnBudget"]

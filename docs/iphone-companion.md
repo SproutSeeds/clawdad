@@ -236,20 +236,35 @@ transfer is explicit, text-only, limited to 64 KB per operation, and is never
 written to ClawDad logs or cloud signaling.
 
 Direct peer connectivity uses STUN. Reliable connectivity across restrictive
-networks can use short-lived Cloudflare TURN credentials through
-`POST /remote-assist/ice-servers`. Keep the long-lived TURN key in Worker
-secrets:
+networks can use per-customer Cloudflare TURN credentials through the
+workspace-authorized `POST /remote-assist/ice-servers` route. ClawDad issues
+15-minute credentials to a trusted target iPhone and refreshes the live WebRTC
+configuration after 12 minutes. Cloudflare receives an HMAC-derived customer
+identifier rather than the account, workspace, device name, or project path.
+
+The default production configuration keeps TURN off while direct STUN remains
+available. Enabling fallback requires these Worker secrets:
 
 ```text
 CLAWDAD_TURN_KEY_ID
 CLAWDAD_TURN_KEY_API_TOKEN
-CLAWDAD_REMOTE_ASSIST_TOKEN
+CLAWDAD_TURN_ANALYTICS_API_TOKEN
+CLAWDAD_TURN_IDENTIFIER_SECRET
+CLAWDAD_TURN_ADMIN_TOKEN
 ```
 
-Store the matching short-lived endpoint bearer value only in the Mac's private
-`~/.clawdad/cloud.json` as `remoteAssistCredentialToken`. Activating TURN is a
-separate billing and credentials gate; the app falls back to STUN when those
-secrets are absent.
+Set `CLAWDAD_CLOUDFLARE_ACCOUNT_ID` to the Cloudflare account identifier. The
+TURN key and analytics token stay server-side; neither is stored on the Mac or
+iPhone. The Mac's existing workspace host credential authorizes a request only
+for a paired, non-revoked target iPhone.
+
+The beta circuit breaker allows 20 GB of monthly TURN egress per customer,
+reports warning and urgent states at 75 GB and 90 GB account-wide, and stops
+new or renewing TURN use at 95 GB. Direct STUN remains available while relay
+fallback is paused. The singleton budget Durable Object caches Cloudflare
+analytics for five minutes, supports customer overrides and an immediate global
+pause, and fails closed when usage cannot be measured. See
+`docs/turn-budget-runbook.md` for activation and operator controls.
 
 For a signed, opt-in transport smoke on a paired physical iPhone, use the
 hidden `ClawDadMobile-LiveSmoke` scheme and select only the live test:
