@@ -35,11 +35,21 @@ questionnaire. The account holder must confirm the final answers in Apple’s UI
 
 Before answering Apple:
 
-1. Confirm Cloudflare Worker logs do not record request bodies, relay tokens,
-   messages, images, audio, clipboard text, or signed transactions.
-2. Confirm the public privacy page matches this matrix.
-3. Confirm any crash or analytics SDKs actually shipped in build 19. None are
-   intentionally configured for this beta.
-4. Confirm Apple’s current definitions for collection, linkage, and tracking.
+1. Verified 2026-07-30: `cloud/worker.mjs` contains no request-body logging.
+   Its Durable Object writes are limited to the signed Mac appcast and
+   workspace, pairing, device-trust, revocation, and last-seen routing
+   metadata. Relay tokens and one-time pairing tokens are persisted only as
+   hashes. Messages, images, audio, clipboard text, Remote Assist media, and
+   signed StoreKit transactions are not written to Worker storage.
+2. Verified 2026-07-30: the production
+   `https://clawdad-cloud.frg.earth/privacy` page states the same retention,
+   advertising, tracking, diagnostics, and Remote Assist boundaries as this
+   matrix.
+3. Verified 2026-07-30: the exact build-19 archive embeds only
+   `WebRTC.framework` in addition to Apple system frameworks. Its linked
+   libraries contain no crash-reporting, advertising, or behavioral analytics
+   SDK.
+4. The account holder must confirm Apple’s current definitions for collection,
+   linkage, and tracking while submitting the questionnaire.
 5. Record the account holder’s submitted answers and date in the private release
    checklist; never store Apple credentials in this repository.
