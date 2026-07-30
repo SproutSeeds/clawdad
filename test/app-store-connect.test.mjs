@@ -14,6 +14,8 @@ import {
   createAppStoreConnectToken,
   paidBetaCatalog,
   paidBetaPlan,
+  paidBetaProductMissingMetadata,
+  readPaidBetaStatus,
   uploadSubscriptionReviewScreenshot,
 } from "../lib/app-store-connect.mjs";
 
@@ -115,6 +117,204 @@ test("subscription, price, and trial payloads match Apple resource relationships
     type: "territories",
     id: "USA",
   });
+});
+
+test("paid beta metadata audit names every missing subscription field", () => {
+  const desired = paidBetaCatalog.products[0];
+  const complete = {
+    desired,
+    subscription: {
+      attributes: {
+        name: desired.referenceName,
+        subscriptionPeriod: desired.period,
+        groupLevel: desired.groupLevel,
+        reviewNote: "ClawDad connects an iPhone to the customer's paired ClawDad Mac app.",
+      },
+    },
+    localization: {
+      attributes: {
+        locale: desired.locale,
+        name: desired.displayName,
+        description: desired.description,
+      },
+    },
+    availableTerritoryIds: ["USA"],
+    prices: [{ id: "price" }],
+    offers: [{
+      attributes: {
+        duration: "TWO_WEEKS",
+        offerMode: "FREE_TRIAL",
+        numberOfPeriods: 1,
+      },
+    }],
+    screenshotState: "COMPLETE",
+  };
+
+  assert.deepEqual(paidBetaProductMissingMetadata(complete), []);
+  assert.deepEqual(
+    paidBetaProductMissingMetadata({
+      ...complete,
+      localization: null,
+      availableTerritoryIds: [],
+      prices: [],
+      offers: [],
+      screenshotState: "MISSING",
+    }),
+    [
+      "en-US localization",
+      "USA availability",
+      "subscription price",
+      "14-day introductory trial",
+      "review screenshot",
+    ],
+  );
+});
+
+test("paid beta status exposes version-based App Review readiness", async () => {
+  const requests = [];
+  const client = {
+    async request(path) {
+      requests.push(path);
+      if (path === `/v1/apps/${paidBetaCatalog.appId}`) {
+        return {
+          data: {
+            id: paidBetaCatalog.appId,
+            attributes: {
+              name: "ClawDad Mobile",
+              bundleId: paidBetaCatalog.expectedBundleId,
+            },
+          },
+        };
+      }
+      if (path.endsWith("/subscriptionAvailability")) {
+        return { data: { id: `availability-${path.split("/")[3]}` } };
+      }
+      if (path.endsWith("/appStoreReviewScreenshot")) {
+        return {
+          data: {
+            attributes: {
+              assetDeliveryState: { state: "COMPLETE" },
+            },
+          },
+        };
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    },
+    async list(path) {
+      requests.push(path);
+      if (path.includes("/subscriptionGroups?")) {
+        return [{
+          id: "group-1",
+          attributes: { referenceName: paidBetaCatalog.group.referenceName },
+        }];
+      }
+      if (path.includes("/subscriptionGroupLocalizations?")) {
+        return [{
+          attributes: {
+            locale: paidBetaCatalog.group.locale,
+            name: paidBetaCatalog.group.name,
+            state: "PREPARE_FOR_SUBMISSION",
+          },
+        }];
+      }
+      if (path.includes("/subscriptionGroups/group-1/versions?")) {
+        return [{
+          id: "group-version-1",
+          attributes: { version: 1, state: "PREPARE_FOR_SUBMISSION" },
+        }];
+      }
+      if (path.includes("/subscriptionGroupVersions/group-version-1/localizations?")) {
+        return [{
+          attributes: {
+            locale: paidBetaCatalog.group.locale,
+            name: paidBetaCatalog.group.name,
+          },
+        }];
+      }
+      if (path.includes("/subscriptionGroups/group-1/subscriptions?")) {
+        return paidBetaCatalog.products.map((product, index) => ({
+          id: `subscription-${index + 1}`,
+          attributes: {
+            name: product.referenceName,
+            productId: product.productId,
+            subscriptionPeriod: product.period,
+            groupLevel: product.groupLevel,
+            reviewNote:
+              "ClawDad connects an iPhone to the customer's paired ClawDad Mac app.",
+          },
+        }));
+      }
+      if (path.includes("/subscriptionLocalizations?")) {
+        const product = path.includes("subscription-1")
+          ? paidBetaCatalog.products[0]
+          : paidBetaCatalog.products[1];
+        return [{
+          attributes: {
+            locale: product.locale,
+            name: product.displayName,
+            description: product.description,
+          },
+        }];
+      }
+      if (path.includes("/versions?")) {
+        return [{
+          id: `${path.includes("subscription-1") ? "monthly" : "annual"}-version-1`,
+          attributes: { version: 1, state: "PREPARE_FOR_SUBMISSION" },
+        }];
+      }
+      if (path.includes("/subscriptionVersions/monthly-version-1/localizations?")) {
+        return [{
+          attributes: {
+            locale: paidBetaCatalog.products[0].locale,
+            name: paidBetaCatalog.products[0].displayName,
+            description: paidBetaCatalog.products[0].description,
+          },
+        }];
+      }
+      if (path.includes("/subscriptionVersions/annual-version-1/localizations?")) {
+        return [{
+          attributes: {
+            locale: paidBetaCatalog.products[1].locale,
+            name: paidBetaCatalog.products[1].displayName,
+            description: paidBetaCatalog.products[1].description,
+          },
+        }];
+      }
+      if (path.includes("/prices?")) {
+        return [{ id: "price-1" }];
+      }
+      if (path.includes("/introductoryOffers?")) {
+        return [{
+          attributes: {
+            duration: "TWO_WEEKS",
+            offerMode: "FREE_TRIAL",
+            numberOfPeriods: 1,
+          },
+        }];
+      }
+      if (path.includes("/subscriptionAvailabilities/availability-")) {
+        return [{ id: "USA" }];
+      }
+      throw new Error(`Unexpected list: ${path}`);
+    },
+  };
+
+  const status = await readPaidBetaStatus(client);
+  assert.equal(status.group.reviewWorkflow.versionCount, 1);
+  assert.equal(
+    status.group.reviewWorkflow.latestVersion.state,
+    "PREPARE_FOR_SUBMISSION",
+  );
+  assert.deepEqual(
+    status.products.map((product) => product.reviewWorkflow.versionCount),
+    [1, 1],
+  );
+  assert.equal(status.reviewWorkflow.authoritativeStateSource, "draftVersions");
+  assert.equal(status.reviewWorkflow.metadataConfigured, true);
+  assert.equal(status.reviewWorkflow.draftVersionsPrepared, true);
+  assert.ok(
+    requests.includes("/v1/subscriptions/subscription-1/versions?limit=200"),
+  );
 });
 
 test("app release plan pins the ClawDad app, paid-beta build, and public URLs", () => {

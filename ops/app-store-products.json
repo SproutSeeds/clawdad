@@ -1,6 +1,6 @@
 {
   "schema": "clawdad.app-store-products/1",
-  "generatedAt": "2026-07-30T08:42:33.483Z",
+  "generatedAt": "2026-07-30T11:57:56.048Z",
   "app": {
     "id": "6783090068",
     "name": "ClawDad Mobile",
@@ -8,7 +8,19 @@
   },
   "group": {
     "id": "22274634",
-    "referenceName": "ClawDad Pro"
+    "referenceName": "ClawDad Pro",
+    "localizationConfigured": true,
+    "legacyLocalizationState": "PREPARE_FOR_SUBMISSION",
+    "state": "PREPARE_FOR_SUBMISSION",
+    "reviewWorkflow": {
+      "versionCount": 1,
+      "latestVersion": {
+        "id": "b46c02c5-2db0-4b38-8e30-98350b8f8ce5",
+        "version": 1,
+        "state": "PREPARE_FOR_SUBMISSION",
+        "localizationConfigured": true
+      }
+    }
   },
   "territories": [
     "USA"
@@ -18,21 +30,57 @@
       "id": "6796236051",
       "productId": "earth.frg.clawdad.pro.monthly",
       "configured": true,
-      "state": "MISSING_METADATA",
+      "state": "PREPARE_FOR_SUBMISSION",
+      "legacyParentState": "MISSING_METADATA",
       "subscriptionPeriod": "ONE_MONTH",
+      "localizationConfigured": true,
+      "availableTerritories": [
+        "USA"
+      ],
       "priceCount": 1,
       "introductoryOfferCount": 1,
-      "reviewScreenshotState": "COMPLETE"
+      "reviewScreenshotState": "COMPLETE",
+      "missingMetadata": [],
+      "reviewWorkflow": {
+        "versionCount": 1,
+        "latestVersion": {
+          "id": "6820091a-150d-4ad2-8bf7-d4fbb5aaf0c9",
+          "version": 1,
+          "state": "PREPARE_FOR_SUBMISSION",
+          "localizationConfigured": true
+        }
+      }
     },
     {
       "id": "6796236147",
       "productId": "earth.frg.clawdad.pro.annual",
       "configured": true,
-      "state": "MISSING_METADATA",
+      "state": "PREPARE_FOR_SUBMISSION",
+      "legacyParentState": "MISSING_METADATA",
       "subscriptionPeriod": "ONE_YEAR",
+      "localizationConfigured": true,
+      "availableTerritories": [
+        "USA"
+      ],
       "priceCount": 1,
       "introductoryOfferCount": 1,
-      "reviewScreenshotState": "COMPLETE"
+      "reviewScreenshotState": "COMPLETE",
+      "missingMetadata": [],
+      "reviewWorkflow": {
+        "versionCount": 1,
+        "latestVersion": {
+          "id": "1c319b77-6eca-4a5d-8a28-e7e12befa656",
+          "version": 1,
+          "state": "PREPARE_FOR_SUBMISSION",
+          "localizationConfigured": true
+        }
+      }
     }
-  ]
+  ],
+  "reviewWorkflow": {
+    "authoritativeStateSource": "draftVersions",
+    "metadataConfigured": true,
+    "draftVersionsPrepared": true,
+    "nextAction": "ATTACH_APP_AND_SUBSCRIPTION_VERSIONS_TO_REVIEW_SUBMISSION"
+  }
 }

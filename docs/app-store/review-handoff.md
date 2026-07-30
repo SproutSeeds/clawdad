@@ -32,6 +32,26 @@ Monthly and annual plans unlock the same app access. Annual billing is a
 duration discount. Both plans include a 14-day introductory free trial. Codex
 or ChatGPT access is purchased separately from OpenAI.
 
+## Prepared Subscription State
+
+The subscription group, monthly plan, and annual plan each have one
+version-based App Review draft in `PREPARE_FOR_SUBMISSION`. Every draft captured
+the intended `en-US` localization. Both products also have United States
+availability, their intended price, the 14-day trial, review notes, and a
+processed review screenshot.
+
+App Store Connect still returns `MISSING_METADATA` on each legacy parent
+subscription resource. That field is retained in diagnostics as
+`legacyParentState`; the authoritative review state is the related
+`subscriptionVersion`, per
+[Apple's current version-based submission workflow](https://developer.apple.com/documentation/appstoreconnectapi/migrating-in-app-purchase-metadata-to-v2).
+Run `node bin/clawdad-app-store status --json` to verify both layers.
+
+After the remaining human gates are complete, assemble one App Review
+submission containing App Store version 1.0, subscription-group version 1, and
+version 1 of both subscriptions. Submitting that review is the release action;
+the prepared drafts themselves do not publish or charge customers.
+
 ## Human Submission Gates
 
 - Add the account holder’s name, direct phone, and monitored email.
