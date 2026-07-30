@@ -260,6 +260,7 @@ struct ContentView: View {
       .onAppear {
         remoteAssist.bind(to: session)
         session.connectIfPaired()
+        presentAppStorePreviewIfNeeded()
       }
       .onChange(of: scenePhase) { _, phase in
         if phase == .active {
@@ -278,6 +279,21 @@ struct ContentView: View {
         appendVoiceTranscription(transcription)
       }
     }
+  }
+
+  private func presentAppStorePreviewIfNeeded() {
+#if DEBUG
+    guard
+      ClawDadAppStorePreviewScenario.current == .conversation,
+      selectedThreadSelection == nil,
+      let thread = ClawDadAppStorePreviewFixture.make(
+        scenario: .conversation
+      ).selectedThread
+    else {
+      return
+    }
+    selectedThreadSelection = MobileThreadSelection(initialThread: thread)
+#endif
   }
 
   private var workspaceSurface: some View {
@@ -1568,6 +1584,7 @@ struct ThreadDetailSheet: View {
         }
       }
       .padding(18)
+      .accessibilityIdentifier("clawdad.thread.detail")
     }
   }
 }

@@ -55,6 +55,14 @@ final class SubscriptionManager: ObservableObject {
 
   private var started = false
   private var updatesTask: Task<Void, Never>?
+  private let previewAccess: Bool
+
+  init(previewAccess: Bool = false) {
+    self.previewAccess = previewAccess
+    if previewAccess {
+      loading = false
+    }
+  }
 
   var foundingBetaAccess: Bool {
     if let value = Bundle.main.object(
@@ -71,7 +79,7 @@ final class SubscriptionManager: ObservableObject {
   }
 
   var hasAccess: Bool {
-    foundingBetaAccess || entitlement?.active == true
+    previewAccess || foundingBetaAccess || entitlement?.active == true
   }
 
   var requiresPurchase: Bool {
@@ -99,6 +107,10 @@ final class SubscriptionManager: ObservableObject {
   }
 
   func start() {
+    guard !previewAccess else {
+      loading = false
+      return
+    }
     guard !started else {
       return
     }

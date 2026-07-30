@@ -302,6 +302,183 @@ struct MobileThreadSelection: Identifiable, Equatable {
   var initialThread: MobileThreadSummary
 }
 
+#if DEBUG
+enum ClawDadAppStorePreviewScenario: String, Equatable {
+  case workspace
+  case conversation
+
+  static func parse(arguments: [String]) -> Self? {
+    guard
+      let flagIndex = arguments.firstIndex(of: "--clawdad-app-store-preview"),
+      arguments.indices.contains(flagIndex + 1)
+    else {
+      return nil
+    }
+    return Self(rawValue: arguments[flagIndex + 1])
+  }
+
+  static var current: Self? {
+    parse(arguments: ProcessInfo.processInfo.arguments)
+  }
+}
+
+struct ClawDadAppStorePreviewFixture: Equatable {
+  var workspace: MobileWorkspace
+  var selectedProjectPath: String
+  var selectedSessionId: String
+  var historyItems: [MobileHistoryItem]
+  var modelOptions: [CodexModelSummary]
+
+  var selectedThread: MobileThreadSummary? {
+    workspace.projects
+      .first { $0.path == selectedProjectPath }?
+      .sessions
+      .first { $0.sessionId == selectedSessionId }
+  }
+
+  static func make(
+    scenario: ClawDadAppStorePreviewScenario = .workspace
+  ) -> Self {
+    let launchPath = "/Users/demo/Projects/launchpad"
+    let launchSessionId = "preview-paid-beta-launch"
+    let launchThread = MobileThreadSummary(
+      projectName: "Launchpad",
+      projectPath: launchPath,
+      title: "Paid beta launch",
+      provider: "codex",
+      sessionId: launchSessionId,
+      active: true,
+      status: "answered",
+      lastDispatch: "2026-07-30T14:37:00.000Z",
+      lastResponse: "2026-07-30T14:41:00.000Z",
+      lastActivityAt: "2026-07-30T14:41:00.000Z"
+    )
+    let remoteThread = MobileThreadSummary(
+      projectName: "Launchpad",
+      projectPath: launchPath,
+      title: "Remote access polish",
+      provider: "codex",
+      sessionId: "preview-remote-access",
+      active: false,
+      status: "answered",
+      lastDispatch: "2026-07-30T14:08:00.000Z",
+      lastResponse: "2026-07-30T14:16:00.000Z",
+      lastActivityAt: "2026-07-30T14:16:00.000Z"
+    )
+    let studioPath = "/Users/demo/Projects/studio-site"
+    let studioThread = MobileThreadSummary(
+      projectName: "Studio Site",
+      projectPath: studioPath,
+      title: "Homepage launch",
+      provider: "codex",
+      sessionId: "preview-homepage-launch",
+      active: true,
+      status: "answered",
+      lastDispatch: "2026-07-30T13:42:00.000Z",
+      lastResponse: "2026-07-30T13:55:00.000Z",
+      lastActivityAt: "2026-07-30T13:55:00.000Z"
+    )
+    let workspace = MobileWorkspace(
+      id: "preview-workspace",
+      title: "My Projects",
+      hostId: "preview-mac",
+      projects: [
+        ProjectSummary(
+          name: "Launchpad",
+          path: launchPath,
+          activeSessionId: launchSessionId,
+          sessions: [launchThread, remoteThread]
+        ),
+        ProjectSummary(
+          name: "Studio Site",
+          path: studioPath,
+          activeSessionId: studioThread.sessionId,
+          sessions: [studioThread]
+        ),
+      ],
+      recentThreads: [launchThread, remoteThread, studioThread]
+    )
+    let historyItems = [
+      MobileHistoryItem(
+        id: "preview-history-audit",
+        requestId: "preview-history-audit",
+        message: "Please audit the paid beta and give me a clear launch plan.",
+        response: """
+        The paid beta is ready for its final human checks.
+
+        ## Completed
+        - Mac app signed and notarized
+        - iPhone build available in TestFlight
+        - Secure relay and reconnect checks passed
+
+        ## Next
+        1. Verify purchase and restore on iPhone.
+        2. Invite the first founding customers.
+        """,
+        status: "answered",
+        sentAt: "2026-07-30T14:29:00.000Z",
+        answeredAt: "2026-07-30T14:32:00.000Z",
+        scheduleMode: "direct",
+        deliveryMechanism: "dispatch_worker"
+      ),
+      MobileHistoryItem(
+        id: "preview-history-next",
+        requestId: "preview-history-next",
+        message: "Great. Keep this thread open and tell me the next best action.",
+        response: """
+        Start with the iPhone purchase-and-restore pass. I will preserve the results here and continue from this same project when you return.
+        """,
+        status: "answered",
+        sentAt: "2026-07-30T14:37:00.000Z",
+        answeredAt: "2026-07-30T14:41:00.000Z",
+        scheduleMode: "direct",
+        deliveryMechanism: "dispatch_worker"
+      ),
+    ]
+    let conversationHistory = [
+      MobileHistoryItem(
+        id: "preview-history-conversation",
+        requestId: "preview-history-conversation",
+        message: "Can you finish the paid beta readiness pass and tell me what remains?",
+        response: """
+        The release pass is complete.
+
+        ## Verified
+        - Mac app signed and notarized
+        - iPhone build available in TestFlight
+        - Secure relay and reconnect checks passed
+
+        ## Next
+        Run the final purchase-and-restore check on iPhone, then invite the first founding customers.
+        """,
+        status: "answered",
+        sentAt: "2026-07-30T14:37:00.000Z",
+        answeredAt: "2026-07-30T14:41:00.000Z",
+        scheduleMode: "direct",
+        deliveryMechanism: "dispatch_worker"
+      )
+    ]
+    let models = [
+      CodexModelSummary(
+        model: "gpt-5.6-sol",
+        displayName: "GPT-5.6 SOL",
+        description: "Best quality for agentic coding",
+        isDefault: true,
+        defaultReasoningEffort: "ultra",
+        supportedReasoningEfforts: ["medium", "high", "ultra"]
+      )
+    ]
+    return Self(
+      workspace: workspace,
+      selectedProjectPath: launchPath,
+      selectedSessionId: launchSessionId,
+      historyItems: scenario == .conversation ? conversationHistory : historyItems,
+      modelOptions: models
+    )
+  }
+}
+#endif
+
 func resolveMobileSessionAlias(_ selector: String, in project: ProjectSummary) -> String {
   var current = selector.trimmingCharacters(in: .whitespacesAndNewlines)
   guard !current.isEmpty else {

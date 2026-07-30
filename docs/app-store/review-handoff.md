@@ -81,13 +81,37 @@ build to the external group, creates the separate Beta App Review submission,
 and safely resumes if Apple accepted only the first action. It never enables a
 public TestFlight link or invites testers.
 
+## Prepared Screenshots
+
+The current 6.9-inch iPhone screenshots are:
+
+- `docs/app-store/screenshots/iphone-6.9/01-workspace.png`
+- `docs/app-store/screenshots/iphone-6.9/02-conversation.png`
+
+Both are `1290x2796` captures from the real SwiftUI surfaces. They use a
+DEBUG-only, in-memory fixture with synthetic `/Users/demo/...` projects and
+perform no pairing, network requests, or writes to the user's saved workspace.
+The fixture is unavailable in Release and TestFlight builds.
+
+Regenerate and dimension-check the complete set with:
+
+```sh
+zsh ./bin/clawdad-app-store-screenshots
+```
+
+The 2026-07-30 visual review found no clipped labels, overlapping controls,
+debug chrome, credentials, customer data, or real project paths. The workspace
+capture shows project/thread selection, Direct compose, voice, model effort, and
+project-scoped recent threads. The conversation capture shows chronological,
+formatted Codex history and per-message copy controls.
+
 ## Human Submission Gates
 
 - Supply the direct, monitored Beta App Review phone number.
 - Confirm the Paid Applications Agreement, tax, and banking state.
 - Complete the app privacy questionnaire from the evidence worksheet.
-- Attach final App Store screenshots after representative physical-device
-  review.
+- Confirm the prepared screenshots after representative physical-device review,
+  then attach them to App Store version 1.0.
 - Attach both first subscriptions to App Store version 1.0 in the same review
   submission.
 - Provide Apple a durable, least-privilege reviewer Mac and pairing path. A

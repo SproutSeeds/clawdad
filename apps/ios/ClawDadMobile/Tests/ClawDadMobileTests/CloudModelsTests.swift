@@ -2,6 +2,47 @@ import XCTest
 @testable import ClawDadMobile
 
 final class CloudModelsTests: XCTestCase {
+#if DEBUG
+  func testAppStorePreviewArgumentsRequireAnExplicitKnownScenario() {
+    XCTAssertEqual(
+      ClawDadAppStorePreviewScenario.parse(
+        arguments: ["ClawDad", "--clawdad-app-store-preview", "workspace"]
+      ),
+      .workspace
+    )
+    XCTAssertEqual(
+      ClawDadAppStorePreviewScenario.parse(
+        arguments: ["ClawDad", "--clawdad-app-store-preview", "conversation"]
+      ),
+      .conversation
+    )
+    XCTAssertNil(
+      ClawDadAppStorePreviewScenario.parse(
+        arguments: ["ClawDad", "--clawdad-app-store-preview", "unknown"]
+      )
+    )
+    XCTAssertNil(ClawDadAppStorePreviewScenario.parse(arguments: ["ClawDad"]))
+  }
+
+  func testAppStorePreviewUsesSyntheticReadyWorkspaceData() {
+    let fixture = ClawDadAppStorePreviewFixture.make()
+
+    XCTAssertEqual(fixture.workspace.title, "My Projects")
+    XCTAssertEqual(fixture.selectedThread?.title, "Paid beta launch")
+    XCTAssertEqual(fixture.historyItems.count, 2)
+    XCTAssertTrue(fixture.workspace.projects.allSatisfy { $0.path.hasPrefix("/Users/demo/") })
+    XCTAssertFalse(
+      fixture.workspace.projects.contains {
+        $0.path.contains("cody") || $0.path.contains("Code_2TB")
+      }
+    )
+    XCTAssertEqual(
+      ClawDadAppStorePreviewFixture.make(scenario: .conversation).historyItems.count,
+      1
+    )
+  }
+#endif
+
   @MainActor
   func testPaidBetaPlansExposeStableStorefrontFallbacks() {
     let plans = SubscriptionManager.plans

@@ -81,6 +81,7 @@ final class CloudSession: ObservableObject {
   private var lastHostSeenAt = Date.distantPast
   private var seq = 0
   private let defaults = UserDefaults.standard
+  private var appStorePreviewMode = false
 
   init() {
     let bundledCloudUrl = String(
@@ -105,6 +106,30 @@ final class CloudSession: ObservableObject {
     self.selectedReasoningEffort = defaults.string(forKey: "clawdad.selectedReasoningEffort") ?? "ultra"
     self.startupWorkspaceReady = self.pairedHostId.isEmpty || self.pairedHostId != self.hostId
   }
+
+#if DEBUG
+  init(appStorePreview fixture: ClawDadAppStorePreviewFixture) {
+    self.cloudUrl = "https://clawdad-cloud.frg.earth"
+    self.accountId = "preview-account"
+    self.workspaceId = fixture.workspace.id
+    self.hostId = fixture.workspace.hostId
+    self.pairedHostId = fixture.workspace.hostId
+    self.pairedAt = "2026-07-30T14:00:00.000Z"
+    self.pairedHostPublicKeyPem = "app-store-preview"
+    self.selectedProjectPath = fixture.selectedProjectPath
+    self.selectedSessionId = fixture.selectedSessionId
+    self.selectedModel = fixture.modelOptions.first?.model ?? "gpt-5.6-sol"
+    self.selectedReasoningEffort = "ultra"
+    self.appStorePreviewMode = true
+    self.state = .connected
+    self.workspace = fixture.workspace
+    self.historyItems = fixture.historyItems
+    self.historyStatus = "Thread ready"
+    self.modelOptions = fixture.modelOptions
+    self.hostOnline = true
+    self.startupWorkspaceReady = true
+  }
+#endif
 
   var connected: Bool {
     if case .connected = state {
@@ -143,6 +168,9 @@ final class CloudSession: ObservableObject {
   }
 
   func connectIfPaired() {
+    guard !appStorePreviewMode else {
+      return
+    }
     guard paired else {
       return
     }

@@ -48,6 +48,9 @@ Prepared: 2026-07-30
 - The exact `v0.7.0-beta.4` npm package was reconstructed from the tag and
   verified at 207 files. Publication reached npm successfully and stopped at
   the account OTP challenge without publishing a partial version.
+- Two canonical 6.9-inch App Store screenshots are reproducible from synthetic
+  in-memory data and visually reviewed at `1290x2796`. Their final physical
+  review and App Store attachment remain human gates.
 - The connected iPhone remains on `0.1.0 (15)`. Physical certification begins
   after TestFlight updates it to `0.7.0 (19)`.
 - The existing Cloudflare deployment token is healthy for Workers deployment
@@ -79,6 +82,7 @@ npm test
 swift test --package-path apps/ios/ClawDadMobile
 swift test --package-path native/macos
 npm run ios:build
+zsh ./bin/clawdad-app-store-screenshots
 npm run certify:snapshot
 npm pack --dry-run --json
 git diff --check
