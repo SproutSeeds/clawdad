@@ -9,7 +9,7 @@ Mac remains where Codex, project files, and canonical thread history live.
 - Codex installed and signed in on that Mac
 - the ClawDad Mac app
 - an iPhone running iOS 18 or later
-- the ClawDad TestFlight invitation
+- an email invitation to the private ClawDad founding-customer TestFlight group
 - a ClawDad subscription; OpenAI access is separate
 
 ## Install And Pair

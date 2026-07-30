@@ -16,6 +16,7 @@ import {
   paidBetaPlan,
   paidBetaProductMissingMetadata,
   readPaidBetaStatus,
+  submitExternalBetaReview,
   uploadSubscriptionReviewScreenshot,
 } from "../lib/app-store-connect.mjs";
 
@@ -325,7 +326,8 @@ test("app release plan pins the ClawDad app, paid-beta build, and public URLs", 
     appName: "ClawDad Mobile",
     subtitle: "Codex threads from anywhere",
     versionString: "1.0",
-    betaGroup: "ClawDad Internal",
+    internalBetaGroup: "ClawDad Internal",
+    externalBetaGroup: "ClawDad Founding Customers",
     betaBuild: "19",
     privacyPolicyUrl: "https://clawdad-cloud.frg.earth/privacy",
     supportUrl: "https://clawdad-cloud.frg.earth/support",
@@ -400,7 +402,24 @@ class FakeReleaseClient {
           isInternalGroup: true,
         },
       },
+      externalBetaGroup: null,
       groupBuilds: [],
+      externalGroupBuilds: [],
+      betaReviewDetail: {
+        type: "betaAppReviewDetails",
+        id: appReleaseCatalog.appId,
+        attributes: {
+          contactFirstName: null,
+          contactLastName: null,
+          contactPhone: "+1 850 555 0100",
+          contactEmail: null,
+          demoAccountName: null,
+          demoAccountPassword: null,
+          demoAccountRequired: null,
+          notes: null,
+        },
+      },
+      betaReviewSubmissions: [],
     };
   }
 
@@ -421,9 +440,30 @@ class FakeReleaseClient {
     if (path.includes("/betaAppLocalizations?")) {
       return this.resources.betaAppLocalizations;
     }
-    if (path.startsWith("/v1/betaGroups?")) return [this.resources.betaGroup];
-    if (path.includes("/relationships/builds?")) {
+    if (path.startsWith("/v1/betaGroups?")) {
+      return [
+        this.resources.betaGroup,
+        this.resources.externalBetaGroup,
+      ].filter(Boolean);
+    }
+    if (
+      path ===
+      `/v1/betaGroups/${this.resources.betaGroup.id}/relationships/builds?limit=200`
+    ) {
       return this.resources.groupBuilds;
+    }
+    if (
+      this.resources.externalBetaGroup &&
+      path ===
+      `/v1/betaGroups/${this.resources.externalBetaGroup.id}/relationships/builds?limit=200`
+    ) {
+      return this.resources.externalGroupBuilds;
+    }
+    if (path.startsWith("/v1/betaAppReviewDetails?")) {
+      return [this.resources.betaReviewDetail];
+    }
+    if (path.startsWith("/v1/betaAppReviewSubmissions?")) {
+      return this.resources.betaReviewSubmissions;
     }
     if (path.includes("/appScreenshotSets?")) return [];
     throw new Error(`Unexpected list request: ${path}`);
@@ -446,6 +486,8 @@ class FakeReleaseClient {
         builds: this.resources.build,
         betaAppLocalizations: this.resources.betaAppLocalizations[0],
         betaBuildLocalizations: this.resources.betaBuildLocalizations[0],
+        betaGroups: this.resources.externalBetaGroup,
+        betaAppReviewDetails: this.resources.betaReviewDetail,
       }[type];
       assert.ok(resource, `Missing fake resource for ${type}`);
       Object.assign(resource.attributes, attributes);
@@ -469,12 +511,46 @@ class FakeReleaseClient {
       this.resources.betaBuildLocalizations.push(resource);
       return { data: resource };
     }
+    if (method === "POST" && path === "/v1/betaGroups") {
+      assert.equal(options.body.data.attributes.isInternalGroup, false);
+      const resource = {
+        type: "betaGroups",
+        id: "external-group",
+        attributes: options.body.data.attributes,
+      };
+      this.resources.externalBetaGroup = resource;
+      return { data: resource };
+    }
     if (
       method === "POST" &&
       path === `/v1/betaGroups/${this.resources.betaGroup.id}/relationships/builds`
     ) {
       this.resources.groupBuilds.push(this.resources.build);
       return null;
+    }
+    if (
+      method === "POST" &&
+      this.resources.externalBetaGroup &&
+      path ===
+        `/v1/betaGroups/${this.resources.externalBetaGroup.id}/relationships/builds`
+    ) {
+      this.resources.externalGroupBuilds.push(this.resources.build);
+      return null;
+    }
+    if (
+      method === "POST" &&
+      path === "/v1/betaAppReviewSubmissions"
+    ) {
+      const resource = {
+        type: "betaAppReviewSubmissions",
+        id: "beta-review-submission",
+        attributes: {
+          betaReviewState: "WAITING_FOR_REVIEW",
+          submittedDate: "2026-07-30T12:30:00Z",
+        },
+      };
+      this.resources.betaReviewSubmissions.push(resource);
+      return { data: resource };
     }
     throw new Error(`Unexpected ${method} request: ${path}`);
   }
@@ -491,18 +567,126 @@ test("app release configuration is complete, scoped, and idempotent", async () =
   assert.equal(first.status.beta.assignedToGroup, true);
   assert.equal(first.status.beta.appLocalizationConfigured, true);
   assert.equal(first.status.beta.buildLocalizationConfigured, true);
+  assert.equal(first.status.beta.externalTesting.groupConfigured, true);
+  assert.equal(first.status.beta.externalTesting.publicLinkEnabled, false);
+  assert.equal(first.status.beta.externalTesting.buildAssigned, false);
+  assert.equal(first.status.beta.externalTesting.reviewMetadataConfigured, true);
+  assert.deepEqual(
+    first.status.beta.externalTesting.missingContactFields,
+    [],
+  );
+  assert.equal(
+    first.status.beta.externalTesting.reviewState,
+    "NOT_SUBMITTED",
+  );
+  assert.equal(
+    first.status.beta.externalTesting.readyForReviewSubmission,
+    false,
+  );
   assert.deepEqual(first.actions, [
     "Updated en-US app name and privacy metadata.",
     "Updated en-US App Store version metadata.",
     "Created en-US TestFlight app details.",
     "Recorded export-compliance exemption for build 19.",
+    "Created private external TestFlight group ClawDad Founding Customers.",
+    "Updated Beta App Review contact and reviewer instructions.",
     "Assigned build 19 to ClawDad Internal.",
     "Added TestFlight test instructions to build 19.",
   ]);
+  assert.equal(
+    client.calls.some(
+      (call) => call.path === "/v1/betaAppReviewSubmissions",
+    ),
+    false,
+  );
+  assert.equal(
+    client.calls.some(
+      (call) => (
+        call.path ===
+        "/v1/betaGroups/external-group/relationships/builds"
+      ),
+    ),
+    false,
+  );
 
   const second = await configureAppRelease(client);
   assert.deepEqual(second.actions, []);
   assert.equal(second.status.beta.assignedToGroup, true);
+  assert.equal(second.status.beta.externalTesting.buildAssigned, false);
+});
+
+test("external beta submission requires certification and is retry-safe", async () => {
+  const client = new FakeReleaseClient();
+  await configureAppRelease(client);
+
+  await assert.rejects(
+    submitExternalBetaReview(client),
+    /physical-device certification confirmation/u,
+  );
+
+  const first = await submitExternalBetaReview(
+    client,
+    appReleaseCatalog,
+    { physicalCertificationConfirmed: true },
+  );
+  assert.deepEqual(first.actions, [
+    "Assigned build 19 to ClawDad Founding Customers.",
+    "Submitted build 19 for Beta App Review.",
+  ]);
+  assert.equal(first.status.beta.externalTesting.buildAssigned, true);
+  assert.equal(
+    first.status.beta.externalTesting.reviewState,
+    "WAITING_FOR_REVIEW",
+  );
+  assert.equal(
+    first.status.beta.externalTesting.nextAction,
+    "Wait for Apple Beta App Review to finish.",
+  );
+
+  const second = await submitExternalBetaReview(
+    client,
+    appReleaseCatalog,
+    { physicalCertificationConfirmed: true },
+  );
+  assert.deepEqual(second.actions, []);
+  assert.equal(
+    client.calls.filter(
+      (call) => call.path === "/v1/betaAppReviewSubmissions",
+    ).length,
+    1,
+  );
+});
+
+test("app release leaves beta review details untouched until phone contact exists", async () => {
+  const client = new FakeReleaseClient();
+  client.resources.betaReviewDetail.attributes.contactPhone = null;
+
+  const result = await configureAppRelease(client);
+
+  assert.equal(result.status.beta.externalTesting.groupConfigured, true);
+  assert.equal(
+    result.status.beta.externalTesting.reviewMetadataConfigured,
+    false,
+  );
+  assert.deepEqual(
+    result.status.beta.externalTesting.missingContactFields,
+    ["contactFirstName", "contactLastName", "contactPhone", "contactEmail"],
+  );
+  assert.equal(
+    result.actions.includes(
+      "Updated Beta App Review contact and reviewer instructions.",
+    ),
+    false,
+  );
+  assert.equal(
+    client.calls.some(
+      (call) => (
+        call.method === "PATCH" &&
+        call.path === `/v1/betaAppReviewDetails/${appReleaseCatalog.appId}`
+      ),
+    ),
+    false,
+  );
 });
 
 test("subscription review screenshot upload reserves, uploads, commits, and reuses checksum", async () => {

@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { basename, resolve } from "node:path";
 import {
   AppStoreConnectClient,
+  appReleaseCatalog,
   appReleasePlan,
   configurePaidBeta,
   configurePaidBetaReviewScreenshots,
@@ -13,6 +14,7 @@ import {
   paidBetaPlan,
   readAppReleaseStatus,
   readPaidBetaStatus,
+  submitExternalBetaReview,
 } from "../lib/app-store-connect.mjs";
 
 function usage() {
@@ -27,11 +29,16 @@ function usage() {
     "  release-plan       Show App Store and TestFlight metadata configuration",
     "  release-status     Read App Store and TestFlight release status",
     "  release-configure  Apply App Store and TestFlight release configuration",
+    "  external-beta-submit  Assign the certified build and start Beta App Review",
+    "",
+    "External beta confirmation:",
+    "  --confirm-physical-certification",
     "",
     "Environment:",
     "  APP_STORE_CONNECT_KEY_ID",
     "  APP_STORE_CONNECT_ISSUER_ID",
     "  APP_STORE_CONNECT_KEY_PATH",
+    "  APP_STORE_CONNECT_REVIEW_PHONE",
   ].join("\n");
 }
 
@@ -43,6 +50,8 @@ function parseArguments(argv) {
     apply: argv.includes("--apply"),
     json: argv.includes("--json"),
     image: imageIndex >= 0 ? argv[imageIndex + 1] : "",
+    physicalCertificationConfirmed:
+      argv.includes("--confirm-physical-certification"),
     help: argv.includes("--help") || argv.includes("-h"),
   };
 }
@@ -71,8 +80,28 @@ async function loadClient() {
   });
 }
 
+function releaseCatalogFromEnvironment() {
+  const contactPhone = String(
+    process.env.APP_STORE_CONNECT_REVIEW_PHONE || "",
+  ).trim();
+  if (!contactPhone) {
+    return appReleaseCatalog;
+  }
+  return {
+    ...appReleaseCatalog,
+    beta: {
+      ...appReleaseCatalog.beta,
+      review: {
+        ...appReleaseCatalog.beta.review,
+        contactPhone,
+      },
+    },
+  };
+}
+
 async function main() {
   const options = parseArguments(process.argv.slice(2));
+  const releaseCatalog = releaseCatalogFromEnvironment();
   if (options.help) {
     process.stdout.write(`${usage()}\n`);
     return;
@@ -82,7 +111,7 @@ async function main() {
     return;
   }
   if (options.command === "release-plan") {
-    print(appReleasePlan(), options.json);
+    print(appReleasePlan(releaseCatalog), options.json);
     return;
   }
   if (
@@ -92,6 +121,7 @@ async function main() {
       "review-screenshots",
       "release-status",
       "release-configure",
+      "external-beta-submit",
     ].includes(options.command)
   ) {
     throw new Error(`Unknown command: ${options.command}\n\n${usage()}`);
@@ -103,7 +133,7 @@ async function main() {
     return;
   }
   if (options.command === "release-status") {
-    print(await readAppReleaseStatus(client), options.json);
+    print(await readAppReleaseStatus(client, releaseCatalog), options.json);
     return;
   }
   if (options.command === "review-screenshots") {
@@ -142,17 +172,54 @@ async function main() {
     }, options.json);
     return;
   }
+  if (options.command === "external-beta-submit") {
+    if (!options.apply) {
+      print({
+        applied: false,
+        message: [
+          "Complete physical certification, then rerun with --apply",
+          "and --confirm-physical-certification.",
+        ].join(" "),
+        current: await readAppReleaseStatus(client, releaseCatalog),
+      }, options.json);
+      return;
+    }
+    const result = await submitExternalBetaReview(
+      client,
+      releaseCatalog,
+      {
+        physicalCertificationConfirmed:
+          options.physicalCertificationConfirmed,
+      },
+    );
+    const record = {
+      schema: "clawdad.app-store-release/1",
+      ...result.status,
+    };
+    await writeFile(
+      resolve("ops/app-store-release.json"),
+      `${JSON.stringify(record, null, 2)}\n`,
+      { mode: 0o644 },
+    );
+    print({
+      applied: true,
+      actions: result.actions,
+      record: "ops/app-store-release.json",
+      status: result.status,
+    }, options.json);
+    return;
+  }
   if (options.command === "release-configure") {
     if (!options.apply) {
       print({
         applied: false,
         message: "Review this plan, then rerun release-configure with --apply.",
-        plan: appReleasePlan(),
-        current: await readAppReleaseStatus(client),
+        plan: appReleasePlan(releaseCatalog),
+        current: await readAppReleaseStatus(client, releaseCatalog),
       }, options.json);
       return;
     }
-    const result = await configureAppRelease(client);
+    const result = await configureAppRelease(client, releaseCatalog);
     const record = {
       schema: "clawdad.app-store-release/1",
       ...result.status,

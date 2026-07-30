@@ -9,7 +9,8 @@ Prepared: 2026-07-30
 - Git tag: `v0.7.0-beta.4`
 - Mac app: `0.7.0 (19)`
 - iPhone app: `0.7.0 (19)`
-- TestFlight group: `ClawDad Internal`
+- Internal TestFlight group: `ClawDad Internal`
+- External TestFlight group: `ClawDad Founding Customers`
 - App Store record: `ClawDad Mobile`, version `1.0`
 
 ## Customer Artifacts
@@ -40,6 +41,10 @@ Prepared: 2026-07-30
 - App Store subscription metadata is complete. The group, monthly plan, and
   annual plan each have a localized version-1 draft in
   `PREPARE_FOR_SUBMISSION`; these draft-version states are authoritative.
+- The private external `ClawDad Founding Customers` TestFlight group is live
+  with feedback enabled, no public link, no assigned build, and no review
+  submission. The guarded submission command is prepared for the end of the
+  physical certification pass.
 - The exact `v0.7.0-beta.4` npm package was reconstructed from the tag and
   verified at 207 files. Publication reached npm successfully and stopped at
   the account OTP challenge without publishing a partial version.
@@ -54,6 +59,8 @@ Prepared: 2026-07-30
 ## Human Gates
 
 - Install TestFlight build 19 and complete the physical certification matrix.
+- Supply the monitored Beta App Review phone number, then use the guarded
+  command to assign build 19 and start external Beta App Review.
 - Enter a fresh npm authenticator code to publish the prepared beta.4 package.
 - Confirm Paid Applications Agreement, banking, tax, and app privacy answers.
 - Attach the first subscriptions and a public build to App Store version 1.0.

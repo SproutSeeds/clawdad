@@ -19,12 +19,33 @@
     `docs/reliability-certification.md`.
 12. Run `npm run certify:snapshot` again and retain the two mode-`0600`
     artifacts as the release evidence boundary.
-13. Enable production relay enforcement only after the new credential path
+13. Add the monitored Beta App Review phone number without persisting it in
+    the repo, then finish the review detail:
+
+    ```sh
+    APP_STORE_CONNECT_REVIEW_PHONE="+1 ..." \
+      node bin/clawdad-app-store release-configure --apply --json
+    ```
+
+14. Confirm `externalTesting.metadataReady` is `true`, then assign the
+    certified build to `ClawDad Founding Customers` and start Beta App Review:
+
+    ```sh
+    node bin/clawdad-app-store external-beta-submit \
+      --apply \
+      --confirm-physical-certification \
+      --json
+    ```
+
+15. Wait for `externalTesting.reviewState` to become `APPROVED`, then invite
+    named founding customers. The external group has no public link.
+16. Enable production relay enforcement only after the new credential path
     passes.
 
 ## Customer Onboarding
 
-1. Send the customer the notarized DMG and TestFlight invitation.
+1. Invite the customer by email to the private `ClawDad Founding Customers`
+   TestFlight group and send the notarized DMG.
 2. Confirm their Mac meets the current macOS requirement and their iPhone runs
    iOS 18 or later.
 3. Confirm Codex is installed and signed in on the Mac. OpenAI access is a

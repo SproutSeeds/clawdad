@@ -52,9 +52,38 @@ submission containing App Store version 1.0, subscription-group version 1, and
 version 1 of both subscriptions. Submitting that review is the release action;
 the prepared drafts themselves do not publish or charge customers.
 
+## External TestFlight Lane
+
+`ClawDad Founding Customers` is a live external TestFlight group with feedback
+enabled and its public link disabled. It currently has no build, testers, or
+Beta App Review submission. Build 19 remains available only to
+`ClawDad Internal` while physical certification is pending.
+
+App Store Connect requires a complete Beta App Review contact record whenever
+that record is updated. Supply the monitored phone number at runtime with
+`APP_STORE_CONNECT_REVIEW_PHONE`, then run
+`node bin/clawdad-app-store release-configure --apply --json`. The number is
+sent to Apple and is not written to the repository or the release-status
+record.
+
+After the physical matrix passes, run:
+
+```sh
+node bin/clawdad-app-store external-beta-submit \
+  --apply \
+  --confirm-physical-certification \
+  --json
+```
+
+This command fails closed unless the private group, valid build, localized beta
+metadata, complete review contact, and reviewer notes are ready. It assigns the
+build to the external group, creates the separate Beta App Review submission,
+and safely resumes if Apple accepted only the first action. It never enables a
+public TestFlight link or invites testers.
+
 ## Human Submission Gates
 
-- Add the account holder’s name, direct phone, and monitored email.
+- Supply the direct, monitored Beta App Review phone number.
 - Confirm the Paid Applications Agreement, tax, and banking state.
 - Complete the app privacy questionnaire from the evidence worksheet.
 - Attach final App Store screenshots after representative physical-device
