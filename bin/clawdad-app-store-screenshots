@@ -66,7 +66,7 @@ capture_scenario() {
     --clawdad-app-store-preview \
     "$scenario" >/dev/null
   sleep 3
-  xcrun simctl io "$device_id" screenshot "$temporary"
+  xcrun simctl io "$device_id" screenshot --type=png --mask=black "$temporary"
   cp "$temporary" "$destination"
   rm -f "$temporary"
 }
@@ -80,6 +80,12 @@ for screenshot in "$output_dir"/*.png; do
     paste -sd x -)
   if [[ "$dimensions" != "1290x2796" ]]; then
     print -u2 "Unexpected screenshot dimensions for $screenshot: $dimensions"
+    exit 65
+  fi
+  alpha=$(sips -g hasAlpha "$screenshot" |
+    awk '/hasAlpha/ { print $2 }')
+  if [[ "$alpha" != "no" ]]; then
+    print -u2 "App Store screenshot must be opaque: $screenshot"
     exit 65
   fi
 done

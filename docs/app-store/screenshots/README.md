@@ -13,7 +13,8 @@ zsh ./bin/clawdad-app-store-screenshots
 
 The script builds the Debug simulator target, installs it on the dedicated
 `ClawDad App Store 6.9` simulator, fixes the status bar at 9:41, captures each
-scenario, and rejects output that is not exactly `1290x2796`.
+scenario with an opaque screen mask, and rejects output that is not exactly
+`1290x2796` or still contains an alpha channel.
 
 Before upload, visually inspect every generated PNG for:
 

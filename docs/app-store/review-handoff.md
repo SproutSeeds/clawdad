@@ -88,10 +88,11 @@ The current 6.9-inch iPhone screenshots are:
 - `docs/app-store/screenshots/iphone-6.9/01-workspace.png`
 - `docs/app-store/screenshots/iphone-6.9/02-conversation.png`
 
-Both are `1290x2796` captures from the real SwiftUI surfaces. They use a
-DEBUG-only, in-memory fixture with synthetic `/Users/demo/...` projects and
-perform no pairing, network requests, or writes to the user's saved workspace.
-The fixture is unavailable in Release and TestFlight builds.
+Both are opaque `1290x2796` captures from the real SwiftUI surfaces, matching
+Apple's 6.9-inch screenshot requirements. They use a DEBUG-only, in-memory
+fixture with synthetic `/Users/demo/...` projects and perform no pairing,
+network requests, or writes to the user's saved workspace. The fixture is
+unavailable in Release and TestFlight builds.
 
 Regenerate and dimension-check the complete set with:
 
