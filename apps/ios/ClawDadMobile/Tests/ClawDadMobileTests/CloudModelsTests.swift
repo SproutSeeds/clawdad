@@ -65,6 +65,26 @@ final class CloudModelsTests: XCTestCase {
     )
   }
 
+  @MainActor
+  func testSubscriptionAvailabilityMessageDistinguishesCatalogStates() {
+    XCTAssertEqual(
+      SubscriptionManager.productAvailabilityMessage(loadedProductIds: []),
+      "The App Store has not made ClawDad plans available yet. Try again shortly."
+    )
+    XCTAssertEqual(
+      SubscriptionManager.productAvailabilityMessage(
+        loadedProductIds: [SubscriptionManager.monthlyProductId]
+      ),
+      "One ClawDad plan is still unavailable. Try again shortly."
+    )
+    XCTAssertEqual(
+      SubscriptionManager.productAvailabilityMessage(
+        loadedProductIds: SubscriptionManager.productIds
+      ),
+      ""
+    )
+  }
+
   func testPairingPayloadCarriesPinnedMacSigningIdentity() throws {
     let data = Data(
       """

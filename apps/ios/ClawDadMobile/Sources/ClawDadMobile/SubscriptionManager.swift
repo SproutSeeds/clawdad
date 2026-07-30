@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 import StoreKit
 
 struct ClawDadSubscriptionPlan: Identifiable, Equatable {
@@ -28,6 +29,11 @@ struct ClawDadEntitlementSnapshot: Equatable {
 
 @MainActor
 final class SubscriptionManager: ObservableObject {
+  private static let logger = Logger(
+    subsystem: "earth.frg.clawdad.ios",
+    category: "StoreKit"
+  )
+
   static let monthlyProductId = "earth.frg.clawdad.pro.monthly"
   static let annualProductId = "earth.frg.clawdad.pro.annual"
   static let productIds = [monthlyProductId, annualProductId]
@@ -106,6 +112,23 @@ final class SubscriptionManager: ObservableObject {
     products.first { $0.id == productId }
   }
 
+  static func productAvailabilityMessage(
+    loadedProductIds: some Sequence<String>
+  ) -> String {
+    let loaded = Set(loadedProductIds)
+    let missingCount = productIds.filter { !loaded.contains($0) }.count
+    guard missingCount > 0 else {
+      return ""
+    }
+    if missingCount == productIds.count {
+      return [
+        "The App Store has not made ClawDad plans available yet.",
+        "Try again shortly.",
+      ].joined(separator: " ")
+    }
+    return "One ClawDad plan is still unavailable. Try again shortly."
+  }
+
   func start() {
     guard !previewAccess else {
       loading = false
@@ -132,14 +155,29 @@ final class SubscriptionManager: ObservableObject {
     loading = true
     statusMessage = ""
     do {
-      products = try await Product.products(for: Self.productIds)
+      let loadedProducts = try await Product.products(for: Self.productIds)
         .sorted { left, right in
           Self.productIds.firstIndex(of: left.id) ?? Int.max <
             Self.productIds.firstIndex(of: right.id) ?? Int.max
         }
+      products = loadedProducts
+      statusMessage = Self.productAvailabilityMessage(
+        loadedProductIds: loadedProducts.map(\.id)
+      )
+      if !statusMessage.isEmpty {
+        let loadedCount = loadedProducts.count
+        let configuredCount = Self.productIds.count
+        Self.logger.error(
+          "StoreKit returned \(loadedCount, privacy: .public) of \(configuredCount, privacy: .public) configured products."
+        )
+      }
     } catch {
       products = []
-      statusMessage = "Subscriptions are temporarily unavailable."
+      statusMessage = [
+        "The App Store could not load ClawDad plans.",
+        "Check your connection and try again.",
+      ].joined(separator: " ")
+      Self.logger.error("The StoreKit product request failed.")
     }
     await refreshEntitlement()
     loading = false
