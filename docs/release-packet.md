@@ -47,7 +47,9 @@ Prepared: 2026-07-30
   physical certification pass.
 - The exact `v0.7.0-beta.4` npm package was reconstructed from the tag and
   verified at 207 files. Publication reached npm successfully and stopped at
-  the account OTP challenge without publishing a partial version.
+  the account OTP challenge without publishing a partial version. Publish that
+  tagged reconstruction, not the newer 208-file branch package, under the
+  beta.4 version.
 - Two canonical 6.9-inch App Store screenshots are reproducible from synthetic
   in-memory data, opaque, visually reviewed at `1290x2796`, and uploaded in
   order to the draft App Store version with `COMPLETE` processing state.
