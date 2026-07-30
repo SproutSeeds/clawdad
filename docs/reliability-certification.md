@@ -15,7 +15,7 @@ paths. Service-health fields are allow-listed so project paths are excluded.
 
 | Check | State | Evidence |
 | --- | --- | --- |
-| Node integration suite | Pass | `npm test`: 382 tests passed |
+| Node integration suite | Pass | `npm test`: 384 tests passed |
 | iPhone Swift unit suite | Pass | `swift test --package-path apps/ios/ClawDadMobile`: 13 tests passed |
 | Mac Swift unit suite | Pass | `swift test --package-path native/macos`: 8 tests passed |
 | Simulator build | Pass | `npm run ios:build` completed for the final build-19 source |
