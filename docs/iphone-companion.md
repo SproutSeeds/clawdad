@@ -242,8 +242,9 @@ workspace-authorized `POST /remote-assist/ice-servers` route. ClawDad issues
 configuration after 12 minutes. Cloudflare receives an HMAC-derived customer
 identifier rather than the account, workspace, device name, or project path.
 
-The default production configuration keeps TURN off while direct STUN remains
-available. Enabling fallback requires these Worker secrets:
+The production configuration enables TURN after the activation gate while
+direct STUN remains the preferred path. Relay fallback requires these Worker
+secrets:
 
 ```text
 CLAWDAD_TURN_KEY_ID

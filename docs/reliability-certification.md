@@ -31,7 +31,7 @@ problem; use `pending` to clear a result for a fresh rerun.
 
 | Check | State | Evidence |
 | --- | --- | --- |
-| Node integration suite | Pass | `npm test`: 396 tests passed |
+| Node integration suite | Pass | `npm test`: 397 tests passed |
 | iPhone Swift unit suite | Pass | `swift test --package-path apps/ios/ClawDadMobile`: 15 tests passed |
 | Mac Swift unit suite | Pass | `swift test --package-path native/macos`: 8 tests passed |
 | Simulator build | Pass | `npm run ios:build` completed for the final build-19 source |
@@ -41,6 +41,8 @@ problem; use `pending` to clear a result for a fresh rerun.
 | Mac signing and notarization | Pass | `npm run native:release`; beta.4 app `0.7.0 (19)`, ZIP, and DMG are signed, notarized, stapled, Gatekeeper-accepted, and checksum-verified |
 | Persisted event privacy | Pass | Integration coverage redacts credentials before event and live-checkpoint writes; the local JSONL history scan contains no token-shaped or plaintext authorization values |
 | Relay hibernation and TURN controls | Pass | Worker tests prove socket restoration after Durable Object eviction, trusted-device issuance, pseudonymous customer attribution, 15-minute credentials, analytics caching, per-customer and global cutoffs, direct STUN fallback, and admin pause |
+| Production TURN control plane | Pass | Production reports TURN enabled with healthy account analytics and zero measured egress; a guarded live exercise activated the global pause, observed it through the status route, and restored the original unpaused state |
+| External spend alert | Pass | Cloudflare shows the account-wide `ClawDad Beta $5 Guard` at a `$5.00` budget with one verified recipient; the alert is informational and the Worker cutoff remains the enforcement path |
 | Package contents | Pass | The immutable published beta.4 artifact is 207 files with shasum `b38f32333bcb60ef55d853c69c0bdb2a00cf5bfc`; the post-release branch dry run is a distinct 209-file package containing release-certification and TURN-budget operations tooling while excluding wordmark explorations |
 | Cloud public health | Pass | Production `/healthz`, `/support`, `/privacy`, and `/mac/appcast.xml` returned HTTP 200 after the final Worker upload; script settings report Logpush off and observability absent/disabled |
 
@@ -64,7 +66,7 @@ problem; use `pending` to clear a result for a fresh rerun.
 | Image | Pending | Up to four prepared images reach the selected Codex thread |
 | Remote Assist | Pending | Landscape, pointer, scrolling, keyboard, Enter, paste, and copy work |
 | Wi-Fi to cellular | Pending | Thread reconnects and sends without manual Connect |
-| Restrictive network | Blocked | Requires confirmed Realtime activation, production TURN and analytics credentials, then a forced-TURN physical iPhone pass |
+| Restrictive network | Pending | Realtime and production credentials are active; requires a forced-TURN physical iPhone pass |
 
 ## Certification Rule
 

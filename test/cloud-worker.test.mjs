@@ -920,6 +920,31 @@ test("TURN admin controls pause globally without consulting analytics", async ()
   assert.equal(analyticsRequests, 0);
 });
 
+test("TURN admin status reports a bounded analytics failure to operators", async () => {
+  const budget = new TurnBudget(memoryDurableObjectState(), {
+    CLAWDAD_TURN_ENABLED: "true",
+    CLAWDAD_TURN_ADMIN_TOKEN: "admin-secret",
+    CLAWDAD_CLOUDFLARE_ACCOUNT_ID: "cloudflare-account",
+    CLAWDAD_TURN_ANALYTICS_API_TOKEN: "analytics-token",
+    CLAWDAD_TURN_KEY_ID: "turn-key",
+    CLAWDAD_TURN_ANALYTICS_FETCH: async function analyticsFetch() {
+      assert.equal(this, undefined);
+      return new Response("", { status: 403 });
+    },
+  });
+
+  const response = await budget.fetch(
+    new Request("https://turn-budget.internal/status?refresh=true", {
+      headers: { authorization: "Bearer admin-secret" },
+    }),
+  );
+  const payload = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(payload.usage, null);
+  assert.equal(payload.usageError, "TURN analytics request failed (403)");
+});
+
 test("Mac update catalog rejects malformed or unsigned Sparkle feeds", () => {
   assert.match(
     validateSparkleAppcast("<rss><channel><item></item></channel></rss>"),

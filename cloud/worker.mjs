@@ -555,11 +555,12 @@ export class TurnBudget {
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    this.fetchImpl = (
+    const analyticsFetch = (
       typeof env.CLAWDAD_TURN_ANALYTICS_FETCH === "function"
         ? env.CLAWDAD_TURN_ANALYTICS_FETCH
         : fetch
     );
+    this.fetchImpl = (...args) => analyticsFetch(...args);
   }
 
   async control() {
@@ -711,8 +712,12 @@ export class TurnBudget {
     if (configuration.enabled) {
       try {
         usage = await this.usageSnapshot(customIdentifier);
-      } catch {
-        usageError = "TURN analytics are unavailable";
+      } catch (error) {
+        usageError = String(
+          error instanceof Error
+            ? error.message
+            : "TURN analytics are unavailable",
+        ).slice(0, 240);
       }
     }
     const globalEgressBytes = usage?.globalEgressBytes || 0;
@@ -930,11 +935,14 @@ export class TurnBudget {
       },
     );
     if (!response.ok) {
-      throw new Error("TURN analytics request failed");
+      throw new Error(`TURN analytics request failed (${response.status})`);
     }
     const payload = await response.json();
     if (Array.isArray(payload?.errors) && payload.errors.length > 0) {
-      throw new Error("TURN analytics returned an error");
+      const message = String(
+        payload.errors[0]?.message || "unknown error",
+      ).slice(0, 160);
+      throw new Error(`TURN analytics returned an error: ${message}`);
     }
     const accounts = payload?.data?.viewer?.accounts;
     if (!Array.isArray(accounts) || accounts.length === 0) {

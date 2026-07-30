@@ -53,14 +53,19 @@ Prepared: 2026-07-30
 - Two canonical 6.9-inch App Store screenshots are reproducible from synthetic
   in-memory data, opaque, visually reviewed at `1290x2796`, and uploaded in
   order to the draft App Store version with `COMPLETE` processing state.
-- The connected iPhone remains on development build `0.1.0 (15)`, and the
-  TestFlight app is not currently installed. Physical certification begins
-  after a clean removal of build 15, TestFlight installation, and installation
-  of `0.7.0 (19)` from `ClawDad Internal`.
-- The Workspace relay hibernation and TURN budget controls are implemented on
-  the branch with TURN disabled by default. Realtime account activation,
-  production TURN key creation, analytics-read provisioning, and forced-TURN
-  physical verification remain gated.
+- The connected iPhone is paired and wired, and no ClawDad app is currently
+  installed. Physical certification begins after installing `0.7.0 (19)` from
+  the `ClawDad Internal` TestFlight group.
+- The Workspace relay hibernation and TURN budget controls are implemented.
+  Realtime is active, the production TURN and account-scoped analytics
+  credentials are provisioned, and the production relay is deployed with TURN
+  enabled. The live status route reports healthy analytics, no measured TURN
+  egress, and no active global pause.
+- The live emergency control accepted a global pause and restored normal
+  service in a guarded cutoff exercise. Cloudflare's account-wide
+  `ClawDad Beta $5 Guard` budget alert is active with one recipient.
+- Forced-TURN physical verification remains pending until TestFlight build 19
+  is installed and freshly paired on the connected iPhone.
 - Session Doctor is healthy apart from four missing historical project paths
   awaiting an explicit keep-or-retire decision:
   `ai-shorts-studio`, `campus-ready`, `gw2-companion`, and `richboy-tyria`.
@@ -73,9 +78,7 @@ Prepared: 2026-07-30
 - Confirm Paid Applications Agreement, banking, tax, and app privacy answers.
 - Attach the first subscriptions and a public build to App Store version 1.0.
 - Supply App Review contact details and a durable reviewer pairing path.
-- Confirm Cloudflare Realtime billing activation, provision the production TURN
-  and analytics credentials, create the external $5 budget notification, then
-  complete restrictive-network TURN testing.
+- Complete restrictive-network TURN testing from TestFlight build 19.
 - Choose whether the four missing historical project entries should be retired
   from ClawDad or restored on disk.
 
