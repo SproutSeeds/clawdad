@@ -11,11 +11,15 @@
 6. Install the published package and Mac app on the host and verify local and
    public health.
 7. Install build 19 from TestFlight on the iPhone.
-8. Generate a fresh pairing QR from Mac Settings and pair the phone.
-9. Verify the device appears in Mac Settings and revocation blocks it.
-10. Re-pair and finish the physical matrix in
+8. Run `npm run certify:snapshot` and confirm `deviceBuildReady` is `true`
+   before testing app behavior.
+9. Generate a fresh pairing QR from Mac Settings and pair the phone.
+10. Verify the device appears in Mac Settings and revocation blocks it.
+11. Re-pair and finish the physical matrix in
     `docs/reliability-certification.md`.
-11. Enable production relay enforcement only after the new credential path
+12. Run `npm run certify:snapshot` again and retain the two mode-`0600`
+    artifacts as the release evidence boundary.
+13. Enable production relay enforcement only after the new credential path
     passes.
 
 ## Customer Onboarding

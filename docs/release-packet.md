@@ -49,6 +49,7 @@ npm test
 swift test --package-path apps/ios/ClawDadMobile
 swift test --package-path native/macos
 npm run ios:build
+npm run certify:snapshot
 npm pack --dry-run --json
 git diff --check
 orp hygiene --json
