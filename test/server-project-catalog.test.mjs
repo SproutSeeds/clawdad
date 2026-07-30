@@ -2603,6 +2603,169 @@ test("sessions-doctor repairs quarantined pointers and orphaned delegate lanes",
   }
 });
 
+test("sessions-doctor leaves a healthy live session running", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-live-session-doctor-"));
+  const home = path.join(root, "home");
+  const projectPath = path.join(root, "live-project");
+  const sessionId = "live-session";
+  await mkdir(path.join(projectPath, ".clawdad", "mailbox"), { recursive: true });
+  await mkdir(home, { recursive: true });
+  await writeFile(
+    path.join(home, "state.json"),
+    JSON.stringify(
+      {
+        version: 3,
+        projects: {
+          [projectPath]: {
+            status: "running",
+            active_session_id: sessionId,
+            sessions: {
+              [sessionId]: {
+                slug: "live project",
+                provider: "codex",
+                provider_session_seeded: "false",
+                status: "running",
+              },
+            },
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    path.join(projectPath, ".clawdad", "mailbox", "status.json"),
+    JSON.stringify(
+      {
+        state: "running",
+        request_id: "live-request",
+        session_id: sessionId,
+        dispatched_at: new Date().toISOString(),
+        heartbeat_at: new Date().toISOString(),
+        pid: process.pid,
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  try {
+    const result = await runServerCli(["sessions-doctor", projectPath, "--json"], {
+      env: {
+        CLAWDAD_HOME: home,
+      },
+    });
+    assert.equal(result.exitCode, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.issueCount, 0);
+
+    const state = JSON.parse(await readFile(path.join(home, "state.json"), "utf8"));
+    assert.equal(state.projects[projectPath].sessions[sessionId].status, "running");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("sessions-doctor retires a stale local placeholder in favor of the mailbox session", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-placeholder-session-doctor-"));
+  const home = path.join(root, "home");
+  const projectPath = path.join(root, "completed-project");
+  const placeholderSessionId = "local-placeholder";
+  const providerSessionId = "provider-session";
+  const completedAt = "2026-07-27T21:10:25Z";
+  await mkdir(path.join(projectPath, ".clawdad", "mailbox"), { recursive: true });
+  await mkdir(home, { recursive: true });
+  await writeFile(
+    path.join(home, "state.json"),
+    JSON.stringify(
+      {
+        version: 3,
+        projects: {
+          [projectPath]: {
+            status: "completed",
+            active_session_id: placeholderSessionId,
+            sessions: {
+              [placeholderSessionId]: {
+                slug: "local placeholder",
+                provider: "codex",
+                provider_session_seeded: "false",
+                status: "running",
+              },
+              [providerSessionId]: {
+                slug: "provider session",
+                provider: "codex",
+                provider_session_seeded: "false",
+                status: "completed",
+                last_response: completedAt,
+              },
+            },
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    path.join(projectPath, ".clawdad", "mailbox", "status.json"),
+    JSON.stringify(
+      {
+        state: "completed",
+        request_id: "completed-request",
+        session_id: providerSessionId,
+        completed_at: completedAt,
+        pid: null,
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  try {
+    const result = await runServerCli([
+      "sessions-doctor",
+      projectPath,
+      "--repair",
+      "--json",
+    ], {
+      env: {
+        CLAWDAD_HOME: home,
+      },
+    });
+    assert.equal(result.exitCode, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.repairCount, 1);
+    assert.equal(
+      payload.projects[0].repairs[0].type,
+      "busy_session_status_retired",
+    );
+
+    const state = JSON.parse(await readFile(path.join(home, "state.json"), "utf8"));
+    assert.equal(state.projects[projectPath].active_session_id, providerSessionId);
+    assert.equal(
+      state.projects[projectPath].sessions[placeholderSessionId].status,
+      "idle",
+    );
+
+    const clean = await runServerCli(["sessions-doctor", projectPath, "--json"], {
+      env: {
+        CLAWDAD_HOME: home,
+      },
+    });
+    assert.equal(clean.exitCode, 0, clean.stderr);
+    assert.equal(JSON.parse(clean.stdout).issueCount, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("sessions-doctor repairs stale active mirrored Codex goals on terminal lanes", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-goal-doctor-"));
   const home = path.join(root, "home");

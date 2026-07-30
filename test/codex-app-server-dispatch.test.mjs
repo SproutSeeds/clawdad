@@ -334,6 +334,46 @@ function handle(message) {
         });
       }, 10);
     }
+    if (behavior === "secret-command") {
+      setTimeout(() => {
+        const command = [
+          "/bin/zsh",
+          "-lc",
+          "SERVICE_TOKEN=environment-secret-value git -c http.extraHeader='Authorization: Bearer art_v1_commandsecret1234567890' push 'https://user:password@example.com/repo.git?access_token=query-secret-value' HEAD:main --api-key sk-commandsecret1234567890",
+        ];
+        send({
+          method: "item/started",
+          params: {
+            threadId: "thread-test",
+            turnId: "turn-test",
+            item: { id: "cmd-secret", type: "commandExecution", status: "in_progress", command },
+          },
+        });
+        send({
+          method: "item/completed",
+          params: {
+            threadId: "thread-test",
+            turnId: "turn-test",
+            item: { id: "cmd-secret", type: "commandExecution", status: "completed", command },
+          },
+        });
+        send({
+          method: "item/completed",
+          params: {
+            threadId: "thread-test",
+            turnId: "turn-test",
+            item: { type: "agentMessage", phase: "final_answer", text: "secret command completed" },
+          },
+        });
+        send({
+          method: "turn/completed",
+          params: {
+            threadId: "thread-test",
+            turn: { id: "turn-test", status: "completed" },
+          },
+        });
+      }, 10);
+    }
     if (behavior === "slow-tool-complete") {
       setTimeout(() => {
         send({
@@ -1538,6 +1578,41 @@ test("codex app-server dispatch writes normalized app-server event logs", async 
     assert.ok(events.some((event) => event.type === "codex_agent_message_delta" && event.payload.delta === "working live"));
     assert.ok(events.some((event) => event.type === "codex_agent_message" && event.payload.text === "live final response"));
     assert.ok(events.some((event) => event.type === "codex_turn_completed" && event.status === "completed"));
+  });
+});
+
+test("codex app-server dispatch redacts credentials from persisted event logs", async () => {
+  await withTempDir(async (root) => {
+    const fakeCodex = await writeFakeCodexBinary(root, "secret-command");
+    const eventLog = path.join(root, "codex-events.jsonl");
+    const result = await execFileCapture(process.execPath, [
+      dispatchScript,
+      "--project-path",
+      root,
+      "--message",
+      "hello",
+      "--session-id",
+      "thread-test",
+      "--session-seeded",
+      "--event-log-file",
+      eventLog,
+      "--codex-binary",
+      fakeCodex,
+      "--turn-timeout-ms",
+      "1000",
+      "--request-timeout-ms",
+      "2000",
+    ], { timeout: 10000 });
+
+    assert.equal(result.stderr, "");
+    assert.equal(result.exitCode, 0);
+
+    const eventText = await readFile(eventLog, "utf8");
+    assert.doesNotMatch(eventText, /environment-secret-value/u);
+    assert.doesNotMatch(eventText, /commandsecret/u);
+    assert.doesNotMatch(eventText, /query-secret-value/u);
+    assert.doesNotMatch(eventText, /user:password/u);
+    assert.match(eventText, /\[REDACTED\]/u);
   });
 });
 

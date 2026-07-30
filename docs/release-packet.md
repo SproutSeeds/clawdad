@@ -5,21 +5,21 @@ Prepared: 2026-07-30
 ## Release
 
 - Package: `clawdad`
-- Package version: `0.7.0-beta.3`
-- Git tag: `v0.7.0-beta.3`
-- Mac app: `0.7.0 (18)`
+- Package version: `0.7.0-beta.4`
+- Git tag: `v0.7.0-beta.4`
+- Mac app: `0.7.0 (19)`
 - iPhone app: `0.7.0 (19)`
 - TestFlight group: `ClawDad Internal`
 - App Store record: `ClawDad Mobile`, version `1.0`
 
 ## Customer Artifacts
 
-- `ClawDad-0.7.0-beta.3-mac.dmg`
-- `ClawDad-0.7.0-beta.3-mac.zip`
+- `ClawDad-0.7.0-beta.4-mac.dmg`
+- `ClawDad-0.7.0-beta.4-mac.zip`
 - `SHA256SUMS`
 - signed Sparkle `appcast.xml`
 - TestFlight build 19
-- release notes in `docs/releases/0.7.0-beta.3.md`
+- release notes in `docs/releases/0.7.0-beta.4.md`
 
 ## Release Scope
 
@@ -61,9 +61,9 @@ For the generated Mac release, verify:
 codesign --verify --deep --strict --verbose=2 \
   native/macos/dist/ClawDad.app
 xcrun stapler validate \
-  native/macos/dist/releases/0.7.0-beta.3/ClawDad-0.7.0-beta.3-mac.dmg
+  native/macos/dist/releases/0.7.0-beta.4/ClawDad-0.7.0-beta.4-mac.dmg
 shasum -a 256 -c \
-  native/macos/dist/releases/0.7.0-beta.3/SHA256SUMS
+  native/macos/dist/releases/0.7.0-beta.4/SHA256SUMS
 ```
 
 ## Keep Out
