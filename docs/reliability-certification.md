@@ -15,15 +15,16 @@ paths. Service-health fields are allow-listed so project paths are excluded.
 
 | Check | State | Evidence |
 | --- | --- | --- |
-| Node integration suite | Pass | `npm test`: 378 tests passed |
+| Node integration suite | Pass | `npm test`: 381 tests passed |
 | iPhone Swift unit suite | Pass | `swift test --package-path apps/ios/ClawDadMobile`: 13 tests passed |
 | Mac Swift unit suite | Pass | `swift test --package-path native/macos`: 8 tests passed |
 | Simulator build | Pass | `npm run ios:build` completed for the final build-19 source |
 | Certification snapshot | Pass | `npm run certify:snapshot` writes a mode-`0600`, path-free artifact and fails readiness closed when published, installed, or connected-device versions differ |
 | Signed iPhone archive | Pass | `npm run ios:archive`; `ClawDadMobile.xcarchive` is version 0.7.0, build 19, and passes strict code-signature validation |
 | TestFlight processing | Pass | App Store Connect build 19 is `VALID`, export-compliance complete, localized, and assigned to `ClawDad Internal` |
-| Mac signing and notarization | Pass | `npm run native:release`; beta.3 app `0.7.0 (18)`, ZIP, and DMG are signed, notarized, stapled, and checksum-verified |
-| Package contents | Pass | `npm pack --dry-run --json` completed successfully |
+| Mac signing and notarization | Pass | `npm run native:release`; beta.4 app `0.7.0 (19)`, ZIP, and DMG are signed, notarized, stapled, Gatekeeper-accepted, and checksum-verified |
+| Persisted event privacy | Pass | Integration coverage redacts credentials before event and live-checkpoint writes; the local JSONL history scan contains no token-shaped or plaintext authorization values |
+| Package contents | Pass | `npm pack --dry-run --json`: 207 files, including the shared privacy redactor and excluding wordmark explorations |
 | Cloud public health | Pass | Production `/healthz`, `/support`, and `/privacy` returned HTTP 200 after the final worker upload |
 
 ## Physical iPhone And Mac
