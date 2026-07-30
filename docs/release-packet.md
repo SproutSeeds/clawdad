@@ -32,13 +32,36 @@ Prepared: 2026-07-30
 - Face ID-gated Remote Assist with keyboard and explicit clipboard transfer.
 - Signed, notarized Mac install and Sparkle update pipeline.
 
+## Current Gate State
+
+- The installed Mac host, production cloud relay, public support/privacy pages,
+  GitHub prerelease, signed appcast, and TestFlight build 19 are live and
+  healthy.
+- App Store subscription metadata is complete. The group, monthly plan, and
+  annual plan each have a localized version-1 draft in
+  `PREPARE_FOR_SUBMISSION`; these draft-version states are authoritative.
+- The exact `v0.7.0-beta.4` npm package was reconstructed from the tag and
+  verified at 207 files. Publication reached npm successfully and stopped at
+  the account OTP challenge without publishing a partial version.
+- The connected iPhone remains on `0.1.0 (15)`. Physical certification begins
+  after TestFlight updates it to `0.7.0 (19)`.
+- The existing Cloudflare deployment token is healthy for Workers deployment
+  but lacks `Calls Write`; TURN activation needs a narrowly scoped token.
+- Session Doctor is healthy apart from four missing historical project paths
+  awaiting an explicit keep-or-retire decision:
+  `ai-shorts-studio`, `campus-ready`, `gw2-companion`, and `richboy-tyria`.
+
 ## Human Gates
 
 - Install TestFlight build 19 and complete the physical certification matrix.
+- Enter a fresh npm authenticator code to publish the prepared beta.4 package.
 - Confirm Paid Applications Agreement, banking, tax, and app privacy answers.
 - Attach the first subscriptions and a public build to App Store version 1.0.
 - Supply App Review contact details and a durable reviewer pairing path.
-- Obtain Cloudflare Calls Write access before restrictive-network TURN testing.
+- Create a Cloudflare API token limited to `Calls Write`, then complete
+  restrictive-network TURN testing.
+- Choose whether the four missing historical project entries should be retired
+  from ClawDad or restored on disk.
 
 ## Verification
 
