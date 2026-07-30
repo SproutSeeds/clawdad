@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   findInstalledApp,
   sanitizeConnectedDevice,
+  sanitizeServiceHealth,
   summarizeCertificationSnapshot,
 } from "../lib/reliability-certification.mjs";
 
@@ -64,6 +65,28 @@ test("installed app lookup retains only public app version fields", () => {
     build: "19",
   });
   assert.equal(JSON.stringify(app).includes("private/secret"), false);
+});
+
+test("service health snapshots omit project paths and unexpected fields", () => {
+  const health = sanitizeServiceHealth({
+    ok: true,
+    service: "clawdad",
+    version: "0.7.0-beta.2",
+    protocolVersion: "1",
+    authMode: "hybrid",
+    defaultProject: "/Volumes/Code_2TB/code/private-client",
+    token: "must-not-leak",
+  });
+
+  assert.deepEqual(health, {
+    ok: true,
+    service: "clawdad",
+    version: "0.7.0-beta.2",
+    protocolVersion: "1",
+    authMode: "hybrid",
+  });
+  assert.equal(JSON.stringify(health).includes("/Volumes/"), false);
+  assert.equal(JSON.stringify(health).includes("must-not-leak"), false);
 });
 
 test("certification readiness requires the published release and physical build", () => {

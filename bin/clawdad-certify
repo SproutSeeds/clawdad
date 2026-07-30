@@ -17,6 +17,7 @@ import {
   findInstalledApp,
   physicalCertificationChecks,
   sanitizeConnectedDevice,
+  sanitizeServiceHealth,
   summarizeCertificationSnapshot,
 } from "../lib/reliability-certification.mjs";
 
@@ -407,13 +408,13 @@ async function main() {
     },
     mac: {
       installedApp: macApp,
-      localHealth: localHealth.payload || localHealth,
+      localHealth: sanitizeServiceHealth(localHealth.payload || localHealth),
       serverLaunchAgent: serverAgent,
       cloudHostLaunchAgent: cloudHostAgent,
       pairing,
     },
     cloud: {
-      health: cloudHealth.payload || cloudHealth,
+      health: sanitizeServiceHealth(cloudHealth.payload || cloudHealth),
       support,
       privacy,
       appcast,

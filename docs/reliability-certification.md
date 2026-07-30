@@ -9,13 +9,13 @@ command writes a privacy-safe, mode-`0600` JSON snapshot under
 `~/.clawdad/certifications/` with release, Mac service, cloud, pairing,
 App Store, connected-device, and installed-build state. It does not collect
 messages, project contents, credentials, serial numbers, or device filesystem
-paths.
+paths. Service-health fields are allow-listed so project paths are excluded.
 
 ## Automated
 
 | Check | State | Evidence |
 | --- | --- | --- |
-| Node integration suite | Pass | `npm test`: 377 tests passed |
+| Node integration suite | Pass | `npm test`: 378 tests passed |
 | iPhone Swift unit suite | Pass | `swift test --package-path apps/ios/ClawDadMobile`: 13 tests passed |
 | Mac Swift unit suite | Pass | `swift test --package-path native/macos`: 8 tests passed |
 | Simulator build | Pass | `npm run ios:build` completed for the final build-19 source |

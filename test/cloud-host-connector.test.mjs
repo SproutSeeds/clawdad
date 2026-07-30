@@ -306,12 +306,21 @@ test("trusted StoreKit entitlement sync persists a privacy-safe Mac snapshot", a
   assert.equal(sent[0].body.active, true);
   const stored = JSON.parse(await readFile(entitlementPath, "utf8"));
   assert.equal(stored.active, true);
-  assert.equal(stored.deviceId, "ios-phone");
   assert.equal(stored.verification, "apple-storekit-jws");
   assert.equal(stored.productId, "earth.frg.clawdad.pro.monthly");
-  assert.equal("message" in stored, false);
-  assert.equal("publicKeyPem" in stored, false);
-  assert.equal("signedTransaction" in stored, false);
+  for (const privateField of [
+    "deviceId",
+    "environment",
+    "message",
+    "observedAt",
+    "originalTransactionId",
+    "publicKeyPem",
+    "purchasedAt",
+    "signedTransaction",
+    "transactionId",
+  ]) {
+    assert.equal(privateField in stored, false, `${privateField} must not persist`);
+  }
 });
 
 test("active StoreKit entitlement without Apple signed proof is rejected", async () => {
