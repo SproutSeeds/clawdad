@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
   ReleaseCatalog,
@@ -82,6 +83,21 @@ test("public ClawDad pages expose support and privacy without app data", async (
   assert.match(await support.text(), /Forget Pairing/u);
   assert.match(await privacy.text(), /does not durably store message bodies/u);
   assert.equal(publicClawDadPage("/missing"), null);
+});
+
+test("production relay disables persistent request logging", async () => {
+  const config = await readFile(
+    new URL("../cloud/wrangler.toml", import.meta.url),
+    "utf8",
+  );
+  const source = await readFile(
+    new URL("../cloud/worker.mjs", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(config, /^logpush = false$/mu);
+  assert.match(config, /^\[observability\]\nenabled = false$/mu);
+  assert.doesNotMatch(source, /\bconsole\.[a-z]+\s*\(/iu);
 });
 
 test("workspace relay claims an opaque workspace and protects host controls", async () => {

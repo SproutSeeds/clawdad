@@ -35,12 +35,14 @@ questionnaire. The account holder must confirm the final answers in Apple’s UI
 
 Before answering Apple:
 
-1. Verified 2026-07-30: `cloud/worker.mjs` contains no request-body logging.
-   Its Durable Object writes are limited to the signed Mac appcast and
-   workspace, pairing, device-trust, revocation, and last-seen routing
+1. Verified 2026-07-30: `cloud/wrangler.toml` disables Cloudflare Workers
+   observability and Logpush, and `cloud/worker.mjs` contains no application
+   logging. Its Durable Object writes are limited to the signed Mac appcast
+   and workspace, pairing, device-trust, revocation, and last-seen routing
    metadata. Relay tokens and one-time pairing tokens are persisted only as
-   hashes. Messages, images, audio, clipboard text, Remote Assist media, and
-   signed StoreKit transactions are not written to Worker storage.
+   hashes. Messages, images, audio, clipboard text, Remote Assist media, signed
+   StoreKit transactions, and per-request logs are not written to Worker
+   storage.
 2. Verified 2026-07-30: the production
    `https://clawdad-cloud.frg.earth/privacy` page states the same retention,
    advertising, tracking, diagnostics, and Remote Assist boundaries as this

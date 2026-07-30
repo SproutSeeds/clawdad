@@ -1,6 +1,10 @@
 name = "clawdad-cloud"
 main = "worker.mjs"
 compatibility_date = "2026-06-01"
+logpush = false
+
+[observability]
+enabled = false
 
 [[routes]]
 pattern = "clawdad-cloud.frg.earth"
