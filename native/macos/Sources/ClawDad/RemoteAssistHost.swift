@@ -223,9 +223,9 @@ final class RemoteAssistHost: NSObject {
           throw RemoteAssistHostError.hostIdentityMissing
         }
         var request = URLRequest(url: try configuration.realtimeURL())
-        if !configuration.devToken.isEmpty {
+        if !configuration.relayHostToken.isEmpty {
           request.setValue(
-            "Bearer \(configuration.devToken)",
+            "Bearer \(configuration.relayHostToken)",
             forHTTPHeaderField: "Authorization"
           )
         }

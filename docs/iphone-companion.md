@@ -93,7 +93,9 @@ The SwiftUI app currently supports:
 - relay and host heartbeat state that distinguishes Connected, Reconnecting,
   and Mac unavailable
 - Repo scoped and Full access send options
-- passkey request and App Attest helper boundaries for the auth milestone
+- StoreKit monthly and annual subscriptions with a 14-day introductory trial
+- independently verified Apple-signed entitlement sync to the paired Mac
+- one-time QR pairing with a separate revocable Keychain credential per iPhone
 - Face ID-gated Remote Assist for viewing and controlling the paired Mac on
   demand
 
@@ -102,8 +104,7 @@ The app project uses:
 - product name: `ClawDad`
 - bundle id: `earth.frg.clawdad.ios`
 - version: `0.7.0`
-- build: `16`
-- build: `12`
+- build: `19`
 - minimum iOS: `18.0`
 - Release cloud URL: `https://clawdad-cloud.frg.earth`
 
@@ -114,16 +115,22 @@ swift build --package-path apps/ios/ClawDadMobile
 npm run ios:build
 ```
 
-Create a Release archive for TestFlight after selecting an Apple Developer team
-in Xcode or passing `DEVELOPMENT_TEAM=YOURTEAMID` to `xcodebuild`:
+Create the signed Release archive:
 
 ```sh
 npm run ios:archive
 ```
 
-Open `apps/ios/ClawDadMobile/ClawDadMobile.xcodeproj` in Xcode, choose the
-`ClawDadMobile` scheme, create an archive, then distribute through App Store
-Connect for Internal TestFlight.
+Upload that exact archive to App Store Connect for TestFlight:
+
+```sh
+npm run ios:upload:testflight
+```
+
+The upload command uses the checked-in App Store export policy and reads the
+App Store Connect private key from `~/.private_keys/AuthKey_3SN77ZU256.p8` by
+default. Override the key path, key id, or issuer id with
+`CLAWDAD_ASC_KEY_PATH`, `CLAWDAD_ASC_KEY_ID`, or `CLAWDAD_ASC_ISSUER_ID`.
 
 ## QR Pairing For First TestFlight
 
@@ -161,14 +168,21 @@ clawdad cloud-host --json
 clawdad cloud-host
 ```
 
-## Security Gates
+## Security Status
 
-1. Passkey registration and login endpoints.
-2. App Attest challenge and verification endpoints.
-3. Device registry with public signing key storage.
-4. Desktop host trust sync and revocation checks.
-5. APNs token registration and desktop-offline notification.
-6. End-to-end real-device test over cellular.
+The founding paid beta uses workspace claims rather than a global ClawDad
+account. A one-time QR ticket creates a unique opaque relay token for that
+iPhone, the token is stored in the iPhone Keychain, and the Mac can list or
+revoke each paired device. The relay validates the workspace, host, and device
+identity before forwarding app data. Active StoreKit access is accepted by the
+Mac only when the iPhone supplies an Apple-signed transaction that validates
+against the bundled Apple trust roots.
+
+The production relay remains in compatibility mode until build 19 is installed
+on a physical iPhone and a fresh pairing proves the per-device credential path.
+After that proof, enable relay enforcement and recheck connection, revocation,
+and re-pairing. Passkeys, App Attest, APNs, and multi-Mac account recovery are
+future account-platform work; they are not claimed by this beta.
 
 ## Acceptance Test
 

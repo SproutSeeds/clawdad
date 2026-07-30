@@ -626,7 +626,7 @@ test("ClawDad presents its transparent mascot and floating controls with optiona
   ]);
   const loadingSource = contentSource.slice(
     contentSource.indexOf("private var startupLoadingView"),
-    contentSource.indexOf("private var settingsOverlay"),
+    contentSource.indexOf("private var subscriptionLoadingView"),
   );
   const headerSource = contentSource.slice(
     contentSource.indexOf("private var brandHeader"),

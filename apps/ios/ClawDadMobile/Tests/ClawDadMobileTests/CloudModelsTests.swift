@@ -2,6 +2,28 @@ import XCTest
 @testable import ClawDadMobile
 
 final class CloudModelsTests: XCTestCase {
+  @MainActor
+  func testPaidBetaPlansExposeStableStorefrontFallbacks() {
+    let plans = SubscriptionManager.plans
+    XCTAssertEqual(
+      plans,
+      [
+        ClawDadSubscriptionPlan(
+          productId: "earth.frg.clawdad.pro.monthly",
+          title: "Monthly",
+          fallbackPrice: "$9.99",
+          periodLabel: "per month"
+        ),
+        ClawDadSubscriptionPlan(
+          productId: "earth.frg.clawdad.pro.annual",
+          title: "Annual",
+          fallbackPrice: "$99.00",
+          periodLabel: "per year"
+        ),
+      ]
+    )
+  }
+
   func testPairingPayloadCarriesPinnedMacSigningIdentity() throws {
     let data = Data(
       """

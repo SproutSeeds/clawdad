@@ -16,6 +16,7 @@ import {
 import {
   cloudHostReconnectDelayMs,
   createCloudPairingPayload,
+  ensureCloudRelayAccess,
   handleCloudEnvelope,
 } from "../lib/cloud-host-connector.mjs";
 
@@ -135,6 +136,7 @@ test("pairing creates and returns the Mac signing identity", async () => {
 
   const payload = await createCloudPairingPayload({
     config: configPath,
+    registerRelayAccess: false,
   });
 
   assert.match(payload.hostPublicKeyPem, /BEGIN PUBLIC KEY/u);
@@ -147,6 +149,68 @@ test("pairing creates and returns the Mac signing identity", async () => {
     normalizeCloudPublicKeyPem(await readFile(diskConfig.hostPublicKeyPath, "utf8")),
     normalizeCloudPublicKeyPem(payload.hostPublicKeyPem),
   );
+});
+
+test("relay access creates opaque workspace credentials and claims the host", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawdad-cloud-access-"));
+  const configPath = path.join(tempDir, "cloud.json");
+  await writeFile(configPath, JSON.stringify({
+    cloudUrl: "https://clawdad-cloud.frg.earth",
+    hostId: "mac-host",
+  }), "utf8");
+  const requests = [];
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = async (url, options = {}) => {
+    requests.push({ url: String(url), options });
+    return new Response(JSON.stringify({
+      ok: true,
+      claimed: true,
+    }), {
+      status: 201,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const config = {
+    configPath,
+    cloudUrl: "https://clawdad-cloud.frg.earth",
+    accountId: "",
+    workspaceId: "",
+    hostId: "mac-host",
+    relayHostToken: "",
+    relayBootstrapToken: "",
+    hostPrivateKeyPem: "",
+    hostPublicKeyPem: "",
+  };
+
+  const claimed = await ensureCloudRelayAccess(config);
+
+  assert.match(claimed.accountId, /^acct_[a-f0-9]{32}$/u);
+  assert.match(claimed.workspaceId, /^ws_[a-f0-9]{32}$/u);
+  assert.match(config.relayHostToken, /^[a-f0-9]{64}$/u);
+  assert.equal(requests.length, 1);
+  const requestUrl = new URL(requests[0].url);
+  assert.equal(
+    requestUrl.pathname,
+    `/workspaces/${claimed.workspaceId}/access/claim`,
+  );
+  assert.equal(requestUrl.searchParams.get("accountId"), claimed.accountId);
+  assert.equal(
+    requests[0].options.headers.authorization,
+    `Bearer ${config.relayHostToken}`,
+  );
+  const body = JSON.parse(requests[0].options.body);
+  assert.equal(body.accountId, claimed.accountId);
+  assert.equal(body.hostId, "mac-host");
+
+  const diskConfig = JSON.parse(await readFile(configPath, "utf8"));
+  assert.equal(diskConfig.accountId, claimed.accountId);
+  assert.equal(diskConfig.workspaceId, claimed.workspaceId);
+  assert.equal(diskConfig.relayHostToken, config.relayHostToken);
+  assert.match(diskConfig.hostPrivateKeyPath, /cloud-host-private\.pem$/u);
+  assert.match(diskConfig.hostPublicKeyPath, /cloud-host-public\.pem$/u);
 });
 
 test("the Node cloud host leaves Remote Assist signaling to the native Mac host", async () => {
@@ -176,6 +240,116 @@ test("the Node cloud host leaves Remote Assist signaling to the native Mac host"
 
   assert.deepEqual(result, { ok: true, ignored: true });
   assert.deepEqual(sent, []);
+});
+
+test("trusted StoreKit entitlement sync persists a privacy-safe Mac snapshot", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawdad-entitlement-"));
+  const entitlementPath = path.join(tempDir, "entitlement.json");
+  const deviceKeys = generateP256KeyPair();
+  const signedTransaction = "apple.signed.transaction";
+  let verifierInput = null;
+  const config = {
+    ...hostConfig({
+      trustedDevicePublicKeys: {
+        "ios-phone": deviceKeys.publicKey,
+      },
+    }),
+    entitlementPath,
+    verifyStoreKitTransaction: async (input) => {
+      verifierInput = input;
+      return {
+        active: true,
+        source: "storekit-2",
+        productId: "earth.frg.clawdad.pro.monthly",
+        transactionId: "2000001234567890",
+        originalTransactionId: "2000001234567890",
+        purchasedAt: "2026-07-30T00:00:00.000Z",
+        expiresAt,
+        revokedAt: "",
+        introductoryOffer: true,
+        environment: "Sandbox",
+        verification: "apple-storekit-jws",
+      };
+    },
+  };
+  const keyId = cloudPublicKeyFingerprint(deviceKeys.publicKey);
+  const expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60_000).toISOString();
+  const envelope = signCloudEnvelope(normalizeCloudEnvelope({
+    type: "entitlement.sync",
+    accountId: config.accountId,
+    workspaceId: config.workspaceId,
+    sourceDeviceId: "ios-phone",
+    targetHostId: config.hostId,
+    body: {
+      active: true,
+      source: "storekit-2",
+      productId: "earth.frg.clawdad.pro.monthly",
+      transactionId: "2000001234567890",
+      originalTransactionId: "2000001234567890",
+      expiresAt,
+      revokedAt: "",
+      introductoryOffer: true,
+      environment: "Sandbox",
+      signedTransaction,
+    },
+  }), deviceKeys.privateKey, { keyId });
+  const sent = [];
+
+  const result = await handleCloudEnvelope(envelope, config, async (payload) => {
+    sent.push(payload);
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(verifierInput.signedTransaction, signedTransaction);
+  assert.equal(verifierInput.expectedEnvironment, "Sandbox");
+  assert.equal(sent[0].type, "entitlement.accepted");
+  assert.equal(sent[0].body.active, true);
+  const stored = JSON.parse(await readFile(entitlementPath, "utf8"));
+  assert.equal(stored.active, true);
+  assert.equal(stored.deviceId, "ios-phone");
+  assert.equal(stored.verification, "apple-storekit-jws");
+  assert.equal(stored.productId, "earth.frg.clawdad.pro.monthly");
+  assert.equal("message" in stored, false);
+  assert.equal("publicKeyPem" in stored, false);
+  assert.equal("signedTransaction" in stored, false);
+});
+
+test("active StoreKit entitlement without Apple signed proof is rejected", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawdad-entitlement-forged-"));
+  const deviceKeys = generateP256KeyPair();
+  const config = {
+    ...hostConfig({
+      trustedDevicePublicKeys: {
+        "ios-phone": deviceKeys.publicKey,
+      },
+    }),
+    entitlementPath: path.join(tempDir, "entitlement.json"),
+  };
+  const keyId = cloudPublicKeyFingerprint(deviceKeys.publicKey);
+  const envelope = signCloudEnvelope(normalizeCloudEnvelope({
+    type: "entitlement.sync",
+    accountId: config.accountId,
+    workspaceId: config.workspaceId,
+    sourceDeviceId: "ios-phone",
+    targetHostId: config.hostId,
+    body: {
+      active: true,
+      source: "storekit-2",
+      productId: "earth.frg.clawdad.pro.monthly",
+      transactionId: "forged",
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      environment: "Sandbox",
+    },
+  }), deviceKeys.privateKey, { keyId });
+  const sent = [];
+
+  const result = await handleCloudEnvelope(envelope, config, async (payload) => {
+    sent.push(payload);
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(sent[0].type, "error");
+  assert.match(sent[0].body.error, /missing Apple signed proof/iu);
 });
 
 test("pair.request accepts and repairs build-3 CryptoKit raw P-256 public keys", async () => {

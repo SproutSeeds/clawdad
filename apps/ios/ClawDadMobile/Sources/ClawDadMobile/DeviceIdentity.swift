@@ -55,6 +55,71 @@ final class DeviceIdentity {
     return "\"\(deviceId)\": \"\(publicKey)\""
   }
 
+  func relayAccessToken(
+    accountId: String,
+    workspaceId: String,
+    hostId: String
+  ) throws -> String {
+    try readString(
+      account: relayAccessAccount(
+        accountId: accountId,
+        workspaceId: workspaceId,
+        hostId: hostId
+      )
+    ) ?? ""
+  }
+
+  func saveRelayAccessToken(
+    _ token: String,
+    accountId: String,
+    workspaceId: String,
+    hostId: String
+  ) throws {
+    let normalized = token.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !normalized.isEmpty else {
+      return
+    }
+    try saveString(
+      normalized,
+      account: relayAccessAccount(
+        accountId: accountId,
+        workspaceId: workspaceId,
+        hostId: hostId
+      )
+    )
+  }
+
+  func deleteRelayAccessToken(
+    accountId: String,
+    workspaceId: String,
+    hostId: String
+  ) throws {
+    let account = relayAccessAccount(
+      accountId: accountId,
+      workspaceId: workspaceId,
+      hostId: hostId
+    )
+    let query: [String: Any] = [
+      kSecClass as String: kSecClassGenericPassword,
+      kSecAttrService as String: service,
+      kSecAttrAccount as String: account
+    ]
+    let status = SecItemDelete(query as CFDictionary)
+    guard status == errSecSuccess || status == errSecItemNotFound else {
+      throw DeviceIdentityError.keychainWriteFailed(status)
+    }
+  }
+
+  private func relayAccessAccount(
+    accountId: String,
+    workspaceId: String,
+    hostId: String
+  ) -> String {
+    let scope = "\(accountId)\n\(workspaceId)\n\(hostId)"
+    let digest = SHA256.hash(data: Data(scope.utf8))
+    return "relay-access-\(Data(digest).base64UrlEncodedString())"
+  }
+
   private func publicKeyPEM() throws -> String {
     let der = try publicKeySPKIDER()
     let body = der.base64EncodedString()

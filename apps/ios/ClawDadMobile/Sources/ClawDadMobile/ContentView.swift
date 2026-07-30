@@ -9,6 +9,7 @@ import UIKit
 
 struct ContentView: View {
   @EnvironmentObject private var session: CloudSession
+  @EnvironmentObject private var subscription: SubscriptionManager
   @Environment(\.scenePhase) private var scenePhase
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var showingSettings = false
@@ -141,7 +142,8 @@ struct ContentView: View {
   }
 
   private var canSendMessage: Bool {
-    session.ready &&
+    subscription.hasAccess &&
+      session.ready &&
       !session.selectedProjectPath.isEmpty &&
       (!message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !imageAttachments.isEmpty)
   }
@@ -152,7 +154,13 @@ struct ContentView: View {
         ClawDadTheme.background
           .ignoresSafeArea()
 
-        if session.startupLoading {
+        if subscription.loading {
+          subscriptionLoadingView
+            .transition(.opacity)
+        } else if subscription.requiresPurchase {
+          subscriptionGateView
+            .transition(.opacity)
+        } else if session.startupLoading {
           startupLoadingView
             .transition(.opacity)
         } else {
@@ -170,6 +178,7 @@ struct ContentView: View {
           showingScanner = true
         })
         .environmentObject(session)
+        .environmentObject(subscription)
       }
       .sheet(isPresented: $showingTools) {
         ClawToolsSheet(
@@ -321,6 +330,123 @@ struct ContentView: View {
     .accessibilityIdentifier("clawdad.startup.loading")
   }
 
+  private var subscriptionLoadingView: some View {
+    VStack(spacing: 20) {
+      Image("ClawDadMascot")
+        .resizable()
+        .scaledToFit()
+        .frame(width: 122, height: 184)
+
+      ProgressView()
+        .controlSize(.large)
+        .tint(ClawDadTheme.gold)
+
+      Text("Checking your ClawDad access...")
+        .font(.caption.monospaced().weight(.semibold))
+        .foregroundStyle(ClawDadTheme.peach.opacity(0.82))
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .padding(32)
+  }
+
+  private var subscriptionGateView: some View {
+    ScrollView {
+      VStack(spacing: 20) {
+        HStack(alignment: .bottom, spacing: 10) {
+          Image("ClawDadWordmark")
+            .resizable()
+            .scaledToFit()
+            .frame(width: 190, height: 126)
+          Image("ClawDadMascot")
+            .resizable()
+            .scaledToFit()
+            .frame(width: 84, height: 126)
+        }
+
+        VStack(spacing: 8) {
+          Text("Your Codex workspace, wherever you are")
+            .font(.title2.weight(.black))
+            .multilineTextAlignment(.center)
+            .foregroundStyle(ClawDadTheme.cream)
+          Text("Every plan begins with a 14-day free trial.")
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(ClawDadTheme.peach.opacity(0.84))
+        }
+
+        VStack(spacing: 10) {
+          ForEach(SubscriptionManager.plans) { plan in
+            let product = subscription.product(for: plan.productId)
+            Button {
+              if let product {
+                Task {
+                  await subscription.purchase(product)
+                }
+              }
+            } label: {
+              HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                  Text(plan.title)
+                    .font(.headline.weight(.black))
+                  Text("\(product?.displayPrice ?? plan.fallbackPrice) \(plan.periodLabel)")
+                    .font(.caption.weight(.semibold))
+                    .opacity(0.78)
+                }
+                Spacer()
+                Image(systemName: "arrow.right")
+                  .font(.headline.weight(.black))
+              }
+              .foregroundStyle(ClawDadTheme.cream)
+              .padding(.horizontal, 16)
+              .frame(minHeight: 64)
+              .background(ClawDadTheme.panel)
+              .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                  .stroke(ClawDadTheme.gold.opacity(0.52), lineWidth: 1)
+              }
+            }
+            .buttonStyle(.plain)
+            .disabled(subscription.purchasePending || product == nil)
+            .accessibilityIdentifier("clawdad.subscription.\(plan.title.lowercased())")
+          }
+
+          if subscription.products.isEmpty {
+            Button("Try Again") {
+              Task {
+                await subscription.refresh()
+              }
+            }
+            .buttonStyle(ClawDadPrimaryButtonStyle())
+          }
+        }
+
+        if !subscription.statusMessage.isEmpty {
+          Text(subscription.statusMessage)
+            .font(.caption)
+            .multilineTextAlignment(.center)
+            .foregroundStyle(ClawDadTheme.peach)
+        }
+
+        Button("Restore Purchases") {
+          Task {
+            await subscription.restore()
+          }
+        }
+        .buttonStyle(.plain)
+        .font(.subheadline.weight(.bold))
+        .foregroundStyle(ClawDadTheme.cream)
+        .disabled(subscription.purchasePending)
+
+        Text("Codex or ChatGPT access is purchased separately from OpenAI.")
+          .font(.caption)
+          .multilineTextAlignment(.center)
+          .foregroundStyle(ClawDadTheme.peach.opacity(0.68))
+      }
+      .padding(.horizontal, 22)
+      .padding(.top, 44)
+      .padding(.bottom, 36)
+    }
+  }
+
   private var settingsOverlay: some View {
     VStack {
       HStack {
@@ -335,7 +461,11 @@ struct ContentView: View {
             .frame(width: 44, height: 44)
         }
         .buttonStyle(ClawDadGhostButtonStyle())
-        .disabled(session.startupLoading)
+        .disabled(
+          subscription.loading ||
+          subscription.requiresPurchase ||
+          session.startupLoading
+        )
         .accessibilityLabel("Open Mac with Remote Assist")
 
         Spacer()
@@ -2628,6 +2758,7 @@ private func reasoningEffortLabel(_ effort: String) -> String {
 
 struct SettingsView: View {
   @EnvironmentObject private var session: CloudSession
+  @EnvironmentObject private var subscription: SubscriptionManager
   @Environment(\.dismiss) private var dismiss
   @State private var showingAdvanced = false
   @State private var showingForgetPairingConfirm = false
@@ -2700,14 +2831,46 @@ struct SettingsView: View {
 
             ClawDadPanel {
               VStack(alignment: .leading, spacing: 12) {
+                Text("Subscription")
+                  .font(.caption.weight(.black))
+                  .textCase(.uppercase)
+                  .foregroundStyle(ClawDadTheme.gold)
+                Text(subscription.accessLabel)
+                  .font(.headline.weight(.heavy))
+                  .foregroundStyle(ClawDadTheme.cream)
+                HStack(spacing: 16) {
+                  Button("Restore Purchases") {
+                    Task {
+                      await subscription.restore()
+                    }
+                  }
+                  .buttonStyle(.plain)
+                  Link(
+                    "Manage Subscription",
+                    destination: URL(string: "https://apps.apple.com/account/subscriptions")!
+                  )
+                }
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(ClawDadTheme.peach)
+              }
+            }
+
+            ClawDadPanel {
+              VStack(alignment: .leading, spacing: 12) {
                 DisclosureGroup(isExpanded: $showingAdvanced) {
                   VStack(alignment: .leading, spacing: 10) {
-                    clawField("Cloud URL", text: $session.cloudUrl)
-                    clawField("Account ID", text: $session.accountId)
-                    clawField("Workspace ID", text: $session.workspaceId)
-                    clawField("Host ID", text: $session.hostId)
-                    SecureField("Development token", text: $session.devToken)
-                      .textFieldStyle(ClawDadTextFieldStyle())
+                    LabeledContent("Relay") {
+                      Text(URL(string: session.cloudUrl)?.host ?? session.cloudUrl)
+                    }
+                    LabeledContent("Mac") {
+                      Text(session.hostId)
+                    }
+                    LabeledContent("Device access") {
+                      Text("Keychain protected")
+                        .foregroundStyle(ClawDadTheme.good)
+                    }
+                    .font(.caption)
+                    .foregroundStyle(ClawDadTheme.peach.opacity(0.82))
                     DeviceIdentityRow()
                   }
                   .padding(.top, 8)
@@ -2717,7 +2880,7 @@ struct SettingsView: View {
                       .font(.caption.weight(.black))
                       .textCase(.uppercase)
                       .foregroundStyle(ClawDadTheme.gold)
-                    Text("Cloud URL, host id, token, and device key")
+                    Text("Relay, Mac, and protected device identity")
                       .font(.caption)
                       .foregroundStyle(ClawDadTheme.peach.opacity(0.72))
                   }

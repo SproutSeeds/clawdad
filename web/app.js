@@ -15,6 +15,9 @@ const state = {
   cloudPairingStatus: "",
   cloudPairingQrSvg: "",
   cloudPairingExpiresAt: "",
+  cloudDevices: [],
+  cloudDevicesPending: false,
+  cloudDevicesStatus: "",
   directoryPickerPending: "",
   directoryBrowserOpen: false,
   directoryBrowserPurpose: "",
@@ -152,6 +155,8 @@ const state = {
   desktopAppStatus: null,
   desktopAppPending: "",
   desktopAppMessage: "",
+  subscriptionEntitlement: null,
+  subscriptionEntitlementStatus: "",
   remoteAssistStatus: null,
   remoteAssistPending: false,
   remoteAssistInfoOpen: false,
@@ -199,6 +204,7 @@ const elements = {
   settingsDesktopAppSection: document.querySelector("#settingsDesktopAppSection"),
   settingsDesktopAppVersion: document.querySelector("#settingsDesktopAppVersion"),
   settingsDesktopAppStatus: document.querySelector("#settingsDesktopAppStatus"),
+  settingsSubscriptionStatus: document.querySelector("#settingsSubscriptionStatus"),
   settingsCheckUpdatesButton: document.querySelector("#settingsCheckUpdatesButton"),
   settingsOpenLogsButton: document.querySelector("#settingsOpenLogsButton"),
   settingsCopyDiagnosticsButton: document.querySelector("#settingsCopyDiagnosticsButton"),
@@ -216,6 +222,8 @@ const elements = {
   settingsPairingQr: document.querySelector("#settingsPairingQr"),
   settingsPairingStatus: document.querySelector("#settingsPairingStatus"),
   settingsPairingExpiry: document.querySelector("#settingsPairingExpiry"),
+  settingsRefreshDevicesButton: document.querySelector("#settingsRefreshDevicesButton"),
+  settingsPairedDevices: document.querySelector("#settingsPairedDevices"),
   settingsCancelButton: document.querySelector("#settingsCancelButton"),
   settingsSaveButton: document.querySelector("#settingsSaveButton"),
   directoryBrowserModal: document.querySelector("#directoryBrowserModal"),
@@ -6403,6 +6411,60 @@ function buildSettingsRootRow(rootPath) {
   return row;
 }
 
+function renderCloudDevices() {
+  if (!elements.settingsPairedDevices) {
+    return;
+  }
+  clearNode(elements.settingsPairedDevices);
+  if (state.cloudDevicesPending) {
+    const status = document.createElement("div");
+    status.className = "settings-device-empty";
+    status.textContent = "Checking paired devices...";
+    elements.settingsPairedDevices.append(status);
+    return;
+  }
+  if (state.cloudDevicesStatus) {
+    const status = document.createElement("div");
+    status.className = "settings-device-empty";
+    status.textContent = state.cloudDevicesStatus;
+    elements.settingsPairedDevices.append(status);
+    return;
+  }
+  if (state.cloudDevices.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "settings-device-empty";
+    empty.textContent = "No iPhones are paired yet.";
+    elements.settingsPairedDevices.append(empty);
+    return;
+  }
+
+  for (const device of state.cloudDevices) {
+    const row = document.createElement("div");
+    row.className = "settings-device-row";
+    const details = document.createElement("div");
+    details.className = "settings-device-details";
+    const name = document.createElement("div");
+    name.className = "settings-root-path";
+    name.textContent = String(device.deviceName || device.deviceId || "iPhone");
+    const meta = document.createElement("div");
+    meta.className = "settings-root-meta";
+    const seenAt = formatTimestamp(device.lastSeenAt || device.trustedAt);
+    meta.textContent = seenAt ? `Last connected ${seenAt}` : "Paired device";
+    details.append(name, meta);
+
+    const revoke = document.createElement("button");
+    revoke.className = "settings-inline-info-button is-danger";
+    revoke.type = "button";
+    revoke.textContent = "Forget";
+    revoke.disabled = state.cloudDevicesPending;
+    revoke.addEventListener("click", () => {
+      void forgetCloudDevice(device.deviceId);
+    });
+    row.append(details, revoke);
+    elements.settingsPairedDevices.append(row);
+  }
+}
+
 function renderSettingsModal() {
   if (!elements.settingsModal) {
     return;
@@ -6493,6 +6555,12 @@ function renderSettingsModal() {
       : "";
     setText(elements.settingsPairingExpiry, expiryText, { empty: !expiryText });
   }
+  if (elements.settingsRefreshDevicesButton) {
+    elements.settingsRefreshDevicesButton.disabled = state.cloudDevicesPending;
+    elements.settingsRefreshDevicesButton.querySelector(".button-text").textContent =
+      state.cloudDevicesPending ? "Checking..." : "Refresh";
+  }
+  renderCloudDevices();
   elements.settingsCancelButton.disabled =
     state.settingsWorkspacePending || Boolean(state.directoryPickerPending);
   elements.settingsSaveButton.disabled =
@@ -10427,6 +10495,23 @@ function renderDesktopAppSettings() {
     statusText = "Desktop service and secure updates are ready.";
   }
   setText(elements.settingsDesktopAppStatus, statusText, { empty: false });
+  if (elements.settingsSubscriptionStatus) {
+    const entitlement = state.subscriptionEntitlement;
+    let entitlementText = state.subscriptionEntitlementStatus;
+    if (!entitlementText && entitlement?.active) {
+      const expiresAt = formatTimestamp(entitlement.expiresAt);
+      entitlementText = entitlement.source === "founding-beta"
+        ? "Subscription: founding beta access"
+        : `Subscription: active${expiresAt ? ` through ${expiresAt}` : ""}`;
+    } else if (!entitlementText && entitlement?.configured) {
+      entitlementText = "Subscription: inactive";
+    } else if (!entitlementText) {
+      entitlementText = "Subscription syncs from the paired iPhone.";
+    }
+    setText(elements.settingsSubscriptionStatus, entitlementText, {
+      empty: false,
+    });
+  }
 
   const pending = state.desktopAppPending;
   if (elements.settingsCheckUpdatesButton) {
@@ -10472,6 +10557,19 @@ async function refreshDesktopAppStatus({ quiet = false } = {}) {
     }
   } finally {
     state.desktopAppPending = "";
+    renderAll();
+  }
+}
+
+async function refreshSubscriptionEntitlement() {
+  try {
+    const payload = await fetchJson("/v1/cloud/entitlement");
+    state.subscriptionEntitlement = payload.entitlement || null;
+    state.subscriptionEntitlementStatus = "";
+  } catch (error) {
+    state.subscriptionEntitlementStatus =
+      String(error?.message || "Subscription status is unavailable.");
+  } finally {
     renderAll();
   }
 }
@@ -14846,7 +14944,9 @@ function openSettingsModal() {
   }
   void refreshVoiceInputDevices({ quiet: true });
   void refreshDesktopAppStatus();
+  void refreshSubscriptionEntitlement();
   void refreshRemoteAssistStatus();
+  void refreshCloudDevices({ quiet: true });
 }
 
 function closeSettingsModal({ restoreFocus = true } = {}) {
@@ -15066,6 +15166,59 @@ async function startCloudPairing() {
     showError(error);
   } finally {
     state.cloudPairingPending = false;
+    renderAll();
+  }
+}
+
+async function refreshCloudDevices({ quiet = false } = {}) {
+  if (state.cloudDevicesPending) {
+    return;
+  }
+  state.cloudDevicesPending = true;
+  if (!quiet) {
+    state.cloudDevicesStatus = "";
+  }
+  renderAll();
+  try {
+    const payload = await fetchJson("/v1/cloud/devices");
+    state.cloudDevices = Array.isArray(payload.devices)
+      ? payload.devices.filter((device) => !device.revokedAt)
+      : [];
+    state.cloudDevicesStatus = "";
+  } catch (error) {
+    state.cloudDevicesStatus = error.message;
+    if (!quiet) {
+      showError(error);
+    }
+  } finally {
+    state.cloudDevicesPending = false;
+    renderAll();
+  }
+}
+
+async function forgetCloudDevice(deviceId) {
+  const normalizedDeviceId = String(deviceId || "").trim();
+  if (!normalizedDeviceId || state.cloudDevicesPending) {
+    return;
+  }
+  state.cloudDevicesPending = true;
+  state.cloudDevicesStatus = "Revoking device access...";
+  renderAll();
+  try {
+    await fetchJson(`/v1/cloud/devices/${encodeURIComponent(normalizedDeviceId)}`, {
+      method: "DELETE",
+    });
+    state.cloudDevices = state.cloudDevices.filter(
+      (device) => device.deviceId !== normalizedDeviceId,
+    );
+    state.cloudDevicesStatus = state.cloudDevices.length === 0
+      ? "No iPhones are paired yet."
+      : "";
+  } catch (error) {
+    state.cloudDevicesStatus = error.message;
+    showError(error);
+  } finally {
+    state.cloudDevicesPending = false;
     renderAll();
   }
 }
@@ -15893,6 +16046,9 @@ function bindEvents() {
   });
   elements.settingsPairIphoneButton?.addEventListener("click", () => {
     void startCloudPairing();
+  });
+  elements.settingsRefreshDevicesButton?.addEventListener("click", () => {
+    void refreshCloudDevices();
   });
   elements.settingsForm?.addEventListener("submit", (event) => {
     event.preventDefault();

@@ -19,9 +19,6 @@ final class CloudSession: ObservableObject {
   @Published var hostId: String {
     didSet { defaults.set(hostId, forKey: "clawdad.hostId") }
   }
-  @Published var devToken: String {
-    didSet { defaults.set(devToken, forKey: "clawdad.devToken") }
-  }
   @Published var state: CloudConnectionState = .disconnected
   @Published var workspace = MobileWorkspace(
     id: "scratchpad",
@@ -74,6 +71,9 @@ final class CloudSession: ObservableObject {
   private var pendingVoiceEnvelopeId = ""
   private var pendingCatalogHistoryLimit: Int?
   private var pendingPairingHostPublicKeyPem = ""
+  private var pendingPairingRelayToken = ""
+  private var legacyRelayToken = ""
+  private var lastEntitlementFingerprint = ""
   private var remoteAssistEnvelopeHandler: ((CloudEnvelope) -> Void)?
   private var connectionRequested = true
   private var reconnectAttempt = 0
@@ -93,7 +93,8 @@ final class CloudSession: ObservableObject {
     self.accountId = defaults.string(forKey: "clawdad.accountId") ?? "local-account"
     self.workspaceId = defaults.string(forKey: "clawdad.workspaceId") ?? "scratchpad"
     self.hostId = defaults.string(forKey: "clawdad.hostId") ?? "cody-mac"
-    self.devToken = defaults.string(forKey: "clawdad.devToken") ?? ""
+    self.legacyRelayToken = defaults.string(forKey: "clawdad.devToken") ?? ""
+    defaults.removeObject(forKey: "clawdad.devToken")
     self.pairedHostId = defaults.string(forKey: "clawdad.pairedHostId") ?? ""
     self.pairedAt = defaults.string(forKey: "clawdad.pairedAt") ?? ""
     self.pairedHostPublicKeyPem =
@@ -211,6 +212,7 @@ final class CloudSession: ObservableObject {
     voiceTranscriptionStatus = ""
     pendingVoiceRequestId = ""
     pendingVoiceEnvelopeId = ""
+    lastEntitlementFingerprint = ""
     hostOnline = false
     lastRelayPongAt = .distantPast
     lastHostSeenAt = .distantPast
@@ -218,6 +220,13 @@ final class CloudSession: ObservableObject {
 
   func forgetPairing() {
     disconnect()
+    try? DeviceIdentity.shared.deleteRelayAccessToken(
+      accountId: accountId,
+      workspaceId: workspaceId,
+      hostId: hostId
+    )
+    pendingPairingRelayToken = ""
+    legacyRelayToken = ""
     pairedHostId = ""
     pairedAt = ""
     pairedHostPublicKeyPem = ""
@@ -382,6 +391,7 @@ final class CloudSession: ObservableObject {
           "limit": .string(String(limit))
         ])
       } catch {
+        self.pendingPairingRelayToken = ""
         let message = describe(error)
         historyStatus = message
         events.insert("Thread history failed: \(message)", at: 0)
@@ -557,6 +567,67 @@ final class CloudSession: ObservableObject {
     remoteAssistEnvelopeHandler = handler
   }
 
+  func syncEntitlement(
+    _ entitlement: ClawDadEntitlementSnapshot?,
+    foundingBetaAccess: Bool
+  ) {
+    guard ready else {
+      return
+    }
+    let formatter = ISO8601DateFormatter()
+    let productId = entitlement?.productId ?? ""
+    let transactionId = entitlement?.transactionId ?? ""
+    let expiresAt = entitlement?.expiresAt.map(formatter.string) ?? ""
+    let revokedAt = entitlement?.revokedAt.map(formatter.string) ?? ""
+    let active = foundingBetaAccess || entitlement?.active == true
+    let fingerprint = [
+      productId,
+      transactionId,
+      expiresAt,
+      revokedAt,
+      active ? "active" : "inactive",
+      foundingBetaAccess ? "founding-beta" : "storekit"
+    ].joined(separator: "|")
+    guard fingerprint != lastEntitlementFingerprint else {
+      return
+    }
+    lastEntitlementFingerprint = fingerprint
+
+    Task {
+      do {
+        try await sendEnvelope(type: "entitlement.sync", body: [
+          "active": .bool(active),
+          "source": .string(
+            foundingBetaAccess ? "founding-beta" : "storekit-2"
+          ),
+          "productId": .string(productId),
+          "transactionId": .string(transactionId),
+          "originalTransactionId": .string(
+            entitlement?.originalTransactionId ?? ""
+          ),
+          "purchasedAt": .string(
+            entitlement?.purchasedAt.map(formatter.string) ?? ""
+          ),
+          "expiresAt": .string(expiresAt),
+          "revokedAt": .string(revokedAt),
+          "introductoryOffer": .bool(
+            entitlement?.isInIntroductoryOffer ?? false
+          ),
+          "environment": .string(entitlement?.environment ?? ""),
+          "signedTransaction": .string(
+            entitlement?.signedTransaction ?? ""
+          ),
+          "observedAt": .string(
+            formatter.string(from: entitlement?.observedAt ?? Date())
+          )
+        ])
+      } catch {
+        lastEntitlementFingerprint = ""
+        events.insert("Subscription sync will retry after reconnect", at: 0)
+      }
+    }
+  }
+
   @discardableResult
   func sendRemoteAssistEnvelope(
     type: String,
@@ -609,6 +680,7 @@ final class CloudSession: ObservableObject {
     workspaceId = payload.workspaceId
     hostId = payload.hostId
     pendingPairingHostPublicKeyPem = payload.hostPublicKeyPem ?? ""
+    pendingPairingRelayToken = payload.token
     startupWorkspaceReady = false
     workspace = MobileWorkspace(
       id: payload.workspaceId,
@@ -637,14 +709,41 @@ final class CloudSession: ObservableObject {
     #endif
   }
 
+  private func relayAccessToken() throws -> String {
+    if !pendingPairingRelayToken.isEmpty {
+      return pendingPairingRelayToken
+    }
+    let stored = try DeviceIdentity.shared.relayAccessToken(
+      accountId: accountId,
+      workspaceId: workspaceId,
+      hostId: hostId
+    )
+    if !stored.isEmpty {
+      return stored
+    }
+    if !legacyRelayToken.isEmpty {
+      try DeviceIdentity.shared.saveRelayAccessToken(
+        legacyRelayToken,
+        accountId: accountId,
+        workspaceId: workspaceId,
+        hostId: hostId
+      )
+      let migrated = legacyRelayToken
+      legacyRelayToken = ""
+      return migrated
+    }
+    return ""
+  }
+
   private func connectAsync() async throws {
     reconnectTask = nil
     resetSocket()
     state = .connecting
     let deviceId = try DeviceIdentity.shared.deviceId()
     var request = URLRequest(url: try realtimeURL(deviceId: deviceId))
-    if !devToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-      request.setValue("Bearer \(devToken)", forHTTPHeaderField: "Authorization")
+    let accessToken = try relayAccessToken()
+    if !accessToken.isEmpty {
+      request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
     }
     let socket = URLSession.shared.webSocketTask(with: request)
     socket.maximumMessageSize = 32 * 1024 * 1024
@@ -919,6 +1018,24 @@ final class CloudSession: ObservableObject {
       requestCatalog()
       requestHistory()
     case "pair.accepted":
+      let relayAccessToken = envelope.body["relayAccessToken"]?.stringValue ?? ""
+      if !relayAccessToken.isEmpty {
+        do {
+          try DeviceIdentity.shared.saveRelayAccessToken(
+            relayAccessToken,
+            accountId: accountId,
+            workspaceId: workspaceId,
+            hostId: hostId
+          )
+        } catch {
+          pendingPairingRelayToken = ""
+          pairingStatus = "Pairing could not protect this device credential in Keychain."
+          events.insert("Pairing failed: Keychain could not save access", at: 0)
+          disconnect()
+          return
+        }
+      }
+      pendingPairingRelayToken = ""
       pairedHostId = hostId
       pairedAt = envelope.body["trustedAt"]?.stringValue ?? ISO8601DateFormatter().string(from: Date())
       let acceptedHostKey = envelope.body["hostPublicKeyPem"]?.stringValue ?? ""
@@ -929,6 +1046,8 @@ final class CloudSession: ObservableObject {
       pairingStatus = "iPhone paired with \(hostId)"
       events.insert("iPhone paired", at: 0)
       requestCatalog()
+    case "entitlement.accepted":
+      events.insert("Subscription access synced to Mac", at: 0)
     case "remote.assist.available",
          "remote.assist.offer",
          "remote.assist.ice",

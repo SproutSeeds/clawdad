@@ -1,0 +1,43 @@
+{
+  "schema": "clawdad.app-store-release/1",
+  "generatedAt": "2026-07-30T09:05:47.977Z",
+  "app": {
+    "id": "6783090068",
+    "name": "ClawDad Mobile",
+    "bundleId": "earth.frg.clawdad.ios"
+  },
+  "metadata": {
+    "appInfoId": "fbd14c0f-1afe-41ce-89ee-ff5ea02e86d2",
+    "appStoreState": "PREPARE_FOR_SUBMISSION",
+    "localizationId": "d3904947-a227-4fe6-a0fd-5bfabb8161f9",
+    "configured": true,
+    "name": "ClawDad Mobile",
+    "privacyPolicyUrl": "https://clawdad-cloud.frg.earth/privacy"
+  },
+  "version": {
+    "id": "dce03b1e-ac48-4f93-989a-2e36df8af2fb",
+    "versionString": "1.0",
+    "state": "PREPARE_FOR_SUBMISSION",
+    "localizationId": "d44928ae-9da1-41cf-b828-c0df69ddcdb8",
+    "configured": true,
+    "screenshotSetCount": 0,
+    "reviewContactConfigured": false
+  },
+  "beta": {
+    "groupId": "bbba6b69-7ac4-4d56-bc41-e9456d56b02e",
+    "groupName": "ClawDad Internal",
+    "buildId": "942d340f-89ad-4491-8bb4-7749b9a71d30",
+    "buildNumber": "19",
+    "processingState": "VALID",
+    "usesNonExemptEncryption": false,
+    "assignedToGroup": true,
+    "appLocalizationConfigured": true,
+    "buildLocalizationConfigured": true
+  },
+  "remainingHumanGates": [
+    "App Store screenshots and representative visual review",
+    "App privacy questionnaire confirmation",
+    "App Review contact details and reviewer pairing instructions",
+    "Physical-device paid purchase, restore, and cancellation verification"
+  ]
+}

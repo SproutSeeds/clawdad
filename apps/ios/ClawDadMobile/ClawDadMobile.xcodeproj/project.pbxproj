@@ -11,6 +11,7 @@
 		275FAABA58CF0436EC6D32FB /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 471CC1C676A805963BAF2F99 /* Assets.xcassets */; };
 		3B51519C1804A2B28C237997 /* CloudModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 395E23F4DD2363BA0762CE4C /* CloudModels.swift */; };
 		3CA091886654915398868F62 /* CloudClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD8DD24D34A3F29E43308A65 /* CloudClient.swift */; };
+		4D1C0FA879A0AA478DD90B11 /* SubscriptionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8960C1531C592BD814505199 /* SubscriptionManager.swift */; };
 		790F723DF6F713A6DFC6D572 /* ClawDadRemoteAssistProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = 3E041F6ED9B6E45F5F37F06A /* ClawDadRemoteAssistProtocol */; };
 		854A5AC2401B066B721E86D2 /* ClawDadMobileUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11E193EDE43AF5D11AADF538 /* ClawDadMobileUITests.swift */; };
 		8A0DDACD490ED6B80E4A30CA /* QRScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26AABBF8F4DF0D8B38BF9365 /* QRScannerView.swift */; };
@@ -42,6 +43,7 @@
 		3B8CED3140E0C0FA87EA0782 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		471CC1C676A805963BAF2F99 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		47DAEBD8C630AA5DA4CC104A /* WebRTCPackage */ = {isa = PBXFileReference; lastKnownFileType = folder; name = WebRTCPackage; path = ../../../vendor/WebRTCPackage; sourceTree = SOURCE_ROOT; };
+		8960C1531C592BD814505199 /* SubscriptionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionManager.swift; sourceTree = "<group>"; };
 		930A750132AFE74E66A35E11 /* PasskeyRequests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PasskeyRequests.swift; sourceTree = "<group>"; };
 		9EF3E28FFA532EBF14FEAF8B /* DeviceIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceIdentity.swift; sourceTree = "<group>"; };
 		A37F54FBA7123B5C6C46EEB6 /* ClawDadRemoteAssistProtocol */ = {isa = PBXFileReference; lastKnownFileType = folder; name = ClawDadRemoteAssistProtocol; path = ../../../native/ClawDadRemoteAssistProtocol; sourceTree = SOURCE_ROOT; };
@@ -87,6 +89,7 @@
 				930A750132AFE74E66A35E11 /* PasskeyRequests.swift */,
 				26AABBF8F4DF0D8B38BF9365 /* QRScannerView.swift */,
 				AA4FB03C06FF3E3F780BF6B2 /* RemoteAssist.swift */,
+				8960C1531C592BD814505199 /* SubscriptionManager.swift */,
 			);
 			path = ClawDadMobile;
 			sourceTree = "<group>";
@@ -186,12 +189,12 @@
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					7AE3743224B0BDC91B2AF0C0 = {
-						DevelopmentTeam = "";
+						DevelopmentTeam = 4QV4WR9G32;
 						ProvisioningStyle = Automatic;
 						TestTargetID = 8F796CDC540022A7053C796F;
 					};
 					8F796CDC540022A7053C796F = {
-						DevelopmentTeam = "";
+						DevelopmentTeam = 4QV4WR9G32;
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -245,6 +248,7 @@
 				FDF87A63AB6BE997E8422599 /* PasskeyRequests.swift in Sources */,
 				8A0DDACD490ED6B80E4A30CA /* QRScannerView.swift in Sources */,
 				9FAEDA464727521A0D77839C /* RemoteAssist.swift in Sources */,
+				4D1C0FA879A0AA478DD90B11 /* SubscriptionManager.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -273,6 +277,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CLAWDAD_CLOUD_URL = "http://127.0.0.1:8787";
+				CLAWDAD_FOUNDING_BETA_ACCESS = YES;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				INFOPLIST_FILE = Resources/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
@@ -346,11 +351,12 @@
 				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 16;
+				CURRENT_PROJECT_VERSION = 19;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
@@ -424,11 +430,12 @@
 				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 16;
+				CURRENT_PROJECT_VERSION = 19;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
@@ -532,11 +539,12 @@
 				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 16;
+				CURRENT_PROJECT_VERSION = 19;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;

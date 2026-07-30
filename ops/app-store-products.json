@@ -1,0 +1,38 @@
+{
+  "schema": "clawdad.app-store-products/1",
+  "generatedAt": "2026-07-30T08:42:33.483Z",
+  "app": {
+    "id": "6783090068",
+    "name": "ClawDad Mobile",
+    "bundleId": "earth.frg.clawdad.ios"
+  },
+  "group": {
+    "id": "22274634",
+    "referenceName": "ClawDad Pro"
+  },
+  "territories": [
+    "USA"
+  ],
+  "products": [
+    {
+      "id": "6796236051",
+      "productId": "earth.frg.clawdad.pro.monthly",
+      "configured": true,
+      "state": "MISSING_METADATA",
+      "subscriptionPeriod": "ONE_MONTH",
+      "priceCount": 1,
+      "introductoryOfferCount": 1,
+      "reviewScreenshotState": "COMPLETE"
+    },
+    {
+      "id": "6796236147",
+      "productId": "earth.frg.clawdad.pro.annual",
+      "configured": true,
+      "state": "MISSING_METADATA",
+      "subscriptionPeriod": "ONE_YEAR",
+      "priceCount": 1,
+      "introductoryOfferCount": 1,
+      "reviewScreenshotState": "COMPLETE"
+    }
+  ]
+}

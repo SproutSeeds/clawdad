@@ -5,6 +5,7 @@ import {
   WorkspaceRelay,
   cloudRelayTargetMatches,
   generateRemoteAssistIceServers,
+  publicClawDadPage,
   validateSparkleAppcast,
 } from "../cloud/worker.mjs";
 
@@ -36,9 +37,213 @@ function memoryDurableObjectState() {
       async put(key, value) {
         values.set(key, value);
       },
+      async delete(key) {
+        values.delete(key);
+      },
+      async list({ prefix = "" } = {}) {
+        return new Map(
+          [...values.entries()].filter(([key]) => key.startsWith(prefix)),
+        );
+      },
     },
   };
 }
+
+function relayAccessRequest(pathname, {
+  method = "GET",
+  token = "",
+  body,
+  headers = {},
+} = {}) {
+  return new Request(
+    `https://clawdad.example${pathname}?accountId=acct_12345678901234567890`,
+    {
+      method,
+      headers: {
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+        ...(body ? { "content-type": "application/json" } : {}),
+        ...headers,
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    },
+  );
+}
+
+test("public ClawDad pages expose support and privacy without app data", async () => {
+  const overview = publicClawDadPage("/");
+  const support = publicClawDadPage("/support");
+  const privacy = publicClawDadPage("/privacy");
+
+  assert.equal(overview.status, 200);
+  assert.equal(support.status, 200);
+  assert.equal(privacy.status, 200);
+  assert.match(overview.headers.get("content-security-policy"), /default-src 'none'/u);
+  assert.match(await overview.text(), /paired Mac remains the execution authority/u);
+  assert.match(await support.text(), /Forget Pairing/u);
+  assert.match(await privacy.text(), /does not durably store message bodies/u);
+  assert.equal(publicClawDadPage("/missing"), null);
+});
+
+test("workspace relay claims an opaque workspace and protects host controls", async () => {
+  const relay = new WorkspaceRelay(memoryDurableObjectState(), {});
+  const hostToken = "host-token-with-at-least-thirty-two-characters";
+  const claim = await relay.fetch(relayAccessRequest(
+    "/workspaces/ws_12345678901234567890/access/claim",
+    {
+      method: "POST",
+      token: hostToken,
+      body: {
+        accountId: "acct_12345678901234567890",
+        hostId: "mac-host",
+        hostKeyId: "host-key",
+      },
+    },
+  ));
+  assert.equal(claim.status, 201);
+  assert.equal((await claim.json()).claimed, true);
+
+  const unauthorized = await relay.fetch(relayAccessRequest(
+    "/workspaces/ws_12345678901234567890/access/devices",
+  ));
+  assert.equal(unauthorized.status, 401);
+
+  const repeated = await relay.fetch(relayAccessRequest(
+    "/workspaces/ws_12345678901234567890/access/claim",
+    {
+      method: "POST",
+      token: hostToken,
+      body: {
+        accountId: "acct_12345678901234567890",
+        hostId: "mac-host",
+        hostKeyId: "host-key",
+      },
+    },
+  ));
+  assert.equal(repeated.status, 200);
+});
+
+test("legacy workspace claim requires a private migration credential", async () => {
+  const relay = new WorkspaceRelay(
+    memoryDurableObjectState(),
+    { CLAWDAD_LEGACY_BOOTSTRAP_TOKEN: "migration-secret" },
+  );
+  const base = {
+    method: "POST",
+    token: "host-token-with-at-least-thirty-two-characters",
+    body: {
+      accountId: "local-account",
+      hostId: "cody-mac",
+    },
+  };
+  const denied = await relay.fetch(relayAccessRequest(
+    "/workspaces/scratchpad/access/claim",
+    base,
+  ));
+  assert.equal(denied.status, 403);
+
+  const claimed = await relay.fetch(relayAccessRequest(
+    "/workspaces/scratchpad/access/claim",
+    {
+      ...base,
+      headers: {
+        "x-clawdad-bootstrap": "migration-secret",
+      },
+    },
+  ));
+  assert.equal(claimed.status, 201);
+});
+
+test("pairing ticket mints one device token and revocation disables it", async () => {
+  const relay = new WorkspaceRelay(memoryDurableObjectState(), {});
+  const hostToken = "host-token-with-at-least-thirty-two-characters";
+  const workspace = "/workspaces/ws_12345678901234567890";
+  await relay.fetch(relayAccessRequest(`${workspace}/access/claim`, {
+    method: "POST",
+    token: hostToken,
+    body: {
+      accountId: "acct_12345678901234567890",
+      hostId: "mac-host",
+    },
+  }));
+
+  const pairingToken = "pairing-token-with-at-least-thirty-two-chars";
+  const ticket = await relay.fetch(relayAccessRequest(
+    `${workspace}/access/pairing-tickets`,
+    {
+      method: "POST",
+      token: hostToken,
+      body: {
+        pairingToken,
+        expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+      },
+    },
+  ));
+  assert.equal(ticket.status, 201);
+
+  const activated = await relay.fetch(relayAccessRequest(
+    `${workspace}/access/devices/ios-phone`,
+    {
+      method: "PUT",
+      token: hostToken,
+      body: {
+        pairingToken,
+        deviceName: "CodyVerse",
+        platform: "ios",
+        keyId: "phone-key",
+      },
+    },
+  ));
+  assert.equal(activated.status, 200);
+  const activation = await activated.json();
+  assert.equal(activation.device.deviceId, "ios-phone");
+  assert.ok(activation.relayAccessToken.length >= 32);
+
+  const reused = await relay.fetch(relayAccessRequest(
+    `${workspace}/access/devices/second-phone`,
+    {
+      method: "PUT",
+      token: hostToken,
+      body: {
+        pairingToken,
+      },
+    },
+  ));
+  assert.equal(reused.status, 403);
+
+  const listed = await relay.fetch(relayAccessRequest(
+    `${workspace}/access/devices`,
+    { token: hostToken },
+  ));
+  assert.deepEqual(
+    (await listed.json()).devices.map((device) => device.deviceId),
+    ["ios-phone"],
+  );
+
+  const revoked = await relay.fetch(relayAccessRequest(
+    `${workspace}/access/devices/ios-phone`,
+    {
+      method: "DELETE",
+      token: hostToken,
+    },
+  ));
+  assert.equal(revoked.status, 200);
+
+  const metadata = {
+    accountId: "acct_12345678901234567890",
+    workspaceId: "ws_12345678901234567890",
+    hostId: "",
+    deviceId: "ios-phone",
+    role: "device",
+  };
+  const denied = await relay.authorizeRealtime(
+    relayAccessRequest(`${workspace}/realtime`, {
+      token: activation.relayAccessToken,
+    }),
+    metadata,
+  );
+  assert.equal(denied.ok, false);
+  assert.equal(denied.status, 403);
+});
 
 test("cloud relay routes targeted envelopes only to the named host or device", () => {
   const host = { hostId: "cody-mac", deviceId: "" };
@@ -244,6 +449,49 @@ test("Remote Assist returns short-lived Cloudflare ICE servers", async () => {
   const payload = await response.json();
   assert.equal(payload.expiresIn, 3600);
   assert.equal(payload.iceServers.length, 2);
+});
+
+test("workspace host credential authorizes Remote Assist ICE without a shared app token", async (t) => {
+  const relay = new WorkspaceRelay(memoryDurableObjectState(), {
+    CLAWDAD_TURN_KEY_ID: "turn-key",
+    CLAWDAD_TURN_KEY_API_TOKEN: "turn-secret",
+  });
+  const hostToken = "host-token-with-at-least-thirty-two-characters";
+  const workspace = "/workspaces/ws_12345678901234567890";
+  await relay.fetch(relayAccessRequest(`${workspace}/access/claim`, {
+    method: "POST",
+    token: hostToken,
+    body: {
+      accountId: "acct_12345678901234567890",
+      hostId: "mac-host",
+    },
+  }));
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    iceServers: [{
+      urls: ["turns:turn.cloudflare.com:443?transport=tcp"],
+      username: "temporary-user",
+      credential: "temporary-credential",
+    }],
+  }), {
+    status: 201,
+    headers: { "content-type": "application/json" },
+  });
+
+  const response = await relay.fetch(relayAccessRequest(
+    `${workspace}/remote-assist/ice-servers`,
+    {
+      method: "POST",
+      token: hostToken,
+      body: {},
+    },
+  ));
+
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).iceServers.length, 1);
 });
 
 test("Mac update catalog rejects malformed or unsigned Sparkle feeds", () => {

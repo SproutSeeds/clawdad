@@ -1,0 +1,204 @@
+#!/usr/bin/env node
+
+import { readFile, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { basename, resolve } from "node:path";
+import {
+  AppStoreConnectClient,
+  appReleasePlan,
+  configurePaidBeta,
+  configurePaidBetaReviewScreenshots,
+  configureAppRelease,
+  paidBetaCatalog,
+  paidBetaPlan,
+  readAppReleaseStatus,
+  readPaidBetaStatus,
+} from "../lib/app-store-connect.mjs";
+
+function usage() {
+  return [
+    "Usage: clawdad-app-store <command> [--apply] [--json]",
+    "",
+    "Commands:",
+    "  plan               Show subscription product configuration",
+    "  status             Read subscription product status",
+    "  configure          Apply subscription product configuration",
+    "  review-screenshots Upload subscription review screenshots",
+    "  release-plan       Show App Store and TestFlight metadata configuration",
+    "  release-status     Read App Store and TestFlight release status",
+    "  release-configure  Apply App Store and TestFlight release configuration",
+    "",
+    "Environment:",
+    "  APP_STORE_CONNECT_KEY_ID",
+    "  APP_STORE_CONNECT_ISSUER_ID",
+    "  APP_STORE_CONNECT_KEY_PATH",
+  ].join("\n");
+}
+
+function parseArguments(argv) {
+  const command = argv.find((value) => !value.startsWith("-")) || "status";
+  const imageIndex = argv.indexOf("--image");
+  return {
+    command,
+    apply: argv.includes("--apply"),
+    json: argv.includes("--json"),
+    image: imageIndex >= 0 ? argv[imageIndex + 1] : "",
+    help: argv.includes("--help") || argv.includes("-h"),
+  };
+}
+
+function print(value, asJson) {
+  if (asJson) {
+    process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+    return;
+  }
+  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+async function loadClient() {
+  const keyId = process.env.APP_STORE_CONNECT_KEY_ID || "3SN77ZU256";
+  const issuerId = process.env.APP_STORE_CONNECT_ISSUER_ID ||
+    "bd948303-a08e-45af-8ad3-582024dcafbc";
+  const keyPath = resolve(
+    process.env.APP_STORE_CONNECT_KEY_PATH ||
+    `${homedir()}/.private_keys/AuthKey_${keyId}.p8`,
+  );
+  const privateKey = await readFile(keyPath, "utf8");
+  return new AppStoreConnectClient({
+    keyId,
+    issuerId,
+    privateKey,
+  });
+}
+
+async function main() {
+  const options = parseArguments(process.argv.slice(2));
+  if (options.help) {
+    process.stdout.write(`${usage()}\n`);
+    return;
+  }
+  if (options.command === "plan") {
+    print(paidBetaPlan(), options.json);
+    return;
+  }
+  if (options.command === "release-plan") {
+    print(appReleasePlan(), options.json);
+    return;
+  }
+  if (
+    ![
+      "status",
+      "configure",
+      "review-screenshots",
+      "release-status",
+      "release-configure",
+    ].includes(options.command)
+  ) {
+    throw new Error(`Unknown command: ${options.command}\n\n${usage()}`);
+  }
+
+  const client = await loadClient();
+  if (options.command === "status") {
+    print(await readPaidBetaStatus(client), options.json);
+    return;
+  }
+  if (options.command === "release-status") {
+    print(await readAppReleaseStatus(client), options.json);
+    return;
+  }
+  if (options.command === "review-screenshots") {
+    const imagePath = resolve(
+      options.image || "docs/app-store/subscription-review-1290x2796.png",
+    );
+    if (!options.apply) {
+      print({
+        applied: false,
+        message: "Review the image, then rerun review-screenshots with --apply.",
+        image: imagePath,
+        current: await readPaidBetaStatus(client),
+      }, options.json);
+      return;
+    }
+    const contents = await readFile(imagePath);
+    const result = await configurePaidBetaReviewScreenshots(client, {
+      fileName: basename(imagePath),
+      contents,
+    });
+    const record = {
+      schema: "clawdad.app-store-products/1",
+      ...result.status,
+    };
+    await writeFile(
+      resolve("ops/app-store-products.json"),
+      `${JSON.stringify(record, null, 2)}\n`,
+      { mode: 0o644 },
+    );
+    print({
+      applied: true,
+      image: imagePath,
+      results: result.results,
+      record: "ops/app-store-products.json",
+      status: result.status,
+    }, options.json);
+    return;
+  }
+  if (options.command === "release-configure") {
+    if (!options.apply) {
+      print({
+        applied: false,
+        message: "Review this plan, then rerun release-configure with --apply.",
+        plan: appReleasePlan(),
+        current: await readAppReleaseStatus(client),
+      }, options.json);
+      return;
+    }
+    const result = await configureAppRelease(client);
+    const record = {
+      schema: "clawdad.app-store-release/1",
+      ...result.status,
+    };
+    await writeFile(
+      resolve("ops/app-store-release.json"),
+      `${JSON.stringify(record, null, 2)}\n`,
+      { mode: 0o644 },
+    );
+    print({
+      applied: true,
+      actions: result.actions,
+      record: "ops/app-store-release.json",
+      status: result.status,
+    }, options.json);
+    return;
+  }
+  if (!options.apply) {
+    print({
+      applied: false,
+      message: "Review this plan, then rerun configure with --apply.",
+      plan: paidBetaPlan(),
+      current: await readPaidBetaStatus(client),
+    }, options.json);
+    return;
+  }
+
+  const result = await configurePaidBeta(client, paidBetaCatalog);
+  const record = {
+    schema: "clawdad.app-store-products/1",
+    ...result.status,
+  };
+  await writeFile(
+    resolve("ops/app-store-products.json"),
+    `${JSON.stringify(record, null, 2)}\n`,
+    { mode: 0o644 },
+  );
+  print({
+    applied: true,
+    actions: result.actions,
+    record: "ops/app-store-products.json",
+    status: result.status,
+  }, options.json);
+}
+
+main().catch((error) => {
+  process.stderr.write(`clawdad-app-store: ${error.message}\n`);
+  process.exitCode = 1;
+});

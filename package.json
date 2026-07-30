@@ -1,15 +1,23 @@
 {
   "name": "clawdad",
-  "version": "0.7.0-beta.1",
+  "version": "0.7.0-beta.2",
   "description": "Multi-agent orchestration CLI for AI coding agents. Manages persistent spoke agents across projects using ORP as the canonical data store.",
   "scripts": {
     "test": "node --test test/*.test.mjs",
     "cloud:host": "node lib/server.mjs cloud-host",
     "cloud:dev": "npx wrangler dev --config cloud/wrangler.toml",
     "cloud:deploy:staging": "npx wrangler deploy --config cloud/wrangler.toml",
+    "appstore:plan": "node bin/clawdad-app-store plan",
+    "appstore:status": "node bin/clawdad-app-store status",
+    "appstore:configure": "node bin/clawdad-app-store configure",
+    "appstore:review-screenshots": "node bin/clawdad-app-store review-screenshots",
+    "appstore:release:plan": "node bin/clawdad-app-store release-plan",
+    "appstore:release:status": "node bin/clawdad-app-store release-status",
+    "appstore:release:configure": "node bin/clawdad-app-store release-configure",
     "ios:generate": "xcodegen --spec apps/ios/ClawDadMobile/project.yml --project apps/ios/ClawDadMobile",
     "ios:build": "./bin/fetch-webrtc-dependency && xcodebuild -project apps/ios/ClawDadMobile/ClawDadMobile.xcodeproj -scheme ClawDadMobile -configuration Debug -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build",
     "ios:archive": "./bin/fetch-webrtc-dependency && xcodebuild -project apps/ios/ClawDadMobile/ClawDadMobile.xcodeproj -scheme ClawDadMobile -configuration Release -destination 'generic/platform=iOS' -archivePath apps/ios/ClawDadMobile/build/ClawDadMobile.xcarchive archive",
+    "ios:upload:testflight": "./bin/clawdad-testflight upload",
     "native:app": "zsh native/macos/build-app.sh",
     "native:release": "zsh native/macos/package-release.sh",
     "native:build": "./bin/fetch-webrtc-dependency && swift build --package-path native/macos",
@@ -56,6 +64,7 @@
     "web/",
     "native/",
     "vendor/WebRTCPackage/",
+    "vendor/apple-pki/",
     "templates/",
     "docs/BORROWING_FROM_AGENT_RUNTIMES.md",
     "docs/chimera-local-lane.md",
@@ -81,6 +90,7 @@
     "README.md"
   ],
   "dependencies": {
+    "@apple/app-store-server-library": "^3.1.0",
     "@sproutseeds/tailnet-app": "^0.3.0",
     "open-research-protocol": ">=0.4.27",
     "qrcode": "^1.5.4"

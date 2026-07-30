@@ -1,33 +1,73 @@
-# Clawdad Release Packet
+# ClawDad Release Packet
 
-Prepared: 2026-04-13
+Prepared: 2026-07-30
 
 ## Release
 
 - Package: `clawdad`
-- Version: `0.6.4`
-- Tag: `v0.6.4`
+- Package version: `0.7.0-beta.2`
+- Git tag: `v0.7.0-beta.2`
+- Mac app: `0.7.0 (17)`
+- iPhone app: `0.7.0 (19)`
+- TestFlight group: `ClawDad Internal`
+- App Store record: `ClawDad Mobile`, version `1.0`
 
-## Scope
+## Customer Artifacts
 
-- Dispatch workers now have Codex turn/request timeouts.
-- Stale or abandoned mailbox dispatches are repaired to failed state instead of hanging the mobile app indefinitely.
-- Malformed mailbox status files are quarantined and replaced with a failed status so `/v1/status` stays responsive.
-- Mailbox shell writes JSON-safe multiline errors.
-- Delegate run state and mobile UI updates from the prior hardening work are included.
+- `ClawDad-0.7.0-beta.2-mac.dmg`
+- `ClawDad-0.7.0-beta.2-mac.zip`
+- `SHA256SUMS`
+- signed Sparkle `appcast.xml`
+- TestFlight build 19
+- release notes in `docs/releases/0.7.0-beta.2.md`
 
-## Keep Out
+## Release Scope
 
-- `.playwright-mcp/`
-- root-level screenshot scratch files
-- generated mascot/cutout/contact-sheet candidates under `assets/`
-- local walkthrough recordings
+- Per-device QR pairing, inventory, revocation, and Keychain storage.
+- Workspace-scoped cloud relay authorization.
+- StoreKit monthly and annual plans with a 14-day free trial.
+- Apple-signed entitlement verification on the paired Mac.
+- Direct and Queue delivery through long turns and reconnects.
+- Voice, images, formatted thread history, and cross-project recent threads.
+- Face ID-gated Remote Assist with keyboard and explicit clipboard transfer.
+- Signed, notarized Mac install and Sparkle update pipeline.
+
+## Human Gates
+
+- Install TestFlight build 19 and complete the physical certification matrix.
+- Confirm Paid Applications Agreement, banking, tax, and app privacy answers.
+- Attach the first subscriptions and a public build to App Store version 1.0.
+- Supply App Review contact details and a durable reviewer pairing path.
+- Obtain Cloudflare Calls Write access before restrictive-network TURN testing.
 
 ## Verification
 
-- `npm test`
-- `node --check lib/server.mjs`
-- `node --check lib/codex-app-server-dispatch.mjs`
-- `zsh -n bin/clawdad`
-- `npm pack --dry-run --json`
-- live `/v1/status` smoke check after service restart
+Run:
+
+```sh
+npm test
+swift test --package-path apps/ios/ClawDadMobile
+swift test --package-path native/macos
+npm run ios:build
+npm pack --dry-run --json
+git diff --check
+orp hygiene --json
+```
+
+For the generated Mac release, verify:
+
+```sh
+codesign --verify --deep --strict --verbose=2 \
+  native/macos/dist/ClawDad.app
+xcrun stapler validate \
+  native/macos/dist/releases/0.7.0-beta.2/ClawDad-0.7.0-beta.2-mac.dmg
+shasum -a 256 -c \
+  native/macos/dist/releases/0.7.0-beta.2/SHA256SUMS
+```
+
+## Keep Out
+
+- `assets/wordmark-explorations/`
+- local screenshots outside canonical App Store assets
+- credentials, pairing tickets, relay tokens, and Apple signed transactions
+- local logs and customer project data

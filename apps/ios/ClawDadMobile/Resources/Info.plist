@@ -18,8 +18,12 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>ClawDadCloudURL</key>
 	<string>$(CLAWDAD_CLOUD_URL)</string>
+	<key>ClawDadFoundingBetaAccess</key>
+	<string>$(CLAWDAD_FOUNDING_BETA_ACCESS)</string>
 	<key>NSCameraUsageDescription</key>
 	<string>ClawDad uses the camera to scan the pairing QR code from your Mac.</string>
 	<key>NSMicrophoneUsageDescription</key>

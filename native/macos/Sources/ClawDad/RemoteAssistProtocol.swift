@@ -117,11 +117,10 @@ struct RemoteCloudConfiguration {
   var accountId: String
   var workspaceId: String
   var hostId: String
-  var devToken: String
+  var relayHostToken: String
   var hostPrivateKeyPem: String
   var hostPublicKeyPem: String
   var trustedDevicePublicKeys: [String: String]
-  var remoteAssistCredentialToken: String
   var iceServers: [RemoteIceServerConfiguration]
 
   var ready: Bool {
@@ -159,15 +158,16 @@ struct RemoteCloudConfiguration {
       accountId: string(object["accountId"]),
       workspaceId: string(object["workspaceId"]),
       hostId: string(object["hostId"]),
-      devToken: string(object["devToken"]).isEmpty
-        ? string(object["cloudDevToken"])
-        : string(object["devToken"]),
+      relayHostToken: string(object["relayHostToken"]).isEmpty
+        ? (
+          string(object["devToken"]).isEmpty
+            ? string(object["cloudDevToken"])
+            : string(object["devToken"])
+        )
+        : string(object["relayHostToken"]),
       hostPrivateKeyPem: privateKey,
       hostPublicKeyPem: publicKey,
       trustedDevicePublicKeys: trusted,
-      remoteAssistCredentialToken: string(
-        object["remoteAssistCredentialToken"]
-      ),
       iceServers: configuredIceServers.isEmpty
         ? [RemoteIceServerConfiguration(
             urls: ["stun:stun.cloudflare.com:3478"],
@@ -195,12 +195,14 @@ struct RemoteCloudConfiguration {
   }
 
   func resolvedIceServers() async -> [RemoteIceServerConfiguration] {
-    guard !remoteAssistCredentialToken.isEmpty,
+    guard !relayHostToken.isEmpty,
           var components = URLComponents(string: cloudUrl) else {
       return iceServers
     }
-    components.path = "/remote-assist/ice-servers"
-    components.query = nil
+    components.path = "/workspaces/\(workspaceId)/remote-assist/ice-servers"
+    components.queryItems = [
+      URLQueryItem(name: "accountId", value: accountId)
+    ]
     guard let url = components.url else {
       return iceServers
     }
@@ -209,7 +211,7 @@ struct RemoteCloudConfiguration {
     request.httpMethod = "POST"
     request.timeoutInterval = 8
     request.setValue(
-      "Bearer \(remoteAssistCredentialToken)",
+      "Bearer \(relayHostToken)",
       forHTTPHeaderField: "Authorization"
     )
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")

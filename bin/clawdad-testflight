@@ -1,0 +1,47 @@
+#!/bin/zsh
+set -euo pipefail
+
+script_dir=${0:A:h}
+repo_root=${script_dir:h}
+app_root="$repo_root/apps/ios/ClawDadMobile"
+archive_path="${CLAWDAD_IOS_ARCHIVE_PATH:-$app_root/build/ClawDadMobile.xcarchive}"
+export_path="${CLAWDAD_IOS_EXPORT_PATH:-$app_root/build/TestFlightUpload}"
+export_options="${CLAWDAD_IOS_EXPORT_OPTIONS:-$app_root/ExportOptions-AppStore.plist}"
+api_key_path="${CLAWDAD_ASC_KEY_PATH:-$HOME/.private_keys/AuthKey_3SN77ZU256.p8}"
+api_key_id="${CLAWDAD_ASC_KEY_ID:-3SN77ZU256}"
+api_issuer_id="${CLAWDAD_ASC_ISSUER_ID:-bd948303-a08e-45af-8ad3-582024dcafbc}"
+action="${1:-upload}"
+
+if [[ "$action" != "upload" ]]; then
+  print -u2 "Usage: clawdad-testflight upload"
+  exit 64
+fi
+
+if [[ ! -d "$archive_path" ]]; then
+  print -u2 "ClawDad archive not found: $archive_path"
+  print -u2 "Run npm run ios:archive first."
+  exit 66
+fi
+
+if [[ ! -f "$export_options" ]]; then
+  print -u2 "App Store export options not found: $export_options"
+  exit 66
+fi
+
+if [[ ! -f "$api_key_path" ]]; then
+  print -u2 "App Store Connect private key not found: $api_key_path"
+  exit 66
+fi
+
+rm -rf "$export_path"
+mkdir -p "$export_path"
+
+xcodebuild \
+  -exportArchive \
+  -archivePath "$archive_path" \
+  -exportPath "$export_path" \
+  -exportOptionsPlist "$export_options" \
+  -allowProvisioningUpdates \
+  -authenticationKeyPath "$api_key_path" \
+  -authenticationKeyID "$api_key_id" \
+  -authenticationKeyIssuerID "$api_issuer_id"

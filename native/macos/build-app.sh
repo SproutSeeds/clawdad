@@ -6,7 +6,7 @@ repo_root=${script_dir:h:h}
 app_name="ClawDad"
 bundle_id="earth.frg.ClawDad"
 app_version="${CLAWDAD_APP_VERSION:-0.7.0}"
-app_build="${CLAWDAD_APP_BUILD:-16}"
+app_build="${CLAWDAD_APP_BUILD:-17}"
 sparkle_feed_url="${CLAWDAD_SPARKLE_FEED_URL:-https://clawdad-cloud.frg.earth/mac/appcast.xml}"
 sparkle_public_key="${CLAWDAD_SPARKLE_PUBLIC_KEY:-OjSne9VtiBjR3Ls2aaLTgEUeKtYzi9oAtexOiA5K+dI=}"
 dist_dir="$script_dir/dist"
@@ -40,6 +40,8 @@ ditto "$repo_root/lib" "$runtime_dir/lib"
 ditto "$repo_root/web" "$runtime_dir/web"
 ditto "$repo_root/templates" "$runtime_dir/templates"
 ditto "$repo_root/node_modules" "$runtime_dir/node_modules"
+mkdir -p "$runtime_dir/vendor"
+ditto "$repo_root/vendor/apple-pki" "$runtime_dir/vendor/apple-pki"
 
 runtime_assets=(
   clawdad-app-icon-192.png

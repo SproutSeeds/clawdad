@@ -625,6 +625,7 @@
               </div>
             </div>
             <div id="settingsDesktopAppStatus" class="settings-pairing-status" aria-live="polite"></div>
+            <div id="settingsSubscriptionStatus" class="settings-entitlement-status" aria-live="polite"></div>
             <div class="settings-desktop-actions">
               <button id="settingsCheckUpdatesButton" class="detail-action-button is-quiet" type="button">
                 <svg viewBox="0 0 18 18" fill="none" aria-hidden="true">
@@ -741,6 +742,16 @@
             <div id="settingsPairingStatus" class="settings-pairing-status" aria-live="polite"></div>
             <div id="settingsPairingQr" class="settings-pairing-qr" hidden></div>
             <div id="settingsPairingExpiry" class="settings-root-meta"></div>
+            <div class="settings-device-head">
+              <div>
+                <div class="settings-section-title">Paired Devices</div>
+                <div class="settings-section-subhead">Phones trusted to reach this Mac</div>
+              </div>
+              <button id="settingsRefreshDevicesButton" class="settings-inline-info-button" type="button">
+                <span class="button-text">Refresh</span>
+              </button>
+            </div>
+            <div id="settingsPairedDevices" class="settings-device-list"></div>
           </section>
 
           <div class="settings-actions">
