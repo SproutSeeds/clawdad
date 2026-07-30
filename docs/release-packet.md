@@ -45,11 +45,11 @@ Prepared: 2026-07-30
   with feedback enabled, no public link, no assigned build, and no review
   submission. The guarded submission command is prepared for the end of the
   physical certification pass.
-- The exact `v0.7.0-beta.4` npm package was reconstructed from the tag and
-  verified at 207 files. Publication reached npm successfully and stopped at
-  the account OTP challenge without publishing a partial version. Publish that
-  tagged reconstruction, not the newer 208-file branch package, under the
-  beta.4 version.
+- The exact `v0.7.0-beta.4` npm package was reconstructed from the tag,
+  verified at 207 files, and published under the `beta` dist-tag. The live
+  registry SHA-1 is `b38f32333bcb60ef55d853c69c0bdb2a00cf5bfc`.
+  Preserve that tagged release provenance; the newer 208-file branch package
+  is post-release work.
 - Two canonical 6.9-inch App Store screenshots are reproducible from synthetic
   in-memory data, opaque, visually reviewed at `1290x2796`, and uploaded in
   order to the draft App Store version with `COMPLETE` processing state.
@@ -66,7 +66,6 @@ Prepared: 2026-07-30
 - Install TestFlight build 19 and complete the physical certification matrix.
 - Supply the monitored Beta App Review phone number, then use the guarded
   command to assign build 19 and start external Beta App Review.
-- Enter a fresh npm authenticator code to publish the prepared beta.4 package.
 - Confirm Paid Applications Agreement, banking, tax, and app privacy answers.
 - Attach the first subscriptions and a public build to App Store version 1.0.
 - Supply App Review contact details and a durable reviewer pairing path.
