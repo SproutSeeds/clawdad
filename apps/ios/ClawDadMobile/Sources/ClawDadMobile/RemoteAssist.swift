@@ -2,6 +2,118 @@ import ClawDadRemoteAssistProtocol
 import Foundation
 import SwiftUI
 
+struct RemoteViewportTransform: Equatable {
+  static let minimumScale: CGFloat = 1
+  static let maximumScale: CGFloat = 4
+
+  private(set) var scale: CGFloat = minimumScale
+  private(set) var offset: CGSize = .zero
+
+  var isZoomed: Bool {
+    scale > Self.minimumScale + 0.01
+  }
+
+  mutating func reset() {
+    scale = Self.minimumScale
+    offset = .zero
+  }
+
+  func contentVector(at point: CGPoint, in bounds: CGRect) -> CGPoint {
+    guard scale > 0 else {
+      return .zero
+    }
+    return CGPoint(
+      x: (point.x - bounds.midX - offset.width) / scale,
+      y: (point.y - bounds.midY - offset.height) / scale
+    )
+  }
+
+  mutating func zoom(
+    to proposedScale: CGFloat,
+    keeping contentVector: CGPoint,
+    at viewportPoint: CGPoint,
+    in bounds: CGRect,
+    aspectRatio: CGFloat
+  ) {
+    let nextScale = min(
+      Self.maximumScale,
+      max(Self.minimumScale, proposedScale)
+    )
+    scale = nextScale
+    offset = CGSize(
+      width: viewportPoint.x - bounds.midX - contentVector.x * nextScale,
+      height: viewportPoint.y - bounds.midY - contentVector.y * nextScale
+    )
+    clamp(in: bounds, aspectRatio: aspectRatio)
+  }
+
+  mutating func pan(
+    by translation: CGSize,
+    in bounds: CGRect,
+    aspectRatio: CGFloat
+  ) {
+    offset.width += translation.width
+    offset.height += translation.height
+    clamp(in: bounds, aspectRatio: aspectRatio)
+  }
+
+  mutating func clamp(in bounds: CGRect, aspectRatio: CGFloat) {
+    scale = min(Self.maximumScale, max(Self.minimumScale, scale))
+    guard isZoomed else {
+      reset()
+      return
+    }
+    let fitted = fittedRect(in: bounds, aspectRatio: aspectRatio)
+    let horizontalLimit = max(0, (fitted.width * scale - bounds.width) / 2)
+    let verticalLimit = max(0, (fitted.height * scale - bounds.height) / 2)
+    offset.width = min(horizontalLimit, max(-horizontalLimit, offset.width))
+    offset.height = min(verticalLimit, max(-verticalLimit, offset.height))
+  }
+
+  func normalizedPoint(
+    _ point: CGPoint,
+    in bounds: CGRect,
+    aspectRatio: CGFloat
+  ) -> (x: Double, y: Double) {
+    guard bounds.width > 0, bounds.height > 0, aspectRatio > 0 else {
+      return (0.5, 0.5)
+    }
+    let vector = contentVector(at: point, in: bounds)
+    let untransformedPoint = CGPoint(
+      x: bounds.midX + vector.x,
+      y: bounds.midY + vector.y
+    )
+    let fitted = fittedRect(in: bounds, aspectRatio: aspectRatio)
+    return (
+      Double(min(1, max(0, (untransformedPoint.x - fitted.minX) / fitted.width))),
+      Double(min(1, max(0, (untransformedPoint.y - fitted.minY) / fitted.height)))
+    )
+  }
+
+  private func fittedRect(in bounds: CGRect, aspectRatio: CGFloat) -> CGRect {
+    guard bounds.width > 0, bounds.height > 0, aspectRatio > 0 else {
+      return bounds
+    }
+    let viewAspectRatio = bounds.width / bounds.height
+    if viewAspectRatio > aspectRatio {
+      let width = bounds.height * aspectRatio
+      return CGRect(
+        x: bounds.midX - width / 2,
+        y: bounds.minY,
+        width: width,
+        height: bounds.height
+      )
+    }
+    let height = bounds.width / aspectRatio
+    return CGRect(
+      x: bounds.minX,
+      y: bounds.midY - height / 2,
+      width: bounds.width,
+      height: height
+    )
+  }
+}
+
 #if os(iOS)
 import LocalAuthentication
 import UIKit
@@ -1093,19 +1205,22 @@ enum RemoteAssistError: LocalizedError {
 struct RemoteAssistView: View {
   @ObservedObject var controller: RemoteAssistController
   var onClose: () -> Void
+  @State private var viewportZoomed = false
+  @State private var viewportResetToken = 0
 
   var body: some View {
     ZStack {
       Color.black.ignoresSafeArea()
 
       if let track = controller.remoteVideoTrack {
-        RemoteVideoRenderer(track: track)
-          .ignoresSafeArea()
-        RemoteGestureSurface(
+        RemoteVideoViewport(
+          track: track,
           controller: controller,
-          aspectRatio: controller.remoteAspectRatio
+          aspectRatio: controller.remoteAspectRatio,
+          resetToken: viewportResetToken,
+          onZoomChanged: { viewportZoomed = $0 }
         )
-          .ignoresSafeArea()
+        .ignoresSafeArea()
       } else {
         VStack(spacing: 18) {
           if case .failed = controller.phase {
@@ -1154,6 +1269,19 @@ struct RemoteAssistView: View {
             .background(Color.black.opacity(0.58), in: Capsule())
 
           Spacer()
+
+          if viewportZoomed {
+            Button {
+              viewportResetToken += 1
+            } label: {
+              Text("1x")
+                .font(.system(size: 13, weight: .black, design: .rounded))
+                .frame(width: 44, height: 44)
+            }
+            .buttonStyle(RemoteAssistOverlayButtonStyle())
+            .accessibilityLabel("Reset Remote Assist zoom")
+            .transition(.scale.combined(with: .opacity))
+          }
 
           Image(systemName: "lock.fill")
             .font(.system(size: 13, weight: .bold))
@@ -1264,7 +1392,16 @@ struct RemoteAssistView: View {
     }
     .statusBarHidden(true)
     .persistentSystemOverlays(.hidden)
+    .onChange(of: controller.phase) { _, phase in
+      guard phase != .connected else {
+        return
+      }
+      viewportZoomed = false
+      viewportResetToken += 1
+    }
     .onDisappear {
+      viewportZoomed = false
+      viewportResetToken += 1
       controller.stop()
     }
   }
@@ -1280,59 +1417,63 @@ private struct RemoteAssistOverlayButtonStyle: ButtonStyle {
   }
 }
 
-private struct RemoteVideoRenderer: UIViewRepresentable {
-  let track: RTCVideoTrack
+private final class RemoteViewportContainerView: UIView {
+  var onLayout: ((CGRect) -> Void)?
 
-  final class Coordinator {
-    weak var track: RTCVideoTrack?
-  }
-
-  func makeCoordinator() -> Coordinator {
-    Coordinator()
-  }
-
-  func makeUIView(context: Context) -> RTCMTLVideoView {
-    let view = RTCMTLVideoView(frame: .zero)
-    view.videoContentMode = .scaleAspectFit
-    view.backgroundColor = .black
-    context.coordinator.track = track
-    track.add(view)
-    return view
-  }
-
-  func updateUIView(_ view: RTCMTLVideoView, context: Context) {
-    guard context.coordinator.track !== track else {
-      return
-    }
-    context.coordinator.track?.remove(view)
-    context.coordinator.track = track
-    track.add(view)
-  }
-
-  static func dismantleUIView(_ view: RTCMTLVideoView, coordinator: Coordinator) {
-    coordinator.track?.remove(view)
-    coordinator.track = nil
+  override func layoutSubviews() {
+    super.layoutSubviews()
+    onLayout?(bounds)
   }
 }
 
-private struct RemoteGestureSurface: UIViewRepresentable {
+private struct RemoteVideoViewport: UIViewRepresentable {
+  let track: RTCVideoTrack
   @ObservedObject var controller: RemoteAssistController
   var aspectRatio: CGFloat
+  var resetToken: Int
+  var onZoomChanged: (Bool) -> Void
 
   func makeCoordinator() -> Coordinator {
-    Coordinator(controller: controller, aspectRatio: aspectRatio)
+    Coordinator(
+      controller: controller,
+      aspectRatio: aspectRatio,
+      resetToken: resetToken,
+      onZoomChanged: onZoomChanged
+    )
   }
 
-  func makeUIView(context: Context) -> UIView {
-    let view = UIView()
+  func makeUIView(context: Context) -> RemoteViewportContainerView {
+    let view = RemoteViewportContainerView()
     view.backgroundColor = .clear
+    view.clipsToBounds = true
     view.isMultipleTouchEnabled = true
+
+    let videoView = RTCMTLVideoView(frame: view.bounds)
+    videoView.videoContentMode = .scaleAspectFit
+    videoView.backgroundColor = .black
+    videoView.isUserInteractionEnabled = false
+    view.addSubview(videoView)
+
+    context.coordinator.install(
+      in: view,
+      videoView: videoView,
+      track: track
+    )
+
+    let doubleTap = UITapGestureRecognizer(
+      target: context.coordinator,
+      action: #selector(Coordinator.handleDoubleTap(_:))
+    )
+    doubleTap.numberOfTapsRequired = 2
+    doubleTap.numberOfTouchesRequired = 1
+    view.addGestureRecognizer(doubleTap)
 
     let tap = UITapGestureRecognizer(
       target: context.coordinator,
       action: #selector(Coordinator.handleTap(_:))
     )
     tap.numberOfTouchesRequired = 1
+    tap.require(toFail: doubleTap)
     view.addGestureRecognizer(tap)
 
     let rightTap = UITapGestureRecognizer(
@@ -1367,23 +1508,141 @@ private struct RemoteGestureSurface: UIViewRepresentable {
     scroll.maximumNumberOfTouches = 2
     view.addGestureRecognizer(scroll)
 
+    let pinch = UIPinchGestureRecognizer(
+      target: context.coordinator,
+      action: #selector(Coordinator.handlePinch(_:))
+    )
+    pinch.delegate = context.coordinator
+    scroll.delegate = context.coordinator
+    view.addGestureRecognizer(pinch)
+
     return view
   }
 
-  func updateUIView(_ view: UIView, context: Context) {
-    context.coordinator.controller = controller
-    context.coordinator.aspectRatio = aspectRatio
+  func updateUIView(
+    _ view: RemoteViewportContainerView,
+    context: Context
+  ) {
+    context.coordinator.update(
+      controller: controller,
+      aspectRatio: aspectRatio,
+      resetToken: resetToken,
+      onZoomChanged: onZoomChanged,
+      track: track
+    )
+    view.setNeedsLayout()
+  }
+
+  static func dismantleUIView(
+    _ view: RemoteViewportContainerView,
+    coordinator: Coordinator
+  ) {
+    coordinator.tearDown()
+    view.onLayout = nil
   }
 
   @MainActor
-  final class Coordinator: NSObject {
+  final class Coordinator: NSObject, UIGestureRecognizerDelegate {
     var controller: RemoteAssistController
     var aspectRatio: CGFloat
+    var onZoomChanged: (Bool) -> Void
+    private weak var containerView: RemoteViewportContainerView?
+    private weak var videoView: RTCMTLVideoView?
+    private weak var track: RTCVideoTrack?
+    private var viewport = RemoteViewportTransform()
+    private var resetToken: Int
+    private var lastViewportSize: CGSize = .zero
+    private var lastReportedZoomed = false
+    private var pinchStartScale: CGFloat = 1
+    private var pinchContentVector: CGPoint = .zero
+    private var pinchActive = false
     private var selectionActive = false
 
-    init(controller: RemoteAssistController, aspectRatio: CGFloat) {
+    init(
+      controller: RemoteAssistController,
+      aspectRatio: CGFloat,
+      resetToken: Int,
+      onZoomChanged: @escaping (Bool) -> Void
+    ) {
       self.controller = controller
       self.aspectRatio = aspectRatio
+      self.resetToken = resetToken
+      self.onZoomChanged = onZoomChanged
+    }
+
+    func install(
+      in containerView: RemoteViewportContainerView,
+      videoView: RTCMTLVideoView,
+      track: RTCVideoTrack
+    ) {
+      self.containerView = containerView
+      self.videoView = videoView
+      containerView.onLayout = { [weak self] bounds in
+        self?.viewportDidLayout(bounds)
+      }
+      setTrack(track)
+    }
+
+    func update(
+      controller: RemoteAssistController,
+      aspectRatio: CGFloat,
+      resetToken: Int,
+      onZoomChanged: @escaping (Bool) -> Void,
+      track: RTCVideoTrack
+    ) {
+      self.controller = controller
+      self.onZoomChanged = onZoomChanged
+      if abs(self.aspectRatio - aspectRatio) > 0.001 {
+        self.aspectRatio = aspectRatio
+        resetViewport(animated: false)
+      }
+      setTrack(track)
+      if self.resetToken != resetToken {
+        self.resetToken = resetToken
+        resetViewport(animated: true)
+      }
+    }
+
+    func tearDown() {
+      if let videoView {
+        track?.remove(videoView)
+      }
+      track = nil
+      videoView = nil
+      containerView = nil
+    }
+
+    func gestureRecognizer(
+      _ gestureRecognizer: UIGestureRecognizer,
+      shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+      gestureRecognizer is UIPinchGestureRecognizer ||
+        otherGestureRecognizer is UIPinchGestureRecognizer
+    }
+
+    @objc func handleDoubleTap(_ recognizer: UITapGestureRecognizer) {
+      guard let view = recognizer.view else {
+        return
+      }
+      if viewport.isZoomed {
+        resetViewport(animated: true)
+      } else {
+        let location = recognizer.location(in: view)
+        let contentVector = viewport.contentVector(
+          at: location,
+          in: view.bounds
+        )
+        viewport.zoom(
+          to: 2,
+          keeping: contentVector,
+          at: location,
+          in: view.bounds,
+          aspectRatio: aspectRatio
+        )
+        applyViewport(animated: true)
+        reportZoomState()
+      }
+      UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
 
     @objc func handleTap(_ recognizer: UITapGestureRecognizer) {
@@ -1408,6 +1667,17 @@ private struct RemoteGestureSurface: UIViewRepresentable {
 
     @objc func handlePointer(_ recognizer: UIPanGestureRecognizer) {
       guard let view = recognizer.view else {
+        return
+      }
+      if viewport.isZoomed {
+        let translation = recognizer.translation(in: view)
+        recognizer.setTranslation(.zero, in: view)
+        viewport.pan(
+          by: CGSize(width: translation.x, height: translation.y),
+          in: view.bounds,
+          aspectRatio: aspectRatio
+        )
+        applyViewport(animated: false)
         return
       }
       let point = normalizedPoint(recognizer.location(in: view), in: view.bounds)
@@ -1454,6 +1724,9 @@ private struct RemoteGestureSurface: UIViewRepresentable {
       }
       let translation = recognizer.translation(in: view)
       recognizer.setTranslation(.zero, in: view)
+      guard !pinchActive else {
+        return
+      }
       Task { @MainActor in
         controller.sendScroll(
           deltaX: Double(translation.x),
@@ -1462,33 +1735,124 @@ private struct RemoteGestureSurface: UIViewRepresentable {
       }
     }
 
-    private func normalizedPoint(_ point: CGPoint, in bounds: CGRect) -> (x: Double, y: Double) {
-      guard bounds.width > 0, bounds.height > 0, aspectRatio > 0 else {
-        return (0.5, 0.5)
+    @objc func handlePinch(_ recognizer: UIPinchGestureRecognizer) {
+      guard let view = recognizer.view else {
+        return
       }
-      let viewAspectRatio = bounds.width / bounds.height
-      let fitted: CGRect
-      if viewAspectRatio > aspectRatio {
-        let width = bounds.height * aspectRatio
-        fitted = CGRect(
-          x: bounds.midX - width / 2,
-          y: bounds.minY,
-          width: width,
-          height: bounds.height
+      let location = recognizer.location(in: view)
+      switch recognizer.state {
+      case .began:
+        pinchActive = true
+        pinchStartScale = viewport.scale
+        pinchContentVector = viewport.contentVector(
+          at: location,
+          in: view.bounds
+        )
+      case .changed:
+        viewport.zoom(
+          to: pinchStartScale * recognizer.scale,
+          keeping: pinchContentVector,
+          at: location,
+          in: view.bounds,
+          aspectRatio: aspectRatio
+        )
+        applyViewport(animated: false)
+        reportZoomState()
+      case .ended:
+        pinchActive = false
+        if !viewport.isZoomed {
+          resetViewport(animated: true)
+        } else {
+          applyViewport(animated: false)
+          reportZoomState()
+        }
+      case .cancelled, .failed:
+        pinchActive = false
+        applyViewport(animated: false)
+        reportZoomState()
+      default:
+        break
+      }
+    }
+
+    private func normalizedPoint(_ point: CGPoint, in bounds: CGRect) -> (x: Double, y: Double) {
+      viewport.normalizedPoint(
+        point,
+        in: bounds,
+        aspectRatio: aspectRatio
+      )
+    }
+
+    private func setTrack(_ track: RTCVideoTrack) {
+      guard self.track !== track, let videoView else {
+        return
+      }
+      self.track?.remove(videoView)
+      self.track = track
+      track.add(videoView)
+      resetViewport(animated: false)
+    }
+
+    private func viewportDidLayout(_ bounds: CGRect) {
+      guard bounds.width > 0, bounds.height > 0 else {
+        return
+      }
+      let sizeChanged = lastViewportSize != .zero && (
+        abs(lastViewportSize.width - bounds.width) > 1 ||
+          abs(lastViewportSize.height - bounds.height) > 1
+      )
+      lastViewportSize = bounds.size
+      if sizeChanged {
+        resetViewport(animated: false)
+        return
+      }
+      viewport.clamp(in: bounds, aspectRatio: aspectRatio)
+      applyViewport(animated: false)
+    }
+
+    private func resetViewport(animated: Bool) {
+      viewport.reset()
+      applyViewport(animated: animated)
+      reportZoomState()
+    }
+
+    private func applyViewport(animated: Bool) {
+      guard let containerView, let videoView else {
+        return
+      }
+      let updates = {
+        videoView.bounds = CGRect(origin: .zero, size: containerView.bounds.size)
+        videoView.center = CGPoint(
+          x: containerView.bounds.midX + self.viewport.offset.width,
+          y: containerView.bounds.midY + self.viewport.offset.height
+        )
+        videoView.transform = CGAffineTransform(
+          scaleX: self.viewport.scale,
+          y: self.viewport.scale
+        )
+      }
+      if animated {
+        UIView.animate(
+          withDuration: 0.2,
+          delay: 0,
+          options: [.beginFromCurrentState, .curveEaseOut],
+          animations: updates
         )
       } else {
-        let height = bounds.width / aspectRatio
-        fitted = CGRect(
-          x: bounds.minX,
-          y: bounds.midY - height / 2,
-          width: bounds.width,
-          height: height
-        )
+        updates()
       }
-      return (
-        Double(min(1, max(0, (point.x - fitted.minX) / fitted.width))),
-        Double(min(1, max(0, (point.y - fitted.minY) / fitted.height)))
-      )
+    }
+
+    private func reportZoomState() {
+      let isZoomed = viewport.isZoomed
+      guard lastReportedZoomed != isZoomed else {
+        return
+      }
+      lastReportedZoomed = isZoomed
+      let handler = onZoomChanged
+      Task { @MainActor in
+        handler(isZoomed)
+      }
     }
   }
 }

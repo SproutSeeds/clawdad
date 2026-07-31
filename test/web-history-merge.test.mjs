@@ -582,7 +582,19 @@ test("iPhone Remote Assist supports full-screen landscape rotation", async () =>
   assert.match(remoteAssistSource, /Color\.black\.ignoresSafeArea\(\)/u);
   assert.match(remoteAssistSource, /\.statusBarHidden\(true\)/u);
   assert.match(remoteAssistSource, /\.persistentSystemOverlays\(\.hidden\)/u);
-  assert.match(remoteAssistSource, /view\.videoContentMode = \.scaleAspectFit/u);
+  assert.match(remoteAssistSource, /videoView\.videoContentMode = \.scaleAspectFit/u);
+});
+
+test("iPhone Remote Assist supports local pinch zoom with accurate controls", async () => {
+  const remoteAssistSource = await readFile(iosRemoteAssistPath, "utf8");
+
+  assert.match(remoteAssistSource, /maximumScale: CGFloat = 4/u);
+  assert.match(remoteAssistSource, /UIPinchGestureRecognizer/u);
+  assert.match(remoteAssistSource, /handleDoubleTap/u);
+  assert.match(remoteAssistSource, /if viewport\.isZoomed[\s\S]*viewport\.pan/u);
+  assert.match(remoteAssistSource, /Text\("1x"\)/u);
+  assert.match(remoteAssistSource, /viewport\.normalizedPoint/u);
+  assert.match(remoteAssistSource, /sizeChanged[\s\S]*resetViewport/u);
 });
 
 test("Remote Assist exposes acknowledged input and bidirectional clipboard controls", async () => {
