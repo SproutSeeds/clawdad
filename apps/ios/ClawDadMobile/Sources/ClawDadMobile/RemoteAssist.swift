@@ -57,6 +57,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
   private var remoteSessionId = ""
   private var pendingCandidates: [RTCIceCandidate] = []
   private var timeoutTask: Task<Void, Never>?
+  private var peerRecoveryTask: Task<Void, Never>?
   private var clipboardTimeoutTask: Task<Void, Never>?
   private var clipboardNoticeTask: Task<Void, Never>?
   private var textFlushTask: Task<Void, Never>?
@@ -118,7 +119,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
         )
         startTimeout()
       } catch {
-        fail(error.localizedDescription)
+        failAndRelease(error.localizedDescription)
       }
     }
   }
@@ -143,8 +144,28 @@ final class RemoteAssistController: NSObject, ObservableObject {
   }
 
   func retry() {
+    let staleSessionId = remoteSessionId
+    let session = cloudSession
+    tearDownPeer()
+    remoteSessionId = ""
     phase = .idle
-    start()
+    guard !staleSessionId.isEmpty, let session else {
+      start()
+      return
+    }
+    Task {
+      _ = try? await session.sendRemoteAssistEnvelope(
+        type: "remote.assist.stop",
+        body: [
+          "sessionId": .string(staleSessionId),
+          "reason": .string("phone_retry")
+        ]
+      )
+      guard self.phase == .idle else {
+        return
+      }
+      self.start()
+    }
   }
 
   func toggleKeyboard() {
@@ -333,7 +354,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
       phase = .negotiating
     case "remote.assist.offer":
       guard let sdp = envelope.body["sdp"]?.stringValue, !sdp.isEmpty else {
-        fail("Your Mac returned an invalid Remote Assist offer.")
+        failAndRelease("Your Mac returned an invalid Remote Assist offer.")
         return
       }
       let width = envelope.body["width"]?.numberValue ?? 0
@@ -351,7 +372,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
         do {
           try await acceptOffer(sdp)
         } catch {
-          fail(error.localizedDescription)
+          failAndRelease(error.localizedDescription)
         }
       }
     case "remote.assist.ice":
@@ -374,11 +395,15 @@ final class RemoteAssistController: NSObject, ObservableObject {
       remoteIceServers = refreshedIceServers
       updatePeerIceServers(refreshedIceServers)
     case "remote.assist.stop":
-      fail(envelope.body["reason"]?.stringValue ?? "Your Mac ended Remote Assist.")
-      tearDownPeer()
+      failAndRelease(
+        envelope.body["reason"]?.stringValue ?? "Your Mac ended Remote Assist.",
+        notifyMac: false
+      )
     case "remote.assist.error":
-      fail(envelope.body["error"]?.stringValue ?? "Remote Assist could not start.")
-      tearDownPeer()
+      failAndRelease(
+        envelope.body["error"]?.stringValue ?? "Remote Assist could not start.",
+        notifyMac: false
+      )
     default:
       break
     }
@@ -769,8 +794,9 @@ final class RemoteAssistController: NSObject, ObservableObject {
         return
       }
       if self.phase != .connected {
-        self.fail("Your Mac did not open Remote Assist. Confirm it is awake and Remote Assist is enabled.")
-        self.tearDownPeer()
+        self.failAndRelease(
+          "Your Mac did not open Remote Assist. Confirm it is awake and Remote Assist is enabled."
+        )
       }
     }
   }
@@ -785,9 +811,56 @@ final class RemoteAssistController: NSObject, ObservableObject {
     )
   }
 
+  private func failAndRelease(
+    _ message: String,
+    notifyMac: Bool = true
+  ) {
+    let sessionId = remoteSessionId
+    fail(message)
+    tearDownPeer()
+    remoteSessionId = ""
+    guard notifyMac, !sessionId.isEmpty, let cloudSession else {
+      return
+    }
+    Task {
+      try? await cloudSession.sendRemoteAssistEnvelope(
+        type: "remote.assist.stop",
+        body: [
+          "sessionId": .string(sessionId),
+          "reason": .string("phone_connection_ended")
+        ]
+      )
+    }
+  }
+
+  private func schedulePeerRecoveryTimeout(
+    for peer: RTCPeerConnection
+  ) {
+    peerRecoveryTask?.cancel()
+    peerRecoveryTask = Task { @MainActor [weak self, weak peer] in
+      do {
+        try await Task.sleep(nanoseconds: 15_000_000_000)
+      } catch {
+        return
+      }
+      guard !Task.isCancelled,
+            let self,
+            let peer,
+            self.peerConnection === peer else {
+        return
+      }
+      self.peerRecoveryTask = nil
+      self.failAndRelease(
+        "Remote Assist disconnected during the network change. Try again."
+      )
+    }
+  }
+
   private func tearDownPeer() {
     timeoutTask?.cancel()
     timeoutTask = nil
+    peerRecoveryTask?.cancel()
+    peerRecoveryTask = nil
     clipboardTimeoutTask?.cancel()
     clipboardTimeoutTask = nil
     clipboardNoticeTask?.cancel()
@@ -810,6 +883,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
     controlChannel?.delegate = nil
     controlChannel?.close()
     controlChannel = nil
+    peerConnection?.delegate = nil
     peerConnection?.close()
     peerConnection = nil
     pendingCandidates.removeAll()
@@ -937,14 +1011,18 @@ extension RemoteAssistController: RTCPeerConnectionDelegate {
       }
       switch newState {
       case .connected:
+        self.peerRecoveryTask?.cancel()
+        self.peerRecoveryTask = nil
         self.timeoutTask?.cancel()
         self.timeoutTask = nil
         self.phase = .connected
+      case .disconnected:
+        self.schedulePeerRecoveryTimeout(for: peerConnection)
       case .failed:
-        self.fail("The Remote Assist connection failed.")
+        self.failAndRelease("The Remote Assist connection failed.")
       case .closed:
         if self.phase != .idle {
-          self.fail("Remote Assist ended.")
+          self.failAndRelease("Remote Assist ended.")
         }
       default:
         break

@@ -62,6 +62,14 @@ const nativeMacRemotePeerPath = path.join(
   "ClawDad",
   "MacRemotePeer.swift",
 );
+const nativeMacRemoteAssistHostPath = path.join(
+  repoRoot,
+  "native",
+  "macos",
+  "Sources",
+  "ClawDad",
+  "RemoteAssistHost.swift",
+);
 const nativeMacKeyboardLayoutPath = path.join(
   repoRoot,
   "native",
@@ -490,11 +498,26 @@ test("Remote Assist settings explain both macOS permission steps", async () => {
   assert.match(indexHtml, /Privacy &amp; Security &gt; Accessibility/u);
   assert.match(indexHtml, /Allow assistive applications to control the[\s\S]*computer/u);
   assert.match(indexHtml, /both permission[\s\S]*buttons say Allowed/u);
+  assert.match(indexHtml, /Persistent Content Capture approval/u);
   assert.match(appSource, /remoteAssistInfoOpen: false/u);
   assert.match(appSource, /setRemoteAssistInfoOpen\(false, \{ restoreFocus: true \}\)/u);
   assert.match(cssSource, /\.settings-inline-info-button[\s\S]*background: transparent !important[\s\S]*cursor: pointer/u);
   assert.match(cssSource, /\.settings-inline-info-button:hover[\s\S]*text-decoration: underline/u);
   assert.match(cssSource, /\.settings-permission-help\[hidden\][\s\S]*display: none/u);
+});
+
+test("Remote Assist releases stale sessions across network changes", async () => {
+  const [remoteAssistSource, hostSource] = await Promise.all([
+    readFile(iosRemoteAssistPath, "utf8"),
+    readFile(nativeMacRemoteAssistHostPath, "utf8"),
+  ]);
+
+  assert.match(remoteAssistSource, /failAndRelease\(/u);
+  assert.match(remoteAssistSource, /case \.disconnected:[\s\S]*schedulePeerRecoveryTimeout/u);
+  assert.match(remoteAssistSource, /"reason": \.string\("phone_connection_ended"\)/u);
+  assert.match(hostSource, /case \.replaceCurrent:[\s\S]*stopActiveSession/u);
+  assert.match(hostSource, /case \.disconnected:[\s\S]*schedulePeerDisconnectTimeout/u);
+  assert.match(hostSource, /incomingDeviceId: envelope\.sourceDeviceId/u);
 });
 
 test("web composer exposes quick copy for the current prompt draft", async () => {

@@ -54,7 +54,7 @@ test("iPhone release keeps production signing and paid access configuration", as
     /PRODUCT_BUNDLE_IDENTIFIER: earth\.frg\.clawdad\.ios/u,
   );
   assert.match(projectSpec, /MARKETING_VERSION: "0\.7\.0"/u);
-  assert.match(projectSpec, /CURRENT_PROJECT_VERSION: "20"/u);
+  assert.match(projectSpec, /CURRENT_PROJECT_VERSION: "21"/u);
   assert.match(
     projectSpec,
     /Release:\n\s+CLAWDAD_CLOUD_URL: "https:\/\/clawdad-cloud\.frg\.earth"/u,

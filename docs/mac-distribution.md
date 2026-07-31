@@ -29,6 +29,14 @@ Settings explains the two Remote Assist permissions and links directly to the
 correct macOS Privacy & Security panes. Remote Assist stays inactive until the
 customer enables it and grants both permissions.
 
+Current macOS releases can still require a confirmation when a new unattended
+Remote Assist capture starts, even after Screen & System Audio Recording shows
+ClawDad as allowed. Apple reserves durable unattended screen access for VNC apps
+that receive the restricted
+`com.apple.developer.persistent-content-capture` entitlement. ClawDad must keep
+the per-session confirmation until Apple approves that entitlement for the
+Developer ID application.
+
 ## Updates And Diagnostics
 
 The app checks the HTTPS Sparkle feed daily:

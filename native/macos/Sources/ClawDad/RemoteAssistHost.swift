@@ -60,6 +60,25 @@ enum RemoteAssistHostError: LocalizedError {
   }
 }
 
+enum RemoteAssistRequestDisposition: Equatable {
+  case accept
+  case replaceCurrent
+  case rejectBusy
+}
+
+func remoteAssistRequestDisposition(
+  currentSessionId: String,
+  currentDeviceId: String,
+  incomingDeviceId: String
+) -> RemoteAssistRequestDisposition {
+  guard !currentSessionId.isEmpty else {
+    return .accept
+  }
+  return currentDeviceId == incomingDeviceId
+    ? .replaceCurrent
+    : .rejectBusy
+}
+
 @MainActor
 final class RemoteAssistHost: NSObject {
   static let enabledDefaultsKey = "clawdad.remoteAssist.enabled"
@@ -72,6 +91,7 @@ final class RemoteAssistHost: NSObject {
   private var heartbeatTask: Task<Void, Never>?
   private var reconnectTask: Task<Void, Never>?
   private var credentialRefreshTask: Task<Void, Never>?
+  private var peerDisconnectTask: Task<Void, Never>?
   private var currentPeer: MacRemotePeer?
   private var currentSessionId = ""
   private var currentDeviceId = ""
@@ -186,6 +206,8 @@ final class RemoteAssistHost: NSObject {
     let peer = currentPeer
     credentialRefreshTask?.cancel()
     credentialRefreshTask = nil
+    peerDisconnectTask?.cancel()
+    peerDisconnectTask = nil
     currentPeer = nil
     currentSessionId = ""
     currentDeviceId = ""
@@ -361,7 +383,19 @@ final class RemoteAssistHost: NSObject {
       )
       return
     }
-    guard currentSessionId.isEmpty else {
+    switch remoteAssistRequestDisposition(
+      currentSessionId: currentSessionId,
+      currentDeviceId: currentDeviceId,
+      incomingDeviceId: envelope.sourceDeviceId
+    ) {
+    case .accept:
+      break
+    case .replaceCurrent:
+      stopActiveSession(
+        reason: "Remote Assist reconnected from the same iPhone.",
+        notifyPhone: false
+      )
+    case .rejectBusy:
       sendError(
         "Another Remote Assist session is already open.",
         code: "remote_assist_busy",
@@ -418,10 +452,15 @@ final class RemoteAssistHost: NSObject {
           }
         }
         peer.onConnectionState = { [weak self, weak peer] state in
-          guard let self, self.currentPeer === peer else {
+          guard let self, let peer, self.currentPeer === peer else {
             return
           }
           switch state {
+          case .connected:
+            self.peerDisconnectTask?.cancel()
+            self.peerDisconnectTask = nil
+          case .disconnected:
+            self.schedulePeerDisconnectTimeout(for: peer)
           case .failed, .closed:
             self.stopActiveSession(
               reason: "The Remote Assist connection ended.",
@@ -469,6 +508,28 @@ final class RemoteAssistHost: NSObject {
         )
         stopActiveSession(reason: error.localizedDescription, notifyPhone: false)
       }
+    }
+  }
+
+  private func schedulePeerDisconnectTimeout(for peer: MacRemotePeer) {
+    peerDisconnectTask?.cancel()
+    peerDisconnectTask = Task { @MainActor [weak self, weak peer] in
+      do {
+        try await Task.sleep(nanoseconds: 15_000_000_000)
+      } catch {
+        return
+      }
+      guard !Task.isCancelled,
+            let self,
+            let peer,
+            self.currentPeer === peer else {
+        return
+      }
+      self.peerDisconnectTask = nil
+      self.stopActiveSession(
+        reason: "Remote Assist disconnected during a network change.",
+        notifyPhone: true
+      )
     }
   }
 

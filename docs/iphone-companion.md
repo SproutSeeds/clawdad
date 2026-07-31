@@ -228,6 +228,16 @@ separate from Codex threads.
    these controls are used.
 7. Close the view on the iPhone or use **Stop Remote Assist** on the Mac.
 
+On current macOS releases, the Mac may ask for direct screen-access confirmation
+when each new Remote Assist session starts. This confirmation is separate from
+the Screen & System Audio Recording toggle. One-time persistent approval requires
+Apple's restricted `com.apple.developer.persistent-content-capture` entitlement
+for VNC apps.
+
+If the iPhone changes between Wi-Fi and cellular, ClawDad gives the current
+WebRTC path 15 seconds to recover. A retry from the same paired iPhone replaces
+its stale Mac session; a different paired device cannot preempt an active session.
+
 The signaling messages are signed in both directions. Screen video and control
 events travel through the encrypted WebRTC session rather than through Codex or
 the ClawDad message history. The first release shares one primary display with
