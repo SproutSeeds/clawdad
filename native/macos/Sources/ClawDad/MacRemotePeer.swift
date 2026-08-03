@@ -2,6 +2,52 @@ import ClawDadRemoteAssistProtocol
 import Foundation
 @preconcurrency import WebRTC
 
+struct RemoteAnswerApplicationGate {
+  enum Phase: Equatable {
+    case ready
+    case applying
+    case applied
+    case invalidated
+  }
+
+  private(set) var phase: Phase = .ready
+  private var generation: UInt64 = 0
+
+  mutating func begin() -> UInt64? {
+    guard phase == .ready else {
+      return nil
+    }
+    phase = .applying
+    return generation
+  }
+
+  @discardableResult
+  mutating func markApplied(generation expectedGeneration: UInt64) -> Bool {
+    guard generation == expectedGeneration, phase == .applying else {
+      return false
+    }
+    phase = .applied
+    return true
+  }
+
+  @discardableResult
+  mutating func resetAfterFailure(
+    generation expectedGeneration: UInt64
+  ) -> Bool {
+    guard generation == expectedGeneration, phase == .applying else {
+      return false
+    }
+    generation &+= 1
+    phase = .ready
+    return true
+  }
+
+  mutating func invalidate() {
+    generation &+= 1
+    phase = .invalidated
+  }
+}
+
 @MainActor
 final class MacRemotePeer: NSObject {
   struct Offer {
@@ -22,6 +68,7 @@ final class MacRemotePeer: NSObject {
   private var pendingRemoteCandidates: [RTCIceCandidate] = []
   private var sessionStateTask: Task<Void, Never>?
   private var lastPublishedScreenLocked: Bool?
+  private var answerApplicationGate = RemoteAnswerApplicationGate()
 
   init(
     factory: RTCPeerConnectionFactory,
@@ -92,11 +139,32 @@ final class MacRemotePeer: NSObject {
   }
 
   func acceptAnswer(_ sdp: String) async throws {
+    guard let answerGeneration = answerApplicationGate.begin() else {
+      return
+    }
     guard let peerConnection else {
+      answerApplicationGate.resetAfterFailure(
+        generation: answerGeneration
+      )
       throw RemoteAssistHostError.peerConnectionUnavailable
     }
     let answer = RTCSessionDescription(type: .answer, sdp: sdp)
-    try await setRemoteDescription(answer, on: peerConnection)
+    do {
+      try await setRemoteDescription(answer, on: peerConnection)
+    } catch {
+      guard answerApplicationGate.resetAfterFailure(
+        generation: answerGeneration
+      ) else {
+        return
+      }
+      throw error
+    }
+    guard self.peerConnection === peerConnection,
+          answerApplicationGate.markApplied(
+            generation: answerGeneration
+          ) else {
+      return
+    }
     for candidate in pendingRemoteCandidates {
       try? await peerConnection.add(candidate)
     }
@@ -135,6 +203,7 @@ final class MacRemotePeer: NSObject {
   }
 
   func stop() {
+    answerApplicationGate.invalidate()
     inputController.cancelPendingOperations()
     sessionStateTask?.cancel()
     sessionStateTask = nil

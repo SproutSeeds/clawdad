@@ -2,6 +2,50 @@ import ClawDadRemoteAssistProtocol
 import Foundation
 import SwiftUI
 
+struct RemoteAssistOfferAttempt: Equatable {
+  let sessionId: String
+  fileprivate let generation: UInt
+}
+
+struct RemoteAssistOfferGate {
+  private var activeSessionId = ""
+  private var generation: UInt = 0
+  private var hasClaimedOffer = false
+
+  mutating func beginSession(_ sessionId: String) {
+    generation &+= 1
+    activeSessionId = sessionId
+    hasClaimedOffer = false
+  }
+
+  mutating func reset() {
+    generation &+= 1
+    activeSessionId = ""
+    hasClaimedOffer = false
+  }
+
+  mutating func claimOffer(
+    for sessionId: String
+  ) -> RemoteAssistOfferAttempt? {
+    guard !sessionId.isEmpty,
+          sessionId == activeSessionId,
+          !hasClaimedOffer else {
+      return nil
+    }
+    hasClaimedOffer = true
+    return RemoteAssistOfferAttempt(
+      sessionId: sessionId,
+      generation: generation
+    )
+  }
+
+  func isCurrent(_ attempt: RemoteAssistOfferAttempt) -> Bool {
+    hasClaimedOffer &&
+      attempt.sessionId == activeSessionId &&
+      attempt.generation == generation
+  }
+}
+
 struct RemoteViewportTransform: Equatable {
   static let minimumScale: CGFloat = 1
   static let maximumScale: CGFloat = 4
@@ -167,6 +211,8 @@ final class RemoteAssistController: NSObject, ObservableObject {
   private var peerConnection: RTCPeerConnection?
   private var controlChannel: RTCDataChannel?
   private var remoteSessionId = ""
+  private var offerGate = RemoteAssistOfferGate()
+  private var offerTask: Task<Void, Never>?
   private var pendingCandidates: [RTCIceCandidate] = []
   private var timeoutTask: Task<Void, Never>?
   private var peerRecoveryTask: Task<Void, Never>?
@@ -218,12 +264,14 @@ final class RemoteAssistController: NSObject, ObservableObject {
     Task {
       do {
         try await authenticate()
-        remoteSessionId = UUID().uuidString.lowercased()
+        let sessionId = UUID().uuidString.lowercased()
+        remoteSessionId = sessionId
+        offerGate.beginSession(sessionId)
         phase = .requesting
         _ = try await cloudSession.sendRemoteAssistEnvelope(
           type: "remote.assist.request",
           body: [
-            "sessionId": .string(remoteSessionId),
+            "sessionId": .string(sessionId),
             "requestedAt": .string(ISO8601DateFormatter().string(from: Date())),
             "transport": .string("webrtc"),
             "control": .bool(true)
@@ -457,7 +505,8 @@ final class RemoteAssistController: NSObject, ObservableObject {
   }
 
   private func handle(_ envelope: CloudEnvelope) {
-    guard envelope.body["sessionId"]?.stringValue == remoteSessionId else {
+    let sessionId = envelope.body["sessionId"]?.stringValue ?? ""
+    guard !sessionId.isEmpty, sessionId == remoteSessionId else {
       return
     }
 
@@ -467,6 +516,9 @@ final class RemoteAssistController: NSObject, ObservableObject {
     case "remote.assist.offer":
       guard let sdp = envelope.body["sdp"]?.stringValue, !sdp.isEmpty else {
         failAndRelease("Your Mac returned an invalid Remote Assist offer.")
+        return
+      }
+      guard let attempt = offerGate.claimOffer(for: sessionId) else {
         return
       }
       let width = envelope.body["width"]?.numberValue ?? 0
@@ -480,11 +532,18 @@ final class RemoteAssistController: NSObject, ObservableObject {
       if !offeredIceServers.isEmpty {
         remoteIceServers = offeredIceServers
       }
-      Task {
+      offerTask = Task { [weak self] in
+        guard let self else {
+          return
+        }
         do {
-          try await acceptOffer(sdp)
+          try await self.acceptOffer(sdp, attempt: attempt)
         } catch {
-          failAndRelease(error.localizedDescription)
+          guard self.offerGate.isCurrent(attempt),
+                self.remoteSessionId == attempt.sessionId else {
+            return
+          }
+          self.failAndRelease(error.localizedDescription)
         }
       }
     case "remote.assist.ice":
@@ -521,27 +580,49 @@ final class RemoteAssistController: NSObject, ObservableObject {
     }
   }
 
-  private func acceptOffer(_ sdp: String) async throws {
+  private func acceptOffer(
+    _ sdp: String,
+    attempt: RemoteAssistOfferAttempt
+  ) async throws {
+    guard offerGate.isCurrent(attempt),
+          remoteSessionId == attempt.sessionId else {
+      return
+    }
     let peer = try makePeerConnection()
     phase = .negotiating
     try await setRemoteDescription(
       RTCSessionDescription(type: .offer, sdp: sdp),
       on: peer
     )
+    guard offerGate.isCurrent(attempt),
+          remoteSessionId == attempt.sessionId,
+          peerConnection === peer else {
+      return
+    }
     for candidate in pendingCandidates {
       try? await peer.add(candidate)
     }
     pendingCandidates.removeAll()
 
     let answer = try await createAnswer(on: peer)
+    guard offerGate.isCurrent(attempt),
+          remoteSessionId == attempt.sessionId,
+          peerConnection === peer else {
+      return
+    }
     try await setLocalDescription(answer, on: peer)
+    guard offerGate.isCurrent(attempt),
+          remoteSessionId == attempt.sessionId,
+          peerConnection === peer else {
+      return
+    }
     guard let cloudSession else {
       throw RemoteAssistError.cloudUnavailable
     }
     _ = try await cloudSession.sendRemoteAssistEnvelope(
       type: "remote.assist.answer",
       body: [
-        "sessionId": .string(remoteSessionId),
+        "sessionId": .string(attempt.sessionId),
         "sdp": .string(answer.sdp)
       ]
     )
@@ -969,6 +1050,9 @@ final class RemoteAssistController: NSObject, ObservableObject {
   }
 
   private func tearDownPeer() {
+    offerTask?.cancel()
+    offerTask = nil
+    offerGate.reset()
     timeoutTask?.cancel()
     timeoutTask = nil
     peerRecoveryTask?.cancel()
@@ -1052,7 +1136,10 @@ extension RemoteAssistController: RTCPeerConnectionDelegate {
       return
     }
     Task { @MainActor [weak self] in
-      self?.remoteVideoTrack = track
+      guard let self, self.peerConnection === peerConnection else {
+        return
+      }
+      self.remoteVideoTrack = track
     }
   }
 
@@ -1080,13 +1167,17 @@ extension RemoteAssistController: RTCPeerConnectionDelegate {
     didGenerate candidate: RTCIceCandidate
   ) {
     Task { @MainActor [weak self] in
-      guard let self, let cloudSession = self.cloudSession else {
+      guard let self,
+            self.peerConnection === peerConnection,
+            !self.remoteSessionId.isEmpty,
+            let cloudSession = self.cloudSession else {
         return
       }
+      let sessionId = self.remoteSessionId
       _ = try? await cloudSession.sendRemoteAssistEnvelope(
         type: "remote.assist.ice",
         body: [
-          "sessionId": .string(self.remoteSessionId),
+          "sessionId": .string(sessionId),
           "candidate": .string(candidate.sdp),
           "sdpMid": .string(candidate.sdpMid ?? ""),
           "sdpMLineIndex": .number(Double(candidate.sdpMLineIndex))
@@ -1108,7 +1199,10 @@ extension RemoteAssistController: RTCPeerConnectionDelegate {
       return
     }
     Task { @MainActor [weak self] in
-      self?.controlChannel = dataChannel
+      guard let self, self.peerConnection === peerConnection else {
+        return
+      }
+      self.controlChannel = dataChannel
       dataChannel.delegate = self
     }
   }
@@ -1118,7 +1212,7 @@ extension RemoteAssistController: RTCPeerConnectionDelegate {
     didChange newState: RTCPeerConnectionState
   ) {
     Task { @MainActor [weak self] in
-      guard let self else {
+      guard let self, self.peerConnection === peerConnection else {
         return
       }
       switch newState {
@@ -1151,7 +1245,10 @@ extension RemoteAssistController: RTCPeerConnectionDelegate {
       return
     }
     Task { @MainActor [weak self] in
-      self?.remoteVideoTrack = track
+      guard let self, self.peerConnection === peerConnection else {
+        return
+      }
+      self.remoteVideoTrack = track
     }
   }
 }
@@ -1168,7 +1265,7 @@ extension RemoteAssistController: RTCDataChannelDelegate {
     }
     let data = buffer.data
     Task { @MainActor [weak self] in
-      guard let self else {
+      guard let self, self.controlChannel === dataChannel else {
         return
       }
       if self.handleInputResponse(data) {

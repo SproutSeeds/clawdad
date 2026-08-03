@@ -62,6 +62,7 @@ enum RemoteAssistHostError: LocalizedError {
 
 enum RemoteAssistRequestDisposition: Equatable {
   case accept
+  case ignoreDuplicate
   case replaceCurrent
   case rejectBusy
 }
@@ -69,14 +70,18 @@ enum RemoteAssistRequestDisposition: Equatable {
 func remoteAssistRequestDisposition(
   currentSessionId: String,
   currentDeviceId: String,
+  incomingSessionId: String,
   incomingDeviceId: String
 ) -> RemoteAssistRequestDisposition {
   guard !currentSessionId.isEmpty else {
     return .accept
   }
-  return currentDeviceId == incomingDeviceId
-    ? .replaceCurrent
-    : .rejectBusy
+  guard currentDeviceId == incomingDeviceId else {
+    return .rejectBusy
+  }
+  return currentSessionId == incomingSessionId
+    ? .ignoreDuplicate
+    : .replaceCurrent
 }
 
 @MainActor
@@ -386,10 +391,13 @@ final class RemoteAssistHost: NSObject {
     switch remoteAssistRequestDisposition(
       currentSessionId: currentSessionId,
       currentDeviceId: currentDeviceId,
+      incomingSessionId: sessionId,
       incomingDeviceId: envelope.sourceDeviceId
     ) {
     case .accept:
       break
+    case .ignoreDuplicate:
+      return
     case .replaceCurrent:
       stopActiveSession(
         reason: "Remote Assist reconnected from the same iPhone.",

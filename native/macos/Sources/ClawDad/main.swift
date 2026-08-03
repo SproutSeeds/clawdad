@@ -587,9 +587,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
   private var service: ClawDadService?
   private var remoteAssistHost: RemoteAssistHost?
   private var remoteAssistIndicator: NSPanel?
+  private var nativeInstanceGuard: NativeAppInstanceGuard?
   private let updateController = ClawDadUpdateController()
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    let nativeInstanceGuard = NativeAppInstanceGuard()
+    self.nativeInstanceGuard = nativeInstanceGuard
+    nativeInstanceGuard.acquire { [weak self] outcome in
+      guard let self else {
+        return
+      }
+      switch outcome {
+      case .launch:
+        self.finishApplicationLaunch()
+      case .exit:
+        NSApp.terminate(nil)
+      case .blocked(let message):
+        let alert = NSAlert()
+        alert.messageText = "ClawDad could not become the active Mac app."
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.runModal()
+        NSApp.terminate(nil)
+      }
+    }
+  }
+
+  private func finishApplicationLaunch() {
     NSApp.setActivationPolicy(.regular)
     buildApplicationMenu()
     buildWindow()
@@ -599,7 +623,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
   }
 
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-    true
+    NativeAppLifecyclePolicy.terminatesAfterLastWindowClosed
+  }
+
+  func applicationShouldHandleReopen(
+    _ sender: NSApplication,
+    hasVisibleWindows _: Bool
+  ) -> Bool {
+    if NativeAppLifecyclePolicy.shouldRestoreMainWindow(
+      isVisible: window?.isVisible == true
+    ) {
+      window?.makeKeyAndOrderFront(nil)
+      sender.activate(ignoringOtherApps: true)
+    }
+    return true
   }
 
   func applicationWillTerminate(_ notification: Notification) {
@@ -625,6 +662,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     )
     window.title = appName
     window.minSize = NSSize(width: 420, height: 640)
+    window.isReleasedWhenClosed = false
     window.center()
     window.makeKeyAndOrderFront(nil)
     NSApp.activate(ignoringOtherApps: true)
