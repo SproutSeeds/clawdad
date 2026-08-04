@@ -100,6 +100,33 @@ enum NativeAppLifecyclePolicy {
   }
 }
 
+struct NativeAppCanonicalLaunchTracker {
+  let requiredStableObservations: Int
+
+  private(set) var candidateProcessIdentifier: pid_t?
+  private(set) var stableObservationCount = 0
+
+  init(requiredStableObservations: Int = 8) {
+    self.requiredStableObservations = max(1, requiredStableObservations)
+  }
+
+  mutating func observe(processIdentifier: pid_t?) -> Bool {
+    guard let processIdentifier else {
+      candidateProcessIdentifier = nil
+      stableObservationCount = 0
+      return false
+    }
+
+    if candidateProcessIdentifier == processIdentifier {
+      stableObservationCount += 1
+    } else {
+      candidateProcessIdentifier = processIdentifier
+      stableObservationCount = 1
+    }
+    return stableObservationCount >= requiredStableObservations
+  }
+}
+
 enum NativeAppInstanceGuardOutcome {
   case launch
   case exit
@@ -115,6 +142,7 @@ final class NativeAppInstanceGuard {
   private let gracefulTerminationTimeout: TimeInterval
   private let forcedTerminationTimeout: TimeInterval
   private let pollInterval: TimeInterval
+  private let canonicalStableObservations: Int
 
   init(
     currentProcessIdentifier: pid_t = getpid(),
@@ -124,7 +152,8 @@ final class NativeAppInstanceGuard {
     canonicalBundleURL: URL = NativeAppInstancePolicy.canonicalBundleURL,
     gracefulTerminationTimeout: TimeInterval = 2,
     forcedTerminationTimeout: TimeInterval = 1,
-    pollInterval: TimeInterval = 0.1
+    pollInterval: TimeInterval = 0.1,
+    canonicalStableObservations: Int = 8
   ) {
     self.currentProcessIdentifier = currentProcessIdentifier
     self.currentBundleIdentifier = currentBundleIdentifier
@@ -133,6 +162,7 @@ final class NativeAppInstanceGuard {
     self.gracefulTerminationTimeout = gracefulTerminationTimeout
     self.forcedTerminationTimeout = forcedTerminationTimeout
     self.pollInterval = pollInterval
+    self.canonicalStableObservations = max(1, canonicalStableObservations)
   }
 
   func acquire(completion: @escaping (NativeAppInstanceGuardOutcome) -> Void) {
@@ -203,36 +233,110 @@ final class NativeAppInstanceGuard {
     _ canonicalURL: URL,
     completion: @escaping (NativeAppInstanceGuardOutcome) -> Void
   ) {
-    if let runningCanonical = NSRunningApplication.runningApplications(
-      withBundleIdentifier: NativeAppInstancePolicy.bundleIdentifier
-    ).first(where: {
-      guard let bundleURL = $0.bundleURL else {
-        return false
-      }
-      return NativeAppInstancePolicy.urlsMatch(bundleURL, canonicalURL)
-    }) {
+    waitForCanonicalLaunch(
+      canonicalURL,
+      deadline: Date().addingTimeInterval(
+        gracefulTerminationTimeout + forcedTerminationTimeout
+      ),
+      tracker: NativeAppCanonicalLaunchTracker(
+        requiredStableObservations: canonicalStableObservations
+      ),
+      lastOpenError: nil,
+      completion: completion
+    )
+  }
+
+  private func waitForCanonicalLaunch(
+    _ canonicalURL: URL,
+    deadline: Date,
+    tracker: NativeAppCanonicalLaunchTracker,
+    lastOpenError: Error?,
+    completion: @escaping (NativeAppInstanceGuardOutcome) -> Void
+  ) {
+    var nextTracker = tracker
+    if let runningCanonical = runningCanonicalApplication(at: canonicalURL) {
       runningCanonical.activate(options: [.activateAllWindows])
-      completion(.exit)
+      if nextTracker.observe(
+        processIdentifier: runningCanonical.processIdentifier
+      ) {
+        completion(.exit)
+        return
+      }
+      scheduleCanonicalLaunchCheck(
+        canonicalURL,
+        deadline: deadline,
+        tracker: nextTracker,
+        lastOpenError: lastOpenError,
+        completion: completion
+      )
+      return
+    }
+
+    _ = nextTracker.observe(processIdentifier: nil)
+    guard Date() < deadline else {
+      var message = "ClawDad could not confirm its canonical app at \(canonicalURL.path)."
+      if let lastOpenError {
+        message += " " + lastOpenError.localizedDescription
+      }
+      completion(.blocked(message))
       return
     }
 
     let configuration = NSWorkspace.OpenConfiguration()
     configuration.activates = true
+    // Both bundles intentionally share the production bundle identifier.
+    // Without this flag LaunchServices reactivates the noncanonical caller
+    // instead of starting the requested /Applications copy.
+    configuration.createsNewApplicationInstance = true
     NSWorkspace.shared.openApplication(
       at: canonicalURL,
       configuration: configuration
-    ) { _, error in
+    ) { [weak self] _, error in
       DispatchQueue.main.async {
-        if let error {
-          completion(.blocked(
-            "ClawDad could not open its canonical app at \(canonicalURL.path): "
-              + error.localizedDescription
-          ))
-        } else {
-          completion(.exit)
-        }
+        self?.scheduleCanonicalLaunchCheck(
+          canonicalURL,
+          deadline: deadline,
+          tracker: nextTracker,
+          lastOpenError: error ?? lastOpenError,
+          completion: completion
+        )
       }
     }
+  }
+
+  private func scheduleCanonicalLaunchCheck(
+    _ canonicalURL: URL,
+    deadline: Date,
+    tracker: NativeAppCanonicalLaunchTracker,
+    lastOpenError: Error?,
+    completion: @escaping (NativeAppInstanceGuardOutcome) -> Void
+  ) {
+    DispatchQueue.main.asyncAfter(deadline: .now() + pollInterval) { [weak self] in
+      self?.waitForCanonicalLaunch(
+        canonicalURL,
+        deadline: deadline,
+        tracker: tracker,
+        lastOpenError: lastOpenError,
+        completion: completion
+      )
+    }
+  }
+
+  private func runningCanonicalApplication(
+    at canonicalURL: URL
+  ) -> NSRunningApplication? {
+    NSRunningApplication.runningApplications(
+      withBundleIdentifier: NativeAppInstancePolicy.bundleIdentifier
+    )
+    .filter { !$0.isTerminated }
+    .filter {
+      guard let bundleURL = $0.bundleURL else {
+        return false
+      }
+      return NativeAppInstancePolicy.urlsMatch(bundleURL, canonicalURL)
+    }
+    .sorted { $0.processIdentifier < $1.processIdentifier }
+    .first
   }
 
   private func waitForCanonicalOwnership(

@@ -112,6 +112,37 @@ final class NativeAppInstanceGuardTests: XCTestCase {
     )
   }
 
+  func testCanonicalLaunchMustRemainStableBeforeRedirectingCopyExits() {
+    var tracker = NativeAppCanonicalLaunchTracker(
+      requiredStableObservations: 3
+    )
+
+    XCTAssertFalse(tracker.observe(processIdentifier: 100))
+    XCTAssertFalse(tracker.observe(processIdentifier: 100))
+    XCTAssertTrue(tracker.observe(processIdentifier: 100))
+  }
+
+  func testCanonicalLaunchDisappearanceResetsStabilityCheck() {
+    var tracker = NativeAppCanonicalLaunchTracker(
+      requiredStableObservations: 2
+    )
+
+    XCTAssertFalse(tracker.observe(processIdentifier: 100))
+    XCTAssertFalse(tracker.observe(processIdentifier: nil))
+    XCTAssertFalse(tracker.observe(processIdentifier: 101))
+    XCTAssertTrue(tracker.observe(processIdentifier: 101))
+  }
+
+  func testDifferentCanonicalProcessRestartsStabilityCheck() {
+    var tracker = NativeAppCanonicalLaunchTracker(
+      requiredStableObservations: 2
+    )
+
+    XCTAssertFalse(tracker.observe(processIdentifier: 100))
+    XCTAssertFalse(tracker.observe(processIdentifier: 101))
+    XCTAssertTrue(tracker.observe(processIdentifier: 101))
+  }
+
   func testClosingLastWindowKeepsNativeHostAlive() {
     XCTAssertFalse(NativeAppLifecyclePolicy.terminatesAfterLastWindowClosed)
   }
