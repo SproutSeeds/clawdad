@@ -403,6 +403,41 @@ final class CloudModelsTests: XCTestCase {
     XCTAssertEqual(recent.first?.active, true)
   }
 
+  func testReadAloudKeysSeparateSentAndReturnedTextAndTrackResponseChanges() {
+    let item = MobileHistoryItem(
+      id: "turn-1",
+      requestId: "turn-1",
+      message: "Please summarize this.",
+      response: "Here is the summary.",
+      status: "answered",
+      sentAt: "2026-08-07T12:00:00.000Z",
+      answeredAt: "2026-08-07T12:00:03.000Z"
+    )
+
+    let messageKey = mobileReadAloudKey(
+      item: item,
+      kind: .message,
+      text: item.message
+    )
+    let responseKey = mobileReadAloudKey(
+      item: item,
+      kind: .response,
+      text: item.response
+    )
+    let revisedResponseKey = mobileReadAloudKey(
+      item: item,
+      kind: .response,
+      text: "Here is a revised summary."
+    )
+
+    XCTAssertNotEqual(messageKey, responseKey)
+    XCTAssertNotEqual(responseKey, revisedResponseKey)
+    XCTAssertEqual(
+      responseKey,
+      mobileReadAloudKey(item: item, kind: .response, text: "  \(item.response)\n")
+    )
+  }
+
   private func thread(
     projectPath: String,
     sessionId: String,

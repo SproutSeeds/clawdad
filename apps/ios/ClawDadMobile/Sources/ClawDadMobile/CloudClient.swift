@@ -1,12 +1,389 @@
 import Foundation
 import SwiftUI
 import CryptoKit
+import AVFoundation
 #if canImport(UIKit)
 import UIKit
 #endif
 
 @MainActor
+final class MobileReadAloudController: NSObject, ObservableObject {
+  @Published private(set) var activeKey = ""
+  @Published private(set) var phase = MobileReadAloudPhase.idle
+  @Published private(set) var statusMessage = ""
+  @Published private(set) var errorMessage = ""
+
+  private var requestId = ""
+  private var envelopeId = ""
+  private var expectedPartCount = 0
+  private var expectedChunkCounts: [Int: Int] = [:]
+  private var chunksByPart: [Int: [Int: Data]] = [:]
+  private var fileNamesByPart: [Int: String] = [:]
+  private var mimeTypesByPart: [Int: String] = [:]
+  private var audioFilesByPart: [Int: URL] = [:]
+  private var playlist: [URL] = []
+  private var playlistIndex = 0
+  private var receivedBytes = 0
+  private var player: AVAudioPlayer?
+  private var timeoutTask: Task<Void, Never>?
+
+  private let maximumAudioBytes = 256 * 1024 * 1024
+  private let maximumChunkBytes = 512 * 1024
+  private let prepareTimeoutNanoseconds: UInt64 = 3 * 60 * 1_000_000_000
+
+  func phase(for key: String) -> MobileReadAloudPhase {
+    activeKey == key ? phase : .idle
+  }
+
+  func message(for key: String) -> String {
+    activeKey == key ? (errorMessage.isEmpty ? statusMessage : errorMessage) : ""
+  }
+
+  func begin(key: String, requestId: String, envelopeId: String) {
+    resetPlayback()
+    self.activeKey = key
+    self.requestId = requestId
+    self.envelopeId = envelopeId
+    phase = .preparing
+    statusMessage = "Sending text to your Mac..."
+    errorMessage = ""
+    timeoutTask = Task { [weak self] in
+      try? await Task.sleep(nanoseconds: self?.prepareTimeoutNanoseconds ?? 0)
+      guard !Task.isCancelled else {
+        return
+      }
+      self?.fail(
+        requestId: requestId,
+        message: "Audio is still preparing. Tap the speaker again in a moment."
+      )
+    }
+  }
+
+  func markAccepted(requestId: String) {
+    guard requestId == self.requestId, phase == .preparing else {
+      return
+    }
+    statusMessage = "Preparing audio on your Mac..."
+  }
+
+  func receiveChunk(
+    requestId: String,
+    partIndex: Int,
+    partCount: Int,
+    chunkIndex: Int,
+    chunkCount: Int,
+    fileName: String,
+    mimeType: String,
+    declaredBytes: Int,
+    dataBase64: String
+  ) {
+    guard requestId == self.requestId, phase == .preparing else {
+      return
+    }
+    guard partCount > 0, partCount <= 200,
+          partIndex >= 0, partIndex < partCount,
+          chunkCount > 0, chunkCount <= 2_048,
+          chunkIndex >= 0, chunkIndex < chunkCount,
+          let data = Data(base64Encoded: dataBase64),
+          !data.isEmpty,
+          data.count <= maximumChunkBytes,
+          (declaredBytes <= 0 || declaredBytes == data.count)
+    else {
+      fail(requestId: requestId, message: "The Mac returned an invalid audio chunk.")
+      return
+    }
+
+    if expectedPartCount > 0, expectedPartCount != partCount {
+      fail(requestId: requestId, message: "The Mac returned inconsistent audio parts.")
+      return
+    }
+    if let expected = expectedChunkCounts[partIndex], expected != chunkCount {
+      fail(requestId: requestId, message: "The Mac returned inconsistent audio chunks.")
+      return
+    }
+
+    expectedPartCount = partCount
+    expectedChunkCounts[partIndex] = chunkCount
+    fileNamesByPart[partIndex] = fileName
+    mimeTypesByPart[partIndex] = mimeType
+    var partChunks = chunksByPart[partIndex] ?? [:]
+    if let existing = partChunks[chunkIndex] {
+      guard existing == data else {
+        fail(requestId: requestId, message: "The Mac returned a conflicting audio chunk.")
+        return
+      }
+    } else {
+      receivedBytes += data.count
+      guard receivedBytes <= maximumAudioBytes else {
+        fail(requestId: requestId, message: "This response is too large to read aloud on iPhone.")
+        return
+      }
+      partChunks[chunkIndex] = data
+      chunksByPart[partIndex] = partChunks
+    }
+
+    statusMessage = "Receiving audio from your Mac..."
+    if partChunks.count == chunkCount {
+      persistAudioPart(partIndex: partIndex, chunkCount: chunkCount)
+    }
+  }
+
+  func complete(requestId: String, partCount: Int) {
+    guard requestId == self.requestId, phase == .preparing else {
+      return
+    }
+    guard partCount > 0,
+          partCount == expectedPartCount,
+          audioFilesByPart.count == partCount,
+          (0..<partCount).allSatisfy({ audioFilesByPart[$0] != nil })
+    else {
+      fail(requestId: requestId, message: "The audio transfer ended before every part arrived.")
+      return
+    }
+
+    timeoutTask?.cancel()
+    timeoutTask = nil
+    playlist = (0..<partCount).compactMap { audioFilesByPart[$0] }
+    playlistIndex = 0
+    do {
+      try activatePlaybackSession()
+      try playCurrentPart()
+    } catch {
+      fail(requestId: requestId, message: "ClawDad could not play this audio: \(error.localizedDescription)")
+    }
+  }
+
+  func pause() {
+    guard phase == .playing, let player else {
+      return
+    }
+    player.pause()
+    phase = .paused
+    statusMessage = "Audio paused"
+  }
+
+  func resume() {
+    guard phase == .paused, let player else {
+      return
+    }
+    do {
+      try activatePlaybackSession()
+      guard player.play() else {
+        throw URLError(.cannotOpenFile)
+      }
+      phase = .playing
+      statusMessage = playbackStatusMessage()
+    } catch {
+      fail(requestId: requestId, message: "ClawDad could not resume this audio.")
+    }
+  }
+
+  func stop() {
+    activeKey = ""
+    phase = .idle
+    statusMessage = ""
+    errorMessage = ""
+    resetPlayback()
+  }
+
+  func connectionLostWhilePreparing() {
+    guard phase == .preparing else {
+      return
+    }
+    fail(requestId: requestId, message: "Connection to your Mac was lost while preparing audio.")
+  }
+
+  func showFailure(key: String, message: String) {
+    resetPlayback()
+    activeKey = key
+    phase = .failed
+    statusMessage = ""
+    errorMessage = message
+  }
+
+  @discardableResult
+  func failIfMatchingEnvelope(_ candidateEnvelopeId: String, message: String) -> Bool {
+    guard phase == .preparing,
+          !candidateEnvelopeId.isEmpty,
+          candidateEnvelopeId == envelopeId else {
+      return false
+    }
+    fail(requestId: requestId, message: message)
+    return true
+  }
+
+  private func persistAudioPart(partIndex: Int, chunkCount: Int) {
+    guard audioFilesByPart[partIndex] == nil,
+          let chunks = chunksByPart[partIndex],
+          chunks.count == chunkCount else {
+      return
+    }
+    var data = Data()
+    for index in 0..<chunkCount {
+      guard let chunk = chunks[index] else {
+        fail(requestId: requestId, message: "An audio chunk is missing.")
+        return
+      }
+      data.append(chunk)
+    }
+
+    let safeRequestId = requestId.filter { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }
+    let fileExtension = audioFileExtension(
+      fileName: fileNamesByPart[partIndex] ?? "",
+      mimeType: mimeTypesByPart[partIndex] ?? ""
+    )
+    let url = FileManager.default.temporaryDirectory
+      .appendingPathComponent("clawdad-read-aloud-\(safeRequestId)-\(partIndex).\(fileExtension)")
+    do {
+      try data.write(to: url, options: .atomic)
+      audioFilesByPart[partIndex] = url
+      chunksByPart.removeValue(forKey: partIndex)
+    } catch {
+      fail(requestId: requestId, message: "ClawDad could not save the audio on this iPhone.")
+    }
+  }
+
+  private func audioFileExtension(fileName: String, mimeType: String) -> String {
+    let candidate = URL(fileURLWithPath: fileName).pathExtension.lowercased()
+    if ["wav", "mp3", "m4a", "aac", "caf", "ogg", "flac"].contains(candidate) {
+      return candidate
+    }
+    switch mimeType.lowercased().split(separator: ";").first.map(String.init) {
+    case "audio/mpeg": return "mp3"
+    case "audio/mp4": return "m4a"
+    case "audio/aac": return "aac"
+    case "audio/flac": return "flac"
+    case "audio/ogg": return "ogg"
+    default: return "wav"
+    }
+  }
+
+  private func activatePlaybackSession() throws {
+#if canImport(UIKit)
+    let audioSession = AVAudioSession.sharedInstance()
+    try audioSession.setCategory(
+      .playback,
+      mode: .spokenAudio,
+      options: [.allowAirPlay, .allowBluetoothA2DP]
+    )
+    try audioSession.setActive(true)
+#endif
+  }
+
+  private func playCurrentPart() throws {
+    guard playlist.indices.contains(playlistIndex) else {
+      finishPlayback()
+      return
+    }
+    let nextPlayer = try AVAudioPlayer(contentsOf: playlist[playlistIndex])
+    nextPlayer.delegate = self
+    nextPlayer.prepareToPlay()
+    guard nextPlayer.play() else {
+      throw URLError(.cannotOpenFile)
+    }
+    player = nextPlayer
+    phase = .playing
+    statusMessage = playbackStatusMessage()
+    errorMessage = ""
+  }
+
+  private func playbackStatusMessage() -> String {
+    playlist.count > 1
+      ? "Playing audio part \(playlistIndex + 1) of \(playlist.count)"
+      : "Playing audio"
+  }
+
+  private func advancePlayback(successfully flag: Bool) {
+    guard phase == .playing || phase == .paused else {
+      return
+    }
+    guard flag else {
+      fail(requestId: requestId, message: "Audio playback stopped unexpectedly.")
+      return
+    }
+    playlistIndex += 1
+    if playlist.indices.contains(playlistIndex) {
+      do {
+        try playCurrentPart()
+      } catch {
+        fail(requestId: requestId, message: "ClawDad could not play the next audio part.")
+      }
+    } else {
+      finishPlayback()
+    }
+  }
+
+  private func finishPlayback() {
+    phase = .idle
+    statusMessage = ""
+    errorMessage = ""
+    resetPlayback()
+  }
+
+  private func fail(requestId: String, message: String) {
+    guard requestId.isEmpty || requestId == self.requestId else {
+      return
+    }
+    resetPlayback()
+    phase = .failed
+    statusMessage = ""
+    errorMessage = message
+  }
+
+  private func resetPlayback() {
+    timeoutTask?.cancel()
+    timeoutTask = nil
+    player?.stop()
+    player = nil
+    requestId = ""
+    envelopeId = ""
+    expectedPartCount = 0
+    expectedChunkCounts = [:]
+    chunksByPart = [:]
+    fileNamesByPart = [:]
+    mimeTypesByPart = [:]
+    playlist = []
+    playlistIndex = 0
+    receivedBytes = 0
+    removeAudioFiles()
+#if canImport(UIKit)
+    try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+#endif
+  }
+
+  private func removeAudioFiles() {
+    for url in audioFilesByPart.values {
+      try? FileManager.default.removeItem(at: url)
+    }
+    audioFilesByPart = [:]
+  }
+}
+
+extension MobileReadAloudController: AVAudioPlayerDelegate {
+  nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+    Task { @MainActor [weak self] in
+      self?.advancePlayback(successfully: flag)
+    }
+  }
+
+  nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+    Task { @MainActor [weak self] in
+      guard let self else {
+        return
+      }
+      self.fail(
+        requestId: self.requestId,
+        message: error.map { "Audio playback failed: \($0.localizedDescription)" }
+          ?? "Audio playback failed."
+      )
+    }
+  }
+}
+
+@MainActor
 final class CloudSession: ObservableObject {
+  let readAloud = MobileReadAloudController()
+
   @Published var cloudUrl: String {
     didSet { defaults.set(cloudUrl, forKey: "clawdad.cloudUrl") }
   }
@@ -240,6 +617,7 @@ final class CloudSession: ObservableObject {
     voiceTranscriptionStatus = ""
     pendingVoiceRequestId = ""
     pendingVoiceEnvelopeId = ""
+    readAloud.connectionLostWhilePreparing()
     lastEntitlementFingerprint = ""
     hostOnline = false
     lastRelayPongAt = .distantPast
@@ -574,6 +952,64 @@ final class CloudSession: ObservableObject {
         events.insert("Voice note sent for transcription", at: 0)
       } catch {
         finishVoiceTranscription(error: describe(error))
+      }
+    }
+  }
+
+  func toggleReadAloud(
+    item: MobileHistoryItem,
+    projectPath: String,
+    sessionId: String,
+    kind: MobileReadAloudKind,
+    text: String
+  ) {
+    let spokenText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    let key = mobileReadAloudKey(item: item, kind: kind, text: spokenText)
+    switch readAloud.phase(for: key) {
+    case .playing:
+      readAloud.pause()
+      return
+    case .paused:
+      readAloud.resume()
+      return
+    case .preparing:
+      return
+    case .idle, .failed:
+      break
+    }
+
+    guard !spokenText.isEmpty else {
+      readAloud.showFailure(key: key, message: "There is no text available to read aloud yet.")
+      return
+    }
+    guard ready else {
+      readAloud.showFailure(
+        key: key,
+        message: "Reconnect to your paired Mac before using Read Aloud."
+      )
+      return
+    }
+
+    let audioRequestId = UUID().uuidString.lowercased()
+    let envelopeId = UUID().uuidString.lowercased()
+    readAloud.begin(key: key, requestId: audioRequestId, envelopeId: envelopeId)
+    Task {
+      do {
+        try await sendEnvelope(
+          type: "speech.synthesize.request",
+          body: [
+            "requestId": .string(audioRequestId),
+            "project": .string(projectPath),
+            "sessionId": .string(sessionId),
+            "historyRequestId": .string(item.requestId),
+            "kind": .string(kind.rawValue),
+            "text": .string(spokenText)
+          ],
+          envelopeId: envelopeId
+        )
+        events.insert("Requested \(kind.accessibilitySubject) audio from Mac", at: 0)
+      } catch {
+        readAloud.failIfMatchingEnvelope(envelopeId, message: describe(error))
       }
     }
   }
@@ -1021,6 +1457,39 @@ final class CloudSession: ObservableObject {
       applyVoiceTranscriptionAccepted(envelope)
     case "speech.transcription":
       applyVoiceTranscription(envelope)
+    case "speech.synthesize.accepted":
+      guard verifyPairedHostEnvelope(envelope) else {
+        events.insert("Ignored an unauthenticated Read Aloud response", at: 0)
+        return
+      }
+      readAloud.markAccepted(
+        requestId: envelope.body["requestId"]?.stringValue ?? ""
+      )
+    case "speech.synthesis.chunk":
+      guard verifyPairedHostEnvelope(envelope) else {
+        events.insert("Ignored unauthenticated Read Aloud audio", at: 0)
+        return
+      }
+      readAloud.receiveChunk(
+        requestId: envelope.body["requestId"]?.stringValue ?? "",
+        partIndex: Int(envelope.body["partIndex"]?.numberValue ?? -1),
+        partCount: Int(envelope.body["partCount"]?.numberValue ?? 0),
+        chunkIndex: Int(envelope.body["chunkIndex"]?.numberValue ?? -1),
+        chunkCount: Int(envelope.body["chunkCount"]?.numberValue ?? 0),
+        fileName: envelope.body["fileName"]?.stringValue ?? "",
+        mimeType: envelope.body["mimeType"]?.stringValue ?? "audio/wav",
+        declaredBytes: Int(envelope.body["bytes"]?.numberValue ?? 0),
+        dataBase64: envelope.body["dataBase64"]?.stringValue ?? ""
+      )
+    case "speech.synthesis.complete":
+      guard verifyPairedHostEnvelope(envelope) else {
+        events.insert("Ignored an unauthenticated Read Aloud completion", at: 0)
+        return
+      }
+      readAloud.complete(
+        requestId: envelope.body["requestId"]?.stringValue ?? "",
+        partCount: Int(envelope.body["partCount"]?.numberValue ?? 0)
+      )
     case "message.accepted":
       let requestId = envelope.body["requestId"]?.stringValue ?? envelope.body["queueId"]?.stringValue ?? ""
       let acceptedSessionId = envelope.body["sessionId"]?.stringValue ?? ""
@@ -1081,7 +1550,7 @@ final class CloudSession: ObservableObject {
          "remote.assist.ice",
          "remote.assist.stop",
          "remote.assist.error":
-      guard verifyRemoteAssistHostEnvelope(envelope) else {
+      guard verifyPairedHostEnvelope(envelope) else {
         events.insert("Ignored an unauthenticated Remote Assist response", at: 0)
         return
       }
@@ -1091,6 +1560,10 @@ final class CloudSession: ObservableObject {
       let message = envelope.body["error"]?.stringValue ?? "Cloud error"
       let inReplyTo = envelope.body["inReplyTo"]?.stringValue ?? ""
       let code = envelope.body["code"]?.stringValue ?? ""
+      if readAloud.failIfMatchingEnvelope(inReplyTo, message: message) {
+        events.insert("Read Aloud failed: \(message)", at: 0)
+        return
+      }
       if code == "host_unavailable" {
         hostOnline = false
         lastHostSeenAt = .distantPast
@@ -1572,7 +2045,7 @@ final class CloudSession: ObservableObject {
     return try JSONEncoder.clawDadSorted.encode(unsigned)
   }
 
-  private func verifyRemoteAssistHostEnvelope(_ envelope: CloudEnvelope) -> Bool {
+  private func verifyPairedHostEnvelope(_ envelope: CloudEnvelope) -> Bool {
     guard envelope.sourceDeviceId == hostId,
           envelope.accountId == accountId,
           envelope.workspaceId == workspaceId,

@@ -31,6 +31,7 @@ struct ClawDadMobileApp: App {
     WindowGroup {
       ContentView()
         .environmentObject(session)
+        .environmentObject(session.readAloud)
         .environmentObject(subscription)
         .task {
           subscription.start()

@@ -708,6 +708,116 @@ test("trusted speech transcription forwards signed iPhone audio to local ClawDad
   assert.equal(verifyCloudEnvelopeSignature(sent[1], config.hostPublicKeyPem), true);
 });
 
+test("trusted Read Aloud requests generate on the Mac and stream signed audio chunks", async (t) => {
+  const deviceKeys = generateP256KeyPair();
+  const config = hostConfig({
+    trustedDevicePublicKeys: {
+      "ios-phone": deviceKeys.publicKey,
+    },
+  });
+  const firstPart = Buffer.alloc((384 * 1024) + 17, 7);
+  const secondPart = Buffer.from("second-audio-part");
+  const requests = [];
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = async (url, options = {}) => {
+    const requestUrl = new URL(String(url));
+    requests.push({ url: requestUrl, options });
+    if (requestUrl.pathname === "/v1/tts/message") {
+      return new Response(JSON.stringify({
+        ok: true,
+        cached: false,
+        audio: {
+          audioId: "audio-ready",
+          state: "ready",
+          parts: [
+            {
+              fileName: "part-001.wav",
+              url: "/v1/tts/audio?project=%2Fworkspace%2Fclawdad&audioId=audio-ready&part=part-001.wav",
+            },
+            {
+              fileName: "part-002.wav",
+              url: "/v1/tts/audio?project=%2Fworkspace%2Fclawdad&audioId=audio-ready&part=part-002.wav",
+            },
+          ],
+        },
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    const partName = requestUrl.searchParams.get("part");
+    return new Response(partName === "part-001.wav" ? firstPart : secondPart, {
+      status: 200,
+      headers: { "content-type": "audio/wav" },
+    });
+  };
+
+  const envelope = signCloudEnvelope(normalizeCloudEnvelope({
+    type: "speech.synthesize.request",
+    accountId: "acct-1",
+    workspaceId: "scratchpad",
+    sourceDeviceId: "ios-phone",
+    targetHostId: "mac-host",
+    body: {
+      requestId: "audio-request-1",
+      project: "/workspace/clawdad",
+      sessionId: "session-1",
+      historyRequestId: "turn-1",
+      kind: "response",
+      text: "Read this Codex response aloud.",
+    },
+  }), deviceKeys.privateKey, {
+    keyId: cloudPublicKeyFingerprint(deviceKeys.publicKey),
+  });
+  const sent = [];
+
+  const result = await handleCloudEnvelope(envelope, config, async (payload) => {
+    sent.push(payload);
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(requests.length, 3);
+  assert.equal(requests[0].url.pathname, "/v1/tts/message");
+  assert.equal(requests[0].options.headers.authorization, "Bearer local-token");
+  assert.deepEqual(JSON.parse(requests[0].options.body), {
+    project: "/workspace/clawdad",
+    sessionId: "session-1",
+    requestId: "audio-request-1",
+    historyRequestId: "turn-1",
+    kind: "response",
+    text: "Read this Codex response aloud.",
+    prepare: true,
+    poll: false,
+  });
+  assert.equal(sent[0].type, "speech.synthesize.accepted");
+  const chunks = sent.filter((entry) => entry.type === "speech.synthesis.chunk");
+  assert.equal(chunks.length, 3);
+  assert.deepEqual(
+    Buffer.concat(
+      chunks
+        .filter((entry) => entry.body.partIndex === 0)
+        .sort((a, b) => a.body.chunkIndex - b.body.chunkIndex)
+        .map((entry) => Buffer.from(entry.body.dataBase64, "base64")),
+    ),
+    firstPart,
+  );
+  assert.deepEqual(
+    Buffer.concat(
+      chunks
+        .filter((entry) => entry.body.partIndex === 1)
+        .map((entry) => Buffer.from(entry.body.dataBase64, "base64")),
+    ),
+    secondPart,
+  );
+  assert.equal(sent.at(-1).type, "speech.synthesis.complete");
+  assert.equal(sent.at(-1).body.partCount, 2);
+  assert.equal(sent.at(-1).body.totalBytes, firstPart.length + secondPart.length);
+  assert.equal(sent.every((entry) => verifyCloudEnvelopeSignature(entry, config.hostPublicKeyPem)), true);
+});
+
 test("trusted models.request returns the Mac Codex catalog", async (t) => {
   const deviceKeys = generateP256KeyPair();
   const config = hostConfig({ trustedDevicePublicKeys: { "ios-phone": deviceKeys.publicKey } });

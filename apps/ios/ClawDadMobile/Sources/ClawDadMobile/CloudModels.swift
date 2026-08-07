@@ -204,6 +204,43 @@ enum MobileThreadScope: String, CaseIterable, Identifiable {
   }
 }
 
+enum MobileReadAloudKind: String, Equatable {
+  case message
+  case response
+
+  var accessibilitySubject: String {
+    switch self {
+    case .message:
+      return "your message"
+    case .response:
+      return "Codex response"
+    }
+  }
+}
+
+enum MobileReadAloudPhase: String, Equatable {
+  case idle
+  case preparing
+  case playing
+  case paused
+  case failed
+}
+
+func mobileReadAloudKey(
+  item: MobileHistoryItem,
+  kind: MobileReadAloudKind,
+  text: String
+) -> String {
+  let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+  var hash: UInt64 = 14_695_981_039_346_656_037
+  for byte in normalized.utf8 {
+    hash ^= UInt64(byte)
+    hash &*= 1_099_511_628_211
+  }
+  let requestId = item.requestId.isEmpty ? item.id : item.requestId
+  return "\(requestId)::\(kind.rawValue)::\(normalized.utf8.count)::\(String(hash, radix: 36))"
+}
+
 struct MobileHistoryItem: Identifiable, Equatable {
   var id: String
   var requestId: String

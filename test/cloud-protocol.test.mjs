@@ -187,3 +187,59 @@ test("cloud protocol accepts paired speech transcription request and response en
   assert.equal(accepted.ok, true);
   assert.equal(response.ok, true);
 });
+
+test("cloud protocol accepts paired on-demand speech synthesis envelopes", () => {
+  const base = {
+    accountId: "acct-1",
+    workspaceId: "scratchpad",
+  };
+  const request = validateCloudEnvelope(normalizeCloudEnvelope({
+    ...base,
+    type: "speech.synthesize.request",
+    sourceDeviceId: "ios-phone",
+    targetHostId: "mac-host",
+    body: {
+      requestId: "audio-1",
+      project: "/workspace/clawdad",
+      sessionId: "session-1",
+      historyRequestId: "turn-1",
+      kind: "response",
+      text: "Read this response aloud.",
+    },
+  }));
+  const accepted = validateCloudEnvelope(normalizeCloudEnvelope({
+    ...base,
+    type: "speech.synthesize.accepted",
+    sourceDeviceId: "mac-host",
+    targetHostId: "ios-phone",
+    body: { requestId: "audio-1" },
+  }));
+  const chunk = validateCloudEnvelope(normalizeCloudEnvelope({
+    ...base,
+    type: "speech.synthesis.chunk",
+    sourceDeviceId: "mac-host",
+    targetHostId: "ios-phone",
+    body: {
+      requestId: "audio-1",
+      partIndex: 0,
+      partCount: 1,
+      chunkIndex: 0,
+      chunkCount: 1,
+      mimeType: "audio/wav",
+      dataBase64: Buffer.from("audio").toString("base64"),
+    },
+  }));
+  const complete = validateCloudEnvelope(normalizeCloudEnvelope({
+    ...base,
+    type: "speech.synthesis.complete",
+    sourceDeviceId: "mac-host",
+    targetHostId: "ios-phone",
+    body: { requestId: "audio-1", partCount: 1 },
+  }));
+
+  assert.equal(request.ok, true);
+  assert.equal(accepted.ok, true);
+  assert.equal(chunk.ok, true);
+  assert.equal(complete.ok, true);
+  assert.equal(cloudEnvelopeRequiresTrustedDevice(request.envelope), true);
+});

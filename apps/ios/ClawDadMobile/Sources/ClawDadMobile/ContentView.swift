@@ -1504,7 +1504,11 @@ struct ThreadDetailSheet: View {
                       .padding(.vertical, 16)
                   } else {
                     ForEach(displayedItems) { item in
-                      ThreadConversationTurn(item: item)
+                      ThreadConversationTurn(
+                        item: item,
+                        projectPath: thread.projectPath,
+                        sessionId: thread.sessionId
+                      )
                         .id(historySelectionKey(item))
                     }
                   }
@@ -1590,7 +1594,10 @@ struct ThreadDetailSheet: View {
 }
 
 struct ThreadConversationTurn: View {
+  @EnvironmentObject private var session: CloudSession
   var item: MobileHistoryItem
+  var projectPath: String
+  var sessionId: String
 
   private var responseText: String {
     item.displayResponse
@@ -1628,6 +1635,17 @@ struct ThreadConversationTurn: View {
         titleColor: ClawDadTheme.gold,
         displayText: messageText.isEmpty ? "Message unavailable." : item.message,
         copyText: messageText,
+        readAloudKey: mobileReadAloudKey(item: item, kind: .message, text: messageText),
+        readAloudSubject: MobileReadAloudKind.message.accessibilitySubject,
+        onReadAloud: {
+          session.toggleReadAloud(
+            item: item,
+            projectPath: projectPath,
+            sessionId: sessionId,
+            kind: .message,
+            text: messageText
+          )
+        },
         foreground: ClawDadTheme.cream,
         baseFont: .body.weight(.semibold)
       )
@@ -1637,6 +1655,17 @@ struct ThreadConversationTurn: View {
         titleColor: item.lifecycleStatus == "failed" ? ClawDadTheme.danger : ClawDadTheme.good,
         displayText: responseText.isEmpty ? item.responsePlaceholder : responseText,
         copyText: responseText,
+        readAloudKey: mobileReadAloudKey(item: item, kind: .response, text: responseText),
+        readAloudSubject: MobileReadAloudKind.response.accessibilitySubject,
+        onReadAloud: {
+          session.toggleReadAloud(
+            item: item,
+            projectPath: projectPath,
+            sessionId: sessionId,
+            kind: .response,
+            text: responseText
+          )
+        },
         foreground: responseText.isEmpty ? ClawDadTheme.peach.opacity(0.74) : ClawDadTheme.cream.opacity(0.92)
       )
     }
@@ -1654,10 +1683,14 @@ struct ThreadConversationTurn: View {
 }
 
 struct ThreadMessageBlock: View {
+  @EnvironmentObject private var readAloud: MobileReadAloudController
   var title: String
   var titleColor: Color
   var displayText: String
   var copyText: String
+  var readAloudKey: String
+  var readAloudSubject: String
+  var onReadAloud: () -> Void
   var foreground: Color
   var baseFont: Font = .body
 
@@ -1668,10 +1701,30 @@ struct ThreadMessageBlock: View {
           .font(.caption.weight(.black))
           .foregroundStyle(titleColor)
         Spacer()
-        MessageCopyButton(
-          text: copyText,
-          accessibilityLabel: "Copy \(title) message"
-        )
+        HStack(spacing: 6) {
+          MessageReadAloudButton(
+            text: copyText,
+            readAloudKey: readAloudKey,
+            accessibilitySubject: readAloudSubject,
+            onTap: onReadAloud
+          )
+          MessageCopyButton(
+            text: copyText,
+            accessibilityLabel: "Copy \(title) message"
+          )
+        }
+      }
+
+      let readAloudMessage = readAloud.message(for: readAloudKey)
+      if !readAloudMessage.isEmpty {
+        Text(readAloudMessage)
+          .font(.caption2.monospaced().weight(.semibold))
+          .foregroundStyle(
+            readAloud.phase(for: readAloudKey) == .failed
+              ? ClawDadTheme.danger
+              : ClawDadTheme.gold.opacity(0.9)
+          )
+          .accessibilityIdentifier("clawdad.read-aloud.status")
       }
 
       RichMessageText(
@@ -1680,6 +1733,85 @@ struct ThreadMessageBlock: View {
         baseFont: baseFont
       )
     }
+  }
+}
+
+struct MessageReadAloudButton: View {
+  @EnvironmentObject private var readAloud: MobileReadAloudController
+  var text: String
+  var readAloudKey: String
+  var accessibilitySubject: String
+  var onTap: () -> Void
+
+  private var canRead: Bool {
+    !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+
+  private var phase: MobileReadAloudPhase {
+    readAloud.phase(for: readAloudKey)
+  }
+
+  private var accessibilityLabel: String {
+    switch phase {
+    case .preparing:
+      return "Preparing \(accessibilitySubject) audio"
+    case .playing:
+      return "Pause \(accessibilitySubject)"
+    case .paused:
+      return "Resume \(accessibilitySubject)"
+    case .failed:
+      return "Retry reading \(accessibilitySubject) aloud"
+    case .idle:
+      return "Read \(accessibilitySubject) aloud"
+    }
+  }
+
+  private var controlColor: Color {
+    switch phase {
+    case .playing:
+      return ClawDadTheme.good
+    case .preparing, .paused:
+      return ClawDadTheme.gold
+    case .failed:
+      return ClawDadTheme.danger
+    case .idle:
+      return ClawDadTheme.cream.opacity(0.88)
+    }
+  }
+
+  var body: some View {
+    Button(action: onTap) {
+      Group {
+        switch phase {
+        case .preparing:
+          ProgressView()
+            .controlSize(.mini)
+            .tint(ClawDadTheme.gold)
+        case .playing:
+          Image(systemName: "pause.fill")
+        case .paused:
+          Image(systemName: "play.fill")
+        case .failed:
+          Image(systemName: "speaker.slash.fill")
+        case .idle:
+          Image(systemName: "speaker.wave.2.fill")
+        }
+      }
+      .font(.system(size: 12, weight: .black))
+      .frame(width: 30, height: 30)
+    }
+    .buttonStyle(.plain)
+    .foregroundStyle(controlColor)
+    .background(ClawDadTheme.darkPanel.opacity(0.88), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    .overlay(
+      RoundedRectangle(cornerRadius: 8, style: .continuous)
+        .stroke(controlColor.opacity(0.28), lineWidth: 1)
+    )
+    .opacity(canRead ? 1 : 0.48)
+    .disabled(!canRead || phase == .preparing)
+    .accessibilityLabel(accessibilityLabel)
+    .accessibilityValue(readAloud.message(for: readAloudKey))
+    .accessibilityIdentifier("clawdad.read-aloud.\(accessibilitySubject == "your message" ? "message" : "response")")
   }
 }
 

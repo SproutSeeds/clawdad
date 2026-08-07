@@ -570,6 +570,26 @@ test("iPhone composer copies drafts and records voice notes through paired ClawD
   assert.match(infoPlist, /<key>NSMicrophoneUsageDescription<\/key>/u);
 });
 
+test("iPhone thread cards read both sent messages and Codex responses aloud on demand", async () => {
+  const [contentSource, cloudSource, infoPlist] = await Promise.all([
+    readFile(iosContentPath, "utf8"),
+    readFile(iosCloudClientPath, "utf8"),
+    readFile(iosInfoPlistPath, "utf8"),
+  ]);
+
+  assert.match(contentSource, /struct MessageReadAloudButton: View/u);
+  assert.match(contentSource, /Image\(systemName: "speaker\.wave\.2\.fill"\)/u);
+  assert.match(contentSource, /kind: \.message/u);
+  assert.match(contentSource, /kind: \.response/u);
+  assert.ok(contentSource.includes('return "Read \\(accessibilitySubject) aloud"'));
+  assert.match(contentSource, /MessageReadAloudButton\([\s\S]*MessageCopyButton\(/u);
+  assert.match(cloudSource, /type: "speech\.synthesize\.request"/u);
+  assert.match(cloudSource, /case "speech\.synthesis\.chunk":/u);
+  assert.match(cloudSource, /case "speech\.synthesis\.complete":/u);
+  assert.match(cloudSource, /mode: \.spokenAudio/u);
+  assert.match(infoPlist, /<key>UIBackgroundModes<\/key>[\s\S]*<string>audio<\/string>/u);
+});
+
 test("iPhone Remote Assist supports full-screen landscape rotation", async () => {
   const [remoteAssistSource, infoPlist] = await Promise.all([
     readFile(iosRemoteAssistPath, "utf8"),
