@@ -8589,6 +8589,23 @@ exit 1
     assert.equal(scratchRemoteResult.exitCode, 0, scratchRemoteResult.stderr);
     assert.equal(scratchRemoteResult.stdout.trim(), "https://github.com/SproutSeeds/scratch-seed.git");
 
+    const duplicateCreateResponse = await fetch(`${baseUrl}/v1/projects`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "tailscale-user-login": "tester@example.com",
+      },
+      body: JSON.stringify({
+        mode: "new",
+        name: "scratch-seed",
+        provider: "codex",
+      }),
+    });
+    assert.equal(duplicateCreateResponse.status, 400, stderr.join(""));
+    const duplicateCreatePayload = await duplicateCreateResponse.json();
+    assert.equal(duplicateCreatePayload.ok, false);
+    assert.match(duplicateCreatePayload.error, /directory with that name already exists/u);
+
     const updatedGhInvocations = await readFile(githubInvokedPath, "utf8");
     assert.match(
       updatedGhInvocations,

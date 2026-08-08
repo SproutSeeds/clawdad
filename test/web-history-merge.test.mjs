@@ -1531,6 +1531,188 @@ test("web session dropdown exposes a start-new-session option", async () => {
   assert.match(createBody, /syncSelectedSession\(payload\.sessionId/u);
 });
 
+test("Mac workspace exposes project parity controls and scoped recent threads", async () => {
+  const [source, html, css] = await Promise.all([
+    readFile(webAppPath, "utf8"),
+    readFile(webIndexPath, "utf8"),
+    readFile(webCssPath, "utf8"),
+  ]);
+
+  assert.match(html, /id="projectSelect"[^>]*hidden/u);
+  assert.match(html, /id="projectPickerButton"[\s\S]*aria-controls="projectPickerModal"/u);
+  assert.match(html, /id="projectAddButton"[\s\S]*aria-label="Create project directory"/u);
+  assert.match(html, /id="sessionAddButton"[\s\S]*aria-label="Start new Codex session"/u);
+  assert.match(html, /id="projectPickerModal"[\s\S]*id="projectPickerSearchInput"/u);
+  assert.match(html, /id="projectPickerAddExistingButton"[\s\S]*>Add Existing</u);
+  assert.match(html, /id="threadPreviewPanel"[\s\S]*id="threadScopeProjectButton"[\s\S]*id="threadScopeAllButton"/u);
+  assert.match(html, /id="projectDestination"[\s\S]*id="projectDestinationValue"/u);
+  assert.match(html, /class="project-mode-tabs"[^>]*hidden/u);
+
+  assert.match(source, /const threadScopeKey = "clawdad-thread-scope-v1";/u);
+  assert.match(source, /function renderProjectPickerModal\(\)/u);
+  assert.match(source, /function renderThreadPreviewPanel\(\)/u);
+  assert.match(source, /function mergeRecentThreadSummaries\(threads = \[\]\)/u);
+  assert.match(source, /state\.recentThreads = Array\.isArray\(payload\.recentThreads\)/u);
+  assert.match(source, /recentThreads: Array\.isArray\(payload\.recentThreads\)/u);
+  assert.match(source, /restoreThreadScope\(\);/u);
+  assert.match(source, /openProjectModal\(\{\s*mode: "new",\s*returnFocus: elements\.projectAddButton,/u);
+  assert.match(source, /openProjectModal\(\{\s*mode: "existing",\s*returnToPicker: true,/u);
+  assert.match(source, /elements\.sessionAddButton\?\.addEventListener\("click"/u);
+  assert.match(source, /setThreadScope\("project"\)/u);
+  assert.match(source, /setThreadScope\("all"\)/u);
+
+  const createStart = source.indexOf("async function handleProjectCreate");
+  const dispatchStart = source.indexOf("async function handleDispatch", createStart);
+  assert.notEqual(createStart, -1);
+  assert.notEqual(dispatchStart, -1);
+  const createBody = source.slice(createStart, dispatchStart);
+  const pendingStart = createBody.indexOf("state.projectModalPending = true");
+  const fetchStart = createBody.indexOf('fetchJson("/v1/projects"');
+  const closeStart = createBody.indexOf("state.projectModalOpen = false");
+  assert.ok(pendingStart >= 0 && pendingStart < fetchStart);
+  assert.ok(fetchStart >= 0 && fetchStart < closeStart);
+  assert.match(createBody, /state\.projectModalStatus = error\.message/u);
+
+  assert.match(css, /\.app-shell\s*\{[\s\S]*width: min\(100%, 960px\);/u);
+  assert.match(css, /\.thread-preview-list\s*\{[\s\S]*repeat\(auto-fit, minmax\(290px, 1fr\)\)/u);
+  assert.match(css, /\.project-picker-option:hover:not\(:disabled\)/u);
+  assert.match(css, /#projectPickerModal\s*\{[\s\S]*place-items: center;/u);
+});
+
+test("Mac project directory validation mirrors the paired iPhone and server boundary", async () => {
+  const source = await readFile(webAppPath, "utf8");
+  const start = source.indexOf("function projectDirectoryNameIsValid");
+  const end = source.indexOf("function renderProjectModal", start);
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  const context = {};
+  vm.createContext(context);
+  vm.runInContext(
+    `${source.slice(start, end)}\nglobalThis.projectDirectoryNameIsValid = projectDirectoryNameIsValid;`,
+    context,
+  );
+
+  assert.equal(context.projectDirectoryNameIsValid("clawdad-market"), true);
+  assert.equal(context.projectDirectoryNameIsValid(" Beach Planning "), true);
+  assert.equal(context.projectDirectoryNameIsValid(""), false);
+  assert.equal(context.projectDirectoryNameIsValid(".hidden"), false);
+  assert.equal(context.projectDirectoryNameIsValid("nested/project"), false);
+  assert.equal(context.projectDirectoryNameIsValid("nested\\project"), false);
+  assert.equal(context.projectDirectoryNameIsValid(`bad${String.fromCharCode(7)}name`), false);
+});
+
+test("Mac recent-thread scope persists, filters, deduplicates, sorts, and caps cards", async () => {
+  const source = await readFile(webAppPath, "utf8");
+  const start = source.indexOf("function normalizeThreadScope");
+  const end = source.indexOf("function currentThreadEntries", start);
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+
+  const storage = new Map();
+  const state = {
+    threadScope: "project",
+    recentThreads: [],
+    projects: [],
+    selectedProject: "",
+  };
+  const context = {
+    state,
+    threadScopeKey: "clawdad-thread-scope-v1",
+    localStorage: {
+      getItem(key) {
+        return storage.has(key) ? storage.get(key) : null;
+      },
+      setItem(key, value) {
+        storage.set(key, value);
+      },
+    },
+    renderAll() {},
+    timestampToMs(value) {
+      const parsed = new Date(value || 0).getTime();
+      return Number.isFinite(parsed) ? parsed : 0;
+    },
+    sessionDisplayTitle(session) {
+      return session?.title || session?.slug || "Codex thread";
+    },
+    currentProject() {
+      return state.projects.find((project) => project.path === state.selectedProject) || null;
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(
+    `${source.slice(start, end)}\nObject.assign(globalThis, { restoreThreadScope, setThreadScope, threadPreviewCards });`,
+    context,
+  );
+
+  context.restoreThreadScope();
+  assert.equal(state.threadScope, "project");
+  context.setThreadScope("all");
+  assert.equal(storage.get("clawdad-thread-scope-v1"), "all");
+  storage.set("clawdad-thread-scope-v1", "unsupported");
+  context.restoreThreadScope();
+  assert.equal(state.threadScope, "project");
+
+  state.threadScope = "all";
+  state.recentThreads = Array.from({ length: 22 }, (_, index) => ({
+    projectName: index % 2 === 0 ? "Alpha" : "Beta",
+    projectPath: index % 2 === 0 ? "/alpha" : "/beta",
+    sessionId: `session-${index}`,
+    title: `Thread ${index}`,
+    status: "idle",
+    lastActivityAt: new Date(Date.UTC(2026, 7, 7, 12, index)).toISOString(),
+  }));
+  state.recentThreads.push({
+    projectName: "Alpha",
+    projectPath: "/alpha",
+    sessionId: "session-21",
+    title: "Stale duplicate",
+    status: "idle",
+    lastActivityAt: "2026-08-01T00:00:00.000Z",
+  });
+  const allCards = context.threadPreviewCards();
+  assert.equal(allCards.length, 20);
+  assert.equal(allCards[0].sessionId, "session-21");
+  assert.equal(allCards[0].title, "Thread 21");
+  assert.equal(new Set(allCards.map((thread) => thread.sessionId)).size, 20);
+
+  state.projects = [
+    {
+      path: "/alpha",
+      displayName: "Alpha",
+      provider: "codex",
+      sessions: [
+        { sessionId: "alpha-new", title: "New", lastActivityAt: "2026-08-07T12:00:00.000Z" },
+        { sessionId: "alpha-old", title: "Old", lastActivityAt: "2026-08-06T12:00:00.000Z" },
+      ],
+    },
+    {
+      path: "/beta",
+      displayName: "Beta",
+      provider: "codex",
+      sessions: [
+        { sessionId: "beta-new", title: "Other", lastActivityAt: "2026-08-08T12:00:00.000Z" },
+      ],
+    },
+  ];
+  state.threadScope = "project";
+  state.selectedProject = "/alpha";
+  assert.deepEqual(
+    [...context.threadPreviewCards().map((thread) => thread.sessionId)],
+    ["alpha-new", "alpha-old"],
+  );
+  state.selectedProject = "/missing";
+  assert.deepEqual([...context.threadPreviewCards()], []);
+
+  const renderStart = source.indexOf("function buildThreadPreviewCard");
+  const renderEnd = source.indexOf("function repoOptionLabel", renderStart);
+  const renderBody = source.slice(renderStart, renderEnd);
+  assert.match(renderBody, /openSessionThread\(thread\.projectPath, thread\.sessionId\)/u);
+  assert.match(renderBody, /Refreshing threads…/u);
+  assert.match(renderBody, /No Codex threads in your workspace yet\./u);
+  assert.match(renderBody, /No Codex threads in this directory yet\./u);
+  assert.match(renderBody, /state\.threadPreviewError/u);
+});
+
 test("web quick chats render as a composer dropdown instead of a modal or linear tray", async () => {
   const [source, html] = await Promise.all([
     readFile(webAppPath, "utf8"),
@@ -1601,27 +1783,21 @@ test("web quick chats render as a composer dropdown instead of a modal or linear
   assert.match(quickButtonListener, /isQuickPromptTarget\(event\.target\)/u);
   assert.match(quickButtonListener, /closeQuickPromptModal\(\{ focusComposer: false \}\)/u);
 
-  const terminalEscapeStart = source.indexOf('if (event.key === "Escape" && terminalPanelIsOpen())');
-  const archiveEscapeStart = source.indexOf('if (event.key === "Escape" && state.queueArchiveConfirmEntryId)', terminalEscapeStart);
-  assert.notEqual(terminalEscapeStart, -1);
-  assert.notEqual(archiveEscapeStart, -1);
-  assert.ok(terminalEscapeStart < archiveEscapeStart);
-  const terminalEscapeHandler = source.slice(terminalEscapeStart, archiveEscapeStart);
-  assert.match(terminalEscapeHandler, /event\.preventDefault\(\);/u);
-  assert.match(terminalEscapeHandler, /closeTerminalStreamPanel\(\);/u);
-
-  const quickEscapeStart = source.indexOf('if (event.key === "Escape" && state.quickPromptModalOpen)');
-  const toolsEscapeStart = source.indexOf('if (event.key === "Escape" && state.composerToolsOpen)', quickEscapeStart);
-  const projectEscapeStart = source.indexOf('if (event.key === "Escape" && state.projectModalOpen)', quickEscapeStart);
-  assert.notEqual(quickEscapeStart, -1);
-  assert.notEqual(toolsEscapeStart, -1);
-  assert.notEqual(projectEscapeStart, -1);
-  const quickEscapeHandler = source.slice(quickEscapeStart, toolsEscapeStart);
-  assert.match(quickEscapeHandler, /event\.preventDefault\(\);/u);
-  assert.match(quickEscapeHandler, /closeQuickPromptModal\(\);/u);
-  const toolsEscapeHandler = source.slice(toolsEscapeStart, projectEscapeStart);
-  assert.match(toolsEscapeHandler, /event\.preventDefault\(\);/u);
-  assert.match(toolsEscapeHandler, /closeComposerToolsMenu\(\);/u);
+  const goBackStart = source.indexOf("function goBackOneStep()");
+  const bindStart = source.indexOf("function bindEvents()", goBackStart);
+  assert.notEqual(goBackStart, -1);
+  assert.notEqual(bindStart, -1);
+  const goBackBody = source.slice(goBackStart, bindStart);
+  assert.ok(goBackBody.indexOf("terminalPanelIsOpen()") < goBackBody.indexOf("state.queueArchiveConfirmEntryId"));
+  assert.ok(goBackBody.indexOf("state.projectModalOpen") < goBackBody.indexOf("state.projectPickerOpen"));
+  assert.ok(goBackBody.indexOf("state.quickPromptModalOpen") < goBackBody.indexOf("state.composerToolsOpen"));
+  assert.match(goBackBody, /closeTerminalStreamPanel\(\);/u);
+  assert.match(goBackBody, /closeQuickPromptModal\(\);/u);
+  assert.match(goBackBody, /closeComposerToolsMenu\(\);/u);
+  assert.match(
+    source,
+    /if \(event\.key === "Escape" && goBackOneStep\(\)\) \{\s*event\.preventDefault\(\);/u,
+  );
 
   const saveListenerStart = source.indexOf("elements.quickPromptSaveButton?.addEventListener");
   const titleListenerStart = source.indexOf("elements.quickPromptTitleInput?.addEventListener", saveListenerStart);

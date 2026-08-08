@@ -1,5 +1,6 @@
 const state = {
   projects: [],
+  recentThreads: [],
   projectRoots: [],
   workspace: null,
   workspaceSetupPending: false,
@@ -31,6 +32,10 @@ const state = {
   directoryBrowserStatus: "",
   selectedProject: "",
   selectedSessionId: "",
+  threadScope: "project",
+  threadPreviewError: "",
+  projectPickerOpen: false,
+  projectPickerQuery: "",
   workspaceMode: "project",
   sessionImportModalProject: "",
   sessionImportPendingId: "",
@@ -92,6 +97,7 @@ const state = {
   projectModalName: "",
   projectModalProvider: "codex",
   projectModalStatus: "",
+  projectModalReturnToPicker: false,
   historyThreads: {},
   queueCollapsed: false,
   copiedFeedback: {},
@@ -179,6 +185,9 @@ const elements = {
   activeRunsInlineState: document.querySelector("#activeRunsInlineState"),
   activeRunsInlineList: document.querySelector("#activeRunsInlineList"),
   projectSelect: document.querySelector("#projectSelect"),
+  projectPickerButton: document.querySelector("#projectPickerButton"),
+  projectPickerButtonTitle: document.querySelector("#projectPickerButtonTitle"),
+  projectPickerButtonSubtitle: document.querySelector("#projectPickerButtonSubtitle"),
   projectAddButton: document.querySelector("#projectAddButton"),
   workspaceSetupPanel: document.querySelector("#workspaceSetupPanel"),
   workspaceSetupForm: document.querySelector("#workspaceSetupForm"),
@@ -242,6 +251,7 @@ const elements = {
   projectDelegateButton: document.querySelector("#projectDelegateButton"),
   sessionControl: document.querySelector(".session-control"),
   sessionSelect: document.querySelector("#sessionSelect"),
+  sessionAddButton: document.querySelector("#sessionAddButton"),
   sessionImportButton: document.querySelector("#sessionImportButton"),
   sessionImportOrb: document.querySelector("#sessionImportOrb"),
   sessionThreadButton: document.querySelector("#sessionThreadButton"),
@@ -303,6 +313,13 @@ const elements = {
   detailHistoryState: document.querySelector("#detailHistoryState"),
   detailHistoryList: document.querySelector("#detailHistoryList"),
   detailScrollBottomButton: document.querySelector("#detailScrollBottomButton"),
+  threadPreviewPanel: document.querySelector("#threadPreviewPanel"),
+  threadPreviewSubtitle: document.querySelector("#threadPreviewSubtitle"),
+  threadPreviewRefreshButton: document.querySelector("#threadPreviewRefreshButton"),
+  threadScopeProjectButton: document.querySelector("#threadScopeProjectButton"),
+  threadScopeAllButton: document.querySelector("#threadScopeAllButton"),
+  threadPreviewState: document.querySelector("#threadPreviewState"),
+  threadPreviewList: document.querySelector("#threadPreviewList"),
   projectSummaryButton: document.querySelector("#projectSummaryButton"),
   projectCodexButton: document.querySelector("#projectCodexButton"),
   codexIntegrationModal: document.querySelector("#codexIntegrationModal"),
@@ -330,6 +347,10 @@ const elements = {
   projectModalClose: document.querySelector("#projectModalClose"),
   projectModalForm: document.querySelector("#projectModalForm"),
   projectModalState: document.querySelector("#projectModalState"),
+  projectModalTitle: document.querySelector("#projectModalTitle"),
+  projectModalDescription: document.querySelector("#projectModalDescription"),
+  projectDestination: document.querySelector("#projectDestination"),
+  projectDestinationValue: document.querySelector("#projectDestinationValue"),
   projectRootSelect: document.querySelector("#projectRootSelect"),
   projectRepoSelect: document.querySelector("#projectRepoSelect"),
   projectNameInput: document.querySelector("#projectNameInput"),
@@ -337,6 +358,13 @@ const elements = {
   projectCreateButton: document.querySelector("#projectCreateButton"),
   projectModeExisting: document.querySelector("#projectModeExisting"),
   projectModeNew: document.querySelector("#projectModeNew"),
+  projectPickerModal: document.querySelector("#projectPickerModal"),
+  projectPickerBackdrop: document.querySelector("#projectPickerBackdrop"),
+  projectPickerClose: document.querySelector("#projectPickerClose"),
+  projectPickerCount: document.querySelector("#projectPickerCount"),
+  projectPickerAddExistingButton: document.querySelector("#projectPickerAddExistingButton"),
+  projectPickerSearchInput: document.querySelector("#projectPickerSearchInput"),
+  projectPickerList: document.querySelector("#projectPickerList"),
   sessionRenameButton: document.querySelector("#sessionRenameButton"),
   sessionImportModal: document.querySelector("#sessionImportModal"),
   sessionImportBackdrop: document.querySelector("#sessionImportBackdrop"),
@@ -421,11 +449,15 @@ const cacheVersionSuffix = appBuildVersion && appBuildVersion !== "__CLAWDAD_APP
   : "";
 const projectCacheKey = `clawdad-project-catalog-v4${cacheVersionSuffix}`;
 const threadCacheKey = "clawdad-thread-log-v2";
+const threadScopeKey = "clawdad-thread-scope-v1";
 const queueCollapsedKey = "clawdad-queue-collapsed-v1";
 const artifactShelfCollapsedKey = "clawdad-artifact-shelf-collapsed-v1";
 const composerCopyKey = "composer-message";
 let queueArchiveReturnFocus = null;
 let queueArchiveFocusPending = false;
+let projectPickerReturnFocus = null;
+let projectModalReturnFocus = null;
+let sessionThreadReturnFocus = null;
 let terminalPanelReturnFocus = null;
 let terminalPanelHistoryActive = false;
 let terminalPanelPollTimer = null;
@@ -4264,6 +4296,9 @@ function cacheProjects(payload) {
         defaultProject: payload.defaultProject || "",
         workspace: payload.workspace || state.workspace || null,
         projects: Array.isArray(payload.projects) ? payload.projects : [],
+        recentThreads: Array.isArray(payload.recentThreads)
+          ? payload.recentThreads
+          : state.recentThreads,
       }),
     );
   } catch (_error) {
@@ -4288,6 +4323,9 @@ function restoreCachedProjects() {
 
     applyWorkspacePayload(payload.workspace);
     state.projects = projects;
+    state.recentThreads = Array.isArray(payload.recentThreads)
+      ? payload.recentThreads.map(normalizeRecentThreadSummary).filter(Boolean)
+      : [];
     state.projectsLoading = true;
     syncSelectedProject(payload.selectedProject || payload.defaultProject || "", {
       preferCurrent: false,
@@ -4299,6 +4337,131 @@ function restoreCachedProjects() {
   } catch (_error) {
     return false;
   }
+}
+
+function normalizeThreadScope(value) {
+  return value === "all" ? "all" : "project";
+}
+
+function restoreThreadScope() {
+  try {
+    state.threadScope = normalizeThreadScope(localStorage.getItem(threadScopeKey));
+  } catch (_error) {
+    state.threadScope = "project";
+  }
+}
+
+function setThreadScope(value) {
+  state.threadScope = normalizeThreadScope(value);
+  try {
+    localStorage.setItem(threadScopeKey, state.threadScope);
+  } catch (_error) {
+    // Ignore storage failures.
+  }
+  renderAll();
+}
+
+function recentThreadActivityMs(thread) {
+  return Math.max(
+    timestampToMs(thread?.lastActivityAt),
+    timestampToMs(thread?.providerLastActivity),
+    timestampToMs(thread?.lastResponse),
+    timestampToMs(thread?.lastDispatch),
+    timestampToMs(thread?.providerSessionTimestamp),
+    timestampToMs(thread?.lastSelectedAt),
+  );
+}
+
+function normalizeRecentThreadSummary(thread, project = null) {
+  const projectPath = String(thread?.projectPath || thread?.path || project?.path || "").trim();
+  const sessionId = String(thread?.sessionId || "").trim();
+  if (!projectPath || !sessionId) {
+    return null;
+  }
+  const activityMs = recentThreadActivityMs(thread);
+  return {
+    projectName: String(
+      thread?.projectName ||
+      project?.displayName ||
+      project?.slug ||
+      projectPath.split("/").filter(Boolean).at(-1) ||
+      "Project",
+    ).trim(),
+    projectPath,
+    title: String(
+      thread?.title ||
+      thread?.slug ||
+      sessionDisplayTitle(thread, projectPath) ||
+      "Codex thread",
+    ).trim(),
+    provider: String(thread?.provider || project?.provider || "codex").trim() || "codex",
+    sessionId,
+    active: Boolean(thread?.active || project?.activeSessionId === sessionId),
+    status: String(thread?.status || "idle").trim() || "idle",
+    lastDispatch: String(thread?.lastDispatch || "").trim(),
+    lastResponse: String(thread?.lastResponse || "").trim(),
+    lastActivityAt: activityMs > 0
+      ? new Date(activityMs).toISOString()
+      : String(thread?.lastActivityAt || "").trim(),
+  };
+}
+
+function recentThreadsFromProjects(projects = state.projects) {
+  return (Array.isArray(projects) ? projects : []).flatMap((project) =>
+    (Array.isArray(project?.sessions) ? project.sessions : [])
+      .map((session) => normalizeRecentThreadSummary(session, project))
+      .filter(Boolean),
+  );
+}
+
+function mergeRecentThreadSummaries(threads = []) {
+  const byThread = new Map();
+  for (const rawThread of Array.isArray(threads) ? threads : []) {
+    const thread = normalizeRecentThreadSummary(rawThread);
+    if (!thread) {
+      continue;
+    }
+    const key = `${thread.projectPath}::${thread.sessionId}`;
+    const existing = byThread.get(key);
+    if (!existing) {
+      byThread.set(key, thread);
+      continue;
+    }
+    const newer = recentThreadActivityMs(thread) >= recentThreadActivityMs(existing)
+      ? thread
+      : existing;
+    const older = newer === thread ? existing : thread;
+    byThread.set(key, {
+      ...older,
+      ...newer,
+      active: Boolean(existing.active || thread.active),
+      title: newer.title || older.title,
+      lastDispatch: newer.lastDispatch || older.lastDispatch,
+      lastResponse: newer.lastResponse || older.lastResponse,
+    });
+  }
+  return [...byThread.values()].sort((left, right) => {
+    const activityDelta = recentThreadActivityMs(right) - recentThreadActivityMs(left);
+    if (activityDelta !== 0) {
+      return activityDelta;
+    }
+    if (left.active !== right.active) {
+      return left.active ? -1 : 1;
+    }
+    const projectDelta = left.projectName.localeCompare(right.projectName);
+    return projectDelta || left.title.localeCompare(right.title) || left.sessionId.localeCompare(right.sessionId);
+  });
+}
+
+function threadPreviewCards() {
+  if (state.threadScope === "all") {
+    const source = state.recentThreads.length > 0
+      ? state.recentThreads
+      : recentThreadsFromProjects();
+    return mergeRecentThreadSummaries(source).slice(0, 20);
+  }
+  const project = currentProject();
+  return mergeRecentThreadSummaries(recentThreadsFromProjects(project ? [project] : [])).slice(0, 20);
 }
 
 function currentThreadEntries() {
@@ -6248,6 +6411,112 @@ function groupedProjectOptions() {
   };
 }
 
+function projectPickerGroups() {
+  const query = state.projectPickerQuery.trim().toLowerCase();
+  const matches = (project) => {
+    if (!query) {
+      return true;
+    }
+    return [projectOptionLabel(project), project?.path]
+      .some((value) => String(value || "").toLowerCase().includes(query));
+  };
+  const grouped = groupedProjectOptions();
+  return [
+    ...(grouped.scratchpad.some(matches)
+      ? [{ key: "scratchpad", label: "Scratchpad", projects: grouped.scratchpad.filter(matches) }]
+      : []),
+    ...grouped.roots
+      .map((group) => ({ key: group.path, label: group.label || group.path, projects: group.projects.filter(matches) }))
+      .filter((group) => group.projects.length > 0),
+    ...(grouped.pinned.some(matches)
+      ? [{ key: "pinned", label: "Pinned Projects", projects: grouped.pinned.filter(matches) }]
+      : []),
+  ];
+}
+
+function buildProjectPickerOption(project) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "project-picker-option";
+  button.dataset.projectPath = project.path;
+  const selected = project.path === state.selectedProject;
+  button.classList.toggle("is-selected", selected);
+  button.setAttribute("aria-current", selected ? "true" : "false");
+  button.setAttribute("aria-label", `Open ${projectOptionLabel(project)}`);
+
+  const icon = document.createElement("span");
+  icon.className = "project-picker-option-icon";
+  icon.setAttribute("aria-hidden", "true");
+  icon.innerHTML = '<svg viewBox="0 0 18 18" fill="none"><path d="M2.75 5.25h4.4l1.15 1.2h6.95v6.8a1.5 1.5 0 0 1-1.5 1.5h-11a1.5 1.5 0 0 1-1.5-1.5v-6.5a1.5 1.5 0 0 1 1.5-1.5Z" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"></path></svg>';
+
+  const copy = document.createElement("span");
+  copy.className = "project-picker-option-copy";
+  const name = document.createElement("span");
+  name.className = "project-picker-option-name";
+  name.textContent = projectOptionLabel(project);
+  const path = document.createElement("span");
+  path.className = "project-picker-option-path";
+  path.textContent = project.path;
+  copy.append(name, path);
+
+  const check = document.createElement("span");
+  check.className = "project-picker-option-check";
+  check.setAttribute("aria-hidden", "true");
+  check.textContent = selected ? "✓" : "";
+  button.append(icon, copy, check);
+  button.addEventListener("click", () => {
+    closeProjectPicker({ restoreFocus: false });
+    void selectProjectPath(project.path).finally(() => {
+      window.requestAnimationFrame(() => elements.projectPickerButton?.focus());
+    });
+  });
+  return button;
+}
+
+function renderProjectPickerModal() {
+  if (!elements.projectPickerModal) {
+    return;
+  }
+  elements.projectPickerModal.hidden = !state.projectPickerOpen;
+  if (!state.projectPickerOpen) {
+    return;
+  }
+
+  const groups = projectPickerGroups();
+  const matchCount = groups.reduce((count, group) => count + group.projects.length, 0);
+  setText(elements.projectPickerCount, `${matchCount} available`, { empty: false });
+  if (elements.projectPickerSearchInput.value !== state.projectPickerQuery) {
+    elements.projectPickerSearchInput.value = state.projectPickerQuery;
+  }
+  elements.projectPickerSearchInput.disabled = catalogBlocksInteraction();
+  elements.projectPickerAddExistingButton.disabled =
+    catalogBlocksInteraction() || Boolean(state.workspace?.setupRequired);
+
+  clearNode(elements.projectPickerList);
+  if (groups.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "project-picker-empty";
+    empty.textContent = state.projectPickerQuery ? "No matching projects" : "No projects available";
+    elements.projectPickerList.append(empty);
+    return;
+  }
+
+  for (const group of groups) {
+    const section = document.createElement("section");
+    section.className = "project-picker-group";
+    const heading = document.createElement("div");
+    heading.className = "project-picker-group-title";
+    heading.textContent = group.label;
+    const list = document.createElement("div");
+    list.className = "project-picker-group-list";
+    for (const project of group.projects) {
+      list.append(buildProjectPickerOption(project));
+    }
+    section.append(heading, list);
+    elements.projectPickerList.append(section);
+  }
+}
+
 function renderProjectOptions() {
   if (controlInteractionLocked("project-select")) {
     return;
@@ -6276,13 +6545,15 @@ function renderProjectOptions() {
       projectActivityTimestampMs(project),
     ]),
   });
-  if (elements.projectSelect.dataset.renderKey === renderKey) {
+  if (elements.projectPickerButton?.dataset.renderKey === renderKey) {
     return;
   }
   elements.projectSelect.innerHTML = "";
   if (elements.projectAddButton) {
-    elements.projectAddButton.disabled = setupRequired;
-    elements.projectAddButton.title = setupRequired ? "Choose a projects folder first" : "Add project";
+    elements.projectAddButton.disabled = setupRequired || state.projectModalPending;
+    elements.projectAddButton.title = setupRequired
+      ? "Choose a projects folder first"
+      : "Create project directory";
   }
 
   if (catalogBlocking) {
@@ -6292,6 +6563,10 @@ function renderProjectOptions() {
     elements.projectSelect.append(option);
     elements.projectSelect.disabled = true;
     elements.projectSelect.dataset.renderKey = renderKey;
+    elements.projectPickerButton.disabled = true;
+    setText(elements.projectPickerButtonTitle, "Loading projects…", { empty: false });
+    setText(elements.projectPickerButtonSubtitle, "Refreshing your workspace", { empty: false });
+    elements.projectPickerButton.dataset.renderKey = renderKey;
     return;
   }
 
@@ -6302,6 +6577,18 @@ function renderProjectOptions() {
     elements.projectSelect.append(option);
     elements.projectSelect.disabled = true;
     elements.projectSelect.dataset.renderKey = renderKey;
+    elements.projectPickerButton.disabled = true;
+    setText(
+      elements.projectPickerButtonTitle,
+      setupRequired ? "Choose projects folder" : "No projects",
+      { empty: false },
+    );
+    setText(
+      elements.projectPickerButtonSubtitle,
+      setupRequired ? "Set up your workspace first" : "Create a project directory to begin",
+      { empty: false },
+    );
+    elements.projectPickerButton.dataset.renderKey = renderKey;
     return;
   }
 
@@ -6317,6 +6604,15 @@ function renderProjectOptions() {
   elements.projectSelect.disabled = disabled;
   elements.projectSelect.value = state.selectedProject;
   elements.projectSelect.dataset.renderKey = renderKey;
+  const selectedProject = currentProject();
+  elements.projectPickerButton.disabled = disabled;
+  elements.projectPickerButton.setAttribute(
+    "aria-label",
+    selectedProject ? `Choose project. Current project ${projectOptionLabel(selectedProject)}` : "Choose project",
+  );
+  setText(elements.projectPickerButtonTitle, projectOptionLabel(selectedProject), { empty: false });
+  setText(elements.projectPickerButtonSubtitle, selectedProject?.path || "Choose a project", { empty: false });
+  elements.projectPickerButton.dataset.renderKey = renderKey;
 }
 
 function renderWorkspaceSetup() {
@@ -6687,10 +6983,12 @@ function updateProjectControlAppearance() {
   const hasLiveDelegates = state.projects.some((entry) => projectHasLiveDelegate(entry));
   const hasActiveRuns = activeDelegateProjects().length > 0;
   const selectedProjectIsLive = projectHasLiveDelegate(project);
-  const projectControl = elements.projectSelect.closest(".project-control");
+  const projectControl = elements.projectPickerButton?.closest(".project-control");
 
   elements.projectSelect.classList.toggle("is-featured", isFeatured);
   elements.projectSelect.classList.toggle("is-live-delegate", selectedProjectIsLive);
+  elements.projectPickerButton?.classList.toggle("is-featured", isFeatured);
+  elements.projectPickerButton?.classList.toggle("is-live-delegate", selectedProjectIsLive);
   projectControl?.classList.toggle("is-featured", isFeatured);
   projectControl?.classList.toggle("has-live-delegates", hasLiveDelegates);
   projectControl?.classList.toggle("is-live-delegate", selectedProjectIsLive);
@@ -6785,6 +7083,144 @@ function renderSessionOptions() {
   elements.sessionSelect.dataset.renderKey = renderKey;
 }
 
+function threadPreviewStatus(thread) {
+  const status = String(thread?.status || "").trim();
+  if (status) {
+    return status.toUpperCase();
+  }
+  return thread?.active ? "ACTIVE" : String(thread?.provider || "codex").toUpperCase();
+}
+
+function threadPreviewDetail(thread) {
+  if (thread?.lastResponse) {
+    return `Responded ${formatTimestamp(thread.lastResponse) || "recently"}`;
+  }
+  if (thread?.lastDispatch) {
+    return `Sent ${formatTimestamp(thread.lastDispatch) || "recently"}`;
+  }
+  return "Open the Codex thread";
+}
+
+function buildThreadPreviewCard(thread) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "thread-preview-card";
+  button.dataset.projectPath = thread.projectPath;
+  button.dataset.sessionId = thread.sessionId;
+  const selected =
+    thread.projectPath === state.selectedProject && thread.sessionId === state.selectedSessionId;
+  button.classList.toggle("is-selected", selected);
+  button.setAttribute("aria-label", `Open ${thread.title}`);
+
+  const rail = document.createElement("span");
+  rail.className = "thread-preview-rail";
+  rail.setAttribute("aria-hidden", "true");
+  const dot = document.createElement("span");
+  dot.className = "thread-preview-dot";
+  const line = document.createElement("span");
+  line.className = "thread-preview-line";
+  rail.append(dot, line);
+
+  const copy = document.createElement("span");
+  copy.className = "thread-preview-card-copy";
+  const top = document.createElement("span");
+  top.className = "thread-preview-card-top";
+  const time = document.createElement("span");
+  time.className = "thread-preview-time";
+  time.textContent = formatTimestamp(thread.lastActivityAt) || "Now";
+  const status = document.createElement("span");
+  status.className = "thread-preview-status";
+  status.textContent = threadPreviewStatus(thread);
+  top.append(time, status);
+
+  const title = document.createElement("span");
+  title.className = "thread-preview-card-title";
+  title.textContent = thread.title || "Codex thread";
+  const meta = document.createElement("span");
+  meta.className = "thread-preview-card-meta";
+  const projectName = document.createElement("span");
+  projectName.className = "thread-preview-project";
+  projectName.textContent = thread.projectName || fallbackProjectLabel(thread.projectPath);
+  const session = document.createElement("span");
+  session.className = "thread-preview-session";
+  session.textContent = sessionFingerprint(thread.sessionId);
+  meta.append(projectName, session);
+  const detail = document.createElement("span");
+  detail.className = "thread-preview-detail";
+  detail.textContent = threadPreviewDetail(thread);
+  copy.append(top, title, meta, detail);
+  button.append(rail, copy);
+  button.addEventListener("click", () => {
+    void openSessionThread(thread.projectPath, thread.sessionId).catch(showError);
+  });
+  return button;
+}
+
+function renderThreadPreviewPanel() {
+  if (!elements.threadPreviewPanel) {
+    return;
+  }
+  const allScope = state.threadScope === "all";
+  const project = currentProject();
+  const cards = threadPreviewCards();
+  const loading = state.projectsLoading;
+  const refreshDisabled =
+    catalogBlocksInteraction() || (!allScope && !state.selectedProject);
+
+  elements.threadScopeProjectButton.classList.toggle("is-active", !allScope);
+  elements.threadScopeAllButton.classList.toggle("is-active", allScope);
+  elements.threadScopeProjectButton.setAttribute("aria-pressed", String(!allScope));
+  elements.threadScopeAllButton.setAttribute("aria-pressed", String(allScope));
+  elements.threadPreviewRefreshButton.disabled = refreshDisabled;
+  const refreshLabel = allScope ? "Refresh all threads" : "Refresh project threads";
+  elements.threadPreviewRefreshButton.setAttribute("aria-label", refreshLabel);
+  elements.threadPreviewRefreshButton.title = refreshLabel;
+  setText(
+    elements.threadPreviewSubtitle,
+    allScope
+      ? "Recent across all projects"
+      : project
+        ? projectOptionLabel(project)
+        : "Recent in this project",
+    { empty: false },
+  );
+
+  const stateText = state.threadPreviewError
+    ? state.threadPreviewError
+    : loading && cards.length === 0
+      ? "Refreshing threads…"
+      : cards.length === 0
+        ? allScope
+          ? "No Codex threads in your workspace yet."
+          : "No Codex threads in this directory yet."
+        : "";
+  setText(elements.threadPreviewState, stateText, { empty: !stateText });
+
+  const renderKey = JSON.stringify({
+    scope: state.threadScope,
+    selectedProject: state.selectedProject,
+    selectedSessionId: state.selectedSessionId,
+    cards: cards.map((thread) => [
+      thread.projectPath,
+      thread.sessionId,
+      thread.title,
+      thread.status,
+      thread.active,
+      thread.lastActivityAt,
+      thread.lastDispatch,
+      thread.lastResponse,
+    ]),
+  });
+  if (elements.threadPreviewList.dataset.renderKey === renderKey) {
+    return;
+  }
+  clearNode(elements.threadPreviewList);
+  for (const thread of cards) {
+    elements.threadPreviewList.append(buildThreadPreviewCard(thread));
+  }
+  elements.threadPreviewList.dataset.renderKey = renderKey;
+}
+
 function repoOptionLabel(repo) {
   if (!repo) {
     return "";
@@ -6808,6 +7244,7 @@ function updateBodyModalState() {
     "modal-open",
     Boolean(currentModalThread()) ||
       Boolean(state.sessionImportModalProject) ||
+      state.projectPickerOpen ||
       state.projectModalOpen ||
       Boolean(state.summaryModalProject) ||
       Boolean(state.codexIntegrationModalProject) ||
@@ -6822,18 +7259,39 @@ function updateBodyModalState() {
   );
 }
 
+function projectDirectoryNameIsValid(value) {
+  const name = String(value || "").trim();
+  return Boolean(
+    name &&
+    name.length <= 120 &&
+    name !== "." &&
+    name !== ".." &&
+    !name.startsWith(".") &&
+    !name.includes("/") &&
+    !name.includes("\\") &&
+    !/[\u0000-\u001f\u007f]/u.test(name),
+  );
+}
+
 function renderProjectModal() {
-  if (state.projectModalOpen && controlInteractionLocked("project-modal")) {
-    return;
-  }
   if (!state.projectModalOpen) {
     elements.projectModal.hidden = true;
     return;
   }
 
+  const creatingNew = state.projectModalMode === "new";
   const roots = state.projectRoots;
   const repos = currentRootRepos();
   const selectedRepo = repos.find((repo) => repo.path === state.projectModalRepoPath) || null;
+
+  setText(elements.projectModalTitle, creatingNew ? "New Project Directory" : "Add Existing Project", { empty: false });
+  setText(
+    elements.projectModalDescription,
+    creatingNew
+      ? "Create a folder inside your configured Projects directory, register it with Codex, and select its first thread."
+      : "Choose an existing folder from one of your configured project roots and add it to ClawDad.",
+    { empty: false },
+  );
 
   elements.projectRootSelect.innerHTML = "";
   if (state.projectRootsLoading && roots.length === 0) {
@@ -6845,7 +7303,7 @@ function renderProjectModal() {
   } else if (roots.length === 0) {
     const option = document.createElement("option");
     option.value = "";
-    option.textContent = "No roots";
+    option.textContent = "No configured roots";
     elements.projectRootSelect.append(option);
     elements.projectRootSelect.disabled = true;
   } else {
@@ -6859,11 +7317,18 @@ function renderProjectModal() {
     elements.projectRootSelect.value = state.projectModalRoot;
   }
 
-  elements.projectRepoSelect.hidden = state.projectModalMode !== "existing";
-  elements.projectNameInput.hidden = state.projectModalMode !== "new";
+  elements.projectRootSelect.hidden = creatingNew;
+  elements.projectRepoSelect.hidden = creatingNew;
+  elements.projectNameInput.hidden = !creatingNew;
+  elements.projectDestination.hidden = !creatingNew;
+  setText(
+    elements.projectDestinationValue,
+    state.projectModalRoot || state.workspace?.primaryRoot || "Configured Projects directory",
+    { empty: false },
+  );
 
   elements.projectRepoSelect.innerHTML = "";
-  if (state.projectModalMode === "existing") {
+  if (!creatingNew) {
     if (!state.projectModalRoot) {
       const option = document.createElement("option");
       option.value = "";
@@ -6873,7 +7338,7 @@ function renderProjectModal() {
     } else if (repos.length === 0) {
       const option = document.createElement("option");
       option.value = "";
-      option.textContent = "No repos";
+      option.textContent = "No project folders found";
       elements.projectRepoSelect.append(option);
       elements.projectRepoSelect.disabled = true;
     } else {
@@ -6888,39 +7353,46 @@ function renderProjectModal() {
     }
   }
 
-  elements.projectNameInput.value = state.projectModalName;
+  if (elements.projectNameInput.value !== state.projectModalName) {
+    elements.projectNameInput.value = state.projectModalName;
+  }
   elements.projectNameInput.disabled = state.projectModalPending || !state.projectModalRoot;
+  elements.projectNameInput.setAttribute(
+    "aria-invalid",
+    String(Boolean(state.projectModalName.trim()) && !projectDirectoryNameIsValid(state.projectModalName)),
+  );
   elements.projectProviderSelect.value = state.projectModalProvider;
   elements.projectProviderSelect.disabled = state.projectModalPending;
-
-  elements.projectModeExisting.classList.toggle("is-active", state.projectModalMode === "existing");
-  elements.projectModeNew.classList.toggle("is-active", state.projectModalMode === "new");
+  elements.projectModeExisting.classList.toggle("is-active", !creatingNew);
+  elements.projectModeNew.classList.toggle("is-active", creatingNew);
+  elements.projectModalClose.disabled = state.projectModalPending;
+  elements.projectModalBackdrop.disabled = state.projectModalPending;
 
   const canCreate =
     !state.projectModalPending &&
     !state.projectRootsLoading &&
     Boolean(state.projectModalRoot) &&
-    (
-      state.projectModalMode === "existing"
-        ? Boolean(state.projectModalRepoPath)
-        : Boolean(state.projectModalName.trim())
-    );
+    (creatingNew
+      ? projectDirectoryNameIsValid(state.projectModalName)
+      : Boolean(state.projectModalRepoPath));
   elements.projectCreateButton.disabled = !canCreate;
   elements.projectCreateButton.querySelector(".button-text").textContent =
     state.projectModalPending
-      ? "Adding…"
-      : state.projectModalMode === "existing" && selectedRepo?.tracked
-        ? "New Session"
-        : "Add";
+      ? creatingNew ? "Creating Project…" : "Adding Project…"
+      : !creatingNew && selectedRepo?.tracked
+        ? "Start New Session"
+        : creatingNew
+          ? "Create Project"
+          : "Add Existing Project";
 
   let modalState = state.projectModalStatus;
-  if (!modalState) {
-    if (state.projectModalMode === "existing" && selectedRepo?.tracked) {
-      modalState = "Tracked repo";
-    }
+  if (!modalState && !creatingNew && selectedRepo?.tracked) {
+    modalState = "This project is already tracked. Continue to start another session.";
+  }
+  if (!modalState && creatingNew && state.projectModalName.trim() && !projectDirectoryNameIsValid(state.projectModalName)) {
+    modalState = "Use one visible folder name without slashes. Names cannot begin with a period.";
   }
   setText(elements.projectModalState, modalState, { empty: !modalState });
-
   elements.projectModal.hidden = false;
 }
 
@@ -12225,6 +12697,19 @@ function updateSendAvailability() {
 
 function updateThreadButtonAvailability() {
   const session = currentSession();
+  if (elements.sessionAddButton) {
+    elements.sessionAddButton.disabled =
+      catalogBlocksInteraction() ||
+      state.sessionCreatePending ||
+      state.dispatchPending ||
+      !state.selectedProject;
+    elements.sessionAddButton.setAttribute(
+      "aria-label",
+      state.sessionCreatePending ? "Starting new Codex session" : "Start new Codex session",
+    );
+    elements.sessionAddButton.title =
+      state.sessionCreatePending ? "Starting new Codex session…" : "Start new Codex session";
+  }
   elements.sessionThreadButton.disabled =
     catalogBlocksInteraction() ||
     state.sessionCreatePending ||
@@ -12533,8 +13018,10 @@ function renderAll() {
   renderSettingsModal();
   renderDirectoryBrowserModal();
   renderProjectOptions();
+  renderProjectPickerModal();
   updateProjectControlAppearance();
   renderSessionOptions();
+  renderThreadPreviewPanel();
   renderSelectedProjectDelegateCard();
   renderActiveRunsInline();
   renderQueueList();
@@ -12879,6 +13366,10 @@ async function refreshProjects() {
       state.projects = Array.isArray(payload.projects)
         ? payload.projects.map(hydrateProjectVisuals).sort(compareProjects)
         : [];
+      state.recentThreads = Array.isArray(payload.recentThreads)
+        ? mergeRecentThreadSummaries(payload.recentThreads)
+        : recentThreadsFromProjects(state.projects);
+      state.threadPreviewError = "";
       syncSelectedProject(payload.defaultProject || state.selectedProject);
       syncSelectedSession(state.selectedSessionId);
       cacheProjects(payload);
@@ -12902,6 +13393,9 @@ async function refreshProjects() {
       if (state.workspaceMode === "auto") {
         void primeActiveRunsModal().then(renderAll).catch(() => {});
       }
+    } catch (error) {
+      state.threadPreviewError = error.message || "Threads could not refresh.";
+      throw error;
     } finally {
       state.projectsLoading = false;
       renderAll();
@@ -13403,7 +13897,13 @@ async function openSessionThread(projectPath = state.selectedProject, sessionId 
     return;
   }
 
+  if (document.activeElement instanceof HTMLElement) {
+    sessionThreadReturnFocus = document.activeElement;
+  }
+
   state.sessionImportModalProject = "";
+  state.projectPickerOpen = false;
+  state.projectModalOpen = false;
   state.summaryModalProject = "";
   state.codexIntegrationModalProject = "";
   state.artifactModalProject = "";
@@ -13442,9 +13942,13 @@ async function openSessionThread(projectPath = state.selectedProject, sessionId 
   }
 }
 
-function closeSessionThread() {
+function closeSessionThread({ restoreFocus = true } = {}) {
+  const focusTarget = sessionThreadReturnFocus || elements.sessionThreadButton;
   state.modalThread = null;
   renderAll();
+  if (restoreFocus) {
+    window.requestAnimationFrame(() => focusTarget?.focus());
+  }
 }
 
 async function loadProjectSummary(projectPath, { force = false } = {}) {
@@ -14880,7 +15384,71 @@ function saveQuickPromptDraft() {
   void saveQuickPrompts(prompts);
 }
 
-async function openProjectModal() {
+async function selectProjectPath(projectPath) {
+  const normalizedPath = String(projectPath || "").trim();
+  if (!normalizedPath || normalizedPath === state.selectedProject) {
+    return;
+  }
+  clearControlInteraction("project-select");
+  state.selectedProject = normalizedPath;
+  syncSelectedSession("", { preferCurrent: false });
+  state.threadPreviewError = "";
+  renderAll();
+  try {
+    const selected = currentProject();
+    if (selected?.untracked) {
+      await ensureProjectTrackedFromSelection(selected);
+    }
+    void refreshRecentHistory({ force: true, project: state.selectedProject }).catch(() => {});
+    await refreshThreads();
+  } catch (error) {
+    showError(error);
+    await refreshProjects().catch(() => {});
+  }
+}
+
+function openProjectPicker({ returnFocus = document.activeElement } = {}) {
+  projectPickerReturnFocus = returnFocus instanceof HTMLElement
+    ? returnFocus
+    : elements.projectPickerButton;
+  state.summaryModalProject = "";
+  state.codexIntegrationModalProject = "";
+  state.sessionImportModalProject = "";
+  state.activeRunsModalOpen = false;
+  state.artifactModalProject = "";
+  state.delegateModalProject = "";
+  state.sessionTitleModalProject = "";
+  state.sessionTitleModalSessionId = "";
+  state.quickPromptModalOpen = false;
+  state.composerToolsOpen = false;
+  state.modalThread = null;
+  state.projectModalOpen = false;
+  state.projectPickerQuery = "";
+  state.projectPickerOpen = true;
+  renderAll();
+  window.requestAnimationFrame(() => elements.projectPickerSearchInput?.focus());
+}
+
+function closeProjectPicker({ restoreFocus = true } = {}) {
+  const focusTarget = projectPickerReturnFocus || elements.projectPickerButton;
+  state.projectPickerOpen = false;
+  state.projectPickerQuery = "";
+  renderAll();
+  if (restoreFocus) {
+    window.requestAnimationFrame(() => focusTarget?.focus());
+  }
+}
+
+async function openProjectModal({
+  mode = "new",
+  returnToPicker = false,
+  returnFocus = document.activeElement,
+} = {}) {
+  projectModalReturnFocus = returnFocus instanceof HTMLElement
+    ? returnFocus
+    : mode === "new"
+      ? elements.projectAddButton
+      : elements.projectPickerAddExistingButton;
   state.summaryModalProject = "";
   state.codexIntegrationModalProject = "";
   state.sessionImportModalProject = "";
@@ -14891,8 +15459,14 @@ async function openProjectModal() {
   state.sessionTitleModalSessionId = "";
   state.quickPromptModalOpen = false;
   state.modalThread = null;
+  state.projectPickerOpen = false;
   state.projectModalOpen = true;
+  state.projectModalMode = mode === "existing" ? "existing" : "new";
+  state.projectModalReturnToPicker = Boolean(returnToPicker);
+  state.projectModalName = "";
+  state.projectModalRepoPath = "";
   state.projectModalStatus = "";
+  state.projectModalRoot = state.workspace?.primaryRoot || state.projectModalRoot || "";
   syncProjectRootSelection(state.projectModalRoot, { preferCurrent: false });
   syncProjectRepoSelection(state.projectModalRepoPath, { preferCurrent: false });
   renderAll();
@@ -14904,13 +15478,39 @@ async function openProjectModal() {
       renderAll();
     }
   }
+  window.requestAnimationFrame(() => {
+    if (state.projectModalMode === "new") {
+      elements.projectNameInput?.focus();
+    } else {
+      elements.projectRepoSelect?.focus();
+    }
+  });
 }
 
-function closeProjectModal() {
+function closeProjectModal({ restoreFocus = true, force = false } = {}) {
+  if (state.projectModalPending && !force) {
+    return false;
+  }
+  const returnToPicker = state.projectModalReturnToPicker;
+  const focusTarget = projectModalReturnFocus || elements.projectAddButton;
   state.projectModalOpen = false;
   state.projectModalPending = false;
   state.projectModalStatus = "";
+  state.projectModalReturnToPicker = false;
+  if (returnToPicker) {
+    state.projectPickerOpen = true;
+  }
   renderAll();
+  if (restoreFocus) {
+    window.requestAnimationFrame(() => {
+      if (returnToPicker) {
+        elements.projectPickerAddExistingButton?.focus();
+      } else {
+        focusTarget?.focus();
+      }
+    });
+  }
+  return true;
 }
 
 function openSettingsModal() {
@@ -14925,6 +15525,7 @@ function openSettingsModal() {
   state.quickPromptModalOpen = false;
   state.composerToolsOpen = false;
   state.modalThread = null;
+  state.projectPickerOpen = false;
   state.projectModalOpen = false;
   state.settingsModalOpen = true;
   state.remoteAssistInfoOpen = false;
@@ -15337,6 +15938,10 @@ async function ensureProjectTrackedFromSelection(project) {
 async function handleProjectCreate(event) {
   event.preventDefault();
 
+  if (state.projectModalPending) {
+    return;
+  }
+
   const mode = state.projectModalMode;
   const root = state.projectModalRoot;
   const provider = state.projectModalProvider;
@@ -15356,27 +15961,21 @@ async function handleProjectCreate(event) {
   }
 
   if (mode === "new" && !projectName) {
-    state.projectModalStatus = "Choose name";
+    state.projectModalStatus = "Enter a project directory name.";
     renderAll();
     return;
   }
 
-  const previousProjectPath = state.selectedProject;
-  const previousSessionId = state.selectedSessionId;
-  const optimisticState = optimisticProjectForCreate({
-    mode,
-    root,
-    repoPath,
-    projectName,
-    provider,
-  });
+  if (mode === "new" && !projectDirectoryNameIsValid(projectName)) {
+    state.projectModalStatus = "Use one visible folder name without slashes. Names cannot begin with a period.";
+    renderAll();
+    return;
+  }
 
-  state.projectModalName = "";
-  state.projectModalRepoPath = "";
-  upsertProject(optimisticState.optimisticProject);
-  state.selectedProject = optimisticState.projectPath;
-  state.selectedSessionId = optimisticState.pendingSessionId;
-  closeProjectModal();
+  state.projectModalPending = true;
+  state.projectModalStatus = mode === "new"
+    ? "Creating the folder and first Codex thread…"
+    : "Adding the project and preparing its Codex thread…";
   renderAll();
 
   try {
@@ -15403,7 +16002,7 @@ async function handleProjectCreate(event) {
     });
 
     if (payload.projectDetails) {
-      upsertProject(payload.projectDetails);
+      upsertProject(hydrateProjectVisuals(payload.projectDetails));
       state.selectedProject = payload.projectDetails.path;
       syncSelectedSession(payload.sessionId || payload.projectDetails.activeSessionId || "", {
         preferCurrent: false,
@@ -15412,21 +16011,22 @@ async function handleProjectCreate(event) {
       await refreshProjects();
     }
 
+    state.projectModalName = "";
+    state.projectModalRepoPath = "";
+    state.projectModalPending = false;
+    state.projectModalStatus = "";
+    state.projectModalReturnToPicker = false;
+    state.projectModalOpen = false;
+    state.projectPickerOpen = false;
     void refreshProjectRoots().catch(() => {});
+    void refreshProjects().catch(() => {});
     renderAll();
+    window.requestAnimationFrame(() => elements.projectPickerButton?.focus());
   } catch (error) {
-    if (optimisticState.rollbackProject) {
-      replaceProject(optimisticState.rollbackProject);
-    } else {
-      removeProject(optimisticState.projectPath);
-    }
-    state.selectedProject = previousProjectPath;
-    state.selectedSessionId = previousSessionId;
-    syncSelectedProject(previousProjectPath, { preferCurrent: false });
-    syncSelectedSession(previousSessionId, { preferCurrent: false });
-    void refreshProjectRoots().catch(() => {});
+    state.projectModalPending = false;
+    state.projectModalStatus = error.message || "ClawDad could not create this project.";
     renderAll();
-    showError(error);
+    console.error(error);
   }
 }
 
@@ -15586,6 +16186,78 @@ async function handleDispatch(event) {
   }
 }
 
+function goBackOneStep() {
+  if (terminalPanelIsOpen()) {
+    closeTerminalStreamPanel();
+    return true;
+  }
+  if (state.queueArchiveConfirmEntryId) {
+    closeQueueArchiveConfirm();
+    return true;
+  }
+  if (state.projectModalOpen) {
+    closeProjectModal();
+    return true;
+  }
+  if (state.projectPickerOpen) {
+    closeProjectPicker();
+    return true;
+  }
+  if (currentModalThread()) {
+    closeSessionThread();
+    return true;
+  }
+  if (state.sessionImportModalProject) {
+    closeSessionImportModal();
+    return true;
+  }
+  if (state.summaryModalProject) {
+    closeProjectSummary();
+    return true;
+  }
+  if (state.codexIntegrationModalProject) {
+    closeCodexIntegration();
+    return true;
+  }
+  if (state.activeRunsModalOpen) {
+    closeActiveRunsModal();
+    return true;
+  }
+  if (state.artifactModalProject) {
+    closeArtifactsModal();
+    return true;
+  }
+  if (state.delegateModalProject) {
+    closeDelegateModal();
+    return true;
+  }
+  if (state.sessionTitleModalProject) {
+    closeSessionTitleModal();
+    return true;
+  }
+  if (state.directoryBrowserOpen) {
+    closeDirectoryBrowser();
+    return true;
+  }
+  if (state.remoteAssistInfoOpen) {
+    setRemoteAssistInfoOpen(false, { restoreFocus: true });
+    return true;
+  }
+  if (state.settingsModalOpen) {
+    closeSettingsModal();
+    return true;
+  }
+  if (state.quickPromptModalOpen) {
+    closeQuickPromptModal();
+    return true;
+  }
+  if (state.composerToolsOpen) {
+    closeComposerToolsMenu();
+    return true;
+  }
+  return false;
+}
+
 function bindEvents() {
   if (elements.headerCarouselButton) {
     elements.headerCarouselButton.addEventListener("click", () => {
@@ -15634,7 +16306,26 @@ function bindEvents() {
     void openActiveRunsModal();
   });
   elements.projectAddButton.addEventListener("click", () => {
-    void openProjectModal();
+    void openProjectModal({
+      mode: "new",
+      returnFocus: elements.projectAddButton,
+    });
+  });
+  elements.projectPickerButton?.addEventListener("click", () => {
+    openProjectPicker({ returnFocus: elements.projectPickerButton });
+  });
+  elements.projectPickerBackdrop?.addEventListener("click", () => closeProjectPicker());
+  elements.projectPickerClose?.addEventListener("click", () => closeProjectPicker());
+  elements.projectPickerAddExistingButton?.addEventListener("click", () => {
+    void openProjectModal({
+      mode: "existing",
+      returnToPicker: true,
+      returnFocus: elements.projectPickerAddExistingButton,
+    });
+  });
+  elements.projectPickerSearchInput?.addEventListener("input", (event) => {
+    state.projectPickerQuery = String(event.target.value || "");
+    renderAll();
   });
   elements.quickPromptButton?.addEventListener("click", () => {
     if (state.quickPromptModalOpen) {
@@ -15799,12 +16490,28 @@ function bindEvents() {
   elements.sessionImportButton?.addEventListener("click", () => {
     void openSessionImportModal();
   });
+  elements.sessionAddButton?.addEventListener("click", () => {
+    void handleSessionCreate().catch(showError);
+  });
   elements.sessionRenameButton.addEventListener("click", () => {
     openSessionTitleModal();
   });
   elements.dispatchForm.addEventListener("submit", handleDispatch);
   elements.detailBackdrop.addEventListener("click", closeSessionThread);
   elements.detailClose.addEventListener("click", closeSessionThread);
+  elements.threadScopeProjectButton?.addEventListener("click", () => setThreadScope("project"));
+  elements.threadScopeAllButton?.addEventListener("click", () => setThreadScope("all"));
+  elements.threadPreviewRefreshButton?.addEventListener("click", () => {
+    state.threadPreviewError = "";
+    void refreshProjects()
+      .then(() => state.threadScope === "project"
+        ? refreshRecentHistory({ force: true, project: state.selectedProject })
+        : refreshRecentHistory({ force: true }))
+      .catch((error) => {
+        state.threadPreviewError = error.message || "Threads could not refresh.";
+        renderAll();
+      });
+  });
   elements.sessionImportBackdrop.addEventListener("click", closeSessionImportModal);
   elements.sessionImportClose.addEventListener("click", closeSessionImportModal);
   elements.sessionTitleBackdrop.addEventListener("click", closeSessionTitleModal);
@@ -16151,21 +16858,7 @@ function bindEvents() {
   });
 
   elements.projectSelect.addEventListener("change", async (event) => {
-    clearControlInteraction("project-select");
-    state.selectedProject = event.target.value;
-    syncSelectedSession("", { preferCurrent: false });
-    renderAll();
-    try {
-      const selected = currentProject();
-      if (selected?.untracked) {
-        await ensureProjectTrackedFromSelection(selected);
-      }
-      void refreshRecentHistory({ force: true, project: state.selectedProject }).catch(() => {});
-      await refreshThreads();
-    } catch (error) {
-      showError(error);
-      await refreshProjects().catch(() => {});
-    }
+    await selectProjectPath(event.target.value);
   });
 
   elements.sessionSelect.addEventListener("change", async (event) => {
@@ -16262,75 +16955,8 @@ function bindEvents() {
   });
 
   window.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && terminalPanelIsOpen()) {
+    if (event.key === "Escape" && goBackOneStep()) {
       event.preventDefault();
-      closeTerminalStreamPanel();
-      return;
-    }
-    if (event.key === "Escape" && state.queueArchiveConfirmEntryId) {
-      event.preventDefault();
-      closeQueueArchiveConfirm();
-      return;
-    }
-    if (event.key === "Escape" && currentModalThread()) {
-      closeSessionThread();
-      return;
-    }
-    if (event.key === "Escape" && state.sessionImportModalProject) {
-      closeSessionImportModal();
-      return;
-    }
-    if (event.key === "Escape" && state.summaryModalProject) {
-      closeProjectSummary();
-      return;
-    }
-    if (event.key === "Escape" && state.codexIntegrationModalProject) {
-      closeCodexIntegration();
-      return;
-    }
-    if (event.key === "Escape" && state.activeRunsModalOpen) {
-      closeActiveRunsModal();
-      return;
-    }
-    if (event.key === "Escape" && state.artifactModalProject) {
-      closeArtifactsModal();
-      return;
-    }
-    if (event.key === "Escape" && state.delegateModalProject) {
-      closeDelegateModal();
-      return;
-    }
-    if (event.key === "Escape" && state.sessionTitleModalProject) {
-      closeSessionTitleModal();
-      return;
-    }
-    if (event.key === "Escape" && state.directoryBrowserOpen) {
-      event.preventDefault();
-      closeDirectoryBrowser();
-      return;
-    }
-    if (event.key === "Escape" && state.remoteAssistInfoOpen) {
-      event.preventDefault();
-      setRemoteAssistInfoOpen(false, { restoreFocus: true });
-      return;
-    }
-    if (event.key === "Escape" && state.settingsModalOpen) {
-      event.preventDefault();
-      closeSettingsModal();
-      return;
-    }
-    if (event.key === "Escape" && state.quickPromptModalOpen) {
-      event.preventDefault();
-      closeQuickPromptModal();
-      return;
-    }
-    if (event.key === "Escape" && state.composerToolsOpen) {
-      event.preventDefault();
-      closeComposerToolsMenu();
-      return;
-    }
-    if (event.key === "Escape" && state.projectModalOpen) {
-      closeProjectModal();
     }
   });
 }
@@ -16341,6 +16967,7 @@ async function boot() {
   resetProcessingPhraseCycle();
   restoreThreadEntries();
   hydrateReturnedThreadEntries();
+  restoreThreadScope();
   restoreQueueCollapsed();
   restoreArtifactShelfCollapsed();
   restoreComposerAccessMode();
