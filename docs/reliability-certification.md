@@ -32,6 +32,13 @@ snapshots and automatically stops applying when either release identity
 changes. Use `fail` or `blocked` with concrete evidence when a check exposes a
 problem; use `pending` to clear a result for a fresh rerun.
 
+The iPhone inventory's `builtByDeveloper` value is retained as a diagnostic
+fact only. Current Apple device inventory can report that value for a
+TestFlight beta, so it does not prove whether an app was side-loaded. Release
+provenance instead requires the exact installed version/build, the same exact
+build in App Store Connect with `VALID` processing state, and a separately
+recorded fresh-TestFlight-install observation.
+
 ## Beta 5 Candidate Automation
 
 | Check | State | Evidence |

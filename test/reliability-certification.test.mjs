@@ -70,7 +70,7 @@ test("installed app lookup retains only public app version fields", () => {
     bundleIdentifier: "earth.frg.clawdad.ios",
     version: "0.7.0",
     build: "24",
-    installation: "store",
+    builtByDeveloper: false,
   });
   assert.equal(JSON.stringify(app).includes("private/secret"), false);
 });
@@ -107,12 +107,17 @@ test("physical evidence requires the exact paired iPhone and Mac release", () =>
   assert.equal(installedIosBuildMatchesRelease({
     version: "0.7.0",
     build: "24",
-    installation: "store",
+    builtByDeveloper: true,
   }, release), true);
   assert.equal(installedIosBuildMatchesRelease({
     version: "0.7.0",
     build: "22",
-    installation: "store",
+    builtByDeveloper: false,
+  }, release), false);
+  assert.equal(installedIosBuildMatchesRelease({
+    version: "0.6.9",
+    build: "24",
+    builtByDeveloper: false,
   }, release), false);
   assert.equal(installedMacBuildMatchesRelease({
     installed: true,
@@ -160,7 +165,7 @@ test("certification readiness requires the exact published iPhone and Mac builds
         installedApp: {
           version: "0.7.0",
           build: "24",
-          installation: "store",
+          builtByDeveloper: true,
         },
       },
     },
