@@ -43,7 +43,7 @@ problem; use `pending` to clear a result for a fresh rerun.
 | Signed iPhone archive | Pass | `ClawDadMobile-Founder-24.xcarchive` is version 0.7.0, build 24, arm64, and passes strict signature validation |
 | Local iPhone export | Pass | `AppStore-24/ClawDad.ipa` retains build 24, is Apple Distribution signed, and passes strict signature validation |
 | Mac signed package | Pass | Local beta 5 app is version 0.7.0 build 22; the app signature and DMG/ZIP/appcast checksums validate |
-| Mac notarization and stapling | Pending | Disabled for the local candidate; required before external Mac distribution |
+| Mac notarization and stapling | Pass | Build 22 app and DMG were accepted by Apple, stapled, and accepted by Gatekeeper |
 | Package contents | Pass | `npm pack --dry-run --json` reports 216 entries for `clawdad@0.7.0-beta.5`; the local tarball SHA-256 is recorded in `docs/release-packet.md` |
 | Project creation authority | Pass | Tests prove an authenticated phone can send only a name and the Mac creates under its configured default root while ignoring a phone-supplied root |
 | Paired-Mac-first Read Aloud | Pass | Tests prove sent and received speech requests carry Mac-first policy and avoid Umbra when fallback is disabled |
@@ -54,18 +54,17 @@ problem; use `pending` to clear a result for a fresh rerun.
 
 ## Live Release Surfaces
 
-The beta 5 candidate has not changed any live release surface. Refresh the
-production snapshot immediately before release; prior beta 4 production,
-App Store, TestFlight, TURN, public-health, and spend-alert evidence remains
-historical evidence rather than beta 5 certification.
+Beta 5 is live on the Mac and private internal TestFlight surfaces. Physical
+certification remains separate from channel publication and must be recorded
+against the exact installed Mac and iPhone builds.
 
 | Check | State | Acceptance |
 | --- | --- | --- |
-| Candidate source checkpoint | Pending | Audited beta 5 source is committed at one exact SHA |
-| npm and Git release | Pending | Exact beta 5 tarball, tag, and GitHub prerelease agree |
-| Mac notarization and update feed | Pending | Exact build 22 is notarized, stapled, Gatekeeper accepted, and published in the signed appcast |
-| TestFlight processing | Pending | Exact build 24 is uploaded, `VALID`, export-compliance complete, and assigned only to the approved group |
-| Cloud/public health refresh | Pending | Production `/healthz`, `/support`, `/privacy`, appcast, TURN controls, and logging posture are rechecked without exposing customer data |
+| Candidate source checkpoint | Pass | `v0.7.0-beta.5` and the GitHub prerelease point to audited release commit `c34a299` |
+| npm and Git release | Pass | npm `beta` resolves to `0.7.0-beta.5`; the tarball, Git tag, and GitHub prerelease agree |
+| Mac notarization and update feed | Pass | Exact build 22 is notarized, stapled, Gatekeeper accepted, installed, and published in the signed appcast |
+| TestFlight processing | Pass | Exact build 24 is `VALID`, export-compliance complete, and assigned only to `ClawDad Internal` |
+| Cloud/public health refresh | Pass | Production `/healthz`, `/support`, `/privacy`, appcast, Mac assets, local health, and the established host relay connection were rechecked without exposing customer data |
 
 ## Physical iPhone And Mac
 
