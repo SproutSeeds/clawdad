@@ -100,7 +100,9 @@ struct ContentView: View {
 
   private var startupStatusText: String {
     if !session.connected {
-      return "Connecting to ClawDad..."
+      return session.reconnecting
+        ? "Connection interrupted. Reconnecting to your Mac..."
+        : "Connecting to ClawDad..."
     }
     if !session.hostOnline {
       return "Finding your Mac..."
@@ -2327,10 +2329,12 @@ private struct ProjectPickerGroup: Identifiable {
 
 struct ProjectPickerSheet: View {
   @Environment(\.dismiss) private var dismiss
+  @EnvironmentObject private var session: CloudSession
   var projects: [ProjectSummary]
   var selectedPath: String
   var onSelect: (ProjectSummary) -> Void
   @State private var searchText = ""
+  @State private var showingProjectCreator = false
 
   private var matchingProjects: [ProjectSummary] {
     let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2376,6 +2380,18 @@ struct ProjectPickerSheet: View {
               .foregroundStyle(ClawDadTheme.peach.opacity(0.74))
           }
           Spacer()
+          Button {
+            session.clearProjectCreateFeedback()
+            showingProjectCreator = true
+          } label: {
+            Image(systemName: "plus")
+              .font(.system(size: 16, weight: .black))
+              .frame(width: 40, height: 40)
+          }
+          .buttonStyle(ClawDadIconButtonStyle())
+          .disabled(!session.ready || session.projectCreatePending)
+          .accessibilityLabel("Create project directory")
+
           Button {
             dismiss()
           } label: {
@@ -2502,6 +2518,135 @@ struct ProjectPickerSheet: View {
       }
       .padding(18)
     }
+    .sheet(isPresented: $showingProjectCreator) {
+      NewProjectDirectorySheet()
+        .environmentObject(session)
+        .presentationDetents([.medium])
+    }
+    .onChange(of: session.lastCreatedProjectPath) { _, projectPath in
+      guard !projectPath.isEmpty else {
+        return
+      }
+      dismiss()
+    }
+  }
+}
+
+struct NewProjectDirectorySheet: View {
+  @Environment(\.dismiss) private var dismiss
+  @EnvironmentObject private var session: CloudSession
+  @State private var projectName = ""
+  @FocusState private var nameFocused: Bool
+
+  private var normalizedName: String {
+    projectName.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private var canCreate: Bool {
+    session.ready &&
+      !session.projectCreatePending &&
+      mobileProjectDirectoryNameIsValid(normalizedName)
+  }
+
+  var body: some View {
+    NavigationStack {
+      ZStack {
+        ClawDadTheme.background
+          .ignoresSafeArea()
+
+        VStack(alignment: .leading, spacing: 16) {
+          Text("ClawDad will create this folder inside your Mac's configured Projects directory, register it with Codex, and select its first thread.")
+            .font(.subheadline)
+            .foregroundStyle(ClawDadTheme.peach.opacity(0.82))
+
+          projectNameField
+
+          if session.projectCreatePending {
+            HStack(spacing: 10) {
+              ProgressView()
+                .tint(ClawDadTheme.gold)
+              Text(session.projectCreateStatus)
+            }
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(ClawDadTheme.cream)
+          } else if !session.projectCreateError.isEmpty {
+            Label(session.projectCreateError, systemImage: "exclamationmark.triangle.fill")
+              .font(.footnote.weight(.semibold))
+              .foregroundStyle(ClawDadTheme.gold)
+          }
+
+          Button {
+            createProject()
+          } label: {
+            Label(
+              session.projectCreatePending ? "Creating Project..." : "Create Project",
+              systemImage: session.projectCreatePending ? "hourglass" : "folder.badge.plus"
+            )
+            .frame(maxWidth: .infinity)
+          }
+          .buttonStyle(ClawDadPrimaryButtonStyle())
+          .disabled(!canCreate)
+
+          Spacer(minLength: 0)
+        }
+        .padding(18)
+      }
+      .navigationTitle("New Project Directory")
+      .clawDadInlineNavigationTitle()
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Cancel") {
+            dismiss()
+          }
+          .disabled(session.projectCreatePending)
+          .foregroundStyle(ClawDadTheme.cream)
+        }
+      }
+    }
+    .interactiveDismissDisabled(session.projectCreatePending)
+    .onAppear {
+      nameFocused = true
+    }
+    .onChange(of: session.lastCreatedProjectPath) { _, projectPath in
+      guard !projectPath.isEmpty else {
+        return
+      }
+      dismiss()
+    }
+  }
+
+  @ViewBuilder
+  private var projectNameField: some View {
+    #if os(iOS)
+    TextField("Project directory name", text: $projectName)
+      .textInputAutocapitalization(.never)
+      .autocorrectionDisabled()
+      .textFieldStyle(ClawDadTextFieldStyle())
+      .focused($nameFocused)
+      .disabled(session.projectCreatePending)
+      .submitLabel(.done)
+      .onSubmit {
+        createProject()
+      }
+      .accessibilityLabel("Project directory name")
+    #else
+    TextField("Project directory name", text: $projectName)
+      .textFieldStyle(ClawDadTextFieldStyle())
+      .focused($nameFocused)
+      .disabled(session.projectCreatePending)
+      .onSubmit {
+        createProject()
+      }
+      .accessibilityLabel("Project directory name")
+    #endif
+  }
+
+  private func createProject() {
+    guard canCreate else {
+      return
+    }
+    nameFocused = false
+    session.createProjectDirectory(name: normalizedName)
   }
 }
 
@@ -2921,9 +3066,11 @@ struct SettingsView: View {
     case .connected:
       return session.hostOnline
         ? "Connected to \(session.hostId)"
-        : "Cloud connected, Mac offline"
+        : "Relay connected, Mac reconnecting"
     case .connecting:
-      return "Connecting to \(session.hostId)"
+      return session.reconnecting
+        ? "Reconnecting to \(session.hostId)"
+        : "Connecting to \(session.hostId)"
     case .failed:
       return "Connection needs attention"
     case .disconnected:
@@ -2946,7 +3093,9 @@ struct SettingsView: View {
         ? "Projects and Codex threads sync through \(session.hostId)."
         : "The secure relay is online. ClawDad will resume syncing when your Mac host returns."
     case .connecting:
-      return "ClawDad is opening the secure relay."
+      return session.reconnecting
+        ? "The secure connection was interrupted. ClawDad is reconnecting to your paired Mac automatically."
+        : "ClawDad is opening the secure relay."
     case .failed(let message):
       return message
     case .disconnected:
@@ -2975,6 +3124,29 @@ struct SettingsView: View {
                   .font(.subheadline)
                   .foregroundStyle(ClawDadTheme.peach.opacity(0.78))
                 pairingActions
+              }
+            }
+
+            ClawDadPanel {
+              VStack(alignment: .leading, spacing: 12) {
+                Text("Read Aloud")
+                  .font(.caption.weight(.black))
+                  .textCase(.uppercase)
+                  .foregroundStyle(ClawDadTheme.gold)
+                Text("Speech is generated on your paired Mac first.")
+                  .font(.headline.weight(.heavy))
+                  .foregroundStyle(ClawDadTheme.cream)
+                Toggle(isOn: $session.allowUmbraReadAloudFallback) {
+                  VStack(alignment: .leading, spacing: 3) {
+                    Text("Allow Umbra fallback")
+                      .font(.subheadline.weight(.bold))
+                    Text("If Mac speech is unavailable, Umbra may generate the requested audio.")
+                      .font(.caption)
+                      .foregroundStyle(ClawDadTheme.peach.opacity(0.72))
+                  }
+                }
+                .tint(ClawDadTheme.good)
+                .foregroundStyle(ClawDadTheme.cream)
               }
             }
 

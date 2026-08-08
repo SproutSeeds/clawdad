@@ -16,6 +16,8 @@ import { promisify } from "node:util";
 import {
   CLAWDAD_IOS_BUNDLE_ID,
   findInstalledApp,
+  installedIosBuildMatchesRelease,
+  installedMacBuildMatchesRelease,
   normalizePhysicalCertification,
   physicalCertificationChecks,
   sanitizeConnectedDevice,
@@ -257,6 +259,32 @@ async function readMacAppVersion() {
   };
 }
 
+async function readMacReleaseSettings() {
+  try {
+    const source = await readFile(
+      join(projectRoot, "native", "macos", "build-app.sh"),
+      "utf8",
+    );
+    const version = source.match(
+      /^app_version="\$\{CLAWDAD_APP_VERSION:-([^}"]+)\}"$/mu,
+    )?.[1] || "";
+    const build = source.match(
+      /^app_build="\$\{CLAWDAD_APP_BUILD:-([^}"]+)\}"$/mu,
+    )?.[1] || "";
+    return {
+      ok: Boolean(version && build),
+      version,
+      build,
+    };
+  } catch {
+    return {
+      ok: false,
+      version: "",
+      build: "",
+    };
+  }
+}
+
 async function readIosReleaseSettings() {
   const result = await run(
     "xcodebuild",
@@ -388,7 +416,9 @@ function ledgerMatchesRelease(ledger, release) {
   return (
     ledger?.release?.expectedVersion === release.expectedVersion &&
     ledger?.release?.expectedIosVersion === release.expectedIosVersion &&
-    ledger?.release?.expectedIosBuild === release.expectedIosBuild
+    ledger?.release?.expectedIosBuild === release.expectedIosBuild &&
+    ledger?.release?.expectedMacVersion === release.expectedMacVersion &&
+    ledger?.release?.expectedMacBuild === release.expectedMacBuild
   );
 }
 
@@ -425,29 +455,40 @@ async function recordPhysicalCertification({
   if (!options.check || !options.state) {
     throw new Error("record requires --check and --state.");
   }
-  const iosRelease = await readIosReleaseSettings();
-  if (!iosRelease.ok) {
-    throw new Error("The iPhone release build settings are unavailable.");
+  const [iosRelease, macRelease, iphone, macApp] = await Promise.all([
+    readIosReleaseSettings(),
+    readMacReleaseSettings(),
+    readDeviceState(options.deviceId),
+    readMacAppVersion(),
+  ]);
+  if (!iosRelease.ok || !macRelease.ok) {
+    throw new Error("The iPhone or Mac release build settings are unavailable.");
   }
   const release = {
     expectedVersion,
     expectedIosVersion: iosRelease.version,
     expectedIosBuild: iosRelease.build,
+    expectedMacVersion: macRelease.version,
+    expectedMacBuild: macRelease.build,
   };
-  const iphone = await readDeviceState(options.deviceId);
   const installed = iphone.targetDevice?.installedApp || null;
   if (
     options.state === "pass" &&
-    (
-      installed?.version !== release.expectedIosVersion ||
-      installed?.build !== release.expectedIosBuild ||
-      installed?.installation !== "store"
-    )
+    !installedIosBuildMatchesRelease(installed, release)
   ) {
     throw new Error(
       `Pass evidence requires the TestFlight/App Store build ` +
       `${release.expectedIosVersion} (${release.expectedIosBuild}) ` +
       "on a connected physical iPhone.",
+    );
+  }
+  if (
+    options.state === "pass" &&
+    !installedMacBuildMatchesRelease(macApp, release)
+  ) {
+    throw new Error(
+      `Pass evidence requires the installed Mac build ` +
+      `${release.expectedMacVersion} (${release.expectedMacBuild}).`,
     );
   }
   const path = physicalLedgerPath(options);
@@ -462,6 +503,7 @@ async function recordPhysicalCertification({
       installedApp: iphone.targetDevice.installedApp,
     }
     : null;
+  ledger.macApp = macApp;
   ledger.checks = updatePhysicalCertification(ledger.checks, {
     check: options.check,
     state: options.state,
@@ -504,14 +546,19 @@ async function main() {
     return;
   }
   if (options.command === "status") {
-    const iosRelease = await readIosReleaseSettings();
-    if (!iosRelease.ok) {
-      throw new Error("The iPhone release build settings are unavailable.");
+    const [iosRelease, macRelease] = await Promise.all([
+      readIosReleaseSettings(),
+      readMacReleaseSettings(),
+    ]);
+    if (!iosRelease.ok || !macRelease.ok) {
+      throw new Error("The iPhone or Mac release build settings are unavailable.");
     }
     const release = {
       expectedVersion,
       expectedIosVersion: iosRelease.version,
       expectedIosBuild: iosRelease.build,
+      expectedMacVersion: macRelease.version,
+      expectedMacBuild: macRelease.build,
     };
     const ledger = await readPhysicalLedger(
       physicalLedgerPath(options),
@@ -533,6 +580,7 @@ async function main() {
     appcast,
     iphone,
     iosRelease,
+    macRelease,
     macApp,
     serverAgent,
     cloudHostAgent,
@@ -549,6 +597,7 @@ async function main() {
     fetchHead("https://clawdad-cloud.frg.earth/mac/appcast.xml"),
     readDeviceState(options.deviceId),
     readIosReleaseSettings(),
+    readMacReleaseSettings(),
     readMacAppVersion(),
     readLaunchAgent("com.sproutseeds.clawdad.server"),
     readLaunchAgent("earth.frg.ClawDad.cloud-host"),
@@ -581,6 +630,9 @@ async function main() {
       expectedIosBuild: iosRelease.build,
       expectedIosBundleIdentifier: iosRelease.bundleIdentifier,
       iosBuildSettingsReadable: iosRelease.ok,
+      expectedMacVersion: macRelease.version,
+      expectedMacBuild: macRelease.build,
+      macBuildSettingsReadable: macRelease.ok,
       gitCommit,
       npm: npmState,
     },

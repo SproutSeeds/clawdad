@@ -768,6 +768,8 @@ test("trusted Read Aloud requests generate on the Mac and stream signed audio ch
       historyRequestId: "turn-1",
       kind: "response",
       text: "Read this Codex response aloud.",
+      executionPreference: "paired-mac-first",
+      allowRemoteFallback: false,
     },
   }), deviceKeys.privateKey, {
     keyId: cloudPublicKeyFingerprint(deviceKeys.publicKey),
@@ -789,6 +791,8 @@ test("trusted Read Aloud requests generate on the Mac and stream signed audio ch
     historyRequestId: "turn-1",
     kind: "response",
     text: "Read this Codex response aloud.",
+    executionPreference: "paired-mac-first",
+    allowRemoteFallback: false,
     prepare: true,
     poll: false,
   });
@@ -816,6 +820,68 @@ test("trusted Read Aloud requests generate on the Mac and stream signed audio ch
   assert.equal(sent.at(-1).body.partCount, 2);
   assert.equal(sent.at(-1).body.totalBytes, firstPart.length + secondPart.length);
   assert.equal(sent.every((entry) => verifyCloudEnvelopeSignature(entry, config.hostPublicKeyPem)), true);
+});
+
+test("trusted phones create projects only in the Mac configured default root", async (t) => {
+  const deviceKeys = generateP256KeyPair();
+  const config = hostConfig({
+    trustedDevicePublicKeys: {
+      "ios-phone": deviceKeys.publicKey,
+    },
+  });
+  const requests = [];
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = async (url, options = {}) => {
+    requests.push({ url: new URL(String(url)), options });
+    return new Response(JSON.stringify({
+      ok: true,
+      projectPath: "/workspace/new-project",
+      sessionId: "session-1",
+      createdDirectory: true,
+    }), {
+      status: 201,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  const envelope = signCloudEnvelope(normalizeCloudEnvelope({
+    type: "project.create.request",
+    accountId: "acct-1",
+    workspaceId: "scratchpad",
+    sourceDeviceId: "ios-phone",
+    targetHostId: "mac-host",
+    body: {
+      requestId: "project-request-1",
+      name: "new-project",
+      root: "/tmp/phone-must-not-control-this",
+    },
+  }), deviceKeys.privateKey, {
+    keyId: cloudPublicKeyFingerprint(deviceKeys.publicKey),
+  });
+  const sent = [];
+
+  const result = await handleCloudEnvelope(envelope, config, async (payload) => {
+    sent.push(payload);
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url.pathname, "/v1/projects");
+  assert.equal(requests[0].options.method, "POST");
+  assert.equal(requests[0].options.headers.authorization, "Bearer local-token");
+  assert.deepEqual(JSON.parse(requests[0].options.body), {
+    mode: "new",
+    name: "new-project",
+    provider: "codex",
+  });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].type, "project.created");
+  assert.equal(sent[0].body.requestId, "project-request-1");
+  assert.equal(sent[0].body.projectPath, "/workspace/new-project");
+  assert.equal(verifyCloudEnvelopeSignature(sent[0], config.hostPublicKeyPem), true);
 });
 
 test("trusted models.request returns the Mac Codex catalog", async (t) => {

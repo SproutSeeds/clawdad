@@ -8562,7 +8562,6 @@ exit 1
       },
       body: JSON.stringify({
         mode: "new",
-        root: projectRoot,
         name: "scratch-seed",
         provider: "codex",
       }),

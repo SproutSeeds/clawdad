@@ -780,6 +780,98 @@ test("TTS message endpoint uses direct local speech when library lacks speech se
   }
 });
 
+test("paired iPhone Read Aloud uses Mac speech before the optional Umbra fallback", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-tts-mac-first-"));
+  const home = path.join(root, "home");
+  const projectPath = path.join(root, "project");
+  const configPath = path.join(root, "server.json");
+  const fakeLibrary = await startFakeDocReaderLibrary({ audio: Buffer.from("library-audio") });
+  const umbra = await startFakeDocReaderSpeech({ audioPrefix: "umbra-wav" });
+  const mac = await startFakeDocReaderSpeech({ audioPrefix: "mac-wav" });
+  await mkdir(home, { recursive: true });
+  await mkdir(projectPath, { recursive: true });
+  await writeJson(path.join(home, "state.json"), {
+    version: 3,
+    projects: {
+      [projectPath]: {
+        status: "idle",
+        active_session_id: "session-1",
+        sessions: {
+          "session-1": {
+            slug: "Main",
+            provider: "codex",
+            status: "idle",
+          },
+        },
+      },
+    },
+  });
+
+  const port = await freePort();
+  await writeJson(configPath, {
+    host: "127.0.0.1",
+    port,
+    authMode: "tailscale",
+    allowedUsers: ["tester@example.com"],
+  });
+
+  const child = spawn(process.execPath, [serverScript, "serve", "--config", configPath], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      HOME: home,
+      CLAWDAD_HOME: home,
+      CLAWDAD_TTS_ENABLED: "true",
+      CLAWDAD_TTS_PROVIDER: "doc-reader",
+      CLAWDAD_DOC_READER_URL: fakeLibrary.baseUrl,
+      CLAWDAD_DOC_READER_TTS_URL: umbra.baseUrl,
+      CLAWDAD_DOC_READER_TTS_FALLBACK_URL: mac.baseUrl,
+      CLAWDAD_DOC_READER_TTS_ENGINE: "kokoro",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  try {
+    const baseUrl = `http://127.0.0.1:${port}`;
+    await waitForHealth(baseUrl, child);
+    const response = await fetch(`${baseUrl}/v1/tts/message`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "tailscale-user-login": "tester@example.com",
+      },
+      body: JSON.stringify({
+        project: projectPath,
+        sessionId: "session-1",
+        requestId: "request-mac-first",
+        kind: "response",
+        text: "Generate this response on the paired Mac.",
+        executionPreference: "paired-mac-first",
+        allowRemoteFallback: false,
+      }),
+    });
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.ok, true);
+    assert.equal(payload.audio.state, "ready");
+    assert.equal(fakeLibrary.itemCalls.length, 0);
+    assert.equal(mac.speechCalls.length, 1);
+    assert.equal(umbra.speechCalls.length, 0);
+
+    const audioResponse = await fetch(new URL(payload.audio.parts[0].url, baseUrl), {
+      headers: { "tailscale-user-login": "tester@example.com" },
+    });
+    assert.equal(audioResponse.status, 200);
+    assert.equal(await audioResponse.text(), "mac-wav-1");
+  } finally {
+    await stopServer(child);
+    await fakeLibrary.close();
+    await umbra.close();
+    await mac.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("TTS message endpoint synthesizes sent and received text with Doc Reader", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-tts-doc-reader-message-"));
   const home = path.join(root, "home");

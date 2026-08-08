@@ -251,8 +251,17 @@ final class RemoteAssistController: NSObject, ObservableObject {
       fail("ClawDad is not ready.")
       return
     }
-    guard cloudSession.remoteAssistAuthenticated else {
+    guard cloudSession.remoteAssistIdentityReady else {
       fail("Re-pair this iPhone from ClawDad Settings on your Mac to enable Remote Assist.")
+      return
+    }
+    guard cloudSession.connected else {
+      cloudSession.connectIfPaired()
+      fail("The secure connection was interrupted. ClawDad is reconnecting to your paired Mac automatically.")
+      return
+    }
+    guard cloudSession.hostOnline else {
+      fail("The secure relay is online and your paired Mac is reconnecting. Keep ClawDad open on the Mac, then tap Try Again.")
       return
     }
     guard phase == .idle || isFailed else {
@@ -988,7 +997,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
       }
       if self.phase != .connected {
         self.failAndRelease(
-          "Your Mac did not open Remote Assist. Confirm it is awake and Remote Assist is enabled."
+          "Your paired Mac did not answer within 25 seconds. Confirm ClawDad is open and Remote Assist is enabled, then tap Try Again."
         )
       }
     }

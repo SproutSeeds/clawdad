@@ -121,6 +121,21 @@ struct ProjectSummary: Identifiable, Codable, Equatable {
   var sessionAliases: [String: String]? = nil
 }
 
+func mobileProjectDirectoryNameIsValid(_ value: String) -> Bool {
+  let name = value.trimmingCharacters(in: .whitespacesAndNewlines)
+  guard !name.isEmpty,
+        name.count <= 120,
+        name != ".",
+        name != "..",
+        !name.hasPrefix("."),
+        !name.contains("/"),
+        !name.contains("\\"),
+        name.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) else {
+    return false
+  }
+  return true
+}
+
 struct MobileWorkspace: Identifiable, Codable, Equatable {
   var id: String
   var title: String

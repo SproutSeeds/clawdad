@@ -584,10 +584,55 @@ test("iPhone thread cards read both sent messages and Codex responses aloud on d
   assert.ok(contentSource.includes('return "Read \\(accessibilitySubject) aloud"'));
   assert.match(contentSource, /MessageReadAloudButton\([\s\S]*MessageCopyButton\(/u);
   assert.match(cloudSource, /type: "speech\.synthesize\.request"/u);
+  assert.match(cloudSource, /"executionPreference": \.string\("paired-mac-first"\)/u);
+  assert.match(cloudSource, /"allowRemoteFallback": \.bool\(allowUmbraReadAloudFallback\)/u);
   assert.match(cloudSource, /case "speech\.synthesis\.chunk":/u);
   assert.match(cloudSource, /case "speech\.synthesis\.complete":/u);
   assert.match(cloudSource, /mode: \.spokenAudio/u);
   assert.match(infoPlist, /<key>UIBackgroundModes<\/key>[\s\S]*<string>audio<\/string>/u);
+  assert.match(contentSource, /Text\("Speech is generated on your paired Mac first\."\)/u);
+  assert.match(contentSource, /Toggle\(isOn: \$session\.allowUmbraReadAloudFallback\)/u);
+});
+
+test("iPhone creates project directories through the paired Mac default root", async () => {
+  const [contentSource, cloudSource] = await Promise.all([
+    readFile(iosContentPath, "utf8"),
+    readFile(iosCloudClientPath, "utf8"),
+  ]);
+
+  assert.match(contentSource, /struct NewProjectDirectorySheet: View/u);
+  assert.match(contentSource, /accessibilityLabel\("Create project directory"\)/u);
+  assert.match(contentSource, /TextField\("Project directory name", text: \$projectName\)/u);
+  assert.match(contentSource, /session\.createProjectDirectory\(name: normalizedName\)/u);
+  assert.match(contentSource, /\.interactiveDismissDisabled\(session\.projectCreatePending\)/u);
+  assert.match(cloudSource, /func createProjectDirectory\(name: String\)/u);
+  assert.match(cloudSource, /type: "project\.create\.request"/u);
+  assert.match(cloudSource, /case "project\.created":/u);
+  assert.doesNotMatch(
+    cloudSource.slice(
+      cloudSource.indexOf("func createProjectDirectory(name: String)"),
+      cloudSource.indexOf("func clearProjectCreateFeedback", cloudSource.indexOf("func createProjectDirectory(name: String)")),
+    ),
+    /"root"|"path"/u,
+  );
+});
+
+test("iPhone connection recovery names the paired Mac and avoids an indefinite Remote Assist spinner", async () => {
+  const [contentSource, cloudSource, remoteAssistSource] = await Promise.all([
+    readFile(iosContentPath, "utf8"),
+    readFile(iosCloudClientPath, "utf8"),
+    readFile(iosRemoteAssistPath, "utf8"),
+  ]);
+
+  assert.match(
+    cloudSource,
+    /Secure connection interrupted\. Reconnecting to your paired Mac automatically/u,
+  );
+  assert.match(contentSource, /Relay connected, Mac reconnecting/u);
+  assert.match(contentSource, /Connection interrupted\. Reconnecting to your Mac/u);
+  assert.match(remoteAssistSource, /guard cloudSession\.connected else/u);
+  assert.match(remoteAssistSource, /guard cloudSession\.hostOnline else/u);
+  assert.match(remoteAssistSource, /did not answer within 25 seconds/u);
 });
 
 test("iPhone Remote Assist supports full-screen landscape rotation", async () => {

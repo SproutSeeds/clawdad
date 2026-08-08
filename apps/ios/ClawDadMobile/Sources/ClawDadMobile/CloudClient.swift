@@ -420,7 +420,19 @@ final class CloudSession: ObservableObject {
   @Published var selectedReasoningEffort: String {
     didSet { defaults.set(selectedReasoningEffort, forKey: "clawdad.selectedReasoningEffort") }
   }
+  @Published var allowUmbraReadAloudFallback = true {
+    didSet {
+      defaults.set(
+        allowUmbraReadAloudFallback,
+        forKey: "clawdad.allowUmbraReadAloudFallback"
+      )
+    }
+  }
   @Published var sessionCreatePending = false
+  @Published var projectCreatePending = false
+  @Published var projectCreateStatus = ""
+  @Published var projectCreateError = ""
+  @Published private(set) var lastCreatedProjectPath = ""
   @Published var voiceTranscriptionPending = false
   @Published var voiceTranscriptionStatus = ""
   @Published var voiceTranscription: MobileVoiceTranscription?
@@ -437,6 +449,7 @@ final class CloudSession: ObservableObject {
     didSet { defaults.set(pairedHostPublicKeyPem, forKey: "clawdad.pairedHostPublicKeyPem") }
   }
   @Published private(set) var startupWorkspaceReady = false
+  @Published private(set) var reconnecting = false
 
   private var task: URLSessionWebSocketTask?
   private var receiveTask: Task<Void, Never>?
@@ -446,6 +459,7 @@ final class CloudSession: ObservableObject {
   private var lastObservedTerminalRequest = ""
   private var pendingVoiceRequestId = ""
   private var pendingVoiceEnvelopeId = ""
+  private var pendingProjectCreateEnvelopeId = ""
   private var pendingCatalogHistoryLimit: Int?
   private var pendingPairingHostPublicKeyPem = ""
   private var pendingPairingRelayToken = ""
@@ -481,6 +495,11 @@ final class CloudSession: ObservableObject {
     self.selectedSessionId = defaults.string(forKey: "clawdad.selectedSessionId") ?? ""
     self.selectedModel = defaults.string(forKey: "clawdad.selectedModel") ?? "gpt-5.6-sol"
     self.selectedReasoningEffort = defaults.string(forKey: "clawdad.selectedReasoningEffort") ?? "ultra"
+    if defaults.object(forKey: "clawdad.allowUmbraReadAloudFallback") != nil {
+      self.allowUmbraReadAloudFallback = defaults.bool(
+        forKey: "clawdad.allowUmbraReadAloudFallback"
+      )
+    }
     self.startupWorkspaceReady = self.pairedHostId.isEmpty || self.pairedHostId != self.hostId
   }
 
@@ -497,6 +516,7 @@ final class CloudSession: ObservableObject {
     self.selectedSessionId = fixture.selectedSessionId
     self.selectedModel = fixture.modelOptions.first?.model ?? "gpt-5.6-sol"
     self.selectedReasoningEffort = "ultra"
+    self.allowUmbraReadAloudFallback = true
     self.appStorePreviewMode = true
     self.state = .connected
     self.workspace = fixture.workspace
@@ -524,7 +544,11 @@ final class CloudSession: ObservableObject {
   }
 
   var remoteAssistAuthenticated: Bool {
-    ready && !pairedHostPublicKeyPem.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    ready && remoteAssistIdentityReady
+  }
+
+  var remoteAssistIdentityReady: Bool {
+    paired && !pairedHostPublicKeyPem.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
   }
 
   var startupLoading: Bool {
@@ -602,6 +626,7 @@ final class CloudSession: ObservableObject {
     reconnectTask = nil
     resetSocket()
     state = .disconnected
+    reconnecting = false
   }
 
   private func resetSocket() {
@@ -617,6 +642,12 @@ final class CloudSession: ObservableObject {
     voiceTranscriptionStatus = ""
     pendingVoiceRequestId = ""
     pendingVoiceEnvelopeId = ""
+    if projectCreatePending {
+      projectCreatePending = false
+      projectCreateStatus = ""
+      projectCreateError = "The connection was interrupted before the project was created. Reconnect and try again."
+    }
+    pendingProjectCreateEnvelopeId = ""
     readAloud.connectionLostWhilePreparing()
     lastEntitlementFingerprint = ""
     hostOnline = false
@@ -764,6 +795,54 @@ final class CloudSession: ObservableObject {
         events.insert("New thread failed: \(message)", at: 0)
       }
     }
+  }
+
+  func createProjectDirectory(name: String) {
+    let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard ready, !projectCreatePending else {
+      projectCreateError = "Reconnect to your paired Mac before creating a project."
+      return
+    }
+    guard mobileProjectDirectoryNameIsValid(normalizedName) else {
+      projectCreateError = "Use one visible folder name without slashes or a leading period."
+      return
+    }
+
+    let requestId = UUID().uuidString.lowercased()
+    projectCreatePending = true
+    projectCreateStatus = "Creating the project on your Mac..."
+    projectCreateError = ""
+    lastCreatedProjectPath = ""
+    pendingProjectCreateEnvelopeId = requestId
+    Task {
+      do {
+        try await sendEnvelope(
+          type: "project.create.request",
+          body: [
+            "requestId": .string(requestId),
+            "name": .string(normalizedName)
+          ],
+          envelopeId: requestId
+        )
+      } catch {
+        guard pendingProjectCreateEnvelopeId == requestId else {
+          return
+        }
+        projectCreatePending = false
+        pendingProjectCreateEnvelopeId = ""
+        projectCreateStatus = ""
+        projectCreateError = describe(error)
+      }
+    }
+  }
+
+  func clearProjectCreateFeedback() {
+    guard !projectCreatePending else {
+      return
+    }
+    projectCreateStatus = ""
+    projectCreateError = ""
+    lastCreatedProjectPath = ""
   }
 
   func requestHistory(limit: Int = 8) {
@@ -1003,7 +1082,9 @@ final class CloudSession: ObservableObject {
             "sessionId": .string(sessionId),
             "historyRequestId": .string(item.requestId),
             "kind": .string(kind.rawValue),
-            "text": .string(spokenText)
+            "text": .string(spokenText),
+            "executionPreference": .string("paired-mac-first"),
+            "allowRemoteFallback": .bool(allowUmbraReadAloudFallback)
           ],
           envelopeId: envelopeId
         )
@@ -1100,8 +1181,11 @@ final class CloudSession: ObservableObject {
     guard type.hasPrefix("remote.assist.") else {
       throw URLError(.unsupportedURL)
     }
-    guard remoteAssistAuthenticated else {
+    guard remoteAssistIdentityReady else {
       throw RemoteAssistCloudError.authenticationRequired
+    }
+    guard ready else {
+      throw RemoteAssistCloudError.connectionUnavailable
     }
     let envelopeId = UUID().uuidString.lowercased()
     try await sendEnvelope(type: type, body: body, envelopeId: envelopeId)
@@ -1237,6 +1321,7 @@ final class CloudSession: ObservableObject {
     ])
     state = .connected
     reconnectAttempt = 0
+    reconnecting = false
     workspace = MobileWorkspace(
       id: workspaceId,
       title: "Scratchpad",
@@ -1298,12 +1383,14 @@ final class CloudSession: ObservableObject {
     guard connectionRequested, paired else {
       resetSocket()
       state = .disconnected
+      reconnecting = false
       return
     }
     let message = describe(error)
     resetSocket()
     state = .connecting
-    historyStatus = "Reconnecting to ClawDad..."
+    reconnecting = true
+    historyStatus = "Secure connection interrupted. Reconnecting to your paired Mac automatically..."
     events.insert("Connection interrupted: \(message)", at: 0)
     scheduleReconnect()
   }
@@ -1417,6 +1504,39 @@ final class CloudSession: ObservableObject {
       requestModels()
     case "models.snapshot":
       applyModelsSnapshot(envelope)
+    case "project.created":
+      guard verifyPairedHostEnvelope(envelope) else {
+        projectCreatePending = false
+        projectCreateStatus = ""
+        projectCreateError = "ClawDad ignored an unauthenticated project response."
+        events.insert("Ignored an unauthenticated project response", at: 0)
+        return
+      }
+      let requestId = envelope.body["requestId"]?.stringValue ?? ""
+      guard !requestId.isEmpty, requestId == pendingProjectCreateEnvelopeId else {
+        events.insert("Ignored a project response for an older request", at: 0)
+        return
+      }
+      let projectPath = envelope.body["projectPath"]?.stringValue ?? ""
+      let sessionId = envelope.body["sessionId"]?.stringValue ?? ""
+      guard !projectPath.isEmpty else {
+        projectCreatePending = false
+        pendingProjectCreateEnvelopeId = ""
+        projectCreateStatus = ""
+        projectCreateError = "Your Mac did not return the new project path."
+        return
+      }
+      projectCreatePending = false
+      pendingProjectCreateEnvelopeId = ""
+      projectCreateStatus = "Project created."
+      projectCreateError = ""
+      lastCreatedProjectPath = projectPath
+      selectedProjectPath = projectPath
+      selectedSessionId = sessionId
+      historyItems = []
+      historyStatus = "New project ready."
+      events.insert("Created project \(URL(fileURLWithPath: projectPath).lastPathComponent)", at: 0)
+      requestCatalog()
     case "session.created":
       sessionCreatePending = false
       let sessionId = envelope.body["sessionId"]?.stringValue ?? ""
@@ -1560,6 +1680,16 @@ final class CloudSession: ObservableObject {
       let message = envelope.body["error"]?.stringValue ?? "Cloud error"
       let inReplyTo = envelope.body["inReplyTo"]?.stringValue ?? ""
       let code = envelope.body["code"]?.stringValue ?? ""
+      if projectCreatePending,
+         !pendingProjectCreateEnvelopeId.isEmpty,
+         inReplyTo == pendingProjectCreateEnvelopeId {
+        projectCreatePending = false
+        pendingProjectCreateEnvelopeId = ""
+        projectCreateStatus = ""
+        projectCreateError = message
+        events.insert("Project creation failed: \(message)", at: 0)
+        return
+      }
       if readAloud.failIfMatchingEnvelope(inReplyTo, message: message) {
         events.insert("Read Aloud failed: \(message)", at: 0)
         return
@@ -2111,11 +2241,14 @@ final class CloudSession: ObservableObject {
 
 enum RemoteAssistCloudError: LocalizedError {
   case authenticationRequired
+  case connectionUnavailable
 
   var errorDescription: String? {
     switch self {
     case .authenticationRequired:
       return "Re-pair this iPhone from ClawDad Settings on your Mac to enable Remote Assist."
+    case .connectionUnavailable:
+      return "The secure connection to your paired Mac is reconnecting. Try Remote Assist again when the Mac shows connected."
     }
   }
 }

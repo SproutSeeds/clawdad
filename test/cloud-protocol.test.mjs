@@ -111,9 +111,43 @@ test("cloud envelope validation rejects expired envelopes", () => {
 
 test("cloud model reads and session creation require a paired device", () => {
   assert.equal(cloudEnvelopeRequiresTrustedDevice({ type: "models.request" }), true);
+  assert.equal(cloudEnvelopeRequiresTrustedDevice({ type: "project.create.request" }), true);
   assert.equal(cloudEnvelopeRequiresTrustedDevice({ type: "session.create.request" }), true);
   assert.equal(cloudEnvelopeRequiresTrustedDevice({ type: "speech.transcribe.request" }), true);
   assert.equal(cloudEnvelopeRequiresTrustedDevice({ type: "ping" }), false);
+});
+
+test("cloud protocol accepts signed project directory creation envelopes", () => {
+  const base = {
+    accountId: "acct-1",
+    workspaceId: "scratchpad",
+  };
+  const request = validateCloudEnvelope(normalizeCloudEnvelope({
+    ...base,
+    type: "project.create.request",
+    sourceDeviceId: "ios-phone",
+    targetHostId: "mac-host",
+    body: {
+      requestId: "project-1",
+      name: "new-project",
+    },
+  }));
+  const created = validateCloudEnvelope(normalizeCloudEnvelope({
+    ...base,
+    type: "project.created",
+    sourceDeviceId: "mac-host",
+    targetHostId: "ios-phone",
+    body: {
+      requestId: "project-1",
+      projectPath: "/workspace/new-project",
+      sessionId: "session-1",
+    },
+  }));
+
+  assert.equal(request.ok, true);
+  assert.equal(created.ok, true);
+  assert.equal(cloudEnvelopeRequiresTrustedDevice(request.envelope), true);
+  assert.equal(cloudEnvelopeRequiresTrustedDevice(created.envelope), false);
 });
 
 test("Remote Assist signaling preserves paired-device authority boundaries", () => {

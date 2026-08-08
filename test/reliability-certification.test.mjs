@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   findInstalledApp,
+  installedIosBuildMatchesRelease,
+  installedMacBuildMatchesRelease,
   normalizePhysicalCertification,
   physicalCertificationChecks,
   sanitizeConnectedDevice,
@@ -57,7 +59,7 @@ test("installed app lookup retains only public app version fields", () => {
       name: "ClawDad",
       bundleIdentifier: "earth.frg.clawdad.ios",
       version: "0.7.0",
-      bundleVersion: "19",
+      bundleVersion: "24",
       builtByDeveloper: false,
       url: "file:///private/secret/path",
     },
@@ -67,7 +69,7 @@ test("installed app lookup retains only public app version fields", () => {
     name: "ClawDad",
     bundleIdentifier: "earth.frg.clawdad.ios",
     version: "0.7.0",
-    build: "19",
+    build: "24",
     installation: "store",
   });
   assert.equal(JSON.stringify(app).includes("private/secret"), false);
@@ -95,16 +97,52 @@ test("service health snapshots omit project paths and unexpected fields", () => 
   assert.equal(JSON.stringify(health).includes("must-not-leak"), false);
 });
 
-test("certification readiness requires the published release and physical build", () => {
+test("physical evidence requires the exact paired iPhone and Mac release", () => {
+  const release = {
+    expectedIosVersion: "0.7.0",
+    expectedIosBuild: "24",
+    expectedMacVersion: "0.7.0",
+    expectedMacBuild: "22",
+  };
+  assert.equal(installedIosBuildMatchesRelease({
+    version: "0.7.0",
+    build: "24",
+    installation: "store",
+  }, release), true);
+  assert.equal(installedIosBuildMatchesRelease({
+    version: "0.7.0",
+    build: "22",
+    installation: "store",
+  }, release), false);
+  assert.equal(installedMacBuildMatchesRelease({
+    installed: true,
+    version: "0.7.0",
+    build: "22",
+  }, release), true);
+  assert.equal(installedMacBuildMatchesRelease({
+    installed: true,
+    version: "0.7.0",
+    build: "21",
+  }, release), false);
+});
+
+test("certification readiness requires the exact published iPhone and Mac builds", () => {
   const snapshot = {
     release: {
-      expectedVersion: "0.7.0-beta.2",
+      expectedVersion: "0.7.0-beta.5",
       expectedIosVersion: "0.7.0",
-      expectedIosBuild: "19",
-      npm: { betaTag: "0.7.0-beta.2" },
+      expectedIosBuild: "24",
+      expectedMacVersion: "0.7.0",
+      expectedMacBuild: "22",
+      npm: { betaTag: "0.7.0-beta.5" },
     },
     mac: {
       localHealth: { ok: true },
+      installedApp: {
+        installed: true,
+        version: "0.7.0",
+        build: "22",
+      },
     },
     cloud: {
       health: { ok: true },
@@ -113,6 +151,7 @@ test("certification readiness requires the published release and physical build"
       release: {
         beta: {
           processingState: "VALID",
+          buildNumber: "24",
         },
       },
     },
@@ -120,7 +159,7 @@ test("certification readiness requires the published release and physical build"
       targetDevice: {
         installedApp: {
           version: "0.7.0",
-          build: "19",
+          build: "24",
           installation: "store",
         },
       },
@@ -130,18 +169,35 @@ test("certification readiness requires the published release and physical build"
   assert.deepEqual(summarizeCertificationSnapshot(snapshot), {
     registryReady: true,
     localReady: true,
+    macBuildReady: true,
     cloudReady: true,
     testFlightReady: true,
     deviceConnected: true,
     deviceBuildReady: true,
     passed: 0,
-    total: 17,
+    total: 22,
     foundingBetaPassed: 0,
-    foundingBetaTotal: 16,
+    foundingBetaTotal: 21,
     foundingBetaPhysicalReady: false,
     physicalCertificationComplete: false,
     readyForPhysicalCertification: true,
   });
+
+  snapshot.appStore.release.beta.buildNumber = "22";
+  assert.equal(
+    summarizeCertificationSnapshot(snapshot).readyForPhysicalCertification,
+    false,
+  );
+  assert.equal(summarizeCertificationSnapshot(snapshot).testFlightReady, false);
+  snapshot.appStore.release.beta.buildNumber = "24";
+
+  snapshot.mac.installedApp.build = "21";
+  assert.equal(
+    summarizeCertificationSnapshot(snapshot).readyForPhysicalCertification,
+    false,
+  );
+  assert.equal(summarizeCertificationSnapshot(snapshot).macBuildReady, false);
+  snapshot.mac.installedApp.build = "22";
 
   snapshot.iphone.targetDevice.installedApp.build = "15";
   assert.equal(
@@ -154,21 +210,26 @@ test("physical certification records evidence and reports completion", () => {
   let checks = normalizePhysicalCertification();
   assert.equal(Object.keys(checks).length, physicalCertificationChecks.length);
   assert.equal(checks.freshTestFlightInstall.state, "pending");
+  assert.equal(checks.createProjectDirectory.state, "pending");
+  assert.equal(checks.readSentMessageAloud.state, "pending");
+  assert.equal(checks.readCodexResponseAloud.state, "pending");
+  assert.equal(checks.macOnlyReadAloud.state, "pending");
+  assert.equal(checks.umbraReadAloudFallback.state, "pending");
 
   for (const check of physicalCertificationChecks) {
     checks = updatePhysicalCertification(checks, {
       check,
       state: "pass",
-      evidence: `Verified ${check} on build 19.`,
+      evidence: `Verified ${check} on build 24.`,
       recordedAt: "2026-07-30T14:00:00.000Z",
     });
   }
 
   assert.deepEqual(summarizePhysicalCertification(checks), {
-    passed: 17,
-    total: 17,
-    foundingBetaPassed: 16,
-    foundingBetaTotal: 16,
+    passed: 22,
+    total: 22,
+    foundingBetaPassed: 21,
+    foundingBetaTotal: 21,
     foundingBetaPhysicalReady: true,
     physicalCertificationComplete: true,
   });

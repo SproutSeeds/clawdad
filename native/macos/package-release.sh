@@ -5,7 +5,7 @@ script_dir=${0:A:h}
 repo_root=${script_dir:h:h}
 package_version="${CLAWDAD_RELEASE_VERSION:-$(node -p "require('${repo_root}/package.json').version")}"
 app_version="${CLAWDAD_APP_VERSION:-0.7.0}"
-app_build="${CLAWDAD_APP_BUILD:-19}"
+app_build="${CLAWDAD_APP_BUILD:-22}"
 release_tag="${CLAWDAD_RELEASE_TAG:-v${package_version}}"
 release_dir="${CLAWDAD_RELEASE_DIR:-$script_dir/dist/releases/$package_version}"
 app_dir="$script_dir/dist/ClawDad.app"
@@ -109,9 +109,9 @@ if [[ "$notarize" == "1" ]]; then
   xcrun stapler validate "$dmg_path"
 fi
 
-codesign --verify --deep --strict --verbose=2 "$app_dir"
-spctl --assess --type execute --verbose=4 "$app_dir"
 if [[ "$notarize" == "1" ]]; then
+  codesign --verify --deep --strict --verbose=2 "$app_dir"
+  spctl --assess --type execute --verbose=4 "$app_dir"
   spctl --assess \
     --type open \
     --context context:primary-signature \

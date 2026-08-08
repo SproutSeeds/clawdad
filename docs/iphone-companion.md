@@ -86,7 +86,8 @@ The SwiftUI app currently supports:
 - realtime WebSocket connection
 - automatic reconnect on launch, foregrounding, network changes, and host wake
 - catalog request
-- project picker
+- project picker with signed creation inside the Mac's configured primary
+  projects root
 - active thread display
 - signed `message.send` envelope with Direct and Queue modes
 - lightweight `status.request` heartbeat snapshots for long-running turns
@@ -98,13 +99,15 @@ The SwiftUI app currently supports:
 - one-time QR pairing with a separate revocable Keychain credential per iPhone
 - Face ID-gated Remote Assist for viewing and controlling the paired Mac on
   demand
+- on-demand Read Aloud for sent messages and Codex responses, generated on the
+  paired Mac first with an optional Umbra fallback
 
 The app project uses:
 
 - product name: `ClawDad`
 - bundle id: `earth.frg.clawdad.ios`
 - version: `0.7.0`
-- build: `19`
+- build: `24`
 - minimum iOS: `18.0`
 - Release cloud URL: `https://clawdad-cloud.frg.earth`
 
@@ -120,6 +123,10 @@ Create the signed Release archive:
 ```sh
 npm run ios:archive
 ```
+
+For a local App Store package without uploading, export with
+`ExportOptions-LocalAppStore.plist` into a build-specific directory. The
+checked-in upload policy remains reserved for the explicit TestFlight command.
 
 Upload that exact archive to App Store Connect for TestFlight:
 
@@ -148,6 +155,9 @@ refreshes the available choices from the Mac's live Codex model catalog.
 The selected project and Codex thread persist across backgrounding, force quits,
 and later launches. If either saved selection no longer exists, the app falls
 back to the current active thread in the first available project.
+The project picker includes its own plus button. It accepts one visible folder
+name, sends no arbitrary path from the phone, and asks the paired Mac to create
+and register the project under the first configured project root.
 Selecting a project, reconnecting, or using **Refresh Threads** synchronizes that
 directory against the Mac's native Codex transcripts before the catalog is
 returned. ClawDad preserves each Codex session ID, so a thread continued from the
@@ -160,6 +170,11 @@ text. The signed cloud envelope is validated by the Mac connector, translated
 into the local multipart dispatch format, and delivered to Codex as native image
 inputs. Individual prepared images are limited to 4 MB and the message total is
 limited to 12 MB.
+
+Each sent-message and Codex-response card has a speaker control. Audio is
+prepared only after that control is tapped. The paired Mac's local speech
+service is tried first; **Settings > Read Aloud > Allow Umbra fallback** controls
+whether the configured Umbra service may be used if Mac speech is unavailable.
 
 Host connector check:
 

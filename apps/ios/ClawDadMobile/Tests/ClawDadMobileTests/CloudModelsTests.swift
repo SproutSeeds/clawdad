@@ -438,6 +438,18 @@ final class CloudModelsTests: XCTestCase {
     )
   }
 
+  func testProjectDirectoryNamesStayWithinTheConfiguredMacRoot() {
+    XCTAssertTrue(mobileProjectDirectoryNameIsValid("new-project"))
+    XCTAssertTrue(mobileProjectDirectoryNameIsValid("Client Notes"))
+    XCTAssertFalse(mobileProjectDirectoryNameIsValid(""))
+    XCTAssertFalse(mobileProjectDirectoryNameIsValid("."))
+    XCTAssertFalse(mobileProjectDirectoryNameIsValid(".."))
+    XCTAssertFalse(mobileProjectDirectoryNameIsValid(".hidden"))
+    XCTAssertFalse(mobileProjectDirectoryNameIsValid("nested/project"))
+    XCTAssertFalse(mobileProjectDirectoryNameIsValid("nested\\project"))
+    XCTAssertFalse(mobileProjectDirectoryNameIsValid("line\nbreak"))
+  }
+
   private func thread(
     projectPath: String,
     sessionId: String,
