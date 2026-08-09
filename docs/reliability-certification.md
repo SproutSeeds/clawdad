@@ -72,17 +72,17 @@ Mac build 24 and iPhone build 26.
 
 | Check | State | Acceptance |
 | --- | --- | --- |
-| Candidate source checkpoint | Pending publication | `v0.7.0-beta.7` must point to the audited release commit |
-| npm and Git release | Pending publication | npm `beta`, the tarball, Git tag, and GitHub prerelease must agree on `0.7.0-beta.7` |
-| Mac notarization and update feed | Partial | Exact build 24 is notarized, stapled, and Gatekeeper accepted; installation and signed public appcast read-back remain |
-| Internal TestFlight companion | Pending upload | Build 26 must become `VALID` and be assigned only to `ClawDad Internal` before physical verification |
-| Cloud/public health refresh | Pending publication | Production appcast/assets, local health, and the established host relay connection require final read-back |
+| Candidate source checkpoint | Pass | `v0.7.0-beta.7` points to audited source checkpoint `ca8ccc2` and both are pushed |
+| npm and Git release | Partial | GitHub prerelease, DMG, ZIP, and tag agree on beta 7; npm publication is blocked by the expired local registry login |
+| Mac notarization and update feed | Pass | Exact build 24 is notarized, stapled, Gatekeeper accepted, installed, and served by a public appcast whose hash matches the signed local feed |
+| Internal TestFlight companion | Pass | Build 26 is `VALID` and assigned only to `ClawDad Internal`; the external group is unassigned and Beta App Review is not submitted |
+| Cloud/public health refresh | Pass | Public appcast and cloud health, beta 7 local/native health, one Mac app process, and the configured relay host all read back successfully |
 
 ## Physical iPhone And Mac
 
 | Check | State | Acceptance |
 | --- | --- | --- |
-| Native Mac workspace parity | Pending install | Build 24 preserves the tested project picker, create form, Add Existing, Project/All threads, conversation, speaker-control, and responsive-layout source; the packaged app still needs installed UI read-back |
+| Native Mac workspace parity | Pending visual read-back | Build 24 is installed and healthy and preserves the tested project picker, create form, Add Existing, Project/All threads, conversation, speaker-control, and responsive-layout source; fresh packaged-app UI inspection remains |
 | Fresh TestFlight install | Pending | Build 26 launches to the subscription or pairing surface without stale workspace flash |
 | Purchase monthly | Pending | Sandbox purchase grants iPhone access and syncs verified access to Mac |
 | Restore purchase | Pending | Reinstall or sign-out path restores access |
