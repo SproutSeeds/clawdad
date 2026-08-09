@@ -468,6 +468,23 @@ final class RemoteAssistController: NSObject, ObservableObject {
     restoreKeyboardFocusAfterControl()
   }
 
+  func sendShortcut(_ shortcut: RemoteShortcut) {
+    guard sendInputRequest(
+      .shortcutRequest(
+        shortcut: shortcut,
+        requestId: UUID().uuidString.lowercased()
+      )
+    ) else {
+      showClipboardNotice(
+        "Remote Assist is reconnecting.",
+        isError: true
+      )
+      return
+    }
+    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    restoreKeyboardFocusAfterControl()
+  }
+
   func pastePhoneClipboardToMac(_ values: [String]) {
     guard !clipboardBusy else {
       return
@@ -1308,12 +1325,59 @@ enum RemoteAssistError: LocalizedError {
   }
 }
 
+private enum RemoteAssistControlPage: Equatable {
+  case primary
+  case shortcuts
+}
+
+private extension RemoteShortcut {
+  var keycap: String {
+    switch self {
+    case .controlC: "⌃C"
+    case .controlJ: "⌃J"
+    case .escape: "esc"
+    case .tab: "tab"
+    case .arrowUp: "↑"
+    case .arrowDown: "↓"
+    case .arrowLeft: "←"
+    case .arrowRight: "→"
+    case .controlL: "⌃L"
+    case .commandTab: "⌘⇥"
+    }
+  }
+
+  var accessibilityName: String {
+    switch self {
+    case .controlC: "Control C"
+    case .controlJ: "Control J"
+    case .escape: "Escape"
+    case .tab: "Tab"
+    case .arrowUp: "Up Arrow"
+    case .arrowDown: "Down Arrow"
+    case .arrowLeft: "Left Arrow"
+    case .arrowRight: "Right Arrow"
+    case .controlL: "Control L"
+    case .commandTab: "Command Tab, switch Mac app"
+    }
+  }
+}
+
 struct RemoteAssistView: View {
   @ObservedObject var controller: RemoteAssistController
   var onClose: () -> Void
   @State private var viewportZoomed = false
   @State private var viewportResetToken = 0
   @State private var controlsExpanded = false
+  @State private var controlPage: RemoteAssistControlPage = .primary
+
+  private static let mainControlColumns = Array(
+    repeating: GridItem(.fixed(44), spacing: 8),
+    count: 3
+  )
+  private static let shortcutColumns = Array(
+    repeating: GridItem(.fixed(60), spacing: 8),
+    count: 3
+  )
 
   var body: some View {
     ZStack {
@@ -1360,7 +1424,7 @@ struct RemoteAssistView: View {
           .ignoresSafeArea()
           .contentShape(Rectangle())
           .onTapGesture {
-            controlsExpanded = false
+            collapseControls()
           }
           .accessibilityHidden(true)
       }
@@ -1368,7 +1432,7 @@ struct RemoteAssistView: View {
       VStack {
         Spacer()
 
-        VStack(alignment: .trailing, spacing: 10) {
+        VStack(alignment: .trailing, spacing: 6) {
           if let notice = controller.clipboardNotice {
             Label(
               notice.text,
@@ -1387,152 +1451,46 @@ struct RemoteAssistView: View {
           }
 
           if controlsExpanded {
-            VStack(alignment: .trailing, spacing: 10) {
-              Label(
-                controller.remoteScreenLocked ? "Mac Locked" : "Secure session",
-                systemImage: "lock.fill"
-              )
-              .font(.caption.weight(.bold))
-              .foregroundStyle(
-                controller.remoteScreenLocked
-                  ? ClawDadTheme.gold
-                  : ClawDadTheme.good
-              )
-              .padding(.horizontal, 4)
-
-              HStack(spacing: 10) {
-                Button {
-                  controlsExpanded = false
-                  controller.stop()
-                  onClose()
-                } label: {
-                  Image(systemName: "xmark")
-                    .font(.system(size: 18, weight: .black))
-                    .frame(width: 48, height: 48)
-                }
-                .buttonStyle(RemoteAssistOverlayButtonStyle())
-                .accessibilityLabel("Close Remote Assist")
-
-                Button {
-                  controlsExpanded = false
-                  controller.pressEnter()
-                } label: {
-                  Image(systemName: "arrow.turn.down.left")
-                    .font(.system(size: 19, weight: .bold))
-                    .frame(width: 48, height: 48)
-                }
-                .buttonStyle(RemoteAssistOverlayButtonStyle())
-                .disabled(controller.phase != .connected)
-                .accessibilityLabel("Press Enter on Mac")
-
-                PasteButton(payloadType: String.self) { values in
-                  controlsExpanded = false
-                  controller.pastePhoneClipboardToMac(values)
-                }
-                .labelStyle(.iconOnly)
-                .font(.system(size: 19, weight: .bold))
-                .frame(width: 48, height: 48)
-                .buttonStyle(RemoteAssistOverlayButtonStyle())
-                .disabled(
-                  controller.phase != .connected || controller.clipboardBusy
-                )
-                .accessibilityLabel(
-                  controller.remoteScreenLocked
-                    ? "Type iPhone clipboard securely on Mac"
-                    : "Paste iPhone clipboard to Mac"
-                )
-              }
-
-              HStack(spacing: 10) {
-                Button {
-                  controlsExpanded = false
-                  controller.copyMacSelectionToPhone()
-                } label: {
-                  Image(systemName: "doc.on.doc")
-                    .font(.system(size: 19, weight: .bold))
-                    .frame(width: 48, height: 48)
-                }
-                .buttonStyle(RemoteAssistOverlayButtonStyle())
-                .disabled(
-                  controller.phase != .connected ||
-                    controller.clipboardBusy ||
-                    controller.remoteScreenLocked
-                )
-                .accessibilityLabel(
-                  controller.remoteScreenLocked
-                    ? "Copy unavailable while Mac is locked"
-                    : "Copy Mac selection to iPhone"
-                )
-
-                Button {
-                  controlsExpanded = false
-                  controller.toggleKeyboard()
-                } label: {
-                  Image(
-                    systemName: controller.keyboardVisible
-                      ? "keyboard.chevron.compact.down"
-                      : "keyboard"
-                  )
-                  .font(.system(size: 20, weight: .bold))
-                  .frame(width: 48, height: 48)
-                }
-                .buttonStyle(RemoteAssistOverlayButtonStyle())
-                .accessibilityLabel(
-                  controller.keyboardVisible ? "Hide keyboard" : "Show keyboard"
-                )
-
-                if viewportZoomed {
-                  Button {
-                    controlsExpanded = false
-                    viewportResetToken += 1
-                  } label: {
-                    Text("1x")
-                      .font(.system(size: 13, weight: .black, design: .rounded))
-                      .frame(width: 48, height: 48)
-                  }
-                  .buttonStyle(RemoteAssistOverlayButtonStyle())
-                  .accessibilityLabel("Reset Remote Assist zoom")
-                }
-              }
-            }
-            .padding(12)
-            .background(
-              Color.black.opacity(0.78),
-              in: RoundedRectangle(cornerRadius: 18, style: .continuous)
-            )
-            .overlay {
-              RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(ClawDadTheme.cream.opacity(0.2), lineWidth: 1)
-            }
-            .transition(.move(edge: .trailing).combined(with: .opacity))
-            .accessibilityElement(children: .contain)
+            controlPanel
           }
 
           Button {
-            controlsExpanded.toggle()
+            if controlsExpanded {
+              collapseControls()
+            } else {
+              controlPage = .primary
+              controlsExpanded = true
+            }
           } label: {
             Image(systemName: controlsExpanded ? "chevron.down" : "ellipsis")
-              .font(.system(size: 20, weight: .black))
-              .frame(width: 52, height: 52)
+              .font(.system(size: 16, weight: .black))
+              .frame(width: 44, height: 44)
           }
-          .buttonStyle(RemoteAssistOverlayButtonStyle())
+          .buttonStyle(RemoteAssistLauncherButtonStyle())
           .accessibilityLabel(
             controlsExpanded
               ? "Close Remote Assist controls"
               : "Open Remote Assist controls"
           )
           .accessibilityHint(
-            "Shows Exit, Enter, clipboard, keyboard, and zoom controls"
+            "Shows Exit, Enter, clipboard, keyboard, shortcuts, and zoom controls"
           )
         }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 12)
         .animation(
           .easeOut(duration: 0.18),
           value: controller.clipboardNotice?.id
         )
         .animation(.easeOut(duration: 0.18), value: controlsExpanded)
+        .animation(.easeOut(duration: 0.18), value: controlPage)
       }
+      .frame(
+        maxWidth: .infinity,
+        maxHeight: .infinity,
+        alignment: .bottomTrailing
+      )
+      .padding(.trailing, 4)
+      .padding(.bottom, 4)
+      .ignoresSafeArea()
 
       RemoteKeyboardCapture(
         active: controller.keyboardVisible,
@@ -1549,16 +1507,213 @@ struct RemoteAssistView: View {
       guard phase != .connected else {
         return
       }
-      controlsExpanded = false
+      collapseControls()
       viewportZoomed = false
       viewportResetToken += 1
     }
     .onDisappear {
-      controlsExpanded = false
+      collapseControls()
       viewportZoomed = false
       viewportResetToken += 1
       controller.stop()
     }
+  }
+
+  private var controlPanel: some View {
+    Group {
+      switch controlPage {
+      case .primary:
+        primaryControlPanel
+      case .shortcuts:
+        shortcutControlPanel
+      }
+    }
+    .padding(10)
+    .background(
+      Color.black.opacity(0.78),
+      in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+    )
+    .overlay {
+      RoundedRectangle(cornerRadius: 16, style: .continuous)
+        .stroke(ClawDadTheme.cream.opacity(0.2), lineWidth: 1)
+    }
+    .transition(.move(edge: .trailing).combined(with: .opacity))
+    .accessibilityElement(children: .contain)
+  }
+
+  private var primaryControlPanel: some View {
+    VStack(alignment: .trailing, spacing: 8) {
+      Label(
+        controller.remoteScreenLocked ? "Mac Locked" : "Secure session",
+        systemImage: "lock.fill"
+      )
+      .font(.caption.weight(.bold))
+      .foregroundStyle(
+        controller.remoteScreenLocked
+          ? ClawDadTheme.gold
+          : ClawDadTheme.good
+      )
+      .padding(.horizontal, 4)
+
+      LazyVGrid(
+        columns: Self.mainControlColumns,
+        alignment: .trailing,
+        spacing: 8
+      ) {
+        Button {
+          collapseControls()
+          controller.stop()
+          onClose()
+        } label: {
+          Image(systemName: "xmark")
+            .font(.system(size: 17, weight: .black))
+            .frame(width: 44, height: 44)
+        }
+        .buttonStyle(RemoteAssistOverlayButtonStyle())
+        .accessibilityLabel("Close Remote Assist")
+
+        Button {
+          collapseControls()
+          controller.pressEnter()
+        } label: {
+          Image(systemName: "arrow.turn.down.left")
+            .font(.system(size: 18, weight: .bold))
+            .frame(width: 44, height: 44)
+        }
+        .buttonStyle(RemoteAssistOverlayButtonStyle())
+        .disabled(controller.phase != .connected)
+        .accessibilityLabel("Press Enter on Mac")
+
+        PasteButton(payloadType: String.self) { values in
+          collapseControls()
+          controller.pastePhoneClipboardToMac(values)
+        }
+        .labelStyle(.iconOnly)
+        .font(.system(size: 18, weight: .bold))
+        .frame(width: 44, height: 44)
+        .buttonStyle(RemoteAssistOverlayButtonStyle())
+        .disabled(
+          controller.phase != .connected || controller.clipboardBusy
+        )
+        .accessibilityLabel(
+          controller.remoteScreenLocked
+            ? "Type iPhone clipboard securely on Mac"
+            : "Paste iPhone clipboard to Mac"
+        )
+
+        Button {
+          collapseControls()
+          controller.copyMacSelectionToPhone()
+        } label: {
+          Image(systemName: "doc.on.doc")
+            .font(.system(size: 18, weight: .bold))
+            .frame(width: 44, height: 44)
+        }
+        .buttonStyle(RemoteAssistOverlayButtonStyle())
+        .disabled(
+          controller.phase != .connected ||
+            controller.clipboardBusy ||
+            controller.remoteScreenLocked
+        )
+        .accessibilityLabel(
+          controller.remoteScreenLocked
+            ? "Copy unavailable while Mac is locked"
+            : "Copy Mac selection to iPhone"
+        )
+
+        Button {
+          collapseControls()
+          controller.toggleKeyboard()
+        } label: {
+          Image(
+            systemName: controller.keyboardVisible
+              ? "keyboard.chevron.compact.down"
+              : "keyboard"
+          )
+          .font(.system(size: 19, weight: .bold))
+          .frame(width: 44, height: 44)
+        }
+        .buttonStyle(RemoteAssistOverlayButtonStyle())
+        .accessibilityLabel(
+          controller.keyboardVisible ? "Hide keyboard" : "Show keyboard"
+        )
+
+        Button {
+          controlPage = .shortcuts
+        } label: {
+          Image(systemName: "keyboard.badge.ellipsis")
+            .font(.system(size: 18, weight: .bold))
+            .frame(width: 44, height: 44)
+        }
+        .buttonStyle(RemoteAssistOverlayButtonStyle())
+        .disabled(
+          controller.phase != .connected || controller.remoteScreenLocked
+        )
+        .accessibilityLabel("Special commands")
+        .accessibilityHint("Shows Control, navigation, and Mac app shortcuts")
+
+        if viewportZoomed {
+          Button {
+            collapseControls()
+            viewportResetToken += 1
+          } label: {
+            Text("1x")
+              .font(.system(size: 13, weight: .black, design: .rounded))
+              .frame(width: 44, height: 44)
+          }
+          .buttonStyle(RemoteAssistOverlayButtonStyle())
+          .accessibilityLabel("Reset Remote Assist zoom")
+        }
+      }
+    }
+  }
+
+  private var shortcutControlPanel: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      HStack(spacing: 8) {
+        Button {
+          controlPage = .primary
+        } label: {
+          Image(systemName: "chevron.left")
+            .font(.system(size: 14, weight: .black))
+            .frame(width: 32, height: 32)
+        }
+        .buttonStyle(RemoteAssistOverlayButtonStyle())
+        .accessibilityLabel("Back to Remote Assist controls")
+
+        Text("Special Commands")
+          .font(.caption.weight(.heavy))
+          .foregroundStyle(ClawDadTheme.cream)
+      }
+
+      LazyVGrid(
+        columns: Self.shortcutColumns,
+        alignment: .trailing,
+        spacing: 8
+      ) {
+        ForEach(RemoteShortcut.allCases, id: \.self) { shortcut in
+          Button {
+            collapseControls()
+            controller.sendShortcut(shortcut)
+          } label: {
+            Text(shortcut.keycap)
+              .font(.system(size: 15, weight: .black, design: .rounded))
+              .frame(width: 60, height: 46)
+          }
+          .buttonStyle(RemoteAssistShortcutButtonStyle())
+          .disabled(
+            controller.phase != .connected || controller.remoteScreenLocked
+          )
+          .accessibilityLabel(shortcut.accessibilityName)
+          .accessibilityHint("Sends this command to the Mac")
+        }
+      }
+    }
+  }
+
+  private func collapseControls() {
+    controlsExpanded = false
+    controlPage = .primary
   }
 }
 
@@ -1568,6 +1723,38 @@ private struct RemoteAssistOverlayButtonStyle: ButtonStyle {
       .foregroundStyle(ClawDadTheme.cream)
       .background(Color.black.opacity(configuration.isPressed ? 0.78 : 0.58), in: Circle())
       .scaleEffect(configuration.isPressed ? 0.9 : 1)
+      .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+  }
+}
+
+private struct RemoteAssistLauncherButtonStyle: ButtonStyle {
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .foregroundStyle(ClawDadTheme.cream)
+      .background {
+        Circle()
+          .fill(Color.black.opacity(configuration.isPressed ? 0.78 : 0.58))
+          .frame(width: 36, height: 36)
+      }
+      .contentShape(Rectangle())
+      .scaleEffect(configuration.isPressed ? 0.92 : 1)
+      .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+  }
+}
+
+private struct RemoteAssistShortcutButtonStyle: ButtonStyle {
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .foregroundStyle(ClawDadTheme.cream)
+      .background(
+        Color.black.opacity(configuration.isPressed ? 0.86 : 0.58),
+        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+      )
+      .overlay {
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+          .stroke(ClawDadTheme.cream.opacity(0.18), lineWidth: 1)
+      }
+      .scaleEffect(configuration.isPressed ? 0.95 : 1)
       .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
   }
 }

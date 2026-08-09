@@ -1,118 +1,91 @@
-# ClawDad 0.7 Beta 6 Rollout Packet
+# ClawDad 0.7 Beta 7 Rollout Packet
 
-Prepared: 2026-08-07
+Prepared: 2026-08-09
 
 ## Candidate Identity
 
-- Package: `clawdad@0.7.0-beta.6`
-- Git tag: `v0.7.0-beta.6`
-- Mac app: `0.7.0 (23)`
-- iPhone app: existing `0.7.0 (24)`
+- Package: `clawdad@0.7.0-beta.7`
+- Git tag: `v0.7.0-beta.7`
+- Mac app: `0.7.0 (24)`
+- iPhone app: `0.7.0 (26)`
 - Status at preparation: the source, npm tarball, notarized Mac artifacts, and
-  canonical Mac installation are ready; npm, GitHub, and Sparkle publication
-  follow the audited source checkpoint
+  iPhone simulator build are ready; channel publication follows the audited
+  source checkpoint.
 
 ## Included Scope
 
-- The Mac project selector is now a searchable, grouped picker with names,
-  paths, current selection, and an Add Existing action.
-- The project-row plus button opens New Project Directory directly. It shows
-  the configured primary projects root, validates the folder name locally,
-  and keeps creation status visible until the Mac responds.
-- A dedicated thread plus button starts a new Codex session while the existing
-  session dropdown, rename, conversation, import, terminal, delegation,
-  artifact, and queue controls remain available.
-- A visible Threads panel provides persistent Project and All scopes. It shows
-  up to 20 recent cards and opens the existing conversation view.
-- Conversation cards retain separate Copy and on-demand Read Aloud controls
-  for sent messages and Codex responses.
-- Escape and visible close actions share one back-one-step path, close the
-  topmost surface, and restore focus to the control that opened it.
-- Wide Mac windows use a two-column recent-thread grid; narrow windows collapse
-  to one column and preserve the full composer workflow.
-- No backend migration or iPhone protocol change is required. TestFlight build
-  24 remains the compatible companion and is not rebuilt for beta 6.
+- Remote Assist uses one 36-point lower-right launcher inside a 44-point touch
+  target, four points from the full viewport bounds.
+- The launcher opens the existing controls inside one compact overlay. A
+  Special Commands control opens a nested page with an explicit back action.
+- The shortcut page provides Control-C, Control-J, Escape, Tab, four arrow
+  keys, Control-L, and Command-Tab. Every action collapses back to one launcher.
+- A typed shared protocol carries only the enumerated shortcuts. Control and
+  navigation commands target the focused editable app; Command-Tab alone uses
+  the macOS system event stream.
+- The Mac rejects special commands while locked and continues to require its
+  Accessibility permission before posting input.
+- Existing Exit, Enter, clipboard, keyboard, pointer, scrolling, and zoom
+  controls remain available from the compact menu.
 
 ## Local Candidate Artifacts
 
 | Artifact | Local path | SHA-256 |
 | --- | --- | --- |
-| npm package | `native/macos/dist/releases/0.7.0-beta.6/npm/clawdad-0.7.0-beta.6.tgz` | `0446e8e465175947ddfbdb7ea3f3ebca59884ce389c2f1ce9bb1aef1d02144fd` |
-| Mac DMG | `native/macos/dist/releases/0.7.0-beta.6/ClawDad-0.7.0-beta.6-mac.dmg` | `2afc4d1e7024ce41e060d7d038bb151e80fc666801e79ae302d695057fbfde15` |
-| Mac ZIP | `native/macos/dist/releases/0.7.0-beta.6/appcast/ClawDad-0.7.0-beta.6-mac.zip` | `de8cbad21602e75736c8d7a79bfa65b9d7f534686d3796bc9a5af0006920f3ee` |
-| Local appcast | `native/macos/dist/releases/0.7.0-beta.6/appcast/appcast.xml` | `ccca4021a6e2c846dd5366b983a416523569fbae534245894450b3c2583dff09` |
-| Existing iPhone IPA | `apps/ios/ClawDadMobile/build/AppStore-24/ClawDad.ipa` | `f352333d50fe1ecbf9c9f70a4e6ed4eb0a136a3232cea03cdece2c158876450e` |
+| npm package | `native/macos/dist/releases/0.7.0-beta.7/npm/clawdad-0.7.0-beta.7.tgz` | `a9dfdb2349225ad27a7b85ca7655e0860664dabd454d6ac0f7298e029c4bcf98` |
+| Mac DMG | `native/macos/dist/releases/0.7.0-beta.7/ClawDad-0.7.0-beta.7-mac.dmg` | `00b6cff9ecbb9b4293918cef8639a860c37c085b8853e686053e438ba1113809` |
+| Mac ZIP | `native/macos/dist/releases/0.7.0-beta.7/appcast/ClawDad-0.7.0-beta.7-mac.zip` | `454326a91f483f38052901e4abd8de320fb9984f76c2226475665c1fac6eb75d` |
+| Local appcast | `native/macos/dist/releases/0.7.0-beta.7/appcast/appcast.xml` | `fc090ac8d3028ef304889d77db8176d81746333d6fdf678fcbdbfdc8a94371b5` |
+| iPhone IPA | Build-specific archive/export pending | Pending |
 
-The iPhone archive remains
-`apps/ios/ClawDadMobile/build/ClawDadMobile-Founder-24.xcarchive`. Beta 6 release
-notes are in `docs/releases/0.7.0-beta.6.md`.
+Beta 7 release notes are in `docs/releases/0.7.0-beta.7.md`; the iPhone control
+notes are in `docs/releases/0.7.0-ios-26.md`.
 
 ## Verification Completed
 
-- `npm test`: 411/411 passed.
+- `npm test`: 412/412 passed.
 - `swift test --package-path apps/ios/ClawDadMobile`: 25/25 passed.
-- `swift test --package-path native/macos`: 27/27 passed.
-- Targeted workspace/release coverage: 66/66 passed.
-- JavaScript syntax, `git diff --check`, and release metadata checks passed.
-- Mac package: version `0.7.0`, build `23`; the app and DMG were signed,
-  notarized, stapled, and accepted by Gatekeeper. The ZIP, signed appcast, and
-  checksums validate.
-- npm dry run/package: 217 entries with beta 6 metadata.
-- The canonical `/Applications/ClawDad.app` is build 23, its bundled runtime is
-  `0.7.0-beta.6`, and its `index.html`, `app.css`, and `app.js` exactly match
-  the audited source.
-- Native Mac UI inspection passed project search, quick-create destination and
-  validation, Add Existing, nested Escape/back behavior, focus restoration,
-  Project/All switching, thread-card conversation opening, two-column and
-  one-column layouts, and accessible labels.
-- A sent-message Read Aloud request completed through the local Mac path and
-  advanced from preparation to reusable playback. Both sent and response
-  speaker controls are present in the native conversation view.
-- ORP hygiene reports zero unclassified paths. Four unrelated pre-existing
+- `swift test --package-path native/ClawDadRemoteAssistProtocol`: 14/14 passed.
+- `swift test --package-path native/macos`: 30/30 passed.
+- Targeted workspace/release coverage: 78/78 passed.
+- `npm run ios:generate` and `npm run ios:build` succeeded.
+- Mac package: version `0.7.0`, build `24`; the app and DMG were signed,
+  notarized, stapled, and accepted by Gatekeeper.
+- The Mac ZIP, signed Sparkle appcast, and generated checksums validate.
+- `npm pack --json` reports 222 entries with beta 7 metadata.
+- ORP hygiene began with zero unclassified paths. Four unrelated pre-existing
   worktree buckets remain preserved and excluded from the release checkpoint.
 
 ## Rollout Boundaries
 
-- The release changes only the Mac web workspace and Mac/package version
-  metadata. The production relay Worker is unchanged.
-- iPhone `0.7.0 (24)` stays assigned to the private internal TestFlight group;
-  beta 6 does not upload a new iPhone build.
-- Founding-customer assignment, Beta App Review, public App Store submission,
-  and paid-access certification remain behind the existing human and
-  physical-device gates.
-- The temporary beta 5 rollback bundle stays outside `/Applications` until the
-  installed beta 6 service and release surfaces are verified. LaunchServices
-  sees one canonical ClawDad app.
+- Build 26 is assigned only to the private `ClawDad Internal` TestFlight group.
+- The external founding-customer group, Beta App Review, public App Store
+  submission, and paid-access certification remain behind their existing
+  physical-device and human gates.
+- The production relay Worker is unchanged by this release.
+- LaunchServices must see one canonical ClawDad app after build 24 is installed.
 
 ## Physical Device Gates
 
-- Confirm the paired iPhone build 24 sees Mac build 23 and can reopen this
-  exact ClawDad conversation.
-- Create a project from the iPhone and confirm its directory appears under the
-  configured Mac projects root with a selectable Codex thread.
-- Play Read Aloud from one sent message and one Codex response on the iPhone.
-- Disable Umbra fallback, verify Mac-only speech, and confirm a clear failure
-  when the Mac speech service is intentionally unavailable.
-- Enable Umbra fallback and verify it is used only after Mac speech is
-  unavailable.
-- Exercise Wi-Fi-to-cellular reconnect, Mac sleep/wake, and Remote Assist
-  timeout/retry behavior against Mac build 23.
-- Recheck voice transcription, image delivery, Direct/Queue ordering, long
-  turns, and fresh-launch selection restoration.
-- Complete the purchase, restore, revocation, and forced-TURN matrix before
-  founding-customer distribution.
+- Confirm the small launcher is visible and tappable in portrait and both
+  landscape orientations.
+- Confirm the nested back control, outside-tap collapse, and one-launcher state
+  after every action.
+- Exercise Control-C and Control-J against harmless work in the Codex CLI.
+- Exercise Escape, Tab, all arrows, and Control-L in a focused editable app.
+- Confirm Command-Tab switches the active Mac application.
+- Recheck Remote Assist reconnect, clipboard, keyboard, zoom, Mac lock/unlock,
+  Mac sleep/wake, Wi-Fi-to-cellular, and restrictive-network behavior.
 
 ## Remaining Release Actions
 
-1. Commit and tag the audited source as `v0.7.0-beta.6`.
-2. Publish the npm beta tarball and GitHub prerelease with the notarized DMG and
-   ZIP.
-3. Publish and read back the signed Sparkle appcast after the GitHub assets are
-   available.
-4. Install the published npm beta, restart the local services, and verify one
-   canonical Mac host plus established relay health.
-5. Record fresh build-23/build-24 physical-device evidence before expanding
-   TestFlight distribution.
+1. Commit and tag the audited source as `v0.7.0-beta.7`.
+2. Publish the GitHub prerelease, Mac ZIP, DMG, and signed Sparkle appcast.
+3. Publish npm beta 7 if the npm authenticator gate is available.
+4. Install Mac build 24 and verify its bundled runtime plus local/relay health.
+5. Archive, upload, and assign iPhone build 26 to `ClawDad Internal` only.
+6. Record fresh build-24/build-26 physical-device evidence before expanding
+   distribution.
 
 ## Keep Out
 
@@ -121,14 +94,3 @@ notes are in `docs/releases/0.7.0-beta.6.md`.
 - temporary screenshots outside canonical release assets
 - credentials, pairing tickets, relay tokens, and Apple-signed transactions
 - local logs and customer project data
-
-## iPhone Build 25 Follow-Up
-
-On 2026-08-09, source checkpoint
-`811d1ba122479808762b6fe55ca3a1bb9afa43ca` produced the focused Remote Assist
-follow-up documented in `docs/releases/0.7.0-ios-25.md`. The signed IPA at
-`apps/ios/ClawDadMobile/build/AppStore-25/ClawDad.ipa` has SHA-256
-`6c1edbebcd1c15b82b8ecb3e4b76b10e5e2a9825dbddcab123360a1e7e4f70`.
-App Store Connect reports build 25 `VALID` and assigned to `ClawDad Internal`;
-the external founding-customer group remains unassigned and Beta App Review
-remains unsubmitted. Fresh physical-iPhone inspection is still required.

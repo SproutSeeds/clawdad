@@ -41,11 +41,49 @@ final class RemoteInputProtocolTests: XCTestCase {
       requestId: "text-echo",
       text: "secret text",
       key: nil,
+      shortcut: nil,
       ok: true,
       error: nil,
       target: RemoteInputTarget(
         applicationName: "TextEdit",
         bundleIdentifier: "com.apple.TextEdit",
+        role: "AXTextArea"
+      )
+    )
+
+    XCTAssertThrowsError(try RemoteInputCodec.encode(message)) { error in
+      XCTAssertEqual(error as? RemoteInputProtocolError, .invalidResult)
+    }
+  }
+
+  func testEveryApprovedShortcutRoundTrips() throws {
+    for shortcut in RemoteShortcut.allCases {
+      let message = RemoteInputMessage.shortcutRequest(
+        shortcut: shortcut,
+        requestId: "shortcut-\(shortcut.rawValue)"
+      )
+
+      let decoded = try RemoteInputCodec.decode(
+        RemoteInputCodec.encode(message)
+      )
+
+      XCTAssertEqual(decoded, message)
+    }
+  }
+
+  func testShortcutResponseCannotEchoTheCommand() {
+    let message = RemoteInputMessage(
+      type: RemoteInputMessage.resultType,
+      action: .shortcut,
+      requestId: "shortcut-echo",
+      text: nil,
+      key: nil,
+      shortcut: .controlC,
+      ok: true,
+      error: nil,
+      target: RemoteInputTarget(
+        applicationName: "Terminal",
+        bundleIdentifier: "com.apple.Terminal",
         role: "AXTextArea"
       )
     )

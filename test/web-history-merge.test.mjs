@@ -54,6 +54,14 @@ const nativeMacInputPath = path.join(
   "ClawDad",
   "MacInputController.swift",
 );
+const nativeMacShortcutPath = path.join(
+  repoRoot,
+  "native",
+  "macos",
+  "Sources",
+  "ClawDad",
+  "MacRemoteShortcut.swift",
+);
 const nativeMacRemotePeerPath = path.join(
   repoRoot,
   "native",
@@ -85,6 +93,14 @@ const remoteSessionStateProtocolPath = path.join(
   "Sources",
   "ClawDadRemoteAssistProtocol",
   "RemoteSessionStateProtocol.swift",
+);
+const remoteInputProtocolPath = path.join(
+  repoRoot,
+  "native",
+  "ClawDadRemoteAssistProtocol",
+  "Sources",
+  "ClawDadRemoteAssistProtocol",
+  "RemoteInputProtocol.swift",
 );
 const iosInfoPlistPath = path.join(repoRoot, "apps", "ios", "ClawDadMobile", "Resources", "Info.plist");
 const iosMascotContentsPath = path.join(
@@ -650,35 +666,42 @@ test("iPhone Remote Assist supports full-screen landscape rotation", async () =>
   assert.match(remoteAssistSource, /videoView\.videoContentMode = \.scaleAspectFit/u);
 });
 
-test("iPhone Remote Assist collapses every overlay control into one menu", async () => {
-  const remoteAssistSource = await readFile(iosRemoteAssistPath, "utf8");
+test("iPhone Remote Assist hugs one launcher to the corner and nests approved shortcuts", async () => {
+  const [remoteAssistSource, shortcutSource, inputProtocolSource] = await Promise.all([
+    readFile(iosRemoteAssistPath, "utf8"),
+    readFile(nativeMacShortcutPath, "utf8"),
+    readFile(remoteInputProtocolPath, "utf8"),
+  ]);
 
   assert.match(remoteAssistSource, /@State private var controlsExpanded = false/u);
+  assert.match(remoteAssistSource, /@State private var controlPage: RemoteAssistControlPage = \.primary/u);
   assert.match(
     remoteAssistSource,
     /Image\(systemName: controlsExpanded \? "chevron\.down" : "ellipsis"\)/u,
   );
+  assert.match(remoteAssistSource, /\.frame\(width: 44, height: 44\)/u);
+  assert.match(remoteAssistSource, /RemoteAssistLauncherButtonStyle/u);
+  assert.match(remoteAssistSource, /\.frame\(width: 36, height: 36\)/u);
+  assert.match(
+    remoteAssistSource,
+    /alignment: \.bottomTrailing[\s\S]*\.padding\(\.trailing, 4\)[\s\S]*\.padding\(\.bottom, 4\)[\s\S]*\.ignoresSafeArea\(\)/u,
+  );
   assert.match(remoteAssistSource, /"Open Remote Assist controls"/u);
+  assert.match(remoteAssistSource, /Image\(systemName: "keyboard\.badge\.ellipsis"\)/u);
+  assert.match(remoteAssistSource, /controlPage = \.shortcuts/u);
+  assert.match(remoteAssistSource, /Text\("Special Commands"\)/u);
+  assert.match(remoteAssistSource, /accessibilityLabel\("Back to Remote Assist controls"\)/u);
   assert.match(
     remoteAssistSource,
-    /if controlsExpanded \{[\s\S]*accessibilityLabel\("Close Remote Assist"\)[\s\S]*controller\.pressEnter\(\)[\s\S]*PasteButton\(payloadType: String\.self\)[\s\S]*controller\.copyMacSelectionToPhone\(\)[\s\S]*controller\.toggleKeyboard\(\)/u,
+    /ForEach\(RemoteShortcut\.allCases[\s\S]*collapseControls\(\)[\s\S]*controller\.sendShortcut\(shortcut\)/u,
   );
-  assert.match(
-    remoteAssistSource,
-    /controlsExpanded = false\s+controller\.stop\(\)\s+onClose\(\)/u,
-  );
-  assert.match(
-    remoteAssistSource,
-    /controlsExpanded = false\s+controller\.pressEnter\(\)/u,
-  );
-  assert.match(
-    remoteAssistSource,
-    /controlsExpanded = false\s+controller\.copyMacSelectionToPhone\(\)/u,
-  );
-  assert.match(
-    remoteAssistSource,
-    /controlsExpanded = false\s+controller\.toggleKeyboard\(\)/u,
-  );
+  assert.match(remoteAssistSource, /func collapseControls\(\) \{\s*controlsExpanded = false\s*controlPage = \.primary/u);
+  assert.match(inputProtocolSource, /case controlC = "control_c"/u);
+  assert.match(inputProtocolSource, /case controlJ = "control_j"/u);
+  assert.match(inputProtocolSource, /case controlL = "control_l"/u);
+  assert.match(inputProtocolSource, /case commandTab = "command_tab"/u);
+  assert.match(shortcutSource, /case \.commandTab:[\s\S]*flags: \.maskCommand[\s\S]*delivery: \.system/u);
+  assert.match(shortcutSource, /case \.controlC:[\s\S]*flags: \.maskControl/u);
   assert.doesNotMatch(
     remoteAssistSource,
     /Text\(controller\.remoteScreenLocked \? "Mac Locked" : "Remote Assist"\)/u,

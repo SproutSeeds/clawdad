@@ -2,7 +2,21 @@ import Foundation
 
 public enum RemoteInputAction: String, Codable, Equatable, Sendable {
   case key
+  case shortcut
   case text
+}
+
+public enum RemoteShortcut: String, Codable, CaseIterable, Equatable, Hashable, Sendable {
+  case controlC = "control_c"
+  case controlJ = "control_j"
+  case escape
+  case tab
+  case arrowUp = "arrow_up"
+  case arrowDown = "arrow_down"
+  case arrowLeft = "arrow_left"
+  case arrowRight = "arrow_right"
+  case controlL = "control_l"
+  case commandTab = "command_tab"
 }
 
 public struct RemoteInputTarget: Codable, Equatable, Sendable {
@@ -32,6 +46,7 @@ public struct RemoteInputMessage: Codable, Equatable, Sendable {
   public let requestId: String
   public let text: String?
   public let key: String?
+  public let shortcut: RemoteShortcut?
   public let ok: Bool?
   public let error: String?
   public let target: RemoteInputTarget?
@@ -46,6 +61,7 @@ public struct RemoteInputMessage: Codable, Equatable, Sendable {
       requestId: requestId,
       text: text,
       key: nil,
+      shortcut: nil,
       ok: nil,
       error: nil,
       target: nil
@@ -62,6 +78,24 @@ public struct RemoteInputMessage: Codable, Equatable, Sendable {
       requestId: requestId,
       text: nil,
       key: key,
+      shortcut: nil,
+      ok: nil,
+      error: nil,
+      target: nil
+    )
+  }
+
+  public static func shortcutRequest(
+    shortcut: RemoteShortcut,
+    requestId: String
+  ) -> RemoteInputMessage {
+    RemoteInputMessage(
+      type: commandType,
+      action: .shortcut,
+      requestId: requestId,
+      text: nil,
+      key: nil,
+      shortcut: shortcut,
       ok: nil,
       error: nil,
       target: nil
@@ -79,6 +113,7 @@ public struct RemoteInputMessage: Codable, Equatable, Sendable {
       requestId: requestId,
       text: nil,
       key: nil,
+      shortcut: nil,
       ok: true,
       error: nil,
       target: target
@@ -97,6 +132,7 @@ public struct RemoteInputMessage: Codable, Equatable, Sendable {
       requestId: requestId,
       text: nil,
       key: nil,
+      shortcut: nil,
       ok: false,
       error: error,
       target: target
@@ -126,20 +162,29 @@ public struct RemoteInputMessage: Codable, Equatable, Sendable {
       case .text:
         guard let text,
               !text.isEmpty,
-              key == nil else {
+              key == nil,
+              shortcut == nil else {
           throw RemoteInputProtocolError.invalidCommand
         }
       case .key:
         guard text == nil,
               let key,
               !key.isEmpty,
+              shortcut == nil,
               key.utf8.count <= 32 else {
+          throw RemoteInputProtocolError.invalidCommand
+        }
+      case .shortcut:
+        guard text == nil,
+              key == nil,
+              shortcut != nil else {
           throw RemoteInputProtocolError.invalidCommand
         }
       }
     case Self.resultType:
       guard text == nil,
             key == nil,
+            shortcut == nil,
             let ok else {
         throw RemoteInputProtocolError.invalidResult
       }

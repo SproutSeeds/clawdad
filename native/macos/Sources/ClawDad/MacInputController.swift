@@ -474,6 +474,20 @@ final class MacInputController {
   private func executeInput(
     _ message: RemoteInputMessage
   ) async -> RemoteInputMessage {
+    if message.action == .shortcut {
+      guard !MacConsoleSessionState.isLocked() else {
+        return .failure(
+          action: message.action,
+          requestId: message.requestId,
+          error: "Special commands are unavailable while the Mac is locked."
+        )
+      }
+      if let shortcut = message.shortcut,
+         macRemoteShortcutPlan(for: shortcut).delivery == .system {
+        return executeSystemShortcut(message, shortcut: shortcut)
+      }
+    }
+
     do {
       let target = try await resolveEditableTarget()
       let accepted: Bool
@@ -495,6 +509,19 @@ final class MacInputController {
         }
       case .key:
         accepted = pressKey(message.key ?? "", targetPID: target.pid)
+      case .shortcut:
+        guard let shortcut = message.shortcut else {
+          return .failure(
+            action: message.action,
+            requestId: message.requestId,
+            error: "The special command was invalid.",
+            target: target.metadata
+          )
+        }
+        accepted = pressRemoteShortcut(
+          shortcut,
+          targetPID: target.pid
+        )
       }
 
       guard accepted else {
@@ -530,6 +557,48 @@ final class MacInputController {
         error: "ClawDad could not find the Mac app receiving input."
       )
     }
+  }
+
+  private func executeSystemShortcut(
+    _ message: RemoteInputMessage,
+    shortcut: RemoteShortcut
+  ) -> RemoteInputMessage {
+    guard AXIsProcessTrusted() else {
+      return .failure(
+        action: message.action,
+        requestId: message.requestId,
+        error: "Allow ClawDad to control this Mac in Privacy & Security settings."
+      )
+    }
+    let target = systemShortcutTarget()
+    guard pressRemoteShortcut(shortcut, targetPID: nil) else {
+      return .failure(
+        action: message.action,
+        requestId: message.requestId,
+        error: "macOS did not accept that special command.",
+        target: target
+      )
+    }
+    return .success(
+      action: message.action,
+      requestId: message.requestId,
+      target: target
+    )
+  }
+
+  private func systemShortcutTarget() -> RemoteInputTarget {
+    guard let application = NSWorkspace.shared.frontmostApplication else {
+      return RemoteInputTarget(
+        applicationName: "macOS",
+        bundleIdentifier: nil,
+        role: "SystemShortcut"
+      )
+    }
+    return RemoteInputTarget(
+      applicationName: application.localizedName ?? "Mac app",
+      bundleIdentifier: application.bundleIdentifier,
+      role: "SystemShortcut"
+    )
   }
 
   private func resolveEditableTarget() async throws -> InputTarget {
@@ -831,6 +900,40 @@ final class MacInputController {
     }
     keyDown.postToPid(targetPID)
     keyUp.postToPid(targetPID)
+    return true
+  }
+
+  private func pressRemoteShortcut(
+    _ shortcut: RemoteShortcut,
+    targetPID: pid_t?
+  ) -> Bool {
+    let plan = macRemoteShortcutPlan(for: shortcut)
+    guard let keyDown = CGEvent(
+      keyboardEventSource: source,
+      virtualKey: plan.keyCode,
+      keyDown: true
+    ),
+    let keyUp = CGEvent(
+      keyboardEventSource: source,
+      virtualKey: plan.keyCode,
+      keyDown: false
+    ) else {
+      return false
+    }
+    keyDown.flags = plan.flags
+    keyUp.flags = plan.flags
+
+    switch plan.delivery {
+    case .focusedApplication:
+      guard let targetPID else {
+        return false
+      }
+      keyDown.postToPid(targetPID)
+      keyUp.postToPid(targetPID)
+    case .system:
+      keyDown.post(tap: .cghidEventTap)
+      keyUp.post(tap: .cghidEventTap)
+    }
     return true
   }
 
