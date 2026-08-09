@@ -73,7 +73,7 @@ iPhone build 25.
 | Candidate source checkpoint | Pending publication | `v0.7.0-beta.6` must point to the audited release commit |
 | npm and Git release | Pending publication | npm `beta`, the tarball, Git tag, and GitHub prerelease must agree on `0.7.0-beta.6` |
 | Mac notarization and update feed | Partial | Exact build 23 is notarized, stapled, Gatekeeper accepted, and installed; signed public appcast read-back remains |
-| Internal TestFlight companion | Pending upload | Build 25 must become `VALID` and be assigned only to `ClawDad Internal` before physical verification |
+| Internal TestFlight companion | Pass | App Store Connect reports exact build 25 `VALID`, with export compliance declared, test instructions configured, and assignment only to `ClawDad Internal` |
 | Cloud/public health refresh | Pending publication | Production appcast/assets, local health, and the established host relay connection require final read-back |
 
 ## Physical iPhone And Mac

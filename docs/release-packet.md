@@ -121,3 +121,14 @@ notes are in `docs/releases/0.7.0-beta.6.md`.
 - temporary screenshots outside canonical release assets
 - credentials, pairing tickets, relay tokens, and Apple-signed transactions
 - local logs and customer project data
+
+## iPhone Build 25 Follow-Up
+
+On 2026-08-09, source checkpoint
+`811d1ba122479808762b6fe55ca3a1bb9afa43ca` produced the focused Remote Assist
+follow-up documented in `docs/releases/0.7.0-ios-25.md`. The signed IPA at
+`apps/ios/ClawDadMobile/build/AppStore-25/ClawDad.ipa` has SHA-256
+`6c1edbebcd1c15b82b8ecb3e4b76b10e5e2a9825dbddcab123360a1e7e4f70`.
+App Store Connect reports build 25 `VALID` and assigned to `ClawDad Internal`;
+the external founding-customer group remains unassigned and Beta App Review
+remains unsubmitted. Fresh physical-iPhone inspection is still required.
