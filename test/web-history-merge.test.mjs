@@ -650,6 +650,41 @@ test("iPhone Remote Assist supports full-screen landscape rotation", async () =>
   assert.match(remoteAssistSource, /videoView\.videoContentMode = \.scaleAspectFit/u);
 });
 
+test("iPhone Remote Assist collapses every overlay control into one menu", async () => {
+  const remoteAssistSource = await readFile(iosRemoteAssistPath, "utf8");
+
+  assert.match(remoteAssistSource, /@State private var controlsExpanded = false/u);
+  assert.match(
+    remoteAssistSource,
+    /Image\(systemName: controlsExpanded \? "chevron\.down" : "ellipsis"\)/u,
+  );
+  assert.match(remoteAssistSource, /"Open Remote Assist controls"/u);
+  assert.match(
+    remoteAssistSource,
+    /if controlsExpanded \{[\s\S]*accessibilityLabel\("Close Remote Assist"\)[\s\S]*controller\.pressEnter\(\)[\s\S]*PasteButton\(payloadType: String\.self\)[\s\S]*controller\.copyMacSelectionToPhone\(\)[\s\S]*controller\.toggleKeyboard\(\)/u,
+  );
+  assert.match(
+    remoteAssistSource,
+    /controlsExpanded = false\s+controller\.stop\(\)\s+onClose\(\)/u,
+  );
+  assert.match(
+    remoteAssistSource,
+    /controlsExpanded = false\s+controller\.pressEnter\(\)/u,
+  );
+  assert.match(
+    remoteAssistSource,
+    /controlsExpanded = false\s+controller\.copyMacSelectionToPhone\(\)/u,
+  );
+  assert.match(
+    remoteAssistSource,
+    /controlsExpanded = false\s+controller\.toggleKeyboard\(\)/u,
+  );
+  assert.doesNotMatch(
+    remoteAssistSource,
+    /Text\(controller\.remoteScreenLocked \? "Mac Locked" : "Remote Assist"\)/u,
+  );
+});
+
 test("iPhone Remote Assist supports local pinch zoom with accurate controls", async () => {
   const remoteAssistSource = await readFile(iosRemoteAssistPath, "utf8");
 
