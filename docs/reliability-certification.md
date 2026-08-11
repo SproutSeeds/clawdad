@@ -17,7 +17,7 @@ Record each observed physical result in the private release-bound ledger:
 node bin/clawdad-certify record \
   --check freshTestFlightInstall \
   --state pass \
-  --evidence "Build 26 launched from a clean TestFlight install."
+  --evidence "Build 27 launched from a clean TestFlight install."
 ```
 
 The feature checks use `createProjectDirectory`, `readSentMessageAloud`,
@@ -39,7 +39,7 @@ provenance instead requires the exact installed version/build, the same exact
 build in App Store Connect with `VALID` processing state, and a separately
 recorded fresh-TestFlight-install observation.
 
-## Beta 7 And iPhone Build 26 Candidate Automation
+## Beta 7 And iPhone Build 27 Candidate Automation
 
 | Check | State | Evidence |
 | --- | --- | --- |
@@ -57,8 +57,8 @@ recorded fresh-TestFlight-install observation.
 | Project creation authority | Pass | Tests prove an authenticated phone can send only a name and the Mac creates under its configured default root while ignoring a phone-supplied root |
 | Paired-Mac-first Read Aloud | Pass | Tests prove sent and received speech requests carry Mac-first policy and avoid Umbra when fallback is disabled |
 | Connection recovery states | Pass | Source and behavior tests cover automatic reconnect wording, host-offline distinction, and bounded Remote Assist timeout |
-| Candidate readiness identity | Pass | Snapshot logic requires exact npm beta 7, TestFlight build 26, installed iPhone build 26, and installed Mac build 24 before physical certification can become ready |
-| Compact Remote Assist controls | Pass | Source and Swift coverage place a 36-point visual launcher inside a 44-point target at the lower-right viewport edge, preserve a visible submenu back path, and collapse after each action |
+| Candidate readiness identity | Pass | Snapshot logic requires exact npm beta 7, TestFlight build 27, installed iPhone build 27, and installed Mac build 24 before physical certification can become ready |
+| Compact Remote Assist controls | Pass | Source and Swift coverage place a 36-point visual launcher inside a 44-point target at the lower-right viewport edge, constrain the main and shortcut panels to 168 and 216 points including padding, preserve a visible submenu back path, and collapse after each action |
 | Remote special commands | Pass | The shared protocol allow-lists Control-C, Control-J, Escape, Tab, arrows, Control-L, and Command-Tab; Mac tests keep target commands scoped and route Command-Tab through the system event stream |
 | Persisted event privacy | Pass | Integration coverage redacts credentials before event and live-checkpoint writes |
 | Relay hibernation and TURN controls | Pass | Worker tests cover socket restoration, trusted-device issuance, pseudonymous attribution, bounded credentials, budget cutoffs, direct STUN fallback, and admin pause |
@@ -66,16 +66,16 @@ recorded fresh-TestFlight-install observation.
 ## Release Surfaces
 
 The beta 7 source checkpoint publishes the paired Mac shortcut handler together
-with iPhone build 26's Remote Assist control surface. Physical certification
+with iPhone build 27's Remote Assist control surface. Physical certification
 remains separate from channel publication and must be recorded against exact
-Mac build 24 and iPhone build 26.
+Mac build 24 and iPhone build 27.
 
 | Check | State | Acceptance |
 | --- | --- | --- |
-| Candidate source checkpoint | Pass | `v0.7.0-beta.7` points to audited source checkpoint `ca8ccc2` and both are pushed |
+| Candidate source checkpoint | Pass | `v0.7.0-beta.7` points to audited Mac source checkpoint `ca8ccc2`; iPhone build 27 comes from follow-up checkpoint `b6cc759`; all are pushed |
 | npm and Git release | Partial | GitHub prerelease, DMG, ZIP, and tag agree on beta 7; npm publication is blocked by the expired local registry login |
 | Mac notarization and update feed | Pass | Exact build 24 is notarized, stapled, Gatekeeper accepted, installed, and served by a public appcast whose hash matches the signed local feed |
-| Internal TestFlight companion | Pass | Build 26 is `VALID` and assigned only to `ClawDad Internal`; the external group is unassigned and Beta App Review is not submitted |
+| Internal TestFlight companion | Pass | Build 27 is `VALID` and assigned only to `ClawDad Internal`; the external group is unassigned and Beta App Review is not submitted |
 | Cloud/public health refresh | Pass | Public appcast and cloud health, beta 7 local/native health, one Mac app process, and the configured relay host all read back successfully |
 
 ## Physical iPhone And Mac
@@ -83,7 +83,7 @@ Mac build 24 and iPhone build 26.
 | Check | State | Acceptance |
 | --- | --- | --- |
 | Native Mac workspace parity | Pending visual read-back | Build 24 is installed and healthy and preserves the tested project picker, create form, Add Existing, Project/All threads, conversation, speaker-control, and responsive-layout source; fresh packaged-app UI inspection remains |
-| Fresh TestFlight install | Pending | Build 26 launches to the subscription or pairing surface without stale workspace flash |
+| Fresh TestFlight install | Pending | Build 27 launches to the subscription or pairing surface without stale workspace flash |
 | Purchase monthly | Pending | Sandbox purchase grants iPhone access and syncs verified access to Mac |
 | Restore purchase | Pending | Reinstall or sign-out path restores access |
 | Cancel renewal | Pending | Access remains through expiration; status updates without exposing transaction data |
@@ -102,7 +102,7 @@ Mac build 24 and iPhone build 26.
 | Mac sleep and wake | Pending | iPhone names the offline Mac, then reconnects without re-pairing |
 | Voice | Pending | Recording animates, transcription appends, and requested response audio plays |
 | Image | Pending | Up to four prepared images reach the selected Codex thread without terminating the worker |
-| Remote Assist | Pending | Landscape, pointer, scrolling, corner launcher, submenu back path, all ten special commands, Exit, keyboard, Enter, clipboard, zoom reset, timeout, and retry work |
+| Remote Assist | Pending | Landscape, pointer, scrolling, compact primary and shortcut panels, corner launcher, submenu back path, all ten special commands, Exit, keyboard, Enter, clipboard, zoom reset, timeout, and retry work |
 | Wi-Fi to cellular | Pending | Thread and Remote Assist recover without re-pairing or an indefinite spinner |
 | Restrictive network | Pending | Production credentials are active; requires a forced-TURN physical iPhone pass |
 

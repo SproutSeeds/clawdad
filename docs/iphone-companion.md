@@ -107,7 +107,7 @@ The app project uses:
 - product name: `ClawDad`
 - bundle id: `earth.frg.clawdad.ios`
 - version: `0.7.0`
-- build: `26`
+- build: `27`
 - minimum iOS: `18.0`
 - Release cloud URL: `https://clawdad-cloud.frg.earth`
 
