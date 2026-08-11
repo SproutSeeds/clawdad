@@ -100,13 +100,13 @@ test("service health snapshots omit project paths and unexpected fields", () => 
 test("physical evidence requires the exact paired iPhone and Mac release", () => {
   const release = {
     expectedIosVersion: "0.7.0",
-    expectedIosBuild: "26",
+    expectedIosBuild: "27",
     expectedMacVersion: "0.7.0",
     expectedMacBuild: "24",
   };
   assert.equal(installedIosBuildMatchesRelease({
     version: "0.7.0",
-    build: "26",
+    build: "27",
     builtByDeveloper: true,
   }, release), true);
   assert.equal(installedIosBuildMatchesRelease({
@@ -116,7 +116,7 @@ test("physical evidence requires the exact paired iPhone and Mac release", () =>
   }, release), false);
   assert.equal(installedIosBuildMatchesRelease({
     version: "0.6.9",
-    build: "26",
+    build: "27",
     builtByDeveloper: false,
   }, release), false);
   assert.equal(installedMacBuildMatchesRelease({
@@ -136,7 +136,7 @@ test("certification readiness requires the exact published iPhone and Mac builds
     release: {
       expectedVersion: "0.7.0-beta.7",
       expectedIosVersion: "0.7.0",
-      expectedIosBuild: "26",
+      expectedIosBuild: "27",
       expectedMacVersion: "0.7.0",
       expectedMacBuild: "24",
       npm: { betaTag: "0.7.0-beta.7" },
@@ -156,7 +156,7 @@ test("certification readiness requires the exact published iPhone and Mac builds
       release: {
         beta: {
           processingState: "VALID",
-          buildNumber: "26",
+          buildNumber: "27",
         },
       },
     },
@@ -164,7 +164,7 @@ test("certification readiness requires the exact published iPhone and Mac builds
       targetDevice: {
         installedApp: {
           version: "0.7.0",
-          build: "26",
+          build: "27",
           builtByDeveloper: true,
         },
       },
@@ -194,7 +194,7 @@ test("certification readiness requires the exact published iPhone and Mac builds
     false,
   );
   assert.equal(summarizeCertificationSnapshot(snapshot).testFlightReady, false);
-  snapshot.appStore.release.beta.buildNumber = "26";
+  snapshot.appStore.release.beta.buildNumber = "27";
 
   snapshot.mac.installedApp.build = "21";
   assert.equal(
@@ -225,7 +225,7 @@ test("physical certification records evidence and reports completion", () => {
     checks = updatePhysicalCertification(checks, {
       check,
       state: "pass",
-      evidence: `Verified ${check} on build 26.`,
+      evidence: `Verified ${check} on build 27.`,
       recordedAt: "2026-07-30T14:00:00.000Z",
     });
   }

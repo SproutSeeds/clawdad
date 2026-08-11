@@ -1374,10 +1374,12 @@ struct RemoteAssistView: View {
     repeating: GridItem(.fixed(44), spacing: 8),
     count: 3
   )
+  private static let mainControlPanelWidth: CGFloat = 148
   private static let shortcutColumns = Array(
     repeating: GridItem(.fixed(60), spacing: 8),
     count: 3
   )
+  private static let shortcutControlPanelWidth: CGFloat = 196
 
   var body: some View {
     ZStack {
@@ -1528,6 +1530,7 @@ struct RemoteAssistView: View {
         shortcutControlPanel
       }
     }
+    .frame(width: controlPanelWidth, alignment: .trailing)
     .padding(10)
     .background(
       Color.black.opacity(0.78),
@@ -1539,6 +1542,15 @@ struct RemoteAssistView: View {
     }
     .transition(.move(edge: .trailing).combined(with: .opacity))
     .accessibilityElement(children: .contain)
+  }
+
+  private var controlPanelWidth: CGFloat {
+    switch controlPage {
+    case .primary:
+      Self.mainControlPanelWidth
+    case .shortcuts:
+      Self.shortcutControlPanelWidth
+    }
   }
 
   private var primaryControlPanel: some View {

@@ -682,6 +682,16 @@ test("iPhone Remote Assist hugs one launcher to the corner and nests approved sh
   assert.match(remoteAssistSource, /\.frame\(width: 44, height: 44\)/u);
   assert.match(remoteAssistSource, /RemoteAssistLauncherButtonStyle/u);
   assert.match(remoteAssistSource, /\.frame\(width: 36, height: 36\)/u);
+  assert.match(remoteAssistSource, /mainControlPanelWidth: CGFloat = 148/u);
+  assert.match(remoteAssistSource, /shortcutControlPanelWidth: CGFloat = 196/u);
+  assert.match(
+    remoteAssistSource,
+    /\.frame\(width: controlPanelWidth, alignment: \.trailing\)\s*\.padding\(10\)/u,
+  );
+  assert.match(
+    remoteAssistSource,
+    /private var controlPanelWidth: CGFloat \{[\s\S]*case \.primary:[\s\S]*Self\.mainControlPanelWidth[\s\S]*case \.shortcuts:[\s\S]*Self\.shortcutControlPanelWidth/u,
+  );
   assert.match(
     remoteAssistSource,
     /alignment: \.bottomTrailing[\s\S]*\.padding\(\.trailing, 4\)[\s\S]*\.padding\(\.bottom, 4\)[\s\S]*\.ignoresSafeArea\(\)/u,
