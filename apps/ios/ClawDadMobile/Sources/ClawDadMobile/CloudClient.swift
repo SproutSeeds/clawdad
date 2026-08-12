@@ -263,8 +263,7 @@ final class MobileReadAloudController: NSObject, ObservableObject {
     let audioSession = AVAudioSession.sharedInstance()
     try audioSession.setCategory(
       .playback,
-      mode: .spokenAudio,
-      options: [.allowAirPlay, .allowBluetoothA2DP]
+      mode: .spokenAudio
     )
     try audioSession.setActive(true)
 #endif

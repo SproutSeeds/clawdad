@@ -604,7 +604,12 @@ test("iPhone thread cards read both sent messages and Codex responses aloud on d
   assert.match(cloudSource, /"allowRemoteFallback": \.bool\(allowUmbraReadAloudFallback\)/u);
   assert.match(cloudSource, /case "speech\.synthesis\.chunk":/u);
   assert.match(cloudSource, /case "speech\.synthesis\.complete":/u);
-  assert.match(cloudSource, /mode: \.spokenAudio/u);
+  assert.match(cloudSource, /\.playback,\s*mode: \.spokenAudio\s*\)/u);
+  const playbackSessionSource = cloudSource.slice(
+    cloudSource.indexOf("private func activatePlaybackSession()"),
+    cloudSource.indexOf("private func playCurrentPart()"),
+  );
+  assert.doesNotMatch(playbackSessionSource, /allowAirPlay|allowBluetoothA2DP/u);
   assert.match(infoPlist, /<key>UIBackgroundModes<\/key>[\s\S]*<string>audio<\/string>/u);
   assert.match(contentSource, /Text\("Speech is generated on your paired Mac first\."\)/u);
   assert.match(contentSource, /Toggle\(isOn: \$session\.allowUmbraReadAloudFallback\)/u);
