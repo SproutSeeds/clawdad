@@ -107,7 +107,7 @@ The app project uses:
 - product name: `ClawDad`
 - bundle id: `earth.frg.clawdad.ios`
 - version: `0.7.0`
-- build: `27`
+- build: `28`
 - minimum iOS: `18.0`
 - Release cloud URL: `https://clawdad-cloud.frg.earth`
 
@@ -175,6 +175,8 @@ Each sent-message and Codex-response card has a speaker control. Audio is
 prepared only after that control is tapped. The paired Mac's local speech
 service is tried first; **Settings > Read Aloud > Allow Umbra fallback** controls
 whether the configured Umbra service may be used if Mac speech is unavailable.
+The iPhone uses its spoken-audio playback session and the system's normal
+headphone, Bluetooth, and AirPlay routing when the prepared audio arrives.
 
 Host connector check:
 

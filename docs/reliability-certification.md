@@ -17,7 +17,7 @@ Record each observed physical result in the private release-bound ledger:
 node bin/clawdad-certify record \
   --check freshTestFlightInstall \
   --state pass \
-  --evidence "Build 27 launched from a clean TestFlight install."
+  --evidence "Build 28 launched from a clean TestFlight install."
 ```
 
 The feature checks use `createProjectDirectory`, `readSentMessageAloud`,
@@ -39,7 +39,7 @@ provenance instead requires the exact installed version/build, the same exact
 build in App Store Connect with `VALID` processing state, and a separately
 recorded fresh-TestFlight-install observation.
 
-## Beta 7 And iPhone Build 27 Candidate Automation
+## Beta 7 And iPhone Build 28 Candidate Automation
 
 | Check | State | Evidence |
 | --- | --- | --- |
@@ -56,8 +56,9 @@ recorded fresh-TestFlight-install observation.
 | Mac Read Aloud surface | Pass | Native inspection found separate sent/response speaker controls; a sent-message request completed local preparation and became reusable playback |
 | Project creation authority | Pass | Tests prove an authenticated phone can send only a name and the Mac creates under its configured default root while ignoring a phone-supplied root |
 | Paired-Mac-first Read Aloud | Pass | Tests prove sent and received speech requests carry Mac-first policy and avoid Umbra when fallback is disabled |
+| iPhone Read Aloud playback session | Pass | Source and regression coverage activate `.playback` with `.spokenAudio` and exclude incompatible explicit AirPlay or Bluetooth options; system routing remains automatic |
 | Connection recovery states | Pass | Source and behavior tests cover automatic reconnect wording, host-offline distinction, and bounded Remote Assist timeout |
-| Candidate readiness identity | Pass | Snapshot logic requires exact npm beta 7, TestFlight build 27, installed iPhone build 27, and installed Mac build 24 before physical certification can become ready |
+| Candidate readiness identity | Pass | Snapshot logic requires exact npm beta 7, TestFlight build 28, installed iPhone build 28, and installed Mac build 24 before physical certification can become ready |
 | Compact Remote Assist controls | Pass | Source and Swift coverage place a 36-point visual launcher inside a 44-point target at the lower-right viewport edge, constrain the main and shortcut panels to 168 and 216 points including padding, preserve a visible submenu back path, and collapse after each action |
 | Remote special commands | Pass | The shared protocol allow-lists Control-C, Control-J, Escape, Tab, arrows, Control-L, and Command-Tab; Mac tests keep target commands scoped and route Command-Tab through the system event stream |
 | Persisted event privacy | Pass | Integration coverage redacts credentials before event and live-checkpoint writes |
@@ -66,16 +67,17 @@ recorded fresh-TestFlight-install observation.
 ## Release Surfaces
 
 The beta 7 source checkpoint publishes the paired Mac shortcut handler together
-with iPhone build 27's Remote Assist control surface. Physical certification
+with iPhone build 28's Remote Assist controls and corrected Read Aloud playback
+session. Physical certification
 remains separate from channel publication and must be recorded against exact
-Mac build 24 and iPhone build 27.
+Mac build 24 and iPhone build 28.
 
 | Check | State | Acceptance |
 | --- | --- | --- |
-| Candidate source checkpoint | Pass | `v0.7.0-beta.7` points to audited Mac source checkpoint `ca8ccc2`; iPhone build 27 comes from follow-up checkpoint `b6cc759`; all are pushed |
+| Candidate source checkpoint | Pass | `v0.7.0-beta.7` points to audited Mac source checkpoint `ca8ccc2`; iPhone build 28 comes from follow-up checkpoint `873e2b4`; all are pushed |
 | npm and Git release | Partial | GitHub prerelease, DMG, ZIP, and tag agree on beta 7; npm publication is blocked by the expired local registry login |
 | Mac notarization and update feed | Pass | Exact build 24 is notarized, stapled, Gatekeeper accepted, installed, and served by a public appcast whose hash matches the signed local feed |
-| Internal TestFlight companion | Pass | Build 27 is `VALID` and assigned only to `ClawDad Internal`; the external group is unassigned and Beta App Review is not submitted |
+| Internal TestFlight companion | Pass | Build 28 is `VALID` and assigned only to `ClawDad Internal`; the external group is unassigned and Beta App Review is not submitted |
 | Cloud/public health refresh | Pass | Public appcast and cloud health, beta 7 local/native health, one Mac app process, and the configured relay host all read back successfully |
 
 ## Physical iPhone And Mac
@@ -83,15 +85,15 @@ Mac build 24 and iPhone build 27.
 | Check | State | Acceptance |
 | --- | --- | --- |
 | Native Mac workspace parity | Pending visual read-back | Build 24 is installed and healthy and preserves the tested project picker, create form, Add Existing, Project/All threads, conversation, speaker-control, and responsive-layout source; fresh packaged-app UI inspection remains |
-| Fresh TestFlight install | Pending | Build 27 launches to the subscription or pairing surface without stale workspace flash |
+| Fresh TestFlight install | Pending | Build 28 launches to the subscription or pairing surface without stale workspace flash |
 | Purchase monthly | Pending | Sandbox purchase grants iPhone access and syncs verified access to Mac |
 | Restore purchase | Pending | Reinstall or sign-out path restores access |
 | Cancel renewal | Pending | Access remains through expiration; status updates without exposing transaction data |
 | Fresh QR pairing | Pending | One device appears in Mac inventory with a unique credential |
 | Revoke and re-pair | Pending | Revoked phone is rejected; fresh QR restores access |
 | Create project directory | Pending | Phone plus button creates one project under the configured Mac root, registers its first Codex thread, and selects it |
-| Read sent message aloud | Pending | iPhone speaker button prepares on demand and plays the selected sent message through the paired Mac |
-| Read Codex response aloud | Pending | iPhone speaker button prepares on demand and plays the selected Codex response through the paired Mac |
+| Read sent message aloud | Pending | iPhone speaker button prepares the selected sent message on the paired Mac and plays the returned audio through the selected iPhone route |
+| Read Codex response aloud | Pending | iPhone speaker button prepares the selected Codex response on the paired Mac and plays the returned audio through the selected iPhone route |
 | Mac-only Read Aloud | Pending | With Umbra fallback off, Mac speech succeeds and remote speech receives no request |
 | Umbra fallback | Pending | With fallback on and Mac speech unavailable, Umbra supplies the requested audio after the local attempt |
 | Direct during active work | Pending | Message steers the active turn after the current tool call |

@@ -3,7 +3,7 @@
 ## Release Order
 
 1. Run the automated verification in `docs/release-packet.md`.
-2. Archive and upload iPhone build 27.
+2. Archive and upload iPhone build 28.
 3. Wait for Apple to report the build `VALID`, then assign it to
    `ClawDad Internal`.
 4. Build, sign, notarize, staple, and checksum the Mac release.
@@ -11,7 +11,7 @@
 6. Install the published package and Mac app on the host and verify local and
    public health.
 7. Remove any development-signed ClawDad build from the iPhone, install
-   TestFlight from the App Store when needed, then install build 27 from
+   TestFlight from the App Store when needed, then install build 28 from
    `ClawDad Internal`.
 8. Run `npm run certify:snapshot` and confirm `deviceBuildReady` is `true`
    before testing app behavior.
