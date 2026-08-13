@@ -79,6 +79,20 @@ Credentials remain outside the repository:
 - Sparkle signing account: `earth.frg.ClawDad` in macOS Keychain
 - Appcast publish token: service `clawdad-cloud-release`, account `appcast`
 
+CI or isolated release environments can provide App Store Connect API
+credentials directly with `CLAWDAD_NOTARY_KEY_PATH`,
+`CLAWDAD_NOTARY_KEY_ID`, and `CLAWDAD_NOTARY_ISSUER_ID`. Set all three
+together. Local releases continue to use the `ClawDad` Keychain profile by
+default.
+
+Set `CLAWDAD_SWIFT_SCRATCH_PATH` when SwiftPM build output must live outside
+the package's `.build` directory. The release pipeline uses the same scratch
+path for the app binary, Sparkle framework, and appcast generator.
+Set `CLAWDAD_SWIFT_DISABLE_SANDBOX=1` only when an outer build sandbox blocks
+SwiftPM's nested sandbox; ordinary local releases keep SwiftPM sandboxing on.
+An isolated builder that cannot run `iconutil` may provide the previously
+verified multi-resolution icon with `CLAWDAD_PREBUILT_ICON_PATH`.
+
 Set `CLAWDAD_PUBLISH_APPCAST=1` to publish the generated feed after its GitHub
 release archive is available. The public feed is read-only; publishing requires
 the dedicated release token.

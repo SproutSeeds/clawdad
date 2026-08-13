@@ -5,7 +5,7 @@ script_dir=${0:A:h}
 repo_root=${script_dir:h:h}
 package_version="${CLAWDAD_RELEASE_VERSION:-$(node -p "require('${repo_root}/package.json').version")}"
 app_version="${CLAWDAD_APP_VERSION:-0.7.0}"
-app_build="${CLAWDAD_APP_BUILD:-24}"
+app_build="${CLAWDAD_APP_BUILD:-25}"
 release_tag="${CLAWDAD_RELEASE_TAG:-v${package_version}}"
 release_dir="${CLAWDAD_RELEASE_DIR:-$script_dir/dist/releases/$package_version}"
 app_dir="$script_dir/dist/ClawDad.app"
@@ -20,13 +20,21 @@ release_notes_source="$repo_root/docs/releases/$package_version.md"
 release_notes_path="$appcast_dir/ClawDad-${package_version}-mac.md"
 download_url_prefix="${CLAWDAD_RELEASE_DOWNLOAD_URL_PREFIX:-https://github.com/SproutSeeds/clawdad/releases/download/$release_tag/}"
 notary_profile="${CLAWDAD_NOTARY_PROFILE:-ClawDad}"
+notary_key_path="${CLAWDAD_NOTARY_KEY_PATH:-}"
+notary_key_id="${CLAWDAD_NOTARY_KEY_ID:-}"
+notary_issuer_id="${CLAWDAD_NOTARY_ISSUER_ID:-}"
 sparkle_account="${CLAWDAD_SPARKLE_ACCOUNT:-earth.frg.ClawDad}"
 notarize="${CLAWDAD_NOTARIZE:-1}"
 publish_appcast="${CLAWDAD_PUBLISH_APPCAST:-0}"
 appcast_publish_url="${CLAWDAD_APPCAST_PUBLISH_URL:-https://clawdad-cloud.frg.earth/admin/mac/appcast}"
 release_token_service="${CLAWDAD_RELEASE_TOKEN_KEYCHAIN_SERVICE:-clawdad-cloud-release}"
 release_token_account="${CLAWDAD_RELEASE_TOKEN_KEYCHAIN_ACCOUNT:-appcast}"
-generate_appcast="$script_dir/.build/artifacts/sparkle/Sparkle/bin/generate_appcast"
+swift_scratch_path="${CLAWDAD_SWIFT_SCRATCH_PATH:-}"
+if [[ -n "$swift_scratch_path" ]]; then
+  generate_appcast="$swift_scratch_path/artifacts/sparkle/Sparkle/bin/generate_appcast"
+else
+  generate_appcast="$script_dir/.build/artifacts/sparkle/Sparkle/bin/generate_appcast"
+fi
 
 signing_identity="${CLAWDAD_CODESIGN_IDENTITY:-}"
 if [[ -z "$signing_identity" ]]; then
@@ -41,9 +49,24 @@ if [[ -z "$signing_identity" ]]; then
   exit 1
 fi
 
+notary_auth_args=()
+if [[ -n "$notary_key_path" || -n "$notary_key_id" || -n "$notary_issuer_id" ]]; then
+  if [[ -z "$notary_key_path" || -z "$notary_key_id" || -z "$notary_issuer_id" ]]; then
+    print -u2 "CLAWDAD_NOTARY_KEY_PATH, CLAWDAD_NOTARY_KEY_ID, and CLAWDAD_NOTARY_ISSUER_ID must be set together."
+    exit 1
+  fi
+  notary_auth_args=(
+    --key "$notary_key_path"
+    --key-id "$notary_key_id"
+    --issuer "$notary_issuer_id"
+  )
+else
+  notary_auth_args=(--keychain-profile "$notary_profile")
+fi
+
 if [[ "$notarize" == "1" ]]; then
   xcrun notarytool history \
-    --keychain-profile "$notary_profile" \
+    "${notary_auth_args[@]}" \
     --output-format json \
     >/dev/null
 fi
@@ -61,7 +84,7 @@ codesign --verify --deep --strict --verbose=2 "$app_dir"
 ditto -c -k --sequesterRsrc --keepParent "$app_dir" "$zip_path"
 if [[ "$notarize" == "1" ]]; then
   xcrun notarytool submit "$zip_path" \
-    --keychain-profile "$notary_profile" \
+    "${notary_auth_args[@]}" \
     --wait \
     --output-format json \
     >"$release_dir/notary-app.json"
@@ -101,7 +124,7 @@ codesign \
 
 if [[ "$notarize" == "1" ]]; then
   xcrun notarytool submit "$dmg_path" \
-    --keychain-profile "$notary_profile" \
+    "${notary_auth_args[@]}" \
     --wait \
     --output-format json \
     >"$release_dir/notary-dmg.json"

@@ -781,6 +781,38 @@ test("Remote Assist exposes acknowledged input and bidirectional clipboard contr
   assert.match(macInputSource, /case "down":[\s\S]*\.leftMouseDown/u);
   assert.match(macInputSource, /case "drag":[\s\S]*\.leftMouseDragged/u);
   assert.match(macInputSource, /case "up":[\s\S]*\.leftMouseUp/u);
+  assert.match(
+    macInputSource,
+    /guard let source = CGEventSource\(stateID: \.privateState\) else/u,
+  );
+  assert.doesNotMatch(macInputSource, /combinedSessionState/u);
+  const pointerPostingSource = macInputSource.slice(
+    macInputSource.indexOf("private func postMouseEvent("),
+    macInputSource.indexOf("private func establishTarget("),
+  );
+  assert.match(pointerPostingSource, /event\.flags = \[\]/u);
+  const scrollPostingSource = macInputSource.slice(
+    macInputSource.indexOf("private func handleScroll("),
+    macInputSource.indexOf("private func enqueueInput("),
+  );
+  assert.match(scrollPostingSource, /event\.flags = \[\]/u);
+  const cancelInputSource = macInputSource.slice(
+    macInputSource.indexOf("func cancelPendingOperations()"),
+    macInputSource.indexOf("private func handleClipboard("),
+  );
+  assert.match(cancelInputSource, /releaseRemoteInputState\(\)/u);
+  assert.match(macInputSource, /private func releaseRemoteInputState\(\)/u);
+  assert.match(macInputSource, /lastPointerPoint/u);
+  assert.match(macInputSource, /activeRemoteModifierKeyCodes/u);
+  assert.match(macInputSource, /macRemoteShortcutEventSteps\(for: shortcut\)/u);
+  const channelStateSource = macPeerSource.slice(
+    macPeerSource.indexOf("private func controlChannelStateChanged()"),
+    macPeerSource.indexOf("private func publishSessionState("),
+  );
+  assert.match(
+    channelStateSource,
+    /guard controlChannel\?\.readyState == \.open else \{[\s\S]*inputController\.cancelPendingOperations\(\)/u,
+  );
   assert.match(macPeerSource, /self\?\.sendControl\(response\)/u);
   assert.match(macPeerSource, /publishSessionState\(force: true\)/u);
   assert.match(macPeerSource, /RemoteSessionStateCodec\.encode\(message\)/u);

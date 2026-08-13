@@ -6,19 +6,35 @@ repo_root=${script_dir:h:h}
 app_name="ClawDad"
 bundle_id="earth.frg.ClawDad"
 app_version="${CLAWDAD_APP_VERSION:-0.7.0}"
-app_build="${CLAWDAD_APP_BUILD:-24}"
+app_build="${CLAWDAD_APP_BUILD:-25}"
 sparkle_feed_url="${CLAWDAD_SPARKLE_FEED_URL:-https://clawdad-cloud.frg.earth/mac/appcast.xml}"
 sparkle_public_key="${CLAWDAD_SPARKLE_PUBLIC_KEY:-OjSne9VtiBjR3Ls2aaLTgEUeKtYzi9oAtexOiA5K+dI=}"
 dist_dir="$script_dir/dist"
 app_dir="$dist_dir/$app_name.app"
 icon_source="$repo_root/assets/clawdad-claw-hyperreal-icon.png"
+prebuilt_icon_source="${CLAWDAD_PREBUILT_ICON_PATH:-}"
 webrtc_framework_source="$repo_root/vendor/WebRTCPackage/WebRTC.xcframework/macos-x86_64_arm64/WebRTC.framework"
-sparkle_framework_source="$script_dir/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
+swift_scratch_path="${CLAWDAD_SWIFT_SCRATCH_PATH:-}"
+swift_disable_sandbox="${CLAWDAD_SWIFT_DISABLE_SANDBOX:-0}"
+if [[ -n "$swift_scratch_path" ]]; then
+  sparkle_framework_source="$swift_scratch_path/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
+  swift_build_args=(
+    --package-path "$script_dir"
+    --scratch-path "$swift_scratch_path"
+    -c release
+  )
+else
+  sparkle_framework_source="$script_dir/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
+  swift_build_args=(--package-path "$script_dir" -c release)
+fi
+if [[ "$swift_disable_sandbox" == "1" ]]; then
+  swift_build_args+=(--disable-sandbox)
+fi
 runtime_dir="$app_dir/Contents/Resources/runtime"
 
 "$repo_root/bin/fetch-webrtc-dependency"
-swift build --package-path "$script_dir" -c release
-bin_dir=$(swift build --package-path "$script_dir" -c release --show-bin-path)
+swift build "${swift_build_args[@]}"
+bin_dir=$(swift build "${swift_build_args[@]}" --show-bin-path)
 
 rm -rf "$app_dir"
 mkdir -p \
@@ -74,7 +90,13 @@ runtime_version=$(
 )
 printf '%s\n' "$runtime_version" > "$runtime_dir/.bundle-version"
 
-if [[ -f "$icon_source" ]]; then
+if [[ -n "$prebuilt_icon_source" ]]; then
+  if [[ ! -f "$prebuilt_icon_source" ]]; then
+    print -u2 "CLAWDAD_PREBUILT_ICON_PATH does not name a readable icon file."
+    exit 1
+  fi
+  cp "$prebuilt_icon_source" "$app_dir/Contents/Resources/ClawDad.icns"
+elif [[ -f "$icon_source" ]]; then
   iconset_dir=$(mktemp -d "${TMPDIR:-/tmp}/clawdad-iconset.XXXXXX")
   cleanup_iconset() {
     rm -rf "$iconset_dir"

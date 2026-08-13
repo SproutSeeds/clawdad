@@ -60,7 +60,7 @@ final class MacRemotePeer: NSObject {
   var onConnectionState: ((RTCPeerConnectionState) -> Void)?
 
   private let factory: RTCPeerConnectionFactory
-  private let inputController = MacInputController()
+  private let inputController: MacInputController
   private let iceServers: [RemoteIceServerConfiguration]
   private var peerConnection: RTCPeerConnection?
   private var controlChannel: RTCDataChannel?
@@ -73,8 +73,12 @@ final class MacRemotePeer: NSObject {
   init(
     factory: RTCPeerConnectionFactory,
     iceServers: [RemoteIceServerConfiguration]
-  ) {
+  ) throws {
+    guard let inputController = MacInputController() else {
+      throw RemoteAssistHostError.inputEventSourceUnavailable
+    }
     self.factory = factory
+    self.inputController = inputController
     self.iceServers = iceServers
     super.init()
   }
@@ -254,6 +258,7 @@ final class MacRemotePeer: NSObject {
 
   private func controlChannelStateChanged() {
     guard controlChannel?.readyState == .open else {
+      inputController.cancelPendingOperations()
       sessionStateTask?.cancel()
       sessionStateTask = nil
       lastPublishedScreenLocked = nil
