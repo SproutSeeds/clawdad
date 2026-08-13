@@ -339,11 +339,19 @@ final class RemoteAssistController: NSObject, ObservableObject {
 
   func toggleKeyboard() {
     if keyboardVisible {
-      keyboardVisible = false
+      dismissKeyboard()
       return
     }
     keyboardVisible = true
     requestKeyboardFocus()
+  }
+
+  func dismissKeyboard() {
+    flushBufferedText()
+    guard keyboardVisible else {
+      return
+    }
+    keyboardVisible = false
   }
 
   func requestKeyboardFocus() {
@@ -1460,6 +1468,7 @@ struct RemoteAssistView: View {
             if controlsExpanded {
               collapseControls()
             } else {
+              controller.dismissKeyboard()
               controlPage = .primary
               controlsExpanded = true
             }
@@ -1492,7 +1501,7 @@ struct RemoteAssistView: View {
       )
       .padding(.trailing, 4)
       .padding(.bottom, 4)
-      .ignoresSafeArea()
+      .ignoresSafeArea(.container, edges: .all)
 
       RemoteKeyboardCapture(
         active: controller.keyboardVisible,
@@ -2005,6 +2014,7 @@ private struct RemoteVideoViewport: UIViewRepresentable {
       }
       let point = normalizedPoint(recognizer.location(in: view), in: view.bounds)
       Task { @MainActor in
+        controller.dismissKeyboard()
         controller.sendClick(x: point.x, y: point.y)
       }
     }

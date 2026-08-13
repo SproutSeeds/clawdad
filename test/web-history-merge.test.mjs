@@ -671,7 +671,7 @@ test("iPhone Remote Assist supports full-screen landscape rotation", async () =>
   assert.match(remoteAssistSource, /videoView\.videoContentMode = \.scaleAspectFit/u);
 });
 
-test("iPhone Remote Assist hugs one launcher to the corner and nests approved shortcuts", async () => {
+test("iPhone Remote Assist keeps one keyboard-safe launcher in the corner and nests approved shortcuts", async () => {
   const [remoteAssistSource, shortcutSource, inputProtocolSource] = await Promise.all([
     readFile(iosRemoteAssistPath, "utf8"),
     readFile(nativeMacShortcutPath, "utf8"),
@@ -699,7 +699,11 @@ test("iPhone Remote Assist hugs one launcher to the corner and nests approved sh
   );
   assert.match(
     remoteAssistSource,
-    /alignment: \.bottomTrailing[\s\S]*\.padding\(\.trailing, 4\)[\s\S]*\.padding\(\.bottom, 4\)[\s\S]*\.ignoresSafeArea\(\)/u,
+    /alignment: \.bottomTrailing[\s\S]*\.padding\(\.trailing, 4\)[\s\S]*\.padding\(\.bottom, 4\)[\s\S]*\.ignoresSafeArea\(\.container, edges: \.all\)/u,
+  );
+  assert.match(
+    remoteAssistSource,
+    /if controlsExpanded \{\s*collapseControls\(\)\s*\} else \{\s*controller\.dismissKeyboard\(\)\s*controlPage = \.primary\s*controlsExpanded = true/u,
   );
   assert.match(remoteAssistSource, /"Open Remote Assist controls"/u);
   assert.match(remoteAssistSource, /Image\(systemName: "keyboard\.badge\.ellipsis"\)/u);
@@ -721,6 +725,85 @@ test("iPhone Remote Assist hugs one launcher to the corner and nests approved sh
     remoteAssistSource,
     /Text\(controller\.remoteScreenLocked \? "Mac Locked" : "Remote Assist"\)/u,
   );
+});
+
+test("iPhone Remote Assist dismisses its keyboard before forwarding a viewport tap", async () => {
+  const [remoteAssistSource, macPeerSource] = await Promise.all([
+    readFile(iosRemoteAssistPath, "utf8"),
+    readFile(nativeMacRemotePeerPath, "utf8"),
+  ]);
+  const toggleKeyboardStart = remoteAssistSource.indexOf("func toggleKeyboard() {");
+  const dismissKeyboardStart = remoteAssistSource.indexOf("func dismissKeyboard() {");
+  const requestKeyboardFocusStart = remoteAssistSource.indexOf(
+    "func requestKeyboardFocus() {",
+    dismissKeyboardStart,
+  );
+  const toggleKeyboardSource = remoteAssistSource.slice(
+    toggleKeyboardStart,
+    dismissKeyboardStart,
+  );
+  const dismissKeyboardSource = remoteAssistSource.slice(
+    dismissKeyboardStart,
+    requestKeyboardFocusStart,
+  );
+  const handleTapStart = remoteAssistSource.indexOf(
+    "@objc func handleTap(_ recognizer: UITapGestureRecognizer) {",
+  );
+  const handleRightTapStart = remoteAssistSource.indexOf(
+    "@objc func handleRightTap(_ recognizer: UITapGestureRecognizer) {",
+    handleTapStart,
+  );
+  const handleTapSource = remoteAssistSource.slice(
+    handleTapStart,
+    handleRightTapStart,
+  );
+  const keyboardStateStart = remoteAssistSource.indexOf(
+    "private func applyKeyboardState() {",
+  );
+  const keyboardStateEnd = remoteAssistSource.indexOf(
+    "\n  }\n}\n\n#else",
+    keyboardStateStart,
+  );
+  const keyboardStateSource = remoteAssistSource.slice(
+    keyboardStateStart,
+    keyboardStateEnd,
+  );
+
+  assert.notEqual(toggleKeyboardStart, -1);
+  assert.notEqual(dismissKeyboardStart, -1);
+  assert.notEqual(requestKeyboardFocusStart, -1);
+  assert.match(
+    dismissKeyboardSource,
+    /flushBufferedText\(\)[\s\S]*guard keyboardVisible else \{\s*return\s*\}[\s\S]*keyboardVisible = false/u,
+  );
+  assert.match(
+    toggleKeyboardSource,
+    /if keyboardVisible \{[\s\S]*dismissKeyboard\(\)[\s\S]*return/u,
+  );
+  assert.notEqual(handleTapStart, -1);
+  assert.notEqual(handleRightTapStart, -1);
+  assert.match(handleTapSource, /let point = normalizedPoint\(/u);
+  assert.equal(
+    handleTapSource.match(/controller\.dismissKeyboard\(\)/gu)?.length,
+    1,
+  );
+  assert.equal(
+    handleTapSource.match(
+      /controller\.sendClick\(x: point\.x, y: point\.y\)/gu,
+    )?.length,
+    1,
+  );
+  assert.ok(
+    handleTapSource.indexOf("controller.dismissKeyboard()") <
+      handleTapSource.indexOf("controller.sendClick(x: point.x, y: point.y)"),
+  );
+  assert.notEqual(keyboardStateStart, -1);
+  assert.notEqual(keyboardStateEnd, -1);
+  assert.match(
+    keyboardStateSource,
+    /else if self\.isFirstResponder \{\s*self\.resignFirstResponder\(\)/u,
+  );
+  assert.match(macPeerSource, /channelConfiguration\.isOrdered = true/u);
 });
 
 test("iPhone Remote Assist supports local pinch zoom with accurate controls", async () => {

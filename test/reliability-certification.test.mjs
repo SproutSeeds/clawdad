@@ -100,13 +100,13 @@ test("service health snapshots omit project paths and unexpected fields", () => 
 test("physical evidence requires the exact paired iPhone and Mac release", () => {
   const release = {
     expectedIosVersion: "0.7.0",
-    expectedIosBuild: "28",
+    expectedIosBuild: "29",
     expectedMacVersion: "0.7.0",
     expectedMacBuild: "25",
   };
   assert.equal(installedIosBuildMatchesRelease({
     version: "0.7.0",
-    build: "28",
+    build: "29",
     builtByDeveloper: true,
   }, release), true);
   assert.equal(installedIosBuildMatchesRelease({
@@ -136,7 +136,7 @@ test("certification readiness requires the exact published iPhone and Mac builds
     release: {
       expectedVersion: "0.7.0-beta.8",
       expectedIosVersion: "0.7.0",
-      expectedIosBuild: "28",
+      expectedIosBuild: "29",
       expectedMacVersion: "0.7.0",
       expectedMacBuild: "25",
       npm: { betaTag: "0.7.0-beta.8" },
@@ -156,7 +156,7 @@ test("certification readiness requires the exact published iPhone and Mac builds
       release: {
         beta: {
           processingState: "VALID",
-          buildNumber: "28",
+          buildNumber: "29",
         },
       },
     },
@@ -164,7 +164,7 @@ test("certification readiness requires the exact published iPhone and Mac builds
       targetDevice: {
         installedApp: {
           version: "0.7.0",
-          build: "28",
+          build: "29",
           builtByDeveloper: true,
         },
       },
@@ -194,7 +194,7 @@ test("certification readiness requires the exact published iPhone and Mac builds
     false,
   );
   assert.equal(summarizeCertificationSnapshot(snapshot).testFlightReady, false);
-  snapshot.appStore.release.beta.buildNumber = "28";
+  snapshot.appStore.release.beta.buildNumber = "29";
 
   snapshot.mac.installedApp.build = "21";
   assert.equal(
@@ -225,7 +225,7 @@ test("physical certification records evidence and reports completion", () => {
     checks = updatePhysicalCertification(checks, {
       check,
       state: "pass",
-      evidence: `Verified ${check} on build 28.`,
+      evidence: `Verified ${check} on build 29.`,
       recordedAt: "2026-07-30T14:00:00.000Z",
     });
   }
