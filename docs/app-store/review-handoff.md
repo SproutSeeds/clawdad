@@ -6,7 +6,7 @@
 - In-app brand: `ClawDad`
 - Bundle ID: `earth.frg.clawdad.ios`
 - Public version: `1.0`
-- Paid-beta TestFlight build: `0.7.0 (19)`
+- Paid-beta TestFlight build: `0.7.0 (29)`
 - Support: `https://clawdad-cloud.frg.earth/support`
 - Privacy: `https://clawdad-cloud.frg.earth/privacy`
 
@@ -56,8 +56,8 @@ the prepared drafts themselves do not publish or charge customers.
 
 `ClawDad Founding Customers` is a live external TestFlight group with feedback
 enabled and its public link disabled. It currently has no build, testers, or
-Beta App Review submission. Build 19 remains available only to
-`ClawDad Internal` while physical certification is pending.
+Beta App Review submission. Build 29 is assigned only to `ClawDad Internal`
+while physical certification is pending.
 
 App Store Connect requires a complete Beta App Review contact record whenever
 that record is updated. Supply the monitored phone number at runtime with

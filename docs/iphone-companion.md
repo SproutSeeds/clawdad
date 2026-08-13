@@ -107,7 +107,7 @@ The app project uses:
 - product name: `ClawDad`
 - bundle id: `earth.frg.clawdad.ios`
 - version: `0.7.0`
-- build: `28`
+- build: `29`
 - minimum iOS: `18.0`
 - Release cloud URL: `https://clawdad-cloud.frg.earth`
 
@@ -195,7 +195,7 @@ identity before forwarding app data. Active StoreKit access is accepted by the
 Mac only when the iPhone supplies an Apple-signed transaction that validates
 against the bundled Apple trust roots.
 
-The production relay remains in compatibility mode until build 19 is installed
+The production relay remains in compatibility mode until build 29 is installed
 on a physical iPhone and a fresh pairing proves the per-device credential path.
 After that proof, enable relay enforcement and recheck connection, revocation,
 and re-pairing. Passkeys, App Attest, APNs, and multi-Mac account recovery are
@@ -241,8 +241,10 @@ separate from Codex threads.
    physical keyboard events without writing the password to the Mac clipboard;
    Copy from Mac is disabled. Copy from Mac otherwise performs Command-C on the
    current Mac selection and places the fresh text on the iPhone clipboard.
-   When the phone keyboard is open, ClawDad restores its input focus after
-   these controls are used.
+   A normal viewport tap flushes pending text, closes the iPhone keyboard, and
+   sends that same click to the Mac. Opening the lower-right controls closes
+   the keyboard first so the controls remain reachable. Use the keyboard
+   control to reopen and focus phone input.
 7. Close the view on the iPhone or use **Stop Remote Assist** on the Mac.
 
 On current macOS releases, the Mac may ask for direct screen-access confirmation

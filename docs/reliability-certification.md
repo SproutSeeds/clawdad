@@ -17,7 +17,7 @@ Record each observed physical result in the private release-bound ledger:
 node bin/clawdad-certify record \
   --check freshTestFlightInstall \
   --state pass \
-  --evidence "Build 28 launched from a clean TestFlight install."
+  --evidence "Build 29 launched from a clean TestFlight install."
 ```
 
 The feature checks use `createProjectDirectory`, `readSentMessageAloud`,
@@ -39,18 +39,18 @@ provenance instead requires the exact installed version/build, the same exact
 build in App Store Connect with `VALID` processing state, and a separately
 recorded fresh-TestFlight-install observation.
 
-## Beta 7 And iPhone Build 28 Candidate Automation
+## Beta 8 And iPhone Build 29 Candidate Automation
 
 | Check | State | Evidence |
 | --- | --- | --- |
-| Node integration suite | Pass | `npm test`: 412 tests passed |
+| Node integration suite | Pass | `npm test`: 413 tests passed |
 | iPhone Swift unit suite | Pass | `swift test --package-path apps/ios/ClawDadMobile`: 25 tests passed |
 | Remote Assist protocol suite | Pass | `swift test --package-path native/ClawDadRemoteAssistProtocol`: 14 tests passed |
-| Mac Swift unit suite | Pass | `swift test --package-path native/macos`: 30 tests passed |
-| Targeted parity and release suite | Pass | 78 workspace, release, and certification tests passed |
-| Mac signed package | Pass | Local beta 7 app is version 0.7.0 build 24; the app signature and DMG/ZIP/appcast checksums validate |
-| Mac notarization and stapling | Pass | Build 24 app and DMG were accepted by Apple, stapled, and accepted by Gatekeeper |
-| Package contents | Pass | `npm pack --json` reports 222 entries for `clawdad@0.7.0-beta.7`; the local tarball SHA-256 is recorded in `docs/release-packet.md` |
+| Mac Swift unit suite | Pass | `swift test --package-path native/macos`: 34 tests passed |
+| Targeted parity and release suite | Pass | 79 workspace, release, and certification tests passed |
+| Mac signed package | Pending beta 8 rollout | The installed public beta remains version 0.7.0 build 24; beta 8 build 25 still requires its signed release pass |
+| Mac notarization and stapling | Pending beta 8 rollout | Build 25 must be notarized, stapled, and accepted by Gatekeeper before physical candidate certification |
+| Package contents | Pending beta 8 rollout | `clawdad@0.7.0-beta.8` is the source candidate; npm publication and the final tarball checksum remain pending |
 | Mac project picker | Pass | Native inspection verified grouped search, selection, Add Existing, default-root quick create, name validation, Escape, and focus restoration |
 | Mac Threads panel | Pass | Native inspection verified persistent Project/All scope, recent cards, conversation selection, and responsive two-column/one-column layouts |
 | Mac Read Aloud surface | Pass | Native inspection found separate sent/response speaker controls; a sent-message request completed local preparation and became reusable playback |
@@ -58,7 +58,7 @@ recorded fresh-TestFlight-install observation.
 | Paired-Mac-first Read Aloud | Pass | Tests prove sent and received speech requests carry Mac-first policy and avoid Umbra when fallback is disabled |
 | iPhone Read Aloud playback session | Pass | Source and regression coverage activate `.playback` with `.spokenAudio` and exclude incompatible explicit AirPlay or Bluetooth options; system routing remains automatic |
 | Connection recovery states | Pass | Source and behavior tests cover automatic reconnect wording, host-offline distinction, and bounded Remote Assist timeout |
-| Candidate readiness identity | Pass | Snapshot logic requires exact npm beta 7, TestFlight build 28, installed iPhone build 28, and installed Mac build 24 before physical certification can become ready |
+| Candidate readiness identity | Pass | Snapshot logic requires exact npm beta 8, TestFlight build 29, installed iPhone build 29, and installed Mac build 25 before physical certification can become ready |
 | Compact Remote Assist controls | Pass | Source and Swift coverage place a 36-point visual launcher inside a 44-point target at the lower-right viewport edge, constrain the main and shortcut panels to 168 and 216 points including padding, preserve a visible submenu back path, and collapse after each action |
 | Remote special commands | Pass | The shared protocol allow-lists Control-C, Control-J, Escape, Tab, arrows, Control-L, and Command-Tab; Mac tests keep target commands scoped and route Command-Tab through the system event stream |
 | Persisted event privacy | Pass | Integration coverage redacts credentials before event and live-checkpoint writes |
@@ -66,26 +66,27 @@ recorded fresh-TestFlight-install observation.
 
 ## Release Surfaces
 
-The beta 7 source checkpoint publishes the paired Mac shortcut handler together
-with iPhone build 28's Remote Assist controls and corrected Read Aloud playback
-session. Physical certification
+The beta 8 source checkpoint defines the paired Mac modifier fix together with
+iPhone build 29's keyboard-safe Remote Assist controls and corrected Read Aloud
+playback session. The published and installed Mac lane remains beta 7 build 24.
+Physical certification
 remains separate from channel publication and must be recorded against exact
-Mac build 24 and iPhone build 28.
+Mac build 25 and iPhone build 29.
 
 | Check | State | Acceptance |
 | --- | --- | --- |
-| Candidate source checkpoint | Pass | `v0.7.0-beta.7` points to audited Mac source checkpoint `ca8ccc2`; iPhone build 28 comes from follow-up checkpoint `873e2b4`; all are pushed |
-| npm and Git release | Partial | GitHub prerelease, DMG, ZIP, and tag agree on beta 7; npm publication is blocked by the expired local registry login |
-| Mac notarization and update feed | Pass | Exact build 24 is notarized, stapled, Gatekeeper accepted, installed, and served by a public appcast whose hash matches the signed local feed |
-| Internal TestFlight companion | Pass | Build 28 is `VALID` and assigned only to `ClawDad Internal`; the external group is unassigned and Beta App Review is not submitted |
+| Candidate source checkpoint | Pass | Beta 8 Mac source checkpoint `91ba9de` and iPhone build 29 checkpoint `e0e3998` are pushed |
+| npm and Git release | Pending beta 8 rollout | The public channels remain on beta 7 while beta 8 signing, notarization, tagging, and npm publication remain pending |
+| Mac notarization and update feed | Pending beta 8 rollout | Exact beta 7 build 24 remains installed and public; beta 8 build 25 has not completed its signed update-feed rollout |
+| Internal TestFlight companion | Pass | Build 29 is `VALID` and assigned only to `ClawDad Internal`; the external group is unassigned and Beta App Review is not submitted |
 | Cloud/public health refresh | Pass | Public appcast and cloud health, beta 7 local/native health, one Mac app process, and the configured relay host all read back successfully |
 
 ## Physical iPhone And Mac
 
 | Check | State | Acceptance |
 | --- | --- | --- |
-| Native Mac workspace parity | Pending visual read-back | Build 24 is installed and healthy and preserves the tested project picker, create form, Add Existing, Project/All threads, conversation, speaker-control, and responsive-layout source; fresh packaged-app UI inspection remains |
-| Fresh TestFlight install | Pending | Build 28 launches to the subscription or pairing surface without stale workspace flash |
+| Native Mac workspace parity | Pending beta 8 install and visual read-back | Build 25 must be installed before the current candidate can receive fresh packaged-app UI inspection |
+| Fresh TestFlight install | Pending | Build 29 launches to the subscription or pairing surface without stale workspace flash |
 | Purchase monthly | Pending | Sandbox purchase grants iPhone access and syncs verified access to Mac |
 | Restore purchase | Pending | Reinstall or sign-out path restores access |
 | Cancel renewal | Pending | Access remains through expiration; status updates without exposing transaction data |
@@ -104,7 +105,7 @@ Mac build 24 and iPhone build 28.
 | Mac sleep and wake | Pending | iPhone names the offline Mac, then reconnects without re-pairing |
 | Voice | Pending | Recording animates, transcription appends, and requested response audio plays |
 | Image | Pending | Up to four prepared images reach the selected Codex thread without terminating the worker |
-| Remote Assist | Pending | Landscape, pointer, scrolling, compact primary and shortcut panels, corner launcher, submenu back path, all ten special commands, Exit, keyboard, Enter, clipboard, zoom reset, timeout, and retry work |
+| Remote Assist | Pending | Landscape, pointer, scrolling, compact primary and shortcut panels, keyboard-safe corner launcher, tap-to-dismiss keyboard behavior, submenu back path, all ten special commands, Exit, keyboard, Enter, clipboard, zoom reset, timeout, and retry work |
 | Wi-Fi to cellular | Pending | Thread and Remote Assist recover without re-pairing or an indefinite spinner |
 | Restrictive network | Pending | Production credentials are active; requires a forced-TURN physical iPhone pass |
 
