@@ -154,6 +154,12 @@ func macRemoteShortcutPlan(
       flags: .maskControl,
       delivery: .focusedApplication
     )
+  case .commandT:
+    return MacRemoteShortcutPlan(
+      keyCode: CGKeyCode(kVK_ANSI_T),
+      flags: .maskCommand,
+      delivery: .system
+    )
   case .commandTab:
     return MacRemoteShortcutPlan(
       keyCode: CGKeyCode(kVK_Tab),

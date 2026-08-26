@@ -90,6 +90,8 @@ The SwiftUI app currently supports:
   projects root
 - active thread display
 - signed `message.send` envelope with Direct and Queue modes
+- Copy and Cut controls for the current draft; Cut copies the full draft before
+  clearing it and leaves attachments in place
 - lightweight `status.request` heartbeat snapshots for long-running turns
 - relay and host heartbeat state that distinguishes Connected, Reconnecting,
   and Mac unavailable
@@ -244,7 +246,9 @@ separate from Codex threads.
    A normal viewport tap flushes pending text, closes the iPhone keyboard, and
    sends that same click to the Mac. Opening the lower-right controls closes
    the keyboard first so the controls remain reachable. Use the keyboard
-   control to reopen and focus phone input.
+   control to reopen and focus phone input. The Special Commands page includes
+   allow-listed Control, navigation, Command-Tab, and Command-T actions;
+   Command-T opens a new tab in the active Mac app.
 7. Close the view on the iPhone or use **Stop Remote Assist** on the Mac.
 
 On current macOS releases, the Mac may ask for direct screen-access confirmation

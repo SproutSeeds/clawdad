@@ -6,7 +6,41 @@ final class ClawDadMobileUITests: XCTestCase {
     continueAfterFailure = false
   }
 
-  func testCopyAndVoiceTranscriptionAppend() throws {
+  func testCutDraftClearsAndKeepsEditorFocused() throws {
+    let app = XCUIApplication()
+    app.launchArguments += ["--clawdad-app-store-preview", "workspace"]
+    app.launch()
+
+    let editor = app.textViews["clawdad.composer.editor"]
+    XCTAssertTrue(editor.waitForExistence(timeout: 20), "The message editor did not appear.")
+    editor.tap()
+    editor.typeText("Draft to cut")
+
+    let cutButton = app.buttons["clawdad.composer.cut"]
+    XCTAssertTrue(cutButton.waitForExistence(timeout: 5), "The draft cut button did not appear.")
+    XCTAssertTrue(cutButton.isEnabled, "The draft cut button did not enable for a draft.")
+    cutButton.tap()
+
+    XCTAssertTrue(
+      waitUntil(timeout: 3) {
+        guard let value = editor.value as? String else {
+          return false
+        }
+        return value.isEmpty || value == "Message"
+      },
+      "The cut button did not clear the draft."
+    )
+    XCTAssertEqual(cutButton.label, "Draft cut")
+
+    let replacementDraft = "Replacement draft"
+    editor.typeText(replacementDraft)
+    XCTAssertTrue(
+      waitUntil(timeout: 3) { editor.value as? String == replacementDraft },
+      "The editor did not retain focus after the draft was cut."
+    )
+  }
+
+  func testCopyCutAndVoiceTranscriptionAppend() throws {
     let app = XCUIApplication()
     addUIInterruptionMonitor(withDescription: "Microphone permission") { alert in
       let allowButton = alert.buttons["Allow"]
@@ -37,6 +71,20 @@ final class ClawDadMobileUITests: XCTestCase {
       waitUntil(timeout: 3) { copyButton.label == "Draft copied" },
       "The copy button did not confirm that the draft was copied."
     )
+
+    let cutButton = app.buttons["clawdad.composer.cut"]
+    XCTAssertTrue(cutButton.waitForExistence(timeout: 5), "The draft cut button did not appear.")
+    cutButton.tap()
+    XCTAssertTrue(
+      waitUntil(timeout: 3) {
+        guard let value = editor.value as? String else {
+          return false
+        }
+        return value.isEmpty || value == "Message"
+      },
+      "The cut button did not clear the draft."
+    )
+    editor.typeText(existingDraft)
 
     let voiceButton = app.buttons["clawdad.composer.voice"]
     XCTAssertTrue(voiceButton.waitForExistence(timeout: 5), "The microphone button did not appear.")

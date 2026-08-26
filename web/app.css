@@ -666,20 +666,28 @@ textarea {
 
 .message-input-wrap textarea {
   width: 100%;
-  padding-right: 54px;
+  padding-right: 94px;
 }
 
-.composer-copy-button {
+.composer-clipboard-controls {
   position: absolute;
   top: 10px;
   right: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.message-input-wrap .composer-copy-button,
+.message-input-wrap .composer-cut-button {
   width: 32px;
   min-width: 32px;
   min-height: 32px;
   color: rgba(255, 244, 227, 0.82);
 }
 
-.composer-copy-button:disabled {
+.composer-copy-button:disabled,
+.composer-cut-button:disabled {
   cursor: not-allowed;
   opacity: 0.42;
 }

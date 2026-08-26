@@ -148,6 +148,7 @@ const state = {
   quickPromptResetConfirm: false,
   quickPromptError: "",
   composerAttachments: [],
+  composerCutPending: false,
   voiceRecorder: null,
   voiceStream: null,
   voiceChunks: [],
@@ -256,7 +257,9 @@ const elements = {
   sessionImportOrb: document.querySelector("#sessionImportOrb"),
   sessionThreadButton: document.querySelector("#sessionThreadButton"),
   messageInput: document.querySelector("#messageInput"),
+  messageCutButton: document.querySelector("#messageCutButton"),
   messageCopyButton: document.querySelector("#messageCopyButton"),
+  composerClipboardStatus: document.querySelector("#composerClipboardStatus"),
   composerToolsButton: document.querySelector("#composerToolsButton"),
   composerToolsMenu: document.querySelector("#composerToolsMenu"),
   composerVoiceButton: document.querySelector("#composerVoiceButton"),
@@ -453,6 +456,7 @@ const threadScopeKey = "clawdad-thread-scope-v1";
 const queueCollapsedKey = "clawdad-queue-collapsed-v1";
 const artifactShelfCollapsedKey = "clawdad-artifact-shelf-collapsed-v1";
 const composerCopyKey = "composer-message";
+const composerCutKey = "composer-cut";
 let queueArchiveReturnFocus = null;
 let queueArchiveFocusPending = false;
 let projectPickerReturnFocus = null;
@@ -757,6 +761,16 @@ function copyIconMarkup() {
     <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
       <rect x="5.25" y="3.25" width="7.5" height="9.5" rx="1.6" stroke="currentColor" stroke-width="1.3"></rect>
       <path d="M3.25 10.25V4.9c0-.91.74-1.65 1.65-1.65h4.35" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"></path>
+    </svg>
+  `;
+}
+
+function cutIconMarkup() {
+  return `
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <circle cx="4.1" cy="4.15" r="1.7" stroke="currentColor" stroke-width="1.25"></circle>
+      <circle cx="4.1" cy="11.85" r="1.7" stroke="currentColor" stroke-width="1.25"></circle>
+      <path d="m5.55 5.05 6.95 6.95M5.55 10.95 12.5 4" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"></path>
     </svg>
   `;
 }
@@ -2005,6 +2019,17 @@ async function copyText(text) {
     throw new Error("Clipboard copy failed.");
   }
 
+  return true;
+}
+
+async function cutComposerDraft(input, writeText = copyText) {
+  const text = String(input?.value || "");
+  if (!text.trim()) {
+    return false;
+  }
+
+  await writeText(text);
+  input.value = "";
   return true;
 }
 
@@ -4852,6 +4877,23 @@ function decorateCopyButton(button, copyKey) {
   button.innerHTML = copied ? checkIconMarkup() : copyIconMarkup();
 }
 
+function decorateComposerCutButton(button) {
+  const cut = copyFeedbackActive(composerCutKey);
+  button.classList.toggle("is-copied", cut);
+  button.innerHTML = cut ? checkIconMarkup() : cutIconMarkup();
+}
+
+function announceComposerClipboardStatus(message) {
+  const status = elements.composerClipboardStatus;
+  if (!status) {
+    return;
+  }
+  status.textContent = "";
+  window.requestAnimationFrame(() => {
+    status.textContent = String(message || "");
+  });
+}
+
 function buildCopyButton({ copyKey, label, text }) {
   const button = document.createElement("button");
   button.type = "button";
@@ -4879,10 +4921,26 @@ function updateMessageCopyButton() {
   }
   const hasText = Boolean(String(elements.messageInput?.value || "").trim());
   button.dataset.copyKey = composerCopyKey;
-  button.disabled = !hasText;
+  button.disabled = !hasText || state.composerCutPending;
   decorateCopyButton(button, composerCopyKey);
   const copied = copyFeedbackActive(composerCopyKey);
   const label = copied ? "Copied composer text" : "Copy composer text";
+  button.setAttribute("aria-label", label);
+  button.title = label;
+}
+
+function updateMessageCutButton() {
+  const button = elements.messageCutButton;
+  if (!button) {
+    return;
+  }
+  const hasText = Boolean(String(elements.messageInput?.value || "").trim());
+  const cut = copyFeedbackActive(composerCutKey);
+  const pending = state.composerCutPending;
+  button.disabled = !hasText || pending;
+  button.setAttribute("aria-busy", String(pending));
+  decorateComposerCutButton(button);
+  const label = pending ? "Cutting draft" : cut ? "Draft cut" : "Cut draft";
   button.setAttribute("aria-label", label);
   button.title = label;
 }
@@ -12693,6 +12751,7 @@ function updateSendAvailability() {
     allowBusySend,
   });
   updateMessageCopyButton();
+  updateMessageCutButton();
 }
 
 function updateThreadButtonAvailability() {
@@ -16373,6 +16432,43 @@ function bindEvents() {
       return;
     }
     removeComposerAttachment(String(removeButton.dataset.removeAttachment || ""));
+  });
+  elements.messageCutButton?.addEventListener("click", async () => {
+    const input = elements.messageInput;
+    if (
+      state.composerCutPending ||
+      !String(input?.value || "").trim()
+    ) {
+      return;
+    }
+
+    state.composerCutPending = true;
+    updateMessageCutButton();
+    announceComposerClipboardStatus("Copying draft to the clipboard.");
+
+    let didCut = false;
+    try {
+      didCut = await cutComposerDraft(input);
+    } catch (error) {
+      announceComposerClipboardStatus("Draft was not cut. Clipboard copy failed.");
+      showError(error);
+    } finally {
+      state.composerCutPending = false;
+      updateSendAvailability();
+    }
+
+    if (!didCut) {
+      return;
+    }
+
+    markCopied(composerCutKey);
+    announceComposerClipboardStatus("Draft cut.");
+    try {
+      input.focus({ preventScroll: true });
+    } catch {
+      input.focus();
+    }
+    input.setSelectionRange(0, 0);
   });
   elements.messageCopyButton?.addEventListener("click", async () => {
     const text = String(elements.messageInput?.value || "");

@@ -57,6 +57,45 @@ final class MacRemoteShortcutTests: XCTestCase {
     )
   }
 
+  func testCommandTUsesTheSystemEventStream() {
+    XCTAssertEqual(
+      macRemoteShortcutPlan(for: .commandT),
+      MacRemoteShortcutPlan(
+        keyCode: CGKeyCode(kVK_ANSI_T),
+        flags: .maskCommand,
+        delivery: .system
+      )
+    )
+  }
+
+  func testCommandTUsesBalancedModifierLifecycle() {
+    XCTAssertEqual(
+      macRemoteShortcutEventSteps(for: .commandT),
+      [
+        MacRemoteKeyEventStep(
+          keyCode: CGKeyCode(kVK_Command),
+          keyDown: true,
+          flags: .maskCommand
+        ),
+        MacRemoteKeyEventStep(
+          keyCode: CGKeyCode(kVK_ANSI_T),
+          keyDown: true,
+          flags: .maskCommand
+        ),
+        MacRemoteKeyEventStep(
+          keyCode: CGKeyCode(kVK_ANSI_T),
+          keyDown: false,
+          flags: .maskCommand
+        ),
+        MacRemoteKeyEventStep(
+          keyCode: CGKeyCode(kVK_Command),
+          keyDown: false,
+          flags: []
+        ),
+      ]
+    )
+  }
+
   func testCommandTabUsesBalancedModifierLifecycle() {
     XCTAssertEqual(
       macRemoteShortcutEventSteps(for: .commandTab),

@@ -16,6 +16,7 @@ public enum RemoteShortcut: String, Codable, CaseIterable, Equatable, Hashable, 
   case arrowLeft = "arrow_left"
   case arrowRight = "arrow_right"
   case controlL = "control_l"
+  case commandT = "command_t"
   case commandTab = "command_tab"
 }
 

@@ -1350,6 +1350,7 @@ private extension RemoteShortcut {
     case .arrowLeft: "←"
     case .arrowRight: "→"
     case .controlL: "⌃L"
+    case .commandT: "⌘T"
     case .commandTab: "⌘⇥"
     }
   }
@@ -1365,6 +1366,7 @@ private extension RemoteShortcut {
     case .arrowLeft: "Left Arrow"
     case .arrowRight: "Right Arrow"
     case .controlL: "Control L"
+    case .commandT: "Command T, open a new tab in the active Mac app"
     case .commandTab: "Command Tab, switch Mac app"
     }
   }
