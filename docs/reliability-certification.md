@@ -50,7 +50,7 @@ recorded fresh-TestFlight-install observation.
 | Targeted parity and release suite | Pass | 66 release and certification tests passed |
 | Mac signed package | Pass | GitHub serves the exact beta 8 DMG and ZIP; build 25 is installed on the paired Mac |
 | Mac notarization and stapling | Pass | The app and DMG are notarized and stapled; Gatekeeper accepts installed build 25 |
-| Package contents | Pass, processing | The verified beta 8 tarball has 228 entries and SHA-256 `783c1feffbc971f9b726d200cbecc6e31735d274ff5667a3ffa59786f76df252`; npm accepted it and public read-back is processing |
+| Package contents | Pass | The verified beta 8 tarball has 228 entries and SHA-256 `783c1feffbc971f9b726d200cbecc6e31735d274ff5667a3ffa59786f76df252`; npm serves it through the public `beta` tag |
 | Mac project picker | Pass | Native inspection verified grouped search, selection, Add Existing, default-root quick create, name validation, Escape, and focus restoration |
 | Mac Threads panel | Pass | Native inspection verified persistent Project/All scope, recent cards, conversation selection, and responsive two-column/one-column layouts |
 | Mac Read Aloud surface | Pass | Native inspection found separate sent/response speaker controls; a sent-message request completed local preparation and became reusable playback |
@@ -75,7 +75,7 @@ recorded against exact Mac build 25 and iPhone build 30.
 | Check | State | Acceptance |
 | --- | --- | --- |
 | Candidate source checkpoint | Pass | Release checkpoint `aefc633` and feature checkpoint `3d64694` are pushed; annotated tag `v0.7.0-beta.8` resolves to the release checkpoint |
-| npm and Git release | Pass, npm processing | The GitHub prerelease and exact assets are public; npm accepted beta 8 for the `beta` tag and public read-back is processing |
+| npm and Git release | Pass | The GitHub prerelease and exact assets are public; npm serves beta 8 through the public `beta` tag with shasum `ea47ff63de6f90e5fa0573012301c21b72d7a5f0` |
 | Mac notarization and update feed | Pass | Beta 8 build 25 is installed, notarized, stapled, Gatekeeper-approved, and advertised by the byte-matched signed public appcast |
 | Internal TestFlight companion | Pass | Build 30 is `VALID` and assigned only to `ClawDad Internal`; the external group is unassigned and Beta App Review is not submitted |
 | Cloud/public health refresh | Pass | Public appcast, beta 8 global/native runtime health, one Mac app process, and the configured relay host all read back successfully |

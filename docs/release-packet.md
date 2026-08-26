@@ -14,7 +14,7 @@ Prepared: 2026-08-26
 The annotated tag and release branch are pushed. The notarized Mac release is
 public on GitHub and through the signed Sparkle feed, build 25 is installed on
 the paired Mac, TestFlight build 30 is `VALID` in `ClawDad Internal` only, and
-npm accepted beta 8 for publication to the `beta` tag.
+npm serves beta 8 through the public `beta` tag.
 
 ## Included Scope
 
@@ -72,8 +72,8 @@ Release notes are in `docs/releases/0.7.0-beta.8.md` and
   appropriate.
 - One Mac app process is running. The background server owns port 4477 and the
   app-managed runtime owns its fallback port 4487 without a restart loop.
-- npm authenticated as `sproutseeds` and accepted the exact beta 8 tarball for
-  publication. Public registry read-back can lag while npm processes a package.
+- npm serves `clawdad@0.7.0-beta.8` through the public `beta` tag with package
+  shasum `ea47ff63de6f90e5fa0573012301c21b72d7a5f0`.
 
 ## Distribution Boundaries
 
@@ -96,10 +96,9 @@ Release notes are in `docs/releases/0.7.0-beta.8.md` and
 
 ## Remaining Release Action
 
-Wait for npm's post-publication processing to expose beta 8 through public
-registry read-back, then record the final `beta` dist-tag result. This does not
-block TestFlight or the installed Mac host, which already runs the exact
-verified beta 8 package from the release tarball.
+Install TestFlight build 30 on the paired iPhone and complete the physical
+acceptance checks above. Automated publication and Mac-host rollout are
+complete.
 
 ## Preserved Outside This Release
 
