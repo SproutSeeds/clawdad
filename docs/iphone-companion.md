@@ -109,7 +109,7 @@ The app project uses:
 - product name: `ClawDad`
 - bundle id: `earth.frg.clawdad.ios`
 - version: `0.7.0`
-- build: `29`
+- build: `30`
 - minimum iOS: `18.0`
 - Release cloud URL: `https://clawdad-cloud.frg.earth`
 
@@ -197,7 +197,7 @@ identity before forwarding app data. Active StoreKit access is accepted by the
 Mac only when the iPhone supplies an Apple-signed transaction that validates
 against the bundled Apple trust roots.
 
-The production relay remains in compatibility mode until build 29 is installed
+The production relay remains in compatibility mode until build 30 is installed
 on a physical iPhone and a fresh pairing proves the per-device credential path.
 After that proof, enable relay enforcement and recheck connection, revocation,
 and re-pairing. Passkeys, App Attest, APNs, and multi-Mac account recovery are
