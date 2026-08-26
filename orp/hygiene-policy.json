@@ -80,6 +80,7 @@
         "__tests__/**",
         "public/**",
         "web/**",
+        "marketing-site/**",
         "apps/**",
         "cloud/**",
         "plugins/**",
