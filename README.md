@@ -21,9 +21,11 @@ without letting them become parallel sources of truth. See
 ## Native Mac Shell
 
 ClawDad is moving to a local-first native Mac shell. The current Swift/AppKit
-shell lives in `native/macos`: it supervises a loopback `clawdad serve`
-process, loads the web UI in `WKWebView`, stores the native app token in
-Keychain, and exposes the macOS folder picker to the web UI.
+shell lives in `native/macos`: it embeds the ClawDad runtime, supervises its
+app-managed loopback service on port 4487, loads the web UI in `WKWebView`,
+stores the native app token in Keychain, and exposes the macOS folder picker to
+the web UI. The legacy global service labels remain disabled for this native
+lane.
 
 ```bash
 npm run native:build
@@ -53,11 +55,15 @@ clawdad cloud-host
 ```
 
 For the current internal TestFlight lane, use bundle id
-`earth.frg.clawdad.ios`, product name `ClawDad`, version `0.7.0`, build `16`.
+`earth.frg.clawdad.ios`, product name `ClawDad`, version `0.7.0`, build `31`.
 The iPhone app pairs by scanning the Pair iPhone QR from desktop Settings, then
 sends signed messages through the cloud relay back to the Mac host.
 
-## Install
+## Public CLI Install
+
+This npm installation path is for the separately authorized public CLI lane.
+The private native Mac release is installed from its locally retained,
+notarized DMG as described in [Mac Distribution](docs/mac-distribution.md).
 
 Before you start:
 

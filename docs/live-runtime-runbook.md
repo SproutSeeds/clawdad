@@ -1,13 +1,22 @@
 # ClawDad Live Runtime Runbook
 
-Use this runbook when source changes need to become the local desktop app and
-its optional ClawDad Cloud iPhone connection.
+Use this runbook to inspect and operate a ClawDad runtime. Select the
+distribution mode before following a release procedure:
+
+- `native-private` embeds the runtime in the signed Mac app, keeps app services
+  on port 4487, and leaves the public npm package, GitHub release assets, and
+  public appcast unchanged.
+- `public-cli` publishes and globally installs the npm CLI. It requires separate
+  release authorization.
 
 ## Host Lifecycle
 
-The desktop server and cloud host connector run as `launchd` user agents with
-`RunAtLoad` and `KeepAlive`. Locking the Mac screen leaves both services and
-active Codex turns running.
+The installed native-private app owns its bundled runtime and cloud connector on
+port 4487. Legacy global service labels are disabled in this mode. Locking the
+Mac screen leaves the app-managed services and active Codex turns running.
+
+The public CLI lane can instead run the desktop server and cloud host connector
+as `launchd` user agents with `RunAtLoad` and `KeepAlive`.
 
 Every active dispatch also owns a macOS idle-sleep assertion through
 `caffeinate -i -w <worker-pid>`. The assertion ends with the dispatch and can be
@@ -19,7 +28,14 @@ the cloud host reconnects its outbound WebSocket with backoff. The iPhone should
 show `Reconnecting` until the host heartbeat is current; opening the app starts
 this connection automatically.
 
-Inspect the live agents:
+Inspect the native-private runtime first:
+
+```sh
+lsof -nP -iTCP:4487 -sTCP:LISTEN
+npm run certify:snapshot
+```
+
+For the public CLI lane, inspect its legacy agents with:
 
 ```sh
 launchctl print gui/$(id -u)/com.sproutseeds.clawdad.server
@@ -39,7 +55,17 @@ The production doctor checks the installed binary, package version, service unit
 
 Treat failures as release blockers. Warnings are follow-up work unless they involve the selected live project or a broken user-facing flow.
 
-## Release Gate
+## Native Private Release Gate
+
+Use `docs/paid-beta-runbook.md` and `docs/mac-distribution.md`. Build, sign,
+notarize, staple, and install the native Mac artifact locally; upload the iPhone
+build only to `ClawDad Internal`. Leave npm, tags, GitHub assets, the public
+appcast, the external TestFlight group, and App Store review unchanged.
+
+## Public CLI Release Gate
+
+This section applies only when `public-cli` publication has been separately
+authorized.
 
 Before publishing:
 

@@ -22,16 +22,27 @@
     `docs/reliability-certification.md`.
 12. Run `npm run certify:snapshot` again and retain the two mode-`0600`
     artifacts as the release evidence boundary.
-13. Add the monitored Beta App Review phone number without persisting it in
-    the repo, then finish the review detail:
+
+The private native beta 10 release stops here. Build 31 remains assigned only to
+`ClawDad Internal`; the external group, public TestFlight link, Beta App Review,
+App Store submission, npm package, public GitHub assets, and public appcast stay
+unchanged.
+
+## Deferred External Customer Release
+
+These steps require separate release authorization after the physical matrix
+passes:
+
+1. Add the monitored Beta App Review phone number without persisting it in the
+   repo, then finish the review detail:
 
     ```sh
     APP_STORE_CONNECT_REVIEW_PHONE="+1 ..." \
       node bin/clawdad-app-store release-configure --apply --json
     ```
 
-14. Confirm `externalTesting.metadataReady` is `true`, then assign the
-    certified build to `ClawDad Founding Customers` and start Beta App Review:
+2. Confirm `externalTesting.metadataReady` is `true`, then assign the certified
+   build to `ClawDad Founding Customers` and start Beta App Review:
 
     ```sh
     node bin/clawdad-app-store external-beta-submit \
@@ -40,12 +51,12 @@
       --json
     ```
 
-15. Wait for `externalTesting.reviewState` to become `APPROVED`, then invite
-    named founding customers. The external group has no public link.
-16. Enable production relay enforcement only after the new credential path
-    passes.
+3. Wait for `externalTesting.reviewState` to become `APPROVED`, then invite
+   named founding customers. The external group has no public link.
+4. Enable production relay enforcement only after the new credential path
+   passes.
 
-## Customer Onboarding
+## Deferred Customer Onboarding
 
 1. Invite the customer by email to the private `ClawDad Founding Customers`
    TestFlight group and send the notarized DMG.
@@ -79,7 +90,9 @@ messages, Apple transaction data, and credentials before attaching diagnostics.
 
 ## Rollback
 
-Disable the public appcast entry for a defective Mac build, keep the notarized
-artifact and checksum for support, and issue a higher build number. Revoke an
-affected iPhone from Mac Settings. A TestFlight build cannot be replaced in
-place; upload a higher build and remove the older build from testing.
+Keep a defective notarized Mac artifact and its checksum as release evidence,
+restore the previous signed and notarized app on the paired Mac, and issue a
+higher build number. The public appcast is unchanged in this private lane and
+requires no rollback. Revoke an affected iPhone from Mac Settings. A TestFlight
+build cannot be replaced in place; upload a higher build and remove the older
+build from testing.

@@ -7,14 +7,26 @@ Sparkle.
 
 ## Distribution Boundary
 
-The native Mac application is distributed as a signed, notarized app through
-its Sparkle update channel. The private iPhone companion is distributed through
-TestFlight. Root `npm` scripts are build and verification entry points for this
-monorepo; `npm publish` is a separate public CLI release and is not part of a
-native Mac or iPhone rollout unless that public publication is explicitly
-requested.
+The native Mac application is distributed as a signed and notarized app. A
+private native candidate can be retained and installed locally; a separately
+authorized public release can use the Sparkle update channel and GitHub assets.
+The private iPhone companion is distributed through TestFlight. Root `npm`
+scripts are build and verification entry points for this monorepo; `npm publish`
+is a separate public CLI release and is not part of a native Mac or iPhone
+rollout unless that public publication is explicitly requested.
 
-## Customer Install
+## Private Native Install
+
+For a private candidate such as native beta 10, use the locally retained DMG:
+
+1. Open `native/macos/dist/releases/0.7.0-beta.10/ClawDad-0.7.0-beta.10-mac.dmg`.
+2. Quit ClawDad, drag ClawDad into Applications, and replace the previous app.
+3. Open `/Applications/ClawDad.app` and verify version `0.7.0 (26)` with embedded
+   runtime `0.7.0-beta.10`.
+4. Confirm only the app-managed native services are active on port 4487 and the
+   legacy service labels remain disabled.
+
+## Published Customer Install
 
 1. Download `ClawDad-<version>-mac.dmg` from the matching GitHub release.
 2. Open the DMG and drag ClawDad into Applications.
@@ -66,10 +78,15 @@ Desktop Settings provides:
 
 ## Release Command
 
-Run:
+For the current private native release, run:
 
 ```bash
-npm run native:release
+CLAWDAD_RELEASE_VERSION=0.7.0-beta.10 \
+CLAWDAD_APP_VERSION=0.7.0 \
+CLAWDAD_APP_BUILD=26 \
+CLAWDAD_NOTARIZE=1 \
+CLAWDAD_PUBLISH_APPCAST=0 \
+  npm run native:release
 ```
 
 The command:
@@ -102,9 +119,11 @@ SwiftPM's nested sandbox; ordinary local releases keep SwiftPM sandboxing on.
 An isolated builder that cannot run `iconutil` may provide the previously
 verified multi-resolution icon with `CLAWDAD_PREBUILT_ICON_PATH`.
 
-Set `CLAWDAD_PUBLISH_APPCAST=1` to publish the generated feed after its GitHub
-release archive is available. The public feed is read-only; publishing requires
-the dedicated release token.
+The generated appcast, ZIP, and DMG remain local when
+`CLAWDAD_PUBLISH_APPCAST=0`. Set `CLAWDAD_PUBLISH_APPCAST=1` only for a
+separately authorized public release after its GitHub release archive is
+available. The public feed is read-only; publishing requires the dedicated
+release token.
 
 ## Verification
 
@@ -122,7 +141,12 @@ Gatekeeper should report `source=Notarized Developer ID`.
 
 ## Rollback
 
-Sparkle retains prior release entries when future appcasts are generated. A bad
-release should be removed from the public appcast first, then replaced with a
-new higher build number. Existing notarized DMGs and their checksums remain on
-the GitHub release for support and forensic comparison.
+For a private native candidate, retain the defective notarized artifact and
+checksum as evidence, restore the previous signed and notarized app locally,
+and issue a higher build number. The public appcast and GitHub assets are
+unchanged and require no rollback.
+
+For a separately authorized public release, remove a defective release from the
+public appcast first, then replace it with a new higher build number. Existing
+notarized DMGs and their checksums remain on the GitHub release for support and
+forensic comparison.

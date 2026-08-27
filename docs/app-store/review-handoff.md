@@ -6,7 +6,7 @@
 - In-app brand: `ClawDad`
 - Bundle ID: `earth.frg.clawdad.ios`
 - Public version: `1.0`
-- Paid-beta TestFlight build: `0.7.0 (30)`
+- Paid-beta TestFlight build: `0.7.0 (31)`
 - Support: `https://clawdad-cloud.frg.earth/support`
 - Privacy: `https://clawdad-cloud.frg.earth/privacy`
 
@@ -56,8 +56,12 @@ the prepared drafts themselves do not publish or charge customers.
 
 `ClawDad Founding Customers` is a live external TestFlight group with feedback
 enabled and its public link disabled. It currently has no build, testers, or
-Beta App Review submission. Build 30 is assigned only to `ClawDad Internal`
+Beta App Review submission. Build 31 is assigned only to `ClawDad Internal`
 while physical certification is pending.
+
+This external lane is deferred and is outside the private native beta 10
+release. Do not submit Beta App Review or assign build 31 to the external group
+without separate release authorization.
 
 App Store Connect requires a complete Beta App Review contact record whenever
 that record is updated. Supply the monitored phone number at runtime with
@@ -66,7 +70,8 @@ that record is updated. Supply the monitored phone number at runtime with
 sent to Apple and is not written to the repository or the release-status
 record.
 
-After the physical matrix passes, run:
+For a separately authorized future external release, after the physical matrix
+passes, run:
 
 ```sh
 node bin/clawdad-app-store external-beta-submit \
