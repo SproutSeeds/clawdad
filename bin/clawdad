@@ -38,6 +38,8 @@ Commands:
   delegate-reset <project>      Reset the delegate brief to the default template
   sessions-doctor [project]     Audit/repair stale sessions and delegate lanes
   codex <install|doctor> [proj] Install or audit Codex hooks, skills, plugin, and AGENTS integration
+  codex-cli [codex args...]      Open Codex CLI on Clawdad's shared local app-server
+  codex-runtime [status|ensure] Inspect or start the shared local Codex writer
   watchtower <project>          Observe delegation read-only and index review cards
   feed <tail|search|review>     Read the delegation review feed
   track-session <project> <session-id>
@@ -1015,6 +1017,14 @@ cmd_codex() {
   run_server_helper codex "$@"
 }
 
+cmd_codex_cli() {
+  run_server_helper codex-cli "$@"
+}
+
+cmd_codex_runtime() {
+  run_server_helper codex-runtime "$@"
+}
+
 cmd_codex_hook() {
   run_server_helper codex-hook "$@"
 }
@@ -1053,6 +1063,8 @@ main() {
     delegate-reset) cmd_delegate_reset "$@" ;;
     sessions-doctor|session-doctor) cmd_sessions_doctor "$@" ;;
     codex)      cmd_codex "$@" ;;
+    codex-cli|tui) cmd_codex_cli "$@" ;;
+    codex-runtime) cmd_codex_runtime "$@" ;;
     codex-hook) cmd_codex_hook "$@" ;;
     watchtower) cmd_watchtower "$@" ;;
     feed)       cmd_feed "$@" ;;

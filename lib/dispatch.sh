@@ -86,7 +86,14 @@ _build_cmd_codex() {
     "--session-id" "$session_id"
     "--permission-mode" "$permission_mode"
     "--codex-binary" "$CLAWDAD_CODEX"
+    "--app-server-mode" "${CLAWDAD_CODEX_APP_SERVER_MODE:-auto}"
+    "--app-server-socket" "${CLAWDAD_CODEX_APP_SERVER_SOCKET:-$CLAWDAD_CODEX_HOME/app-server-control/app-server-control.sock}"
+    "--dispatch-mode" "${CLAWDAD_DISPATCH_MODE:-direct}"
   )
+
+  if [[ -n "${CLAWDAD_DISPATCH_REQUEST_ID:-}" ]]; then
+    cmd+=("--request-id" "$CLAWDAD_DISPATCH_REQUEST_ID")
+  fi
 
   if [[ "$session_seeded" == "true" ]]; then
     cmd+=("--session-seeded")
