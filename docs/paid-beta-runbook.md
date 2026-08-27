@@ -3,15 +3,16 @@
 ## Release Order
 
 1. Run the automated verification in `docs/release-packet.md`.
-2. Archive and upload iPhone build 28.
+2. Archive and upload iPhone build 31.
 3. Wait for Apple to report the build `VALID`, then assign it to
    `ClawDad Internal`.
 4. Build, sign, notarize, staple, and checksum the Mac release.
-5. Publish the npm beta, Git tag, GitHub prerelease, Mac ZIP, DMG, and appcast.
-6. Install the published package and Mac app on the host and verify local and
-   public health.
+5. Keep this release on the private native lane: retain the signed Mac artifacts
+   locally and leave npm, public GitHub assets, and the public appcast unchanged.
+6. Install Mac build 26 on the paired host and verify the bundled runtime, native
+   cloud connector, and cloud health.
 7. Remove any development-signed ClawDad build from the iPhone, install
-   TestFlight from the App Store when needed, then install build 28 from
+   TestFlight from the App Store when needed, then install build 31 from
    `ClawDad Internal`.
 8. Run `npm run certify:snapshot` and confirm `deviceBuildReady` is `true`
    before testing app behavior.

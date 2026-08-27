@@ -10,10 +10,16 @@ import test from "node:test";
 const execFileP = promisify(execFile);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const dispatchScript = path.join(repoRoot, "lib", "codex-app-server-dispatch.mjs");
+const fakeSharedAppServerScript = path.join(repoRoot, "test", "fixtures", "fake-shared-app-server.mjs");
 
 async function execFileCapture(command, args, options = {}) {
+  const env = {
+    ...process.env,
+    CLAWDAD_CODEX_APP_SERVER_MODE: "isolated",
+    ...(options.env || {}),
+  };
   try {
-    const result = await execFileP(command, args, options);
+    const result = await execFileP(command, args, { ...options, env });
     return {
       exitCode: 0,
       stdout: result.stdout || "",
@@ -503,6 +509,95 @@ setInterval(() => {}, 1000);
   return fakePath;
 }
 
+async function withFakeSharedAppServer(root, { active = false, scenario = "" } = {}, work) {
+  const socketDir = path.join("/tmp", `cd-${path.basename(root).replace(/^clawdad-codex-dispatch-test-/u, "")}`);
+  const socketPath = path.join(socketDir, "app-server.sock");
+  const requestLog = path.join(root, "shared-app-server-events.jsonl");
+  await mkdir(socketDir, { recursive: true, mode: 0o700 });
+  const child = spawn(process.execPath, [
+    fakeSharedAppServerScript,
+    socketPath,
+    requestLog,
+    scenario || (active ? "active" : "idle"),
+  ], {
+    cwd: repoRoot,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  let childStdout = "";
+  let childStderr = "";
+  child.stdout.on("data", (chunk) => {
+    childStdout += chunk;
+  });
+  child.stderr.on("data", (chunk) => {
+    childStderr += chunk;
+  });
+
+  await new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      reject(new Error(`fake shared app-server did not become ready: ${childStderr}`));
+    }, 5000);
+    const ready = () => {
+      if (!childStdout.includes("READY\n")) {
+        return;
+      }
+      clearTimeout(timeoutId);
+      child.stdout.off("data", ready);
+      resolve();
+    };
+    child.stdout.on("data", ready);
+    child.once("exit", (code, signal) => {
+      clearTimeout(timeoutId);
+      reject(new Error(`fake shared app-server exited before ready (code=${code}, signal=${signal}): ${childStderr}`));
+    });
+    ready();
+  });
+
+  async function snapshot() {
+    const entries = (await readFile(requestLog, "utf8").catch(() => ""))
+      .trim()
+      .split(/\r?\n/u)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+    return {
+      entries,
+      requests: entries
+        .filter((entry) => entry.type === "request")
+        .map((entry) => entry.message),
+      connectionCount: entries.filter((entry) => entry.type === "connection").length,
+      closeCount: entries.filter((entry) => entry.type === "close").length,
+      queueInsertionCount: entries.filter((entry) => entry.type === "queueInserted").length,
+      queuedClientMessageIds: new Set(
+        entries
+          .filter((entry) => entry.type === "queueInserted")
+          .map((entry) => entry.clientUserMessageId),
+      ),
+    };
+  }
+
+  try {
+    return await work({ socketPath, snapshot });
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGTERM");
+    }
+    await new Promise((resolve) => {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        resolve();
+        return;
+      }
+      child.once("exit", resolve);
+      setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGKILL");
+        }
+      }, 1000).unref?.();
+    });
+    await rm(socketDir, { recursive: true, force: true });
+  }
+}
+
 test("codex app-server dispatch times out a turn that never completes", async () => {
   await withTempDir(async (root) => {
     const fakeCodex = await writeFakeCodexBinary(root, "never-complete");
@@ -774,6 +869,7 @@ test("repo-scoped codex dispatch waits for and applies an explicit approval deci
     ], {
       env: {
         ...process.env,
+        CLAWDAD_CODEX_APP_SERVER_MODE: "isolated",
         FAKE_CODEX_REQUEST_LOG: requestLog,
         CLAWDAD_CODEX_EVENT_LOG_FILE: eventLog,
       },
@@ -1699,5 +1795,474 @@ test("codex app-server dispatch applies model and reasoning effort to the thread
     assert.equal(resume.params.config.model_reasoning_effort, "ultra");
     assert.equal(turn.params.model, "gpt-5.6-sol");
     assert.equal(turn.params.effort, "ultra");
+  });
+});
+
+test("shared app-server dispatch reuses the listening runtime without spawning a per-dispatch Codex process", async () => {
+  await withTempDir(async (root) => {
+    await withFakeSharedAppServer(root, {}, async ({ socketPath, snapshot }) => {
+      const unavailableCodex = path.join(root, "codex-must-not-be-spawned");
+      const commonArgs = [
+        dispatchScript,
+        "--project-path",
+        root,
+        "--message",
+        "hello from a shared client",
+        "--session-id",
+        "thread-test",
+        "--session-seeded",
+        "--app-server-mode",
+        "shared",
+        "--app-server-socket",
+        socketPath,
+        "--dispatch-mode",
+        "direct",
+        "--codex-binary",
+        unavailableCodex,
+        "--turn-timeout-ms",
+        "2000",
+        "--request-timeout-ms",
+        "1000",
+      ];
+
+      const first = await execFileCapture(
+        process.execPath,
+        [...commonArgs, "--request-id", "request-shared-runtime-1"],
+        { timeout: 10000 },
+      );
+      const second = await execFileCapture(
+        process.execPath,
+        [...commonArgs, "--request-id", "request-shared-runtime-2"],
+        { timeout: 10000 },
+      );
+
+      assert.equal(first.stderr, "");
+      assert.equal(first.exitCode, 0);
+      assert.equal(JSON.parse(first.stdout.trim()).result_text, "shared start response");
+      assert.equal(second.stderr, "");
+      assert.equal(second.exitCode, 0);
+      assert.equal(JSON.parse(second.stdout.trim()).result_text, "shared start response");
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      const state = await snapshot();
+      assert.equal(state.connectionCount, 4);
+      assert.equal(state.closeCount, 4);
+      assert.equal(
+        state.requests.filter((entry) => (
+          entry.method === "initialize" && entry.params?.clientInfo?.name === "clawdad"
+        )).length,
+        2,
+      );
+      assert.equal(
+        state.requests.filter((entry) => (
+          entry.method === "initialize" && entry.params?.clientInfo?.name === "clawdad-runtime-probe"
+        )).length,
+        2,
+      );
+      assert.equal(state.requests.filter((entry) => entry.method === "turn/start").length, 2);
+    });
+  });
+});
+
+test("shared direct dispatch steers an active thread with the expected turn and stable request id", async () => {
+  await withTempDir(async (root) => {
+    await withFakeSharedAppServer(root, { active: true }, async ({ socketPath, snapshot }) => {
+      const result = await execFileCapture(process.execPath, [
+        dispatchScript,
+        "--project-path",
+        root,
+        "--message",
+        "Fold this phone message into the active CLI turn.",
+        "--session-id",
+        "thread-test",
+        "--session-seeded",
+        "--app-server-mode",
+        "shared",
+        "--app-server-socket",
+        socketPath,
+        "--dispatch-mode",
+        "direct",
+        "--request-id",
+        "request-direct-active",
+        "--codex-binary",
+        path.join(root, "codex-must-not-be-spawned"),
+        "--turn-timeout-ms",
+        "2000",
+        "--request-timeout-ms",
+        "1000",
+      ], { timeout: 10000 });
+
+      assert.equal(result.stderr, "");
+      assert.equal(result.exitCode, 0);
+      assert.equal(JSON.parse(result.stdout.trim()).result_text, "shared steer response");
+      const state = await snapshot();
+      assert.equal(state.requests.some((entry) => entry.method === "turn/start"), false);
+      const steer = state.requests.find((entry) => entry.method === "turn/steer");
+      assert.ok(steer);
+      assert.equal(steer.params.threadId, "thread-test");
+      assert.equal(steer.params.expectedTurnId, "turn-active");
+      assert.equal(steer.params.clientUserMessageId, "request-direct-active");
+      assert.deepEqual(steer.params.input, [
+        {
+          type: "text",
+          text: "Fold this phone message into the active CLI turn.",
+          text_elements: [],
+        },
+      ]);
+    });
+  });
+});
+
+test("shared direct dispatch starts an idle turn with the stable request id", async () => {
+  await withTempDir(async (root) => {
+    await withFakeSharedAppServer(root, {}, async ({ socketPath, snapshot }) => {
+      const result = await execFileCapture(process.execPath, [
+        dispatchScript,
+        "--project-path",
+        root,
+        "--message",
+        "Start this from the phone.",
+        "--session-id",
+        "thread-test",
+        "--session-seeded",
+        "--app-server-mode",
+        "shared",
+        "--app-server-socket",
+        socketPath,
+        "--dispatch-mode",
+        "direct",
+        "--request-id",
+        "request-direct-idle",
+        "--codex-binary",
+        path.join(root, "codex-must-not-be-spawned"),
+        "--turn-timeout-ms",
+        "2000",
+        "--request-timeout-ms",
+        "1000",
+      ], { timeout: 10000 });
+
+      assert.equal(result.stderr, "");
+      assert.equal(result.exitCode, 0);
+      const state = await snapshot();
+      const turnStart = state.requests.find((entry) => entry.method === "turn/start");
+      assert.ok(turnStart);
+      assert.equal(turnStart.params.threadId, "thread-test");
+      assert.equal(turnStart.params.clientUserMessageId, "request-direct-idle");
+      assert.equal(state.requests.some((entry) => entry.method === "turn/steer"), false);
+    });
+  });
+});
+
+test("shared direct dispatch defers a structured non-steerable turn and starts safely when idle", async () => {
+  await withTempDir(async (root) => {
+    await withFakeSharedAppServer(root, { scenario: "non-steerable" }, async ({ socketPath, snapshot }) => {
+      const result = await execFileCapture(process.execPath, [
+        dispatchScript,
+        "--project-path",
+        root,
+        "--message",
+        "Run this phone message after review finishes.",
+        "--session-id",
+        "thread-test",
+        "--session-seeded",
+        "--app-server-mode",
+        "shared",
+        "--app-server-socket",
+        socketPath,
+        "--dispatch-mode",
+        "direct",
+        "--request-id",
+        "request-direct-deferred",
+        "--codex-binary",
+        path.join(root, "codex-must-not-be-spawned"),
+        "--turn-timeout-ms",
+        "3000",
+        "--request-timeout-ms",
+        "1000",
+        "--liveness-interval-ms",
+        "50",
+      ], { timeout: 10000 });
+
+      assert.equal(result.stderr, "");
+      assert.equal(result.exitCode, 0, result.stdout || result.stderr);
+      const output = JSON.parse(result.stdout.trim());
+      assert.equal(output.result_text, "shared start response");
+      assert.equal(output.delivery_mode, "deferred_start");
+      const state = await snapshot();
+      assert.equal(state.requests.filter((entry) => entry.method === "turn/steer").length, 1);
+      assert.equal(state.requests.filter((entry) => entry.method === "turn/start").length, 1);
+    });
+  });
+});
+
+test("shared dispatch abstains from another client's approval and answers only its owned turn", async () => {
+  await withTempDir(async (root) => {
+    await withFakeSharedAppServer(root, { scenario: "foreign-approval" }, async ({ socketPath, snapshot }) => {
+      const result = await execFileCapture(process.execPath, [
+        dispatchScript,
+        "--project-path",
+        root,
+        "--message",
+        "Run after the Terminal-owned turn finishes.",
+        "--session-id",
+        "thread-test",
+        "--session-seeded",
+        "--app-server-mode",
+        "shared",
+        "--app-server-socket",
+        socketPath,
+        "--dispatch-mode",
+        "queue",
+        "--request-id",
+        "request-owned-approval",
+        "--permission-mode",
+        "full",
+        "--codex-binary",
+        path.join(root, "codex-must-not-be-spawned"),
+        "--turn-timeout-ms",
+        "3000",
+        "--request-timeout-ms",
+        "1000",
+        "--liveness-interval-ms",
+        "50",
+      ], { timeout: 10000 });
+
+      assert.equal(result.stderr, "");
+      assert.equal(result.exitCode, 0, result.stdout || result.stderr);
+      const state = await snapshot();
+      const foreignResponses = state.requests.filter((entry) => (
+        entry.id === "approval-terminal" && !entry.method
+      ));
+      const ownedResponse = state.requests.find((entry) => (
+        entry.id === "approval-clawdad" && !entry.method
+      ));
+      assert.equal(foreignResponses.length, 0);
+      assert.deepEqual(ownedResponse?.result, { decision: "accept" });
+      const foreignCompletionIndex = state.entries.findIndex((entry) => (
+        entry.type === "foreignTurnCompleted"
+      ));
+      const ownStartIndex = state.entries.findIndex((entry) => (
+        entry.type === "request" && entry.message?.method === "turn/start"
+      ));
+      assert.ok(ownStartIndex >= 0);
+      assert.ok(foreignCompletionIndex >= 0);
+      assert.ok(ownStartIndex > foreignCompletionIndex);
+    });
+  });
+});
+
+test("shared dispatch reconnects and reconciles a turn after its client socket drops", async () => {
+  await withTempDir(async (root) => {
+    await withFakeSharedAppServer(root, { scenario: "disconnect-once" }, async ({ socketPath, snapshot }) => {
+      const result = await execFileCapture(process.execPath, [
+        dispatchScript,
+        "--project-path",
+        root,
+        "--message",
+        "Keep this request exactly once across reconnect.",
+        "--session-id",
+        "thread-test",
+        "--session-seeded",
+        "--app-server-mode",
+        "shared",
+        "--app-server-socket",
+        socketPath,
+        "--dispatch-mode",
+        "direct",
+        "--request-id",
+        "request-reconnect-stable",
+        "--codex-binary",
+        path.join(root, "codex-must-not-be-spawned"),
+        "--turn-timeout-ms",
+        "3000",
+        "--request-timeout-ms",
+        "1000",
+        "--liveness-interval-ms",
+        "100",
+      ], { timeout: 10000 });
+
+      assert.equal(result.stderr, "");
+      assert.equal(result.exitCode, 0, result.stdout || result.stderr);
+      assert.equal(JSON.parse(result.stdout.trim()).result_text, "shared reconnect response");
+      const state = await snapshot();
+      assert.equal(state.requests.filter((entry) => entry.method === "turn/start").length, 1);
+      assert.ok(
+        state.requests.filter((entry) => (
+          entry.method === "thread/resume" && entry.params?.threadId === "thread-test"
+        )).length >= 2,
+      );
+    });
+  });
+});
+
+test("shared dispatch recovers a dead delivery owner after server acceptance without sending twice", async (t) => {
+  await withTempDir(async (root) => {
+    await withFakeSharedAppServer(root, { scenario: "crash-after-accept" }, async ({ socketPath, snapshot }) => {
+      const args = [
+        dispatchScript,
+        "--project-path",
+        root,
+        "--message",
+        "Keep this accepted phone request exactly once after a worker crash.",
+        "--session-id",
+        "thread-test",
+        "--session-seeded",
+        "--app-server-mode",
+        "shared",
+        "--app-server-socket",
+        socketPath,
+        "--dispatch-mode",
+        "queue",
+        "--request-id",
+        "request-crash-stable",
+        "--codex-binary",
+        path.join(root, "codex-must-not-be-spawned"),
+        "--turn-timeout-ms",
+        "3000",
+        "--request-timeout-ms",
+        "1000",
+        "--liveness-interval-ms",
+        "50",
+      ];
+      const first = spawn(process.execPath, args, {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          CLAWDAD_CODEX_APP_SERVER_MODE: "isolated",
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      t.after(() => {
+        if (first.exitCode == null && first.signalCode == null) first.kill("SIGKILL");
+      });
+
+      const acceptedDeadline = Date.now() + 5000;
+      for (;;) {
+        const state = await snapshot();
+        if (state.entries.some((entry) => (
+          entry.type === "turnAccepted" && entry.clientUserMessageId === "request-crash-stable"
+        ))) {
+          break;
+        }
+        if (Date.now() >= acceptedDeadline) {
+          throw new Error("timed out waiting for fake app-server acceptance");
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+
+      first.kill("SIGKILL");
+      await new Promise((resolve) => first.once("exit", resolve));
+
+      const recovered = await execFileCapture(process.execPath, args, { timeout: 10000 });
+      assert.equal(recovered.stderr, "");
+      assert.equal(recovered.exitCode, 0, recovered.stdout || recovered.stderr);
+      assert.equal(
+        JSON.parse(recovered.stdout.trim()).result_text,
+        "shared crash recovery response",
+      );
+      const state = await snapshot();
+      assert.equal(state.requests.filter((entry) => entry.method === "turn/start").length, 1);
+    });
+  });
+});
+
+test("shared queued dispatch starts a fully configured idle turn and reconciles a duplicate request id", async () => {
+  await withTempDir(async (root) => {
+    const imagePath = path.join(root, "phone-photo.jpg");
+    const manifestPath = path.join(root, "attachments.json");
+    await writeFile(imagePath, "fake image", "utf8");
+    await writeFile(
+      manifestPath,
+      JSON.stringify({
+        attachments: [
+          {
+            path: imagePath,
+            kind: "image",
+            mimeType: "image/jpeg",
+          },
+        ],
+      }),
+      "utf8",
+    );
+
+    await withFakeSharedAppServer(root, {}, async ({ socketPath, snapshot }) => {
+      const args = [
+        dispatchScript,
+        "--project-path",
+        root,
+        "--message",
+        "Inspect this phone attachment.",
+        "--session-id",
+        "thread-test",
+        "--session-seeded",
+        "--attachment-manifest",
+        manifestPath,
+        "--app-server-mode",
+        "shared",
+        "--app-server-socket",
+        socketPath,
+        "--dispatch-mode",
+        "queue",
+        "--request-id",
+        "request-queue-stable",
+        "--permission-mode",
+        "approve",
+        "--model",
+        "gpt-test",
+        "--reasoning-effort",
+        "high",
+        "--codex-binary",
+        path.join(root, "codex-must-not-be-spawned"),
+        "--turn-timeout-ms",
+        "2000",
+        "--request-timeout-ms",
+        "1000",
+      ];
+
+      const [first, second] = await Promise.all([
+        execFileCapture(process.execPath, args, { timeout: 10000 }),
+        execFileCapture(process.execPath, args, { timeout: 10000 }),
+      ]);
+
+      assert.equal(first.stderr, "");
+      assert.equal(first.exitCode, 0);
+      assert.equal(JSON.parse(first.stdout.trim()).result_text, "shared start response");
+      assert.equal(second.stderr, "");
+      assert.equal(second.exitCode, 0);
+      assert.equal(JSON.parse(second.stdout.trim()).result_text, "shared start response");
+      const state = await snapshot();
+      assert.equal(state.queueInsertionCount, 0);
+      assert.equal(state.queuedClientMessageIds.size, 0);
+      const queueAdds = state.requests.filter((entry) => entry.method === "thread/queue/add");
+      assert.equal(queueAdds.length, 0);
+      assert.equal(state.requests.filter((entry) => entry.method === "thread/queue/start").length, 0);
+      const turnStarts = state.requests.filter((entry) => entry.method === "turn/start");
+      assert.equal(turnStarts.length, 1);
+      assert.equal(turnStarts[0].params.threadId, "thread-test");
+      assert.equal(turnStarts[0].params.cwd, root);
+      assert.equal(turnStarts[0].params.approvalPolicy, "never");
+      assert.equal(turnStarts[0].params.clientUserMessageId, "request-queue-stable");
+      assert.equal(turnStarts[0].params.model, "gpt-test");
+      assert.equal(turnStarts[0].params.effort, "high");
+      assert.deepEqual(turnStarts[0].params.sandboxPolicy, {
+        type: "workspaceWrite",
+        networkAccess: true,
+        writableRoots: [root],
+      });
+      assert.deepEqual(turnStarts[0].params.input, [
+        {
+          type: "text",
+          text: "Inspect this phone attachment.",
+          text_elements: [],
+        },
+        {
+          type: "localImage",
+          path: imagePath,
+        },
+      ]);
+      const initialize = state.requests.find((entry) => (
+        entry.method === "initialize" && entry.params?.clientInfo?.name === "clawdad"
+      ));
+      assert.equal(initialize.params.capabilities.experimentalApi, false);
+    });
   });
 });

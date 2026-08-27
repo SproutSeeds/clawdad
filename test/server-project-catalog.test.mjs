@@ -1,18 +1,22 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createRequire } from "node:module";
 import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, utimes, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
+import { WebSocketServer } from "ws";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const serverScript = path.join(repoRoot, "lib", "server.mjs");
 const dispatchQueueWorkerScript = path.join(repoRoot, "lib", "dispatch-queue-worker.mjs");
 const cliScript = path.join(repoRoot, "bin", "clawdad");
 const codexSessionDiscoveryScript = path.join(repoRoot, "lib", "codex-session-discovery.mjs");
+const require = createRequire(import.meta.url);
+const wsModuleUrl = pathToFileURL(require.resolve("ws")).href;
 
 async function freePort() {
   const server = net.createServer();
@@ -111,6 +115,70 @@ async function stopServer(child) {
       finish();
     }
   });
+}
+
+async function stopProcessByPid(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return;
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch (error) {
+    if (error?.code === "ESRCH") return;
+    throw error;
+  }
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if (error?.code === "ESRCH") return;
+      throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch (error) {
+    if (error?.code !== "ESRCH") throw error;
+  }
+}
+
+async function startFakeCodexSharedRuntime(socketPath) {
+  await mkdir(path.dirname(socketPath), { recursive: true });
+  await rm(socketPath, { force: true });
+  const httpServer = createServer();
+  const webSocketServer = new WebSocketServer({ server: httpServer });
+  webSocketServer.on("connection", (socket) => {
+    socket.on("message", (rawMessage) => {
+      let message;
+      try {
+        message = JSON.parse(String(rawMessage));
+      } catch (_error) {
+        return;
+      }
+      if (message.method === "initialize" && message.id != null) {
+        socket.send(
+          JSON.stringify({
+            id: message.id,
+            result: {
+              userAgent: "clawdad-test-app-server",
+            },
+          }),
+        );
+      }
+    });
+  });
+  await new Promise((resolve, reject) => {
+    httpServer.once("error", reject);
+    httpServer.listen(socketPath, resolve);
+  });
+  return async () => {
+    for (const socket of webSocketServer.clients) {
+      socket.terminate();
+    }
+    await new Promise((resolve) => webSocketServer.close(resolve));
+    await new Promise((resolve) => httpServer.close(resolve));
+    await rm(socketPath, { force: true });
+  };
 }
 
 async function readRequestBody(request) {
@@ -455,6 +523,131 @@ test("app shell injects a fresh build fingerprint for frontend assets", async ()
   }
 });
 
+test("server starts degraded when the shared Codex runtime fails and recovers on its health loop", async () => {
+  const root = await mkdtemp("/tmp/clawdad-server-degraded-");
+  const home = path.join(root, "home");
+  const clawdadHome = path.join(root, "clawdad-home");
+  const projectPath = path.join(root, "project");
+  const configPath = path.join(root, "server.json");
+  const codexPath = path.join(root, "recovering-codex.mjs");
+  const gatePath = path.join(root, "runtime-ready");
+  const pidPath = path.join(root, "runtime.pid");
+  const socketPath = path.join(root, "codex-control", "codex.sock");
+  await mkdir(home, { recursive: true });
+  await mkdir(projectPath, { recursive: true });
+  await writeFile(
+    codexPath,
+    `#!/usr/bin/env node
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+import path from "node:path";
+import wsPackage from ${JSON.stringify(wsModuleUrl)};
+const { WebSocketServer } = wsPackage;
+const args = process.argv.slice(2);
+if (args[0] === "app-server" && args[1] === "--help") {
+  process.stdout.write("--listen <URL> supports unix://\\n");
+  process.exit(0);
+}
+if (args[0] !== "app-server" || args[1] !== "--listen") process.exit(2);
+if (!existsSync(process.env.CLAWDAD_TEST_CODEX_READY_GATE)) process.exit(23);
+const socketPath = decodeURIComponent(new URL(args[2]).pathname);
+mkdirSync(path.dirname(socketPath), { recursive: true });
+writeFileSync(process.env.CLAWDAD_TEST_CODEX_PID_PATH, String(process.pid));
+const httpServer = createServer();
+const webSocketServer = new WebSocketServer({ server: httpServer });
+webSocketServer.on("connection", (socket) => {
+  socket.on("message", (payload) => {
+    const message = JSON.parse(Buffer.from(payload).toString("utf8"));
+    if (message.method === "initialize") {
+      socket.send(JSON.stringify({ id: message.id, result: { serverInfo: { name: "recovering-codex" } } }));
+    }
+  });
+});
+httpServer.listen(socketPath);
+const shutdown = () => {
+  for (const client of webSocketServer.clients) client.terminate();
+  webSocketServer.close(() => httpServer.close(() => process.exit(0)));
+};
+process.on("SIGTERM", shutdown);
+`,
+    "utf8",
+  );
+  await chmod(codexPath, 0o755);
+
+  const port = await freePort();
+  await writeFile(
+    configPath,
+    JSON.stringify({
+      host: "127.0.0.1",
+      port,
+      defaultProject: projectPath,
+      authMode: "tailscale",
+      allowedUsers: ["tester@example.com"],
+    }),
+    "utf8",
+  );
+
+  const child = spawn(process.execPath, [serverScript, "serve", "--config", configPath], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      HOME: home,
+      CLAWDAD_HOME: clawdadHome,
+      CLAWDAD_TTS_ENABLED: "false",
+      CLAWDAD_CODEX: codexPath,
+      CLAWDAD_CODEX_APP_SERVER_MODE: "shared",
+      CLAWDAD_CODEX_APP_SERVER_SOCKET: socketPath,
+      CLAWDAD_CODEX_RUNTIME_HEALTH_INTERVAL_MS: "50",
+      CLAWDAD_TEST_CODEX_READY_GATE: gatePath,
+      CLAWDAD_TEST_CODEX_PID_PATH: pidPath,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  try {
+    const baseUrl = `http://127.0.0.1:${port}`;
+    await waitForHealth(baseUrl, child);
+    let response = await fetch(`${baseUrl}/healthz`);
+    let health = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(health.ok, true);
+    assert.deepEqual(
+      {
+        mode: health.codexAppServer.mode,
+        requestedMode: health.codexAppServer.requestedMode,
+        ready: health.codexAppServer.ready,
+        state: health.codexAppServer.state,
+        socketPath: health.codexAppServer.socketPath,
+      },
+      {
+        mode: "shared",
+        requestedMode: "shared",
+        ready: false,
+        state: "unavailable",
+        socketPath,
+      },
+    );
+    assert.match(health.codexAppServer.reason, /exited during startup/u);
+
+    await writeFile(gatePath, "ready\n", "utf8");
+    const deadline = Date.now() + 5_000;
+    do {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      response = await fetch(`${baseUrl}/healthz`);
+      health = await response.json();
+    } while (!health.codexAppServer.ready && Date.now() < deadline);
+
+    assert.equal(health.codexAppServer.ready, true);
+    assert.equal(health.codexAppServer.state, "ready");
+    assert.equal(health.codexAppServer.mode, "shared");
+  } finally {
+    await stopServer(child);
+    const runtimePid = Number.parseInt(await readFile(pidPath, "utf8").catch(() => ""), 10);
+    await stopProcessByPid(runtimePid);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("projects endpoint reads local state without invoking the ORP-backed CLI", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-projects-"));
   const home = path.join(root, "home");
@@ -634,12 +827,14 @@ sleep 10
   }
 });
 
-test("session-terminal endpoint opens the tracked Codex resume session with configured launcher", async () => {
+test("session-terminal opens tracked Codex sessions through the shared app-server", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-terminal-"));
   const home = path.join(root, "home");
   const codexHome = path.join(root, "codex-home");
   const projectPath = path.join(root, "frg-site");
   const configPath = path.join(root, "server.json");
+  const codexPath = path.join(root, "codex-fake");
+  const appServerSocketPath = path.join(root, "app-server.sock");
   const launcherPath = path.join(root, "terminal-launcher");
   const capturePath = path.join(root, "terminal-capture.json");
   const sessionId = "019d57e8-8947-7dd1-ba76-55a23c4e6292";
@@ -685,6 +880,18 @@ test("session-terminal endpoint opens the tracked Codex resume session with conf
     "utf8",
   );
   await writeFile(
+    codexPath,
+    `#!/bin/sh
+if [ "$1" = "app-server" ] && [ "$2" = "--help" ]; then
+  printf '%s\n' 'Usage: codex app-server --listen <URL>'
+  exit 0
+fi
+exit 2
+`,
+    "utf8",
+  );
+  await chmod(codexPath, 0o755);
+  await writeFile(
     launcherPath,
     `#!/bin/sh
 cat > "$CLAWDAD_TERMINAL_CAPTURE"
@@ -710,6 +917,7 @@ cat > "$CLAWDAD_TERMINAL_CAPTURE"
     "utf8",
   );
 
+  const stopSharedRuntime = await startFakeCodexSharedRuntime(appServerSocketPath);
   const child = spawn(process.execPath, [serverScript, "serve", "--config", configPath], {
     cwd: repoRoot,
     env: {
@@ -717,7 +925,9 @@ cat > "$CLAWDAD_TERMINAL_CAPTURE"
       CLAWDAD_TTS_ENABLED: "false",
       CLAWDAD_HOME: home,
       CLAWDAD_CODEX_HOME: codexHome,
-      CLAWDAD_CODEX: "codex-fake",
+      CLAWDAD_CODEX: codexPath,
+      CLAWDAD_CODEX_APP_SERVER_MODE: "auto",
+      CLAWDAD_CODEX_APP_SERVER_SOCKET: appServerSocketPath,
       CLAWDAD_TERMINAL_LAUNCHER: launcherPath,
       CLAWDAD_TERMINAL_CAPTURE: capturePath,
     },
@@ -754,15 +964,16 @@ cat > "$CLAWDAD_TERMINAL_CAPTURE"
     assert.equal(launched.launchMode, "resume");
     assert.equal(
       launched.shellCommand,
-      `exec bash -lc 'cd '\\''${projectPath}'\\'' && clear && exec '\\''codex-fake'\\'' '\\''resume'\\'' '\\''${sessionId}'\\'''`,
+      `exec bash -lc 'cd '\\''${projectPath}'\\'' && clear && exec '\\''${codexPath}'\\'' '\\''--remote'\\'' '\\''unix://${appServerSocketPath}'\\'' '\\''resume'\\'' '\\''${sessionId}'\\'''`,
     );
   } finally {
     await stopServer(child);
+    await stopSharedRuntime();
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("session-terminal opens unsaved Codex placeholders as new project sessions", async () => {
+test("session-terminal keeps the isolated command for unsaved Codex placeholders", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-terminal-placeholder-"));
   const home = path.join(root, "home");
   const projectPath = path.join(root, "mtg-decklab");
@@ -834,6 +1045,7 @@ cat > "$CLAWDAD_TERMINAL_CAPTURE"
       CLAWDAD_TTS_ENABLED: "false",
       CLAWDAD_HOME: home,
       CLAWDAD_CODEX: "codex-fake",
+      CLAWDAD_CODEX_APP_SERVER_MODE: "isolated",
       CLAWDAD_TERMINAL_LAUNCHER: launcherPath,
       CLAWDAD_TERMINAL_CAPTURE: capturePath,
     },

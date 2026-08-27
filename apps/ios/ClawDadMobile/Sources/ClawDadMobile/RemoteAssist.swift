@@ -46,6 +46,140 @@ struct RemoteAssistOfferGate {
   }
 }
 
+struct RemoteDisplaySelectionAttempt: Equatable {
+  let requestId: String
+  let displayId: String
+  let expectedTopologyRevision: Int
+}
+
+struct RemoteDisplayStateApplication: Equatable {
+  let accepted: Bool
+  let selectedDisplayChanged: Bool
+  let pendingResolved: Bool
+  let pendingInvalidated: Bool
+}
+
+struct RemoteDisplayResultApplication: Equatable {
+  let stateApplication: RemoteDisplayStateApplication
+  let matchedPendingRequest: Bool
+}
+
+struct RemoteDisplaySelectionState: Equatable {
+  private(set) var canonicalState: RemoteDisplayState?
+  private(set) var pendingAttempt: RemoteDisplaySelectionAttempt?
+
+  var displays: [RemoteDisplayDescriptor] {
+    canonicalState?.displays ?? []
+  }
+
+  var selectedDisplayId: String {
+    canonicalState?.selectedDisplayId ?? ""
+  }
+
+  var selectedDisplay: RemoteDisplayDescriptor? {
+    displays.first { $0.id == selectedDisplayId }
+  }
+
+  var hasMultipleDisplays: Bool {
+    displays.count > 1
+  }
+
+  var inputSuppressed: Bool {
+    pendingAttempt != nil
+  }
+
+  mutating func reset() {
+    canonicalState = nil
+    pendingAttempt = nil
+  }
+
+  mutating func beginSelection(
+    displayId: String,
+    requestId: String
+  ) -> RemoteDisplaySelectionAttempt? {
+    guard pendingAttempt == nil,
+          let canonicalState,
+          canonicalState.displays.count > 1,
+          canonicalState.selectedDisplayId != displayId,
+          canonicalState.displays.contains(where: { $0.id == displayId }),
+          !requestId.isEmpty else {
+      return nil
+    }
+    let attempt = RemoteDisplaySelectionAttempt(
+      requestId: requestId,
+      displayId: displayId,
+      expectedTopologyRevision: canonicalState.topologyRevision
+    )
+    pendingAttempt = attempt
+    return attempt
+  }
+
+  mutating func applyState(
+    _ state: RemoteDisplayState
+  ) -> RemoteDisplayStateApplication {
+    if let canonicalState,
+       state.topologyRevision < canonicalState.topologyRevision {
+      return RemoteDisplayStateApplication(
+        accepted: false,
+        selectedDisplayChanged: false,
+        pendingResolved: false,
+        pendingInvalidated: false
+      )
+    }
+
+    let previousDisplayId = canonicalState?.selectedDisplayId ?? ""
+    canonicalState = state
+
+    var pendingResolved = false
+    var pendingInvalidated = false
+    if let pendingAttempt {
+      if state.selectedDisplayId == pendingAttempt.displayId {
+        self.pendingAttempt = nil
+        pendingResolved = true
+      } else if !state.displays.contains(where: {
+        $0.id == pendingAttempt.displayId
+      }) {
+        self.pendingAttempt = nil
+        pendingInvalidated = true
+      }
+    }
+
+    return RemoteDisplayStateApplication(
+      accepted: true,
+      selectedDisplayChanged: previousDisplayId != state.selectedDisplayId,
+      pendingResolved: pendingResolved,
+      pendingInvalidated: pendingInvalidated
+    )
+  }
+
+  mutating func applyResult(
+    _ message: RemoteDisplayMessage
+  ) -> RemoteDisplayResultApplication? {
+    guard message.type == RemoteDisplayMessage.selectResultType,
+          let requestId = message.requestId,
+          let state = message.state else {
+      return nil
+    }
+    let matchedPendingRequest = pendingAttempt?.requestId == requestId
+    let stateApplication = applyState(state)
+    if matchedPendingRequest {
+      pendingAttempt = nil
+    }
+    return RemoteDisplayResultApplication(
+      stateApplication: stateApplication,
+      matchedPendingRequest: matchedPendingRequest
+    )
+  }
+
+  mutating func timeOut(requestId: String) -> Bool {
+    guard pendingAttempt?.requestId == requestId else {
+      return false
+    }
+    pendingAttempt = nil
+    return true
+  }
+}
+
 struct RemoteViewportTransform: Equatable {
   static let minimumScale: CGFloat = 1
   static let maximumScale: CGFloat = 4
@@ -205,6 +339,11 @@ final class RemoteAssistController: NSObject, ObservableObject {
   @Published private(set) var clipboardBusy = false
   @Published private(set) var clipboardNotice: RemoteAssistNotice?
   @Published private(set) var remoteScreenLocked = false
+  @Published private(set) var remoteDisplays: [RemoteDisplayDescriptor] = []
+  @Published private(set) var selectedRemoteDisplayId = ""
+  @Published private(set) var pendingRemoteDisplayId: String?
+  @Published private(set) var displaySelectionPending = false
+  @Published private(set) var remoteDisplayChangeToken = 0
 
   private weak var cloudSession: CloudSession?
   private let factory = RTCPeerConnectionFactory()
@@ -218,6 +357,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
   private var peerRecoveryTask: Task<Void, Never>?
   private var clipboardTimeoutTask: Task<Void, Never>?
   private var clipboardNoticeTask: Task<Void, Never>?
+  private var displaySelectionTimeoutTask: Task<Void, Never>?
   private var textFlushTask: Task<Void, Never>?
   private var bufferedText = ""
   private var textBufferStartedAt: Date?
@@ -229,10 +369,19 @@ final class RemoteAssistController: NSObject, ObservableObject {
     requestId: String,
     action: RemoteClipboardAction
   )?
+  private var displaySelection = RemoteDisplaySelectionState()
   private var lastPointerSentAt = Date.distantPast
   private var remoteIceServers = [
     RTCIceServer(urlStrings: ["stun:stun.cloudflare.com:3478"])
   ]
+
+  var hasMultipleRemoteDisplays: Bool {
+    remoteDisplays.count > 1
+  }
+
+  var remoteInputSuppressed: Bool {
+    displaySelectionPending
+  }
 
   override init() {
     RTCInitializeSSL()
@@ -339,21 +488,35 @@ final class RemoteAssistController: NSObject, ObservableObject {
 
   func toggleKeyboard() {
     if keyboardVisible {
-      keyboardVisible = false
+      dismissKeyboard()
+      return
+    }
+    guard !displaySelection.inputSuppressed else {
       return
     }
     keyboardVisible = true
     requestKeyboardFocus()
   }
 
-  func requestKeyboardFocus() {
+  func dismissKeyboard() {
+    flushBufferedText()
     guard keyboardVisible else {
+      return
+    }
+    keyboardVisible = false
+  }
+
+  func requestKeyboardFocus() {
+    guard keyboardVisible, !displaySelection.inputSuppressed else {
       return
     }
     keyboardFocusRequest &+= 1
   }
 
   func sendPointerMove(x: Double, y: Double) {
+    guard !displaySelection.inputSuppressed else {
+      return
+    }
     let now = Date()
     guard now.timeIntervalSince(lastPointerSentAt) >= (1.0 / 30.0) else {
       return
@@ -368,6 +531,9 @@ final class RemoteAssistController: NSObject, ObservableObject {
   }
 
   func sendPointerDown(x: Double, y: Double) {
+    guard !displaySelection.inputSuppressed else {
+      return
+    }
     lastPointerSentAt = .distantPast
     sendControl([
       "type": "pointer",
@@ -379,6 +545,9 @@ final class RemoteAssistController: NSObject, ObservableObject {
   }
 
   func sendPointerDrag(x: Double, y: Double) {
+    guard !displaySelection.inputSuppressed else {
+      return
+    }
     let now = Date()
     guard now.timeIntervalSince(lastPointerSentAt) >= (1.0 / 30.0) else {
       return
@@ -394,6 +563,9 @@ final class RemoteAssistController: NSObject, ObservableObject {
   }
 
   func sendPointerUp(x: Double, y: Double) {
+    guard !displaySelection.inputSuppressed else {
+      return
+    }
     sendControl([
       "type": "pointer",
       "action": "up",
@@ -404,6 +576,9 @@ final class RemoteAssistController: NSObject, ObservableObject {
   }
 
   func sendClick(x: Double, y: Double, button: String = "left") {
+    guard !displaySelection.inputSuppressed else {
+      return
+    }
     sendControl([
       "type": "pointer",
       "action": "click",
@@ -414,6 +589,9 @@ final class RemoteAssistController: NSObject, ObservableObject {
   }
 
   func sendScroll(deltaX: Double, deltaY: Double) {
+    guard !displaySelection.inputSuppressed else {
+      return
+    }
     sendControl([
       "type": "scroll",
       "deltaX": deltaX,
@@ -422,7 +600,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
   }
 
   func sendText(_ text: String) {
-    guard !text.isEmpty else {
+    guard !text.isEmpty, !displaySelection.inputSuppressed else {
       return
     }
     if bufferedText.isEmpty {
@@ -459,7 +637,9 @@ final class RemoteAssistController: NSObject, ObservableObject {
   func pressEnter() {
     guard sendKey("enter") else {
       showClipboardNotice(
-        "Remote Assist is reconnecting.",
+        displaySelection.inputSuppressed
+          ? "Wait for the Mac to finish switching displays."
+          : "Remote Assist is reconnecting.",
         isError: true
       )
       return
@@ -476,7 +656,9 @@ final class RemoteAssistController: NSObject, ObservableObject {
       )
     ) else {
       showClipboardNotice(
-        "Remote Assist is reconnecting.",
+        displaySelection.inputSuppressed
+          ? "Wait for the Mac to finish switching displays."
+          : "Remote Assist is reconnecting.",
         isError: true
       )
       return
@@ -486,7 +668,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
   }
 
   func pastePhoneClipboardToMac(_ values: [String]) {
-    guard !clipboardBusy else {
+    guard !clipboardBusy, !displaySelection.inputSuppressed else {
       return
     }
     let text = values.joined(separator: "\n")
@@ -500,7 +682,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
   }
 
   func copyMacSelectionToPhone() {
-    guard !clipboardBusy else {
+    guard !clipboardBusy, !displaySelection.inputSuppressed else {
       return
     }
     let requestId = UUID().uuidString.lowercased()
@@ -508,6 +690,75 @@ final class RemoteAssistController: NSObject, ObservableObject {
       .copyRequest(requestId: requestId),
       pendingText: "Copying from Mac..."
     )
+  }
+
+  func selectRemoteDisplay(_ displayId: String) {
+    guard phase == .connected,
+          !displaySelection.inputSuppressed,
+          let display = remoteDisplays.first(where: { $0.id == displayId }),
+          display.id != selectedRemoteDisplayId else {
+      return
+    }
+
+    dismissKeyboard()
+    let requestId = UUID().uuidString.lowercased()
+    guard let attempt = displaySelection.beginSelection(
+      displayId: display.id,
+      requestId: requestId
+    ) else {
+      return
+    }
+
+    let data: Data
+    do {
+      data = try RemoteDisplayCodec.encode(
+        .selectRequest(
+          displayId: attempt.displayId,
+          expectedTopologyRevision: attempt.expectedTopologyRevision,
+          requestId: attempt.requestId
+        )
+      )
+    } catch {
+      _ = displaySelection.timeOut(requestId: attempt.requestId)
+      publishDisplaySelection()
+      showClipboardNotice(error.localizedDescription, isError: true)
+      UINotificationFeedbackGenerator().notificationOccurred(.error)
+      return
+    }
+
+    publishDisplaySelection()
+    showClipboardNotice(
+      "Switching to \(display.name)...",
+      isError: false,
+      autoDismiss: false
+    )
+    guard sendControlData(data) else {
+      _ = displaySelection.timeOut(requestId: attempt.requestId)
+      publishDisplaySelection()
+      showClipboardNotice(
+        "Remote Assist is reconnecting. The current display will stay active.",
+        isError: true
+      )
+      UINotificationFeedbackGenerator().notificationOccurred(.error)
+      return
+    }
+
+    displaySelectionTimeoutTask?.cancel()
+    displaySelectionTimeoutTask = Task { @MainActor [weak self] in
+      try? await Task.sleep(nanoseconds: 8_000_000_000)
+      guard !Task.isCancelled,
+            let self,
+            self.displaySelection.timeOut(requestId: attempt.requestId) else {
+        return
+      }
+      self.displaySelectionTimeoutTask = nil
+      self.publishDisplaySelection()
+      self.showClipboardNotice(
+        "The Mac did not confirm the display change. The current display will stay active.",
+        isError: true
+      )
+      UINotificationFeedbackGenerator().notificationOccurred(.error)
+    }
   }
 
   private var isFailed: Bool {
@@ -784,6 +1035,9 @@ final class RemoteAssistController: NSObject, ObservableObject {
 
   @discardableResult
   private func sendInputRequest(_ message: RemoteInputMessage) -> Bool {
+    guard !displaySelection.inputSuppressed else {
+      return false
+    }
     let data: Data
     do {
       data = try RemoteInputCodec.encode(message)
@@ -851,6 +1105,130 @@ final class RemoteAssistController: NSObject, ObservableObject {
     return true
   }
 
+  private func handleDisplayMessage(_ data: Data) -> Bool {
+    guard let message = try? RemoteDisplayCodec.decode(data) else {
+      return false
+    }
+
+    switch message.type {
+    case RemoteDisplayMessage.stateType:
+      guard let state = message.state else {
+        return true
+      }
+      let previousSelectedDisplayId = displaySelection.selectedDisplayId
+      let pendingBefore = displaySelection.pendingAttempt
+      let application = displaySelection.applyState(state)
+      guard application.accepted else {
+        return true
+      }
+      if application.pendingResolved || application.pendingInvalidated {
+        displaySelectionTimeoutTask?.cancel()
+        displaySelectionTimeoutTask = nil
+      }
+      publishDisplaySelection()
+
+      if application.pendingResolved,
+         let pendingBefore,
+         let selectedDisplay = displaySelection.selectedDisplay,
+         selectedDisplay.id == pendingBefore.displayId {
+        showClipboardNotice(
+          "Showing \(selectedDisplay.name)",
+          isError: false
+        )
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+      } else if application.pendingInvalidated {
+        showClipboardNotice(
+          "That display is no longer available. The Mac kept the current display active.",
+          isError: true
+        )
+        UINotificationFeedbackGenerator().notificationOccurred(.error)
+      } else if !previousSelectedDisplayId.isEmpty,
+                application.selectedDisplayChanged,
+                let selectedDisplay = displaySelection.selectedDisplay {
+        showClipboardNotice(
+          "Showing \(selectedDisplay.name)",
+          isError: false
+        )
+      }
+      return true
+
+    case RemoteDisplayMessage.selectResultType:
+      let pendingBefore = displaySelection.pendingAttempt
+      guard let application = displaySelection.applyResult(message) else {
+        return true
+      }
+      if pendingBefore != nil, displaySelection.pendingAttempt == nil {
+        displaySelectionTimeoutTask?.cancel()
+        displaySelectionTimeoutTask = nil
+      }
+      publishDisplaySelection()
+
+      if application.matchedPendingRequest, let pendingBefore {
+        if message.ok == true,
+           displaySelection.selectedDisplayId == pendingBefore.displayId,
+           let selectedDisplay = displaySelection.selectedDisplay {
+          showClipboardNotice(
+            "Showing \(selectedDisplay.name)",
+            isError: false
+          )
+          UINotificationFeedbackGenerator().notificationOccurred(.success)
+        } else {
+          showClipboardNotice(
+            message.error ?? "The Mac could not switch displays.",
+            isError: true
+          )
+          UINotificationFeedbackGenerator().notificationOccurred(.error)
+        }
+      } else if application.stateApplication.pendingResolved,
+                let selectedDisplay = displaySelection.selectedDisplay {
+        showClipboardNotice(
+          "Showing \(selectedDisplay.name)",
+          isError: false
+        )
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+      } else if application.stateApplication.pendingInvalidated {
+        showClipboardNotice(
+          "That display is no longer available. The Mac kept the current display active.",
+          isError: true
+        )
+        UINotificationFeedbackGenerator().notificationOccurred(.error)
+      } else if application.stateApplication.accepted,
+                application.stateApplication.selectedDisplayChanged,
+                let selectedDisplay = displaySelection.selectedDisplay {
+        showClipboardNotice(
+          "Showing \(selectedDisplay.name)",
+          isError: false
+        )
+      }
+      return true
+
+    case RemoteDisplayMessage.selectType:
+      return true
+
+    default:
+      return true
+    }
+  }
+
+  private func publishDisplaySelection() {
+    let previousSelectedDisplayId = selectedRemoteDisplayId
+    remoteDisplays = displaySelection.displays
+    selectedRemoteDisplayId = displaySelection.selectedDisplayId
+    pendingRemoteDisplayId = displaySelection.pendingAttempt?.displayId
+    displaySelectionPending = displaySelection.inputSuppressed
+
+    if let selectedDisplay = displaySelection.selectedDisplay,
+       selectedDisplay.width > 0,
+       selectedDisplay.height > 0 {
+      remoteAspectRatio = CGFloat(selectedDisplay.width) /
+        CGFloat(selectedDisplay.height)
+    }
+    if previousSelectedDisplayId != selectedRemoteDisplayId,
+       !selectedRemoteDisplayId.isEmpty {
+      remoteDisplayChangeToken &+= 1
+    }
+  }
+
   private func showInputError(_ text: String) {
     let now = Date()
     guard text != lastInputErrorText ||
@@ -867,6 +1245,9 @@ final class RemoteAssistController: NSObject, ObservableObject {
     _ message: RemoteClipboardMessage,
     pendingText: String
   ) {
+    guard !displaySelection.inputSuppressed else {
+      return
+    }
     let data: Data
     do {
       data = try RemoteClipboardCodec.encode(message)
@@ -1087,6 +1468,8 @@ final class RemoteAssistController: NSObject, ObservableObject {
     clipboardTimeoutTask = nil
     clipboardNoticeTask?.cancel()
     clipboardNoticeTask = nil
+    displaySelectionTimeoutTask?.cancel()
+    displaySelectionTimeoutTask = nil
     textFlushTask?.cancel()
     textFlushTask = nil
     bufferedText = ""
@@ -1102,6 +1485,12 @@ final class RemoteAssistController: NSObject, ObservableObject {
     clipboardBusy = false
     clipboardNotice = nil
     remoteScreenLocked = false
+    displaySelection.reset()
+    remoteDisplays = []
+    selectedRemoteDisplayId = ""
+    pendingRemoteDisplayId = nil
+    displaySelectionPending = false
+    remoteAspectRatio = 16.0 / 9.0
     controlChannel?.delegate = nil
     controlChannel?.close()
     controlChannel = nil
@@ -1300,6 +1689,9 @@ extension RemoteAssistController: RTCDataChannelDelegate {
       if self.handleSessionState(data) {
         return
       }
+      if self.handleDisplayMessage(data) {
+        return
+      }
       self.handleClipboardResponse(data)
     }
   }
@@ -1328,6 +1720,12 @@ enum RemoteAssistError: LocalizedError {
 private enum RemoteAssistControlPage: Equatable {
   case primary
   case shortcuts
+  case screens
+}
+
+private enum RemoteAssistAccessibilityFocus: Hashable {
+  case screenChooser
+  case screensHeading
 }
 
 private extension RemoteShortcut {
@@ -1342,6 +1740,7 @@ private extension RemoteShortcut {
     case .arrowLeft: "←"
     case .arrowRight: "→"
     case .controlL: "⌃L"
+    case .commandT: "⌘T"
     case .commandTab: "⌘⇥"
     }
   }
@@ -1357,6 +1756,7 @@ private extension RemoteShortcut {
     case .arrowLeft: "Left Arrow"
     case .arrowRight: "Right Arrow"
     case .controlL: "Control L"
+    case .commandT: "Command T, open a new tab in the active Mac app"
     case .commandTab: "Command Tab, switch Mac app"
     }
   }
@@ -1369,6 +1769,8 @@ struct RemoteAssistView: View {
   @State private var viewportResetToken = 0
   @State private var controlsExpanded = false
   @State private var controlPage: RemoteAssistControlPage = .primary
+  @AccessibilityFocusState private var accessibilityFocus:
+    RemoteAssistAccessibilityFocus?
 
   private static let mainControlColumns = Array(
     repeating: GridItem(.fixed(44), spacing: 8),
@@ -1380,6 +1782,7 @@ struct RemoteAssistView: View {
     count: 3
   )
   private static let shortcutControlPanelWidth: CGFloat = 196
+  private static let screenControlPanelWidth: CGFloat = 228
 
   var body: some View {
     ZStack {
@@ -1394,6 +1797,7 @@ struct RemoteAssistView: View {
           onZoomChanged: { viewportZoomed = $0 }
         )
         .ignoresSafeArea()
+        .allowsHitTesting(!controller.remoteInputSuppressed)
       } else {
         VStack(spacing: 18) {
           if case .failed = controller.phase {
@@ -1419,6 +1823,28 @@ struct RemoteAssistView: View {
             .buttonStyle(ClawDadCompactButtonStyle())
           }
         }
+      }
+
+      if controller.displaySelectionPending,
+         controller.remoteVideoTrack != nil {
+        Color.black.opacity(0.001)
+          .ignoresSafeArea()
+          .contentShape(Rectangle())
+          .accessibilityHidden(true)
+
+        HStack(spacing: 9) {
+          ProgressView()
+            .controlSize(.small)
+            .tint(ClawDadTheme.gold)
+          Text("Switching displays...")
+            .font(.footnote.weight(.bold))
+            .foregroundStyle(ClawDadTheme.cream)
+        }
+        .padding(.horizontal, 14)
+        .frame(minHeight: 40)
+        .background(Color.black.opacity(0.76), in: Capsule())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Switching displays. Remote input is paused.")
       }
 
       if controlsExpanded {
@@ -1460,6 +1886,7 @@ struct RemoteAssistView: View {
             if controlsExpanded {
               collapseControls()
             } else {
+              controller.dismissKeyboard()
               controlPage = .primary
               controlsExpanded = true
             }
@@ -1475,7 +1902,9 @@ struct RemoteAssistView: View {
               : "Open Remote Assist controls"
           )
           .accessibilityHint(
-            "Shows Exit, Enter, clipboard, keyboard, shortcuts, and zoom controls"
+            controller.hasMultipleRemoteDisplays
+              ? "Shows Exit, Enter, clipboard, keyboard, shortcuts, display, and zoom controls"
+              : "Shows Exit, Enter, clipboard, keyboard, shortcuts, and zoom controls"
           )
         }
         .animation(
@@ -1492,10 +1921,10 @@ struct RemoteAssistView: View {
       )
       .padding(.trailing, 4)
       .padding(.bottom, 4)
-      .ignoresSafeArea()
+      .ignoresSafeArea(.container, edges: .all)
 
       RemoteKeyboardCapture(
-        active: controller.keyboardVisible,
+        active: controller.keyboardVisible && !controller.remoteInputSuppressed,
         focusRequest: controller.keyboardFocusRequest,
         onText: controller.sendText,
         onDelete: { controller.sendKey("delete") }
@@ -1513,6 +1942,22 @@ struct RemoteAssistView: View {
       viewportZoomed = false
       viewportResetToken += 1
     }
+    .onChange(of: controller.remoteDisplayChangeToken) { _, _ in
+      viewportZoomed = false
+      viewportResetToken += 1
+      if controlsExpanded, controlPage == .screens {
+        DispatchQueue.main.async {
+          accessibilityFocus = .screensHeading
+        }
+      }
+    }
+    .onChange(of: controller.remoteDisplays.count) { _, count in
+      guard count < 2, controlPage == .screens else {
+        return
+      }
+      controlPage = .primary
+      accessibilityFocus = nil
+    }
     .onDisappear {
       collapseControls()
       viewportZoomed = false
@@ -1528,6 +1973,8 @@ struct RemoteAssistView: View {
         primaryControlPanel
       case .shortcuts:
         shortcutControlPanel
+      case .screens:
+        screenControlPanel
       }
     }
     .frame(width: controlPanelWidth, alignment: .trailing)
@@ -1550,6 +1997,8 @@ struct RemoteAssistView: View {
       Self.mainControlPanelWidth
     case .shortcuts:
       Self.shortcutControlPanelWidth
+    case .screens:
+      Self.screenControlPanelWidth
     }
   }
 
@@ -1593,7 +2042,9 @@ struct RemoteAssistView: View {
             .frame(width: 44, height: 44)
         }
         .buttonStyle(RemoteAssistOverlayButtonStyle())
-        .disabled(controller.phase != .connected)
+        .disabled(
+          controller.phase != .connected || controller.remoteInputSuppressed
+        )
         .accessibilityLabel("Press Enter on Mac")
 
         PasteButton(payloadType: String.self) { values in
@@ -1605,7 +2056,9 @@ struct RemoteAssistView: View {
         .frame(width: 44, height: 44)
         .buttonStyle(RemoteAssistOverlayButtonStyle())
         .disabled(
-          controller.phase != .connected || controller.clipboardBusy
+          controller.phase != .connected ||
+            controller.clipboardBusy ||
+            controller.remoteInputSuppressed
         )
         .accessibilityLabel(
           controller.remoteScreenLocked
@@ -1625,7 +2078,8 @@ struct RemoteAssistView: View {
         .disabled(
           controller.phase != .connected ||
             controller.clipboardBusy ||
-            controller.remoteScreenLocked
+            controller.remoteScreenLocked ||
+            controller.remoteInputSuppressed
         )
         .accessibilityLabel(
           controller.remoteScreenLocked
@@ -1646,6 +2100,9 @@ struct RemoteAssistView: View {
           .frame(width: 44, height: 44)
         }
         .buttonStyle(RemoteAssistOverlayButtonStyle())
+        .disabled(
+          controller.phase != .connected || controller.remoteInputSuppressed
+        )
         .accessibilityLabel(
           controller.keyboardVisible ? "Hide keyboard" : "Show keyboard"
         )
@@ -1659,10 +2116,36 @@ struct RemoteAssistView: View {
         }
         .buttonStyle(RemoteAssistOverlayButtonStyle())
         .disabled(
-          controller.phase != .connected || controller.remoteScreenLocked
+          controller.phase != .connected ||
+            controller.remoteScreenLocked ||
+            controller.remoteInputSuppressed
         )
         .accessibilityLabel("Special commands")
         .accessibilityHint("Shows Control, navigation, and Mac app shortcuts")
+
+        if controller.hasMultipleRemoteDisplays {
+          Button {
+            controlPage = .screens
+            DispatchQueue.main.async {
+              accessibilityFocus = .screensHeading
+            }
+          } label: {
+            Image(systemName: "display.2")
+              .font(.system(size: 18, weight: .bold))
+              .frame(width: 44, height: 44)
+          }
+          .buttonStyle(RemoteAssistOverlayButtonStyle())
+          .disabled(
+            controller.phase != .connected ||
+              controller.remoteInputSuppressed
+          )
+          .accessibilityLabel("Choose Mac display")
+          .accessibilityHint("Shows the available Mac displays")
+          .accessibilityFocused(
+            $accessibilityFocus,
+            equals: .screenChooser
+          )
+        }
 
         if viewportZoomed {
           Button {
@@ -1674,6 +2157,7 @@ struct RemoteAssistView: View {
               .frame(width: 44, height: 44)
           }
           .buttonStyle(RemoteAssistOverlayButtonStyle())
+          .disabled(controller.remoteInputSuppressed)
           .accessibilityLabel("Reset Remote Assist zoom")
         }
       }
@@ -1714,7 +2198,9 @@ struct RemoteAssistView: View {
           }
           .buttonStyle(RemoteAssistShortcutButtonStyle())
           .disabled(
-            controller.phase != .connected || controller.remoteScreenLocked
+            controller.phase != .connected ||
+              controller.remoteScreenLocked ||
+              controller.remoteInputSuppressed
           )
           .accessibilityLabel(shortcut.accessibilityName)
           .accessibilityHint("Sends this command to the Mac")
@@ -1723,9 +2209,106 @@ struct RemoteAssistView: View {
     }
   }
 
+  private var screenControlPanel: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      HStack(spacing: 8) {
+        Button {
+          controlPage = .primary
+          DispatchQueue.main.async {
+            accessibilityFocus = .screenChooser
+          }
+        } label: {
+          Image(systemName: "chevron.left")
+            .font(.system(size: 14, weight: .black))
+            .frame(width: 32, height: 32)
+        }
+        .buttonStyle(RemoteAssistOverlayButtonStyle())
+        .accessibilityLabel("Back to Remote Assist controls")
+
+        Text("Screens")
+          .font(.caption.weight(.heavy))
+          .foregroundStyle(ClawDadTheme.cream)
+          .accessibilityAddTraits(.isHeader)
+          .accessibilityFocused(
+            $accessibilityFocus,
+            equals: .screensHeading
+          )
+
+        Spacer(minLength: 4)
+
+        if controller.displaySelectionPending {
+          ProgressView()
+            .controlSize(.small)
+            .tint(ClawDadTheme.gold)
+            .accessibilityHidden(true)
+        }
+      }
+
+      ScrollView {
+        LazyVStack(spacing: 6) {
+          ForEach(controller.remoteDisplays, id: \.id) { display in
+            let isSelected = display.id == controller.selectedRemoteDisplayId
+            let isPending = display.id == controller.pendingRemoteDisplayId
+            Button {
+              controller.selectRemoteDisplay(display.id)
+            } label: {
+              HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                  Text(display.name)
+                    .font(.footnote.weight(.bold))
+                    .lineLimit(1)
+                  Text(
+                    "\(display.width) × \(display.height)" +
+                      (display.isPrimary ? " • Main" : "")
+                  )
+                  .font(.caption2.monospacedDigit())
+                  .foregroundStyle(ClawDadTheme.cream.opacity(0.68))
+                  .lineLimit(1)
+                }
+
+                Spacer(minLength: 4)
+
+                if isPending {
+                  ProgressView()
+                    .controlSize(.small)
+                    .tint(ClawDadTheme.gold)
+                } else if isSelected {
+                  Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 17, weight: .bold))
+                    .foregroundStyle(ClawDadTheme.good)
+                }
+              }
+              .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+              .padding(.horizontal, 10)
+            }
+            .buttonStyle(RemoteAssistDisplayButtonStyle(isSelected: isSelected))
+            .disabled(
+              controller.phase != .connected ||
+                controller.displaySelectionPending ||
+                isSelected
+            )
+            .accessibilityLabel(
+              "\(display.name), \(display.width) by \(display.height)" +
+                (display.isPrimary ? ", main display" : "") +
+                (isSelected ? ", selected" : "")
+            )
+            .accessibilityValue(isPending ? "Switching" : "")
+            .accessibilityHint(
+              isSelected
+                ? "Currently shown in Remote Assist"
+                : "Shows this display in Remote Assist"
+            )
+          }
+        }
+      }
+      .frame(maxHeight: 238)
+    }
+  }
+
   private func collapseControls() {
     controlsExpanded = false
     controlPage = .primary
+    accessibilityFocus = nil
   }
 }
 
@@ -1767,6 +2350,32 @@ private struct RemoteAssistShortcutButtonStyle: ButtonStyle {
           .stroke(ClawDadTheme.cream.opacity(0.18), lineWidth: 1)
       }
       .scaleEffect(configuration.isPressed ? 0.95 : 1)
+      .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+  }
+}
+
+private struct RemoteAssistDisplayButtonStyle: ButtonStyle {
+  let isSelected: Bool
+
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .foregroundStyle(ClawDadTheme.cream)
+      .background(
+        isSelected
+          ? ClawDadTheme.gold.opacity(0.18)
+          : Color.black.opacity(configuration.isPressed ? 0.86 : 0.58),
+        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+      )
+      .overlay {
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+          .stroke(
+            isSelected
+              ? ClawDadTheme.gold.opacity(0.62)
+              : ClawDadTheme.cream.opacity(0.18),
+            lineWidth: 1
+          )
+      }
+      .scaleEffect(configuration.isPressed ? 0.98 : 1)
       .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
   }
 }
@@ -2005,6 +2614,7 @@ private struct RemoteVideoViewport: UIViewRepresentable {
       }
       let point = normalizedPoint(recognizer.location(in: view), in: view.bounds)
       Task { @MainActor in
+        controller.dismissKeyboard()
         controller.sendClick(x: point.x, y: point.y)
       }
     }

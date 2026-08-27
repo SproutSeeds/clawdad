@@ -179,18 +179,44 @@
           <label class="sr-only" for="messageInput">Message</label>
           <div class="message-input-wrap">
             <textarea id="messageInput" name="message" rows="6" placeholder="Message"></textarea>
-            <button
-              id="messageCopyButton"
-              class="copy-button composer-copy-button"
-              type="button"
-              aria-label="Copy composer text"
-              disabled
-            >
-              <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <path d="M6.2 5.1h5.05c.78 0 1.4.63 1.4 1.4v5.05c0 .78-.63 1.4-1.4 1.4H6.2c-.78 0-1.4-.63-1.4-1.4V6.5c0-.78.63-1.4 1.4-1.4Z" stroke="currentColor" stroke-width="1.25"></path>
-                <path d="M3.35 9.8H2.9c-.78 0-1.4-.63-1.4-1.4V3.35c0-.78.63-1.4 1.4-1.4h5.05c.78 0 1.4.63 1.4 1.4v.45" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"></path>
-              </svg>
-            </button>
+            <div class="composer-clipboard-controls" role="group" aria-label="Draft clipboard actions">
+              <button
+                id="messageCutButton"
+                class="copy-button composer-clipboard-button composer-cut-button"
+                type="button"
+                aria-label="Cut draft"
+                aria-describedby="composerCutHint"
+                title="Cut draft"
+                disabled
+              >
+                <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <circle cx="4.1" cy="4.15" r="1.7" stroke="currentColor" stroke-width="1.25"></circle>
+                  <circle cx="4.1" cy="11.85" r="1.7" stroke="currentColor" stroke-width="1.25"></circle>
+                  <path d="m5.55 5.05 6.95 6.95M5.55 10.95 12.5 4" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"></path>
+                </svg>
+              </button>
+              <button
+                id="messageCopyButton"
+                class="copy-button composer-clipboard-button composer-copy-button"
+                type="button"
+                aria-label="Copy composer text"
+                title="Copy composer text"
+                disabled
+              >
+                <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <path d="M6.2 5.1h5.05c.78 0 1.4.63 1.4 1.4v5.05c0 .78-.63 1.4-1.4 1.4H6.2c-.78 0-1.4-.63-1.4-1.4V6.5c0-.78.63-1.4 1.4-1.4Z" stroke="currentColor" stroke-width="1.25"></path>
+                  <path d="M3.35 9.8H2.9c-.78 0-1.4-.63-1.4-1.4V3.35c0-.78.63-1.4 1.4-1.4h5.05c.78 0 1.4.63 1.4 1.4v.45" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"></path>
+                </svg>
+              </button>
+            </div>
+            <span id="composerCutHint" class="sr-only">Copies the entire draft to the clipboard, then clears the editor.</span>
+            <div
+              id="composerClipboardStatus"
+              class="sr-only"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+            ></div>
           </div>
             <input
               id="composerAttachmentInput"

@@ -259,6 +259,18 @@ async function readMacAppVersion() {
   };
 }
 
+async function readInstalledRuntimeVersion() {
+  try {
+    const source = await readFile(
+      "/Applications/ClawDad.app/Contents/Resources/runtime/package.json",
+      "utf8",
+    );
+    return String(JSON.parse(source)?.version || "");
+  } catch {
+    return "";
+  }
+}
+
 async function readMacReleaseSettings() {
   try {
     const source = await readFile(
@@ -414,7 +426,9 @@ function physicalLedgerPath(options) {
 
 function ledgerMatchesRelease(ledger, release) {
   return (
+    ledger?.release?.distributionMode === release.distributionMode &&
     ledger?.release?.expectedVersion === release.expectedVersion &&
+    ledger?.release?.expectedRuntimeVersion === release.expectedRuntimeVersion &&
     ledger?.release?.expectedIosVersion === release.expectedIosVersion &&
     ledger?.release?.expectedIosBuild === release.expectedIosBuild &&
     ledger?.release?.expectedMacVersion === release.expectedMacVersion &&
@@ -465,7 +479,9 @@ async function recordPhysicalCertification({
     throw new Error("The iPhone or Mac release build settings are unavailable.");
   }
   const release = {
+    distributionMode: "native-private",
     expectedVersion,
+    expectedRuntimeVersion: expectedVersion,
     expectedIosVersion: iosRelease.version,
     expectedIosBuild: iosRelease.build,
     expectedMacVersion: macRelease.version,
@@ -533,6 +549,7 @@ async function main() {
     await readFile(join(projectRoot, "package.json"), "utf8"),
   );
   const expectedVersion = String(packageDocument.version || "");
+  const distributionMode = "native-private";
   if (options.help) {
     process.stdout.write(`${usage()}\n`);
     return;
@@ -554,7 +571,9 @@ async function main() {
       throw new Error("The iPhone or Mac release build settings are unavailable.");
     }
     const release = {
+      distributionMode: "native-private",
       expectedVersion,
+      expectedRuntimeVersion: expectedVersion,
       expectedIosVersion: iosRelease.version,
       expectedIosBuild: iosRelease.build,
       expectedMacVersion: macRelease.version,
@@ -582,6 +601,7 @@ async function main() {
     iosRelease,
     macRelease,
     macApp,
+    installedRuntimeVersion,
     serverAgent,
     cloudHostAgent,
     pairing,
@@ -589,8 +609,12 @@ async function main() {
     subscriptionStatus,
     gitCommit,
   ] = await Promise.all([
-    readNpmState(expectedVersion),
-    fetchJson("http://127.0.0.1:4477/healthz"),
+    Promise.resolve({
+      ok: false,
+      skipped: true,
+      reason: "native-private release",
+    }),
+    fetchJson("http://127.0.0.1:4487/healthz"),
     fetchJson("https://clawdad-cloud.frg.earth/healthz"),
     fetchHead("https://clawdad-cloud.frg.earth/support"),
     fetchHead("https://clawdad-cloud.frg.earth/privacy"),
@@ -599,8 +623,9 @@ async function main() {
     readIosReleaseSettings(),
     readMacReleaseSettings(),
     readMacAppVersion(),
-    readLaunchAgent("com.sproutseeds.clawdad.server"),
-    readLaunchAgent("earth.frg.ClawDad.cloud-host"),
+    readInstalledRuntimeVersion(),
+    readLaunchAgent("earth.frg.ClawDad.NativeRuntime"),
+    readLaunchAgent("earth.frg.ClawDad.NativeCloudHost"),
     readPairingSummary(),
     readJsonCommand(resolve(projectRoot, "bin", "clawdad-app-store"), [
       "release-status",
@@ -615,9 +640,13 @@ async function main() {
   const physicalLedger = await readPhysicalLedger(
     physicalLedgerPath(options),
     {
+      distributionMode,
       expectedVersion,
+      expectedRuntimeVersion: expectedVersion,
       expectedIosVersion: iosRelease.version,
       expectedIosBuild: iosRelease.build,
+      expectedMacVersion: macRelease.version,
+      expectedMacBuild: macRelease.build,
     },
   );
 
@@ -625,7 +654,9 @@ async function main() {
     schema: "clawdad.reliability-snapshot/1",
     capturedAt: new Date().toISOString(),
     release: {
+      distributionMode,
       expectedVersion,
+      expectedRuntimeVersion: expectedVersion,
       expectedIosVersion: iosRelease.version,
       expectedIosBuild: iosRelease.build,
       expectedIosBundleIdentifier: iosRelease.bundleIdentifier,
@@ -638,6 +669,7 @@ async function main() {
     },
     mac: {
       installedApp: macApp,
+      installedRuntimeVersion,
       localHealth: sanitizeServiceHealth(localHealth.payload || localHealth),
       serverLaunchAgent: serverAgent,
       cloudHostLaunchAgent: cloudHostAgent,

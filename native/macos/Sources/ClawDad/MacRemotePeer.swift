@@ -1,3 +1,4 @@
+import AppKit
 import ClawDadRemoteAssistProtocol
 import Foundation
 @preconcurrency import WebRTC
@@ -58,23 +59,33 @@ final class MacRemotePeer: NSObject {
 
   var onIceCandidate: ((RTCIceCandidate) -> Void)?
   var onConnectionState: ((RTCPeerConnectionState) -> Void)?
+  var onFatalError: ((Error) -> Void)?
 
   private let factory: RTCPeerConnectionFactory
-  private let inputController = MacInputController()
+  private let inputController: MacInputController
   private let iceServers: [RemoteIceServerConfiguration]
   private var peerConnection: RTCPeerConnection?
   private var controlChannel: RTCDataChannel?
   private var screenCapturer: MacScreenCapturer?
   private var pendingRemoteCandidates: [RTCIceCandidate] = []
   private var sessionStateTask: Task<Void, Never>?
+  private var displaySelectionTask: Task<Void, Never>?
+  private var displayRefreshTask: Task<Void, Never>?
+  private var displayOperationInProgress = false
+  private var displayRefreshPending = false
+  private var screenParametersObserver: NSObjectProtocol?
   private var lastPublishedScreenLocked: Bool?
   private var answerApplicationGate = RemoteAnswerApplicationGate()
 
   init(
     factory: RTCPeerConnectionFactory,
     iceServers: [RemoteIceServerConfiguration]
-  ) {
+  ) throws {
+    guard let inputController = MacInputController() else {
+      throw RemoteAssistHostError.inputEventSourceUnavailable
+    }
     self.factory = factory
+    self.inputController = inputController
     self.iceServers = iceServers
     super.init()
   }
@@ -82,6 +93,9 @@ final class MacRemotePeer: NSObject {
   func createOffer() async throws -> Offer {
     let videoSource = factory.videoSource(forScreenCast: true)
     let capturer = MacScreenCapturer(videoSource: videoSource)
+    capturer.onStreamFailure = { [weak self] _ in
+      self?.scheduleDisplayTopologyRefresh()
+    }
     screenCapturer = capturer
 
     let videoTrack = factory.videoTrack(
@@ -129,6 +143,11 @@ final class MacRemotePeer: NSObject {
     controlChannel = channel
 
     try await capturer.start()
+    guard let activeDisplayID = capturer.activeDisplayID else {
+      throw RemoteAssistHostError.noDisplayAvailable
+    }
+    inputController.commitDisplayTransition(to: activeDisplayID)
+    startDisplayTopologyMonitoring()
     let offer = try await offer(on: peer)
     try await setLocalDescription(offer, on: peer)
     return Offer(
@@ -204,6 +223,16 @@ final class MacRemotePeer: NSObject {
 
   func stop() {
     answerApplicationGate.invalidate()
+    displaySelectionTask?.cancel()
+    displaySelectionTask = nil
+    displayRefreshTask?.cancel()
+    displayRefreshTask = nil
+    displayOperationInProgress = false
+    displayRefreshPending = false
+    if let screenParametersObserver {
+      NotificationCenter.default.removeObserver(screenParametersObserver)
+      self.screenParametersObserver = nil
+    }
     inputController.cancelPendingOperations()
     sessionStateTask?.cancel()
     sessionStateTask = nil
@@ -244,6 +273,13 @@ final class MacRemotePeer: NSObject {
     sendControlData(data)
   }
 
+  private func sendControl(_ message: RemoteDisplayMessage) {
+    guard let data = try? RemoteDisplayCodec.encode(message) else {
+      return
+    }
+    sendControlData(data)
+  }
+
   private func sendControlData(_ data: Data) {
     guard let controlChannel,
           controlChannel.readyState == .open else {
@@ -254,12 +290,14 @@ final class MacRemotePeer: NSObject {
 
   private func controlChannelStateChanged() {
     guard controlChannel?.readyState == .open else {
+      inputController.cancelPendingOperations()
       sessionStateTask?.cancel()
       sessionStateTask = nil
       lastPublishedScreenLocked = nil
       return
     }
     publishSessionState(force: true)
+    publishDisplayState()
     guard sessionStateTask == nil else {
       return
     }
@@ -283,6 +321,162 @@ final class MacRemotePeer: NSObject {
     }
     lastPublishedScreenLocked = screenLocked
     sendControl(.state(screenLocked: screenLocked))
+  }
+
+  private func publishDisplayState() {
+    guard let state = screenCapturer?.displayState else {
+      return
+    }
+    sendControl(RemoteDisplayMessage.state(state))
+  }
+
+  private func handleDisplaySelection(_ message: RemoteDisplayMessage) {
+    guard message.type == RemoteDisplayMessage.selectType,
+          let requestId = message.requestId,
+          let displayId = message.displayId,
+          let expectedRevision = message.expectedTopologyRevision,
+          let capturer = screenCapturer,
+          let currentState = capturer.displayState else {
+      return
+    }
+
+    guard displaySelectionTask == nil,
+          !displayOperationInProgress else {
+      sendControl(.selectFailure(
+        requestId: requestId,
+        errorCode: "switch_in_progress",
+        error: "ClawDad is already switching screens.",
+        state: currentState
+      ))
+      return
+    }
+
+    displayRefreshTask?.cancel()
+    displayRefreshTask = nil
+    displayOperationInProgress = true
+    inputController.prepareForDisplayTransition()
+    displaySelectionTask = Task { @MainActor [weak self, weak capturer] in
+      guard let self, let capturer else {
+        return
+      }
+      defer {
+        self.displaySelectionTask = nil
+        self.displayOperationInProgress = false
+        if self.displayRefreshPending {
+          self.scheduleDisplayTopologyRefresh()
+        }
+      }
+      do {
+        let state = try await capturer.selectDisplay(
+          displayId: displayId,
+          expectedTopologyRevision: expectedRevision
+        )
+        guard !Task.isCancelled,
+              self.screenCapturer === capturer,
+              let activeDisplayID = capturer.activeDisplayID else {
+          return
+        }
+        self.inputController.commitDisplayTransition(to: activeDisplayID)
+        self.sendControl(.selectSuccess(
+          requestId: requestId,
+          state: state
+        ))
+        self.sendControl(RemoteDisplayMessage.state(state))
+      } catch let failure as MacDisplaySelectionFailure {
+        guard !Task.isCancelled,
+              self.screenCapturer === capturer else {
+          return
+        }
+        if let activeDisplayID = capturer.activeDisplayID {
+          self.inputController.commitDisplayTransition(to: activeDisplayID)
+        } else {
+          self.inputController.cancelDisplayTransition()
+        }
+        self.sendControl(.selectFailure(
+          requestId: requestId,
+          errorCode: failure.code,
+          error: failure.message,
+          state: failure.state
+        ))
+        self.sendControl(RemoteDisplayMessage.state(failure.state))
+      } catch {
+        guard !Task.isCancelled,
+              self.screenCapturer === capturer else {
+          return
+        }
+        self.inputController.cancelDisplayTransition()
+        self.onFatalError?(error)
+      }
+    }
+  }
+
+  private func startDisplayTopologyMonitoring() {
+    guard screenParametersObserver == nil else {
+      return
+    }
+    screenParametersObserver = NotificationCenter.default.addObserver(
+      forName: NSApplication.didChangeScreenParametersNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] _ in
+      Task { @MainActor [weak self] in
+        self?.scheduleDisplayTopologyRefresh()
+      }
+    }
+  }
+
+  private func scheduleDisplayTopologyRefresh() {
+    displayRefreshPending = true
+    guard !displayOperationInProgress else {
+      return
+    }
+    displayRefreshTask?.cancel()
+    displayRefreshTask = Task { @MainActor [weak self] in
+      do {
+        try await Task.sleep(nanoseconds: 400_000_000)
+      } catch {
+        return
+      }
+      guard !Task.isCancelled, let self else {
+        return
+      }
+      guard self.displaySelectionTask == nil,
+            !self.displayOperationInProgress else {
+        self.displayRefreshTask = nil
+        return
+      }
+      self.displayRefreshPending = false
+      self.displayOperationInProgress = true
+      await self.refreshDisplayTopology()
+      self.displayOperationInProgress = false
+      self.displayRefreshTask = nil
+      if self.displayRefreshPending {
+        self.scheduleDisplayTopologyRefresh()
+      }
+    }
+  }
+
+  private func refreshDisplayTopology() async {
+    guard let capturer = screenCapturer else {
+      return
+    }
+    inputController.prepareForDisplayTransition()
+    do {
+      let state = try await capturer.refreshDisplays()
+      guard !Task.isCancelled,
+            screenCapturer === capturer,
+            let activeDisplayID = capturer.activeDisplayID else {
+        return
+      }
+      inputController.commitDisplayTransition(to: activeDisplayID)
+      sendControl(RemoteDisplayMessage.state(state))
+    } catch {
+      guard screenCapturer === capturer else {
+        return
+      }
+      inputController.cancelDisplayTransition()
+      onFatalError?(error)
+    }
   }
 
   private func offer(on peer: RTCPeerConnection) async throws -> RTCSessionDescription {
@@ -417,6 +611,11 @@ extension MacRemotePeer: RTCDataChannelDelegate {
     let data = buffer.data
     Task { @MainActor [weak self] in
       guard let self else {
+        return
+      }
+      if let displayMessage = try? RemoteDisplayCodec.decode(data),
+         displayMessage.type == RemoteDisplayMessage.selectType {
+        self.handleDisplaySelection(displayMessage)
         return
       }
       self.inputController.handle(

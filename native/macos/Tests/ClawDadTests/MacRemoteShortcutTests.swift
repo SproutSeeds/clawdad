@@ -56,4 +56,145 @@ final class MacRemoteShortcutTests: XCTestCase {
       )
     )
   }
+
+  func testCommandTUsesTheSystemEventStream() {
+    XCTAssertEqual(
+      macRemoteShortcutPlan(for: .commandT),
+      MacRemoteShortcutPlan(
+        keyCode: CGKeyCode(kVK_ANSI_T),
+        flags: .maskCommand,
+        delivery: .system
+      )
+    )
+  }
+
+  func testCommandTUsesBalancedModifierLifecycle() {
+    XCTAssertEqual(
+      macRemoteShortcutEventSteps(for: .commandT),
+      [
+        MacRemoteKeyEventStep(
+          keyCode: CGKeyCode(kVK_Command),
+          keyDown: true,
+          flags: .maskCommand
+        ),
+        MacRemoteKeyEventStep(
+          keyCode: CGKeyCode(kVK_ANSI_T),
+          keyDown: true,
+          flags: .maskCommand
+        ),
+        MacRemoteKeyEventStep(
+          keyCode: CGKeyCode(kVK_ANSI_T),
+          keyDown: false,
+          flags: .maskCommand
+        ),
+        MacRemoteKeyEventStep(
+          keyCode: CGKeyCode(kVK_Command),
+          keyDown: false,
+          flags: []
+        ),
+      ]
+    )
+  }
+
+  func testCommandTabUsesBalancedModifierLifecycle() {
+    XCTAssertEqual(
+      macRemoteShortcutEventSteps(for: .commandTab),
+      [
+        MacRemoteKeyEventStep(
+          keyCode: CGKeyCode(kVK_Command),
+          keyDown: true,
+          flags: .maskCommand
+        ),
+        MacRemoteKeyEventStep(
+          keyCode: CGKeyCode(kVK_Tab),
+          keyDown: true,
+          flags: .maskCommand
+        ),
+        MacRemoteKeyEventStep(
+          keyCode: CGKeyCode(kVK_Tab),
+          keyDown: false,
+          flags: .maskCommand
+        ),
+        MacRemoteKeyEventStep(
+          keyCode: CGKeyCode(kVK_Command),
+          keyDown: false,
+          flags: []
+        ),
+      ]
+    )
+  }
+
+  func testControlShortcutEndsWithNeutralModifierState() {
+    let steps = macRemoteShortcutEventSteps(for: .controlC)
+
+    XCTAssertEqual(steps.first, MacRemoteKeyEventStep(
+      keyCode: CGKeyCode(kVK_Control),
+      keyDown: true,
+      flags: .maskControl
+    ))
+    XCTAssertEqual(steps.last, MacRemoteKeyEventStep(
+      keyCode: CGKeyCode(kVK_Control),
+      keyDown: false,
+      flags: []
+    ))
+  }
+
+  func testCompoundModifierLifecycleReleasesInReverseOrder() {
+    XCTAssertEqual(
+      macRemoteKeyEventSteps(
+        keyCode: CGKeyCode(kVK_ANSI_A),
+        flags: [.maskShift, .maskAlternate]
+      ),
+      [
+        MacRemoteKeyEventStep(
+          keyCode: CGKeyCode(kVK_Shift),
+          keyDown: true,
+          flags: .maskShift
+        ),
+        MacRemoteKeyEventStep(
+          keyCode: CGKeyCode(kVK_Option),
+          keyDown: true,
+          flags: [.maskShift, .maskAlternate]
+        ),
+        MacRemoteKeyEventStep(
+          keyCode: CGKeyCode(kVK_ANSI_A),
+          keyDown: true,
+          flags: [.maskShift, .maskAlternate]
+        ),
+        MacRemoteKeyEventStep(
+          keyCode: CGKeyCode(kVK_ANSI_A),
+          keyDown: false,
+          flags: [.maskShift, .maskAlternate]
+        ),
+        MacRemoteKeyEventStep(
+          keyCode: CGKeyCode(kVK_Option),
+          keyDown: false,
+          flags: .maskShift
+        ),
+        MacRemoteKeyEventStep(
+          keyCode: CGKeyCode(kVK_Shift),
+          keyDown: false,
+          flags: []
+        ),
+      ]
+    )
+  }
+
+  func testUnmodifiedNavigationKeyUsesNeutralFlags() {
+    XCTAssertEqual(
+      macRemoteShortcutEventSteps(for: .escape),
+      [
+        MacRemoteKeyEventStep(
+          keyCode: CGKeyCode(kVK_Escape),
+          keyDown: true,
+          flags: []
+        ),
+        MacRemoteKeyEventStep(
+          keyCode: CGKeyCode(kVK_Escape),
+          keyDown: false,
+          flags: []
+        ),
+      ]
+    )
+  }
 }

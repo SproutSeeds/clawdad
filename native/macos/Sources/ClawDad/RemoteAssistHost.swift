@@ -35,6 +35,7 @@ enum RemoteAssistHostError: LocalizedError {
   case peerConnectionUnavailable
   case videoTrackUnavailable
   case controlChannelUnavailable
+  case inputEventSourceUnavailable
   case invalidSessionDescription
   case relayUnavailable
 
@@ -52,6 +53,8 @@ enum RemoteAssistHostError: LocalizedError {
       return "ClawDad could not create the screen video stream."
     case .controlChannelUnavailable:
       return "ClawDad could not create the Remote Assist control channel."
+    case .inputEventSourceUnavailable:
+      return "ClawDad could not create an isolated Remote Assist input session. Restart ClawDad and try again."
     case .invalidSessionDescription:
       return "Remote Assist received an invalid connection response."
     case .relayUnavailable:
@@ -435,7 +438,7 @@ final class RemoteAssistHost: NSObject {
               currentDeviceId == envelope.sourceDeviceId else {
           return
         }
-        let peer = MacRemotePeer(
+        let peer = try MacRemotePeer(
           factory: factory,
           iceServers: iceServers
         )
@@ -477,6 +480,15 @@ final class RemoteAssistHost: NSObject {
           default:
             break
           }
+        }
+        peer.onFatalError = { [weak self, weak peer] error in
+          guard let self, let peer, self.currentPeer === peer else {
+            return
+          }
+          self.stopActiveSession(
+            reason: error.localizedDescription,
+            notifyPhone: true
+          )
         }
 
         let offer = try await peer.createOffer()

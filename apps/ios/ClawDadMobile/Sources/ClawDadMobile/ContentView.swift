@@ -25,6 +25,7 @@ struct ContentView: View {
   @State private var scannerError = ""
   @State private var message = ""
   @State private var composerCopied = false
+  @State private var composerCutConfirmed = false
   @State private var voicePulse = false
   @State private var voiceDraftBase = ""
   @State private var consumedVoiceTranscriptionId = ""
@@ -625,7 +626,7 @@ struct ContentView: View {
         .frame(minHeight: 156)
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .padding(.trailing, 40)
+        .padding(.trailing, 84)
         .focused($messageEditorFocused)
         .accessibilityIdentifier("clawdad.composer.editor")
 
@@ -643,18 +644,33 @@ struct ContentView: View {
         .stroke(ClawDadTheme.peach.opacity(0.18), lineWidth: 1)
     )
     .overlay(alignment: .topTrailing) {
-      Button {
-        copyComposerDraft()
-      } label: {
-        Image(systemName: composerCopied ? "checkmark" : "doc.on.doc")
-          .font(.system(size: 13, weight: .bold))
-          .frame(width: 34, height: 34)
+      HStack(spacing: 6) {
+        Button {
+          cutComposerDraft()
+        } label: {
+          Image(systemName: composerCutConfirmed ? "checkmark" : "scissors")
+            .font(.system(size: 13, weight: .bold))
+            .frame(width: 34, height: 34)
+        }
+        .buttonStyle(ClawDadIconButtonStyle())
+        .disabled(message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        .accessibilityLabel(composerCutConfirmed ? "Draft cut" : "Cut draft")
+        .accessibilityHint("Copies the full draft to the clipboard and clears the message")
+        .accessibilityIdentifier("clawdad.composer.cut")
+
+        Button {
+          copyComposerDraft()
+        } label: {
+          Image(systemName: composerCopied ? "checkmark" : "doc.on.doc")
+            .font(.system(size: 13, weight: .bold))
+            .frame(width: 34, height: 34)
+        }
+        .buttonStyle(ClawDadIconButtonStyle())
+        .disabled(message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        .accessibilityLabel(composerCopied ? "Draft copied" : "Copy draft")
+        .accessibilityIdentifier("clawdad.composer.copy")
       }
-      .buttonStyle(ClawDadIconButtonStyle())
-      .disabled(message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
       .padding(10)
-      .accessibilityLabel(composerCopied ? "Draft copied" : "Copy draft")
-      .accessibilityIdentifier("clawdad.composer.copy")
     }
   }
 
@@ -991,11 +1007,33 @@ struct ContentView: View {
     guard !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
       return
     }
-    copyTextToPasteboard(message)
+    guard copyTextToPasteboard(message) else {
+      return
+    }
+    composerCutConfirmed = false
     composerCopied = true
     Task {
       try? await Task.sleep(nanoseconds: 1_200_000_000)
       composerCopied = false
+    }
+  }
+
+  private func cutComposerDraft() {
+    var updatedMessage = message
+    guard performComposerDraftCut(
+      &updatedMessage,
+      copyToClipboard: copyTextToPasteboard
+    ) else {
+      return
+    }
+    message = updatedMessage
+    voiceDraftBase = ""
+    composerCopied = false
+    composerCutConfirmed = true
+    messageEditorFocused = true
+    Task {
+      try? await Task.sleep(nanoseconds: 1_200_000_000)
+      composerCutConfirmed = false
     }
   }
 
@@ -1828,7 +1866,9 @@ struct MessageCopyButton: View {
 
   var body: some View {
     Button {
-      copyTextToPasteboard(text)
+      guard copyTextToPasteboard(text) else {
+        return
+      }
       copied = true
       DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
         copied = false
@@ -2185,9 +2225,26 @@ private func markdownAutolinkText(_ value: String) -> String {
   return result
 }
 
-private func copyTextToPasteboard(_ text: String) {
+func performComposerDraftCut(
+  _ draft: inout String,
+  copyToClipboard: (String) -> Bool
+) -> Bool {
+  guard !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+    return false
+  }
+  guard copyToClipboard(draft) else {
+    return false
+  }
+  draft = ""
+  return true
+}
+
+private func copyTextToPasteboard(_ text: String) -> Bool {
   #if canImport(UIKit)
   UIPasteboard.general.string = text
+  return true
+  #else
+  return false
   #endif
 }
 

@@ -71,6 +71,10 @@ final class RemoteInputProtocolTests: XCTestCase {
     }
   }
 
+  func testCommandTUsesStableWireValue() {
+    XCTAssertEqual(RemoteShortcut.commandT.rawValue, "command_t")
+  }
+
   func testShortcutResponseCannotEchoTheCommand() {
     let message = RemoteInputMessage(
       type: RemoteInputMessage.resultType,

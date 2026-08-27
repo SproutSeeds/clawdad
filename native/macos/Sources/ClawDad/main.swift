@@ -6,8 +6,8 @@ import WebKit
 
 private let appName = "ClawDad"
 private let localHost = "127.0.0.1"
-private let preferredPort = 4477
-private let fallbackPortStart = 4487
+private let preferredPort = 4487
+private let fallbackPortStart = 4488
 private let fallbackPortEnd = 4517
 
 struct ClawDadHealth {
@@ -79,6 +79,8 @@ final class ClawDadSecrets {
 
 final class ClawDadService {
   private static let managedServiceLabel = "earth.frg.ClawDad.NativeRuntime"
+  private static let managedCloudServiceLabel = "earth.frg.ClawDad.NativeCloudHost"
+  private static let legacyCloudServiceLabel = "earth.frg.ClawDad.cloud-host"
 
   let repoRoot: URL
   let supportDir: URL
@@ -118,6 +120,7 @@ final class ClawDadService {
         let port = self.choosePort()
         if let health = self.health(port: port), health.ok, health.service == "clawdad-server" {
           status("Connecting to local ClawDad service...")
+          self.startManagedCloudHostIfNeeded(port: port, status: status)
           ready(.success(self.baseURL(port: port)))
           return
         }
@@ -125,6 +128,7 @@ final class ClawDadService {
         status("Starting local ClawDad service...")
         try self.startManagedService(port: port)
         try self.waitForHealth(port: port, status: status)
+        self.startManagedCloudHostIfNeeded(port: port, status: status)
         ready(.success(self.baseURL(port: port)))
       } catch {
         ready(.failure(error))
@@ -275,7 +279,7 @@ final class ClawDadService {
     try stdoutHandle.close()
     try stderrHandle.close()
 
-    Self.removeManagedService()
+    Self.removeManagedService(label: Self.managedServiceLabel)
 
     let environment = Self.serverEnvironment(
       repoRoot: repoRoot,
@@ -326,6 +330,118 @@ final class ClawDadService {
     }
   }
 
+  private func startManagedCloudHostIfNeeded(
+    port: Int,
+    status: @escaping (String) -> Void
+  ) {
+    let cloudConfig = FileManager.default.homeDirectoryForCurrentUser
+      .appendingPathComponent(".clawdad", isDirectory: true)
+      .appendingPathComponent("cloud.json")
+    guard FileManager.default.fileExists(atPath: cloudConfig.path) else {
+      return
+    }
+
+    // Existing private-beta installs may still have the old npm-backed
+    // connector loaded. The controlled migration stops it only after this
+    // bundled replacement has been built and verified, preventing two sockets
+    // from claiming the same paired host identity.
+    guard !Self.managedServiceIsLoaded(label: Self.legacyCloudServiceLabel) else {
+      return
+    }
+
+    do {
+      status("Connecting paired iPhone...")
+      try startManagedCloudHost(port: port, configURL: cloudConfig)
+    } catch {
+      appendNativeCloudHostDiagnostic(error.localizedDescription)
+    }
+  }
+
+  private func startManagedCloudHost(port: Int, configURL: URL) throws {
+    let serverPath = repoRoot.appendingPathComponent("lib/server.mjs")
+    guard FileManager.default.fileExists(atPath: serverPath.path) else {
+      throw NSError(
+        domain: "ClawDad",
+        code: 7,
+        userInfo: [NSLocalizedDescriptionKey: "Could not find \(serverPath.path)"]
+      )
+    }
+    let nodeURL = try Self.nodeExecutableURL()
+    let logsDir = supportDir.appendingPathComponent("logs")
+    try FileManager.default.createDirectory(at: logsDir, withIntermediateDirectories: true)
+    let stdout = logsDir.appendingPathComponent("native-cloud-host.stdout.log")
+    let stderr = logsDir.appendingPathComponent("native-cloud-host.stderr.log")
+    FileManager.default.createFile(atPath: stdout.path, contents: nil)
+    FileManager.default.createFile(atPath: stderr.path, contents: nil)
+
+    Self.removeManagedService(label: Self.managedCloudServiceLabel)
+    let environment = Self.serverEnvironment(
+      repoRoot: repoRoot,
+      tokenFile: tokenFile
+    )
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+    process.arguments = [
+      "submit",
+      "-l", Self.managedCloudServiceLabel,
+      "-o", stdout.path,
+      "-e", stderr.path,
+      "--",
+      "/usr/bin/env",
+      "PATH=\(environment["PATH"] ?? "")",
+      "CLAWDAD_ROOT=\(repoRoot.path)",
+      "CLAWDAD_DISABLE_DELEGATE_SUPERVISOR_RESUME=1",
+      "CLAWDAD_NATIVE_RUNTIME_VERSION=\(runtimeVersion)",
+      nodeURL.path,
+      serverPath.path,
+      "cloud-host",
+      "--config", configURL.path,
+      "--local-url", baseURL(port: port).absoluteString,
+      "--local-token-file", tokenFile.path
+    ]
+    let launchOutput = Pipe()
+    process.standardOutput = launchOutput
+    process.standardError = launchOutput
+    try process.run()
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else {
+      let detail = String(
+        data: launchOutput.fileHandleForReading.readDataToEndOfFile(),
+        encoding: .utf8
+      )?.trimmingCharacters(in: .whitespacesAndNewlines)
+      throw NSError(
+        domain: "ClawDad",
+        code: 8,
+        userInfo: [
+          NSLocalizedDescriptionKey:
+            detail?.isEmpty == false
+              ? "Could not start paired-phone connector: \(detail!)"
+              : "Could not start paired-phone connector."
+        ]
+      )
+    }
+  }
+
+  private func appendNativeCloudHostDiagnostic(_ message: String) {
+    let logURL = supportDir
+      .appendingPathComponent("logs", isDirectory: true)
+      .appendingPathComponent("native-cloud-host.stderr.log")
+    let line = "[native-cloud-host] \(ISO8601DateFormatter().string(from: Date())) \(message)\n"
+    guard let data = line.data(using: .utf8) else {
+      return
+    }
+    if !FileManager.default.fileExists(atPath: logURL.path) {
+      FileManager.default.createFile(atPath: logURL.path, contents: data)
+      return
+    }
+    guard let handle = try? FileHandle(forWritingTo: logURL) else {
+      return
+    }
+    defer { try? handle.close() }
+    _ = try? handle.seekToEnd()
+    try? handle.write(contentsOf: data)
+  }
+
   private static func nodeExecutableURL() throws -> URL {
     var candidates: [String] = []
     if let envNode = ProcessInfo.processInfo.environment["CLAWDAD_NODE_PATH"], !envNode.isEmpty {
@@ -371,10 +487,10 @@ final class ClawDadService {
     return environment
   }
 
-  private static func removeManagedService() {
+  private static func removeManagedService(label: String) {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-    process.arguments = ["remove", managedServiceLabel]
+    process.arguments = ["remove", label]
     process.standardOutput = FileHandle.nullDevice
     process.standardError = FileHandle.nullDevice
     do {
@@ -383,14 +499,14 @@ final class ClawDadService {
     } catch {
       return
     }
-    waitForManagedServiceRemoval()
+    waitForManagedServiceRemoval(label: label)
   }
 
-  private static func waitForManagedServiceRemoval() {
+  private static func waitForManagedServiceRemoval(label: String) {
     let deadline = Date().addingTimeInterval(2)
     var consecutiveAbsentChecks = 0
     while Date() < deadline {
-      if managedServiceIsLoaded() {
+      if managedServiceIsLoaded(label: label) {
         consecutiveAbsentChecks = 0
       } else {
         consecutiveAbsentChecks += 1
@@ -402,10 +518,10 @@ final class ClawDadService {
     }
   }
 
-  private static func managedServiceIsLoaded() -> Bool {
+  private static func managedServiceIsLoaded(label: String) -> Bool {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-    process.arguments = ["list", managedServiceLabel]
+    process.arguments = ["list", label]
     process.standardOutput = FileHandle.nullDevice
     process.standardError = FileHandle.nullDevice
     do {

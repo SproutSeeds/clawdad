@@ -124,6 +124,23 @@ const iosMascotImagePath = path.join(
   "clawdad-mascot.png",
 );
 
+async function loadComposerCutHelper() {
+  const source = await readFile(webAppPath, "utf8");
+  const start = source.indexOf("async function cutComposerDraft(");
+  const end = source.indexOf("async function fetchJson", start);
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  assert.ok(end > start);
+
+  const context = {};
+  vm.createContext(context);
+  vm.runInContext(
+    `${source.slice(start, end)}\nglobalThis.cutComposerDraft = cutComposerDraft;`,
+    context,
+  );
+  return context.cutComposerDraft;
+}
+
 async function loadHistoryMergeHelpers() {
   const source = await readFile(webAppPath, "utf8");
   const start = source.indexOf("function normalizeHistoryAttachments");
@@ -446,7 +463,7 @@ test("macOS packaged shell carries a self-contained ClawDad runtime", async () =
   assert.match(nativeSource, /\/bin\/launchctl/u);
   assert.match(nativeSource, /waitForManagedServiceRemoval/u);
   assert.match(nativeSource, /consecutiveAbsentChecks >= 2/u);
-  assert.match(nativeSource, /process\.arguments = \["list", managedServiceLabel\]/u);
+  assert.match(nativeSource, /process\.arguments = \["list", label\]/u);
   assert.match(nativeSource, /CLAWDAD_NATIVE_RUNTIME_VERSION/u);
   assert.match(nativeSource, /prepareBundledRuntime/u);
   assert.match(nativeSource, /\.runtime-\\\(UUID\(\)\.uuidString\.lowercased\(\)\)/u);
@@ -536,23 +553,85 @@ test("Remote Assist releases stale sessions across network changes", async () =>
   assert.match(hostSource, /incomingDeviceId: envelope\.sourceDeviceId/u);
 });
 
-test("web composer exposes quick copy for the current prompt draft", async () => {
+test("web composer exposes accessible Copy and Cut controls for the current prompt draft", async () => {
   const [indexHtml, appSource, cssSource] = await Promise.all([
     readFile(webIndexPath, "utf8"),
     readFile(webAppPath, "utf8"),
     readFile(webCssPath, "utf8"),
   ]);
 
-  assert.match(indexHtml, /class="message-input-wrap"[\s\S]*id="messageInput"[\s\S]*id="messageCopyButton"/u);
+  assert.match(
+    indexHtml,
+    /class="message-input-wrap"[\s\S]*id="messageInput"[\s\S]*id="messageCutButton"[\s\S]*id="messageCopyButton"/u,
+  );
+  assert.match(indexHtml, /id="messageCutButton"[\s\S]*aria-label="Cut draft"[\s\S]*title="Cut draft"/u);
+  assert.match(indexHtml, /id="composerClipboardStatus"[\s\S]*role="status"[\s\S]*aria-live="polite"/u);
+  assert.match(indexHtml, /Copies the entire draft to the clipboard, then clears the editor\./u);
+  assert.match(appSource, /messageCutButton: document\.querySelector\("#messageCutButton"\)/u);
   assert.match(appSource, /messageCopyButton: document\.querySelector\("#messageCopyButton"\)/u);
+  assert.match(appSource, /composerClipboardStatus: document\.querySelector\("#composerClipboardStatus"\)/u);
   assert.match(appSource, /const composerCopyKey = "composer-message";/u);
+  assert.match(appSource, /const composerCutKey = "composer-cut";/u);
   assert.match(appSource, /copyText\(text\);[\s\S]*markCopied\(composerCopyKey\)/u);
+  assert.match(appSource, /state\.composerCutPending[\s\S]*didCut = await cutComposerDraft\(input\)/u);
+  assert.match(appSource, /input\.focus\(\{ preventScroll: true \}\)/u);
   assert.match(appSource, /updateMessageCopyButton\(\);/u);
+  assert.match(appSource, /updateMessageCutButton\(\);/u);
   assert.match(cssSource, /\.message-input-wrap/u);
+  assert.match(cssSource, /\.composer-clipboard-controls/u);
   assert.match(cssSource, /\.composer-copy-button/u);
+  assert.match(cssSource, /\.composer-cut-button/u);
+
+  const cutHandlerStart = appSource.indexOf(
+    'elements.messageCutButton?.addEventListener("click"',
+  );
+  const copyHandlerStart = appSource.indexOf(
+    'elements.messageCopyButton?.addEventListener("click"',
+    cutHandlerStart,
+  );
+  assert.notEqual(cutHandlerStart, -1);
+  assert.notEqual(copyHandlerStart, -1);
+  const cutHandler = appSource.slice(cutHandlerStart, copyHandlerStart);
+  assert.doesNotMatch(cutHandler, /composerAttachments|clearComposerAttachments/u);
 });
 
-test("iPhone composer copies drafts and records voice notes through paired ClawDad STT", async () => {
+test("web Cut copies the exact draft and preserves it when clipboard writing fails", async () => {
+  const cutComposerDraft = await loadComposerCutHelper();
+  const rawDraft = "  First line\nSecond line  ";
+  const input = { value: rawDraft };
+  let clipboardText = "";
+
+  assert.equal(
+    await cutComposerDraft(input, async (text) => {
+      clipboardText = text;
+    }),
+    true,
+  );
+  assert.equal(clipboardText, rawDraft);
+  assert.equal(input.value, "");
+
+  const failedInput = { value: rawDraft };
+  await assert.rejects(
+    cutComposerDraft(failedInput, async () => {
+      throw new Error("Clipboard unavailable");
+    }),
+    /Clipboard unavailable/u,
+  );
+  assert.equal(failedInput.value, rawDraft);
+
+  const blankInput = { value: " \n " };
+  let blankWriteAttempted = false;
+  assert.equal(
+    await cutComposerDraft(blankInput, async () => {
+      blankWriteAttempted = true;
+    }),
+    false,
+  );
+  assert.equal(blankWriteAttempted, false);
+  assert.equal(blankInput.value, " \n ");
+});
+
+test("iPhone composer copies and cuts drafts, then records voice notes through paired ClawDad STT", async () => {
   const [contentSource, cloudSource, infoPlist] = await Promise.all([
     readFile(iosContentPath, "utf8"),
     readFile(iosCloudClientPath, "utf8"),
@@ -565,6 +644,16 @@ test("iPhone composer copies drafts and records voice notes through paired ClawD
 
   assert.match(contentSource, /composerCopied \? "checkmark" : "doc\.on\.doc"/u);
   assert.match(contentSource, /copyTextToPasteboard\(message\)/u);
+  assert.match(contentSource, /composerCutConfirmed \? "checkmark" : "scissors"/u);
+  assert.match(contentSource, /accessibilityIdentifier\("clawdad\.composer\.cut"\)/u);
+  assert.match(
+    contentSource,
+    /func performComposerDraftCut\([\s\S]*copyToClipboard\(draft\)[\s\S]*draft = ""/u,
+  );
+  assert.match(
+    contentSource,
+    /private func cutComposerDraft\(\)[\s\S]*voiceDraftBase = ""[\s\S]*messageEditorFocused = true/u,
+  );
   assert.match(contentSource, /AVAudioRecorder/u);
   assert.match(contentSource, /AVAudioApplication\.requestRecordPermission/u);
   assert.match(contentSource, /\.record,\s*mode: \.default/u);
@@ -671,7 +760,7 @@ test("iPhone Remote Assist supports full-screen landscape rotation", async () =>
   assert.match(remoteAssistSource, /videoView\.videoContentMode = \.scaleAspectFit/u);
 });
 
-test("iPhone Remote Assist hugs one launcher to the corner and nests approved shortcuts", async () => {
+test("iPhone Remote Assist keeps one keyboard-safe launcher in the corner and nests approved shortcuts", async () => {
   const [remoteAssistSource, shortcutSource, inputProtocolSource] = await Promise.all([
     readFile(iosRemoteAssistPath, "utf8"),
     readFile(nativeMacShortcutPath, "utf8"),
@@ -699,7 +788,11 @@ test("iPhone Remote Assist hugs one launcher to the corner and nests approved sh
   );
   assert.match(
     remoteAssistSource,
-    /alignment: \.bottomTrailing[\s\S]*\.padding\(\.trailing, 4\)[\s\S]*\.padding\(\.bottom, 4\)[\s\S]*\.ignoresSafeArea\(\)/u,
+    /alignment: \.bottomTrailing[\s\S]*\.padding\(\.trailing, 4\)[\s\S]*\.padding\(\.bottom, 4\)[\s\S]*\.ignoresSafeArea\(\.container, edges: \.all\)/u,
+  );
+  assert.match(
+    remoteAssistSource,
+    /if controlsExpanded \{\s*collapseControls\(\)\s*\} else \{\s*controller\.dismissKeyboard\(\)\s*controlPage = \.primary\s*controlsExpanded = true/u,
   );
   assert.match(remoteAssistSource, /"Open Remote Assist controls"/u);
   assert.match(remoteAssistSource, /Image\(systemName: "keyboard\.badge\.ellipsis"\)/u);
@@ -714,13 +807,102 @@ test("iPhone Remote Assist hugs one launcher to the corner and nests approved sh
   assert.match(inputProtocolSource, /case controlC = "control_c"/u);
   assert.match(inputProtocolSource, /case controlJ = "control_j"/u);
   assert.match(inputProtocolSource, /case controlL = "control_l"/u);
+  assert.match(inputProtocolSource, /case commandT = "command_t"/u);
   assert.match(inputProtocolSource, /case commandTab = "command_tab"/u);
+  assert.match(remoteAssistSource, /case \.commandT: "⌘T"/u);
+  assert.match(
+    remoteAssistSource,
+    /case \.commandT: "Command T, open a new tab in the active Mac app"/u,
+  );
+  assert.match(
+    shortcutSource,
+    /case \.commandT:[\s\S]*kVK_ANSI_T[\s\S]*flags: \.maskCommand[\s\S]*delivery: \.system/u,
+  );
   assert.match(shortcutSource, /case \.commandTab:[\s\S]*flags: \.maskCommand[\s\S]*delivery: \.system/u);
   assert.match(shortcutSource, /case \.controlC:[\s\S]*flags: \.maskControl/u);
   assert.doesNotMatch(
     remoteAssistSource,
     /Text\(controller\.remoteScreenLocked \? "Mac Locked" : "Remote Assist"\)/u,
   );
+});
+
+test("iPhone Remote Assist dismisses its keyboard before forwarding a viewport tap", async () => {
+  const [remoteAssistSource, macPeerSource] = await Promise.all([
+    readFile(iosRemoteAssistPath, "utf8"),
+    readFile(nativeMacRemotePeerPath, "utf8"),
+  ]);
+  const toggleKeyboardStart = remoteAssistSource.indexOf("func toggleKeyboard() {");
+  const dismissKeyboardStart = remoteAssistSource.indexOf("func dismissKeyboard() {");
+  const requestKeyboardFocusStart = remoteAssistSource.indexOf(
+    "func requestKeyboardFocus() {",
+    dismissKeyboardStart,
+  );
+  const toggleKeyboardSource = remoteAssistSource.slice(
+    toggleKeyboardStart,
+    dismissKeyboardStart,
+  );
+  const dismissKeyboardSource = remoteAssistSource.slice(
+    dismissKeyboardStart,
+    requestKeyboardFocusStart,
+  );
+  const handleTapStart = remoteAssistSource.indexOf(
+    "@objc func handleTap(_ recognizer: UITapGestureRecognizer) {",
+  );
+  const handleRightTapStart = remoteAssistSource.indexOf(
+    "@objc func handleRightTap(_ recognizer: UITapGestureRecognizer) {",
+    handleTapStart,
+  );
+  const handleTapSource = remoteAssistSource.slice(
+    handleTapStart,
+    handleRightTapStart,
+  );
+  const keyboardStateStart = remoteAssistSource.indexOf(
+    "private func applyKeyboardState() {",
+  );
+  const keyboardStateEnd = remoteAssistSource.indexOf(
+    "\n  }\n}\n\n#else",
+    keyboardStateStart,
+  );
+  const keyboardStateSource = remoteAssistSource.slice(
+    keyboardStateStart,
+    keyboardStateEnd,
+  );
+
+  assert.notEqual(toggleKeyboardStart, -1);
+  assert.notEqual(dismissKeyboardStart, -1);
+  assert.notEqual(requestKeyboardFocusStart, -1);
+  assert.match(
+    dismissKeyboardSource,
+    /flushBufferedText\(\)[\s\S]*guard keyboardVisible else \{\s*return\s*\}[\s\S]*keyboardVisible = false/u,
+  );
+  assert.match(
+    toggleKeyboardSource,
+    /if keyboardVisible \{[\s\S]*dismissKeyboard\(\)[\s\S]*return/u,
+  );
+  assert.notEqual(handleTapStart, -1);
+  assert.notEqual(handleRightTapStart, -1);
+  assert.match(handleTapSource, /let point = normalizedPoint\(/u);
+  assert.equal(
+    handleTapSource.match(/controller\.dismissKeyboard\(\)/gu)?.length,
+    1,
+  );
+  assert.equal(
+    handleTapSource.match(
+      /controller\.sendClick\(x: point\.x, y: point\.y\)/gu,
+    )?.length,
+    1,
+  );
+  assert.ok(
+    handleTapSource.indexOf("controller.dismissKeyboard()") <
+      handleTapSource.indexOf("controller.sendClick(x: point.x, y: point.y)"),
+  );
+  assert.notEqual(keyboardStateStart, -1);
+  assert.notEqual(keyboardStateEnd, -1);
+  assert.match(
+    keyboardStateSource,
+    /else if self\.isFirstResponder \{\s*self\.resignFirstResponder\(\)/u,
+  );
+  assert.match(macPeerSource, /channelConfiguration\.isOrdered = true/u);
 });
 
 test("iPhone Remote Assist supports local pinch zoom with accurate controls", async () => {
@@ -781,6 +963,38 @@ test("Remote Assist exposes acknowledged input and bidirectional clipboard contr
   assert.match(macInputSource, /case "down":[\s\S]*\.leftMouseDown/u);
   assert.match(macInputSource, /case "drag":[\s\S]*\.leftMouseDragged/u);
   assert.match(macInputSource, /case "up":[\s\S]*\.leftMouseUp/u);
+  assert.match(
+    macInputSource,
+    /guard let source = CGEventSource\(stateID: \.privateState\) else/u,
+  );
+  assert.doesNotMatch(macInputSource, /combinedSessionState/u);
+  const pointerPostingSource = macInputSource.slice(
+    macInputSource.indexOf("private func postMouseEvent("),
+    macInputSource.indexOf("private func establishTarget("),
+  );
+  assert.match(pointerPostingSource, /event\.flags = \[\]/u);
+  const scrollPostingSource = macInputSource.slice(
+    macInputSource.indexOf("private func handleScroll("),
+    macInputSource.indexOf("private func enqueueInput("),
+  );
+  assert.match(scrollPostingSource, /event\.flags = \[\]/u);
+  const cancelInputSource = macInputSource.slice(
+    macInputSource.indexOf("func cancelPendingOperations()"),
+    macInputSource.indexOf("private func handleClipboard("),
+  );
+  assert.match(cancelInputSource, /releaseRemoteInputState\(\)/u);
+  assert.match(macInputSource, /private func releaseRemoteInputState\(\)/u);
+  assert.match(macInputSource, /lastPointerPoint/u);
+  assert.match(macInputSource, /activeRemoteModifierKeyCodes/u);
+  assert.match(macInputSource, /macRemoteShortcutEventSteps\(for: shortcut\)/u);
+  const channelStateSource = macPeerSource.slice(
+    macPeerSource.indexOf("private func controlChannelStateChanged()"),
+    macPeerSource.indexOf("private func publishSessionState("),
+  );
+  assert.match(
+    channelStateSource,
+    /guard controlChannel\?\.readyState == \.open else \{[\s\S]*inputController\.cancelPendingOperations\(\)/u,
+  );
   assert.match(macPeerSource, /self\?\.sendControl\(response\)/u);
   assert.match(macPeerSource, /publishSessionState\(force: true\)/u);
   assert.match(macPeerSource, /RemoteSessionStateCodec\.encode\(message\)/u);

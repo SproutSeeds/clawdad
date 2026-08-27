@@ -14,10 +14,13 @@ import {
   verifyCloudEnvelopeSignature,
 } from "../lib/cloud-protocol.mjs";
 import {
+  cloudHostStatus,
   cloudHostReconnectDelayMs,
   createCloudPairingPayload,
   ensureCloudRelayAccess,
   handleCloudEnvelope,
+  resolveCloudHostConfig,
+  runCloudHostConnector,
 } from "../lib/cloud-host-connector.mjs";
 
 const p256SpkiHeader = Buffer.from([
@@ -55,6 +58,110 @@ function hostConfig({ trustedDevicePublicKeys = {}, allowUnverifiedCloudDevices 
     allowUnverifiedCloudDevices,
   };
 }
+
+test("cloud host reads a native local token file ahead of a legacy cloud.json token", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawdad-cloud-host-token-file-"));
+  const configPath = path.join(tempDir, "cloud.json");
+  const tokenPath = path.join(tempDir, "native-server.token");
+  await writeFile(configPath, JSON.stringify({
+    cloudUrl: "https://clawdad-cloud.frg.earth",
+    accountId: "acct-1",
+    workspaceId: "scratchpad",
+    hostId: "mac-host",
+    localToken: "legacy-cloud-json-token",
+  }), "utf8");
+  await writeFile(tokenPath, "native-file-token\n", "utf8");
+
+  const resolved = await resolveCloudHostConfig({
+    config: configPath,
+    localTokenFile: tokenPath,
+  });
+  assert.equal(resolved.localToken, "native-file-token");
+  assert.equal(resolved.localTokenFile, tokenPath);
+
+  const status = await cloudHostStatus({
+    config: configPath,
+    localTokenFile: tokenPath,
+  });
+  assert.equal(status.localAuthConfigured, true);
+  assert.equal(status.localTokenFile, tokenPath);
+  assert.doesNotMatch(JSON.stringify(status), /native-file-token|legacy-cloud-json-token/u);
+});
+
+test("cloud host preserves legacy inline token config and explicit token precedence", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawdad-cloud-host-legacy-token-"));
+  const configPath = path.join(tempDir, "cloud.json");
+  await writeFile(configPath, JSON.stringify({
+    localToken: "legacy-cloud-json-token",
+  }), "utf8");
+
+  const legacy = await resolveCloudHostConfig({ config: configPath });
+  assert.equal(legacy.localToken, "legacy-cloud-json-token");
+  assert.equal(legacy.localTokenFile, "");
+
+  const explicit = await resolveCloudHostConfig({
+    config: configPath,
+    localToken: "explicit-token",
+    localTokenFile: path.join(tempDir, "missing-token-file"),
+  });
+  assert.equal(explicit.localToken, "explicit-token");
+});
+
+test("cloud-host CLI accepts a local token file without printing its contents", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawdad-cloud-host-token-cli-"));
+  const configPath = path.join(tempDir, "cloud.json");
+  const tokenPath = path.join(tempDir, "native-server.token");
+  await writeFile(configPath, JSON.stringify({
+    cloudUrl: "https://clawdad-cloud.frg.earth",
+    accountId: "acct-1",
+    workspaceId: "scratchpad",
+    hostId: "mac-host",
+  }), "utf8");
+  await writeFile(tokenPath, "native-cli-token\n", "utf8");
+
+  const logs = [];
+  const originalLog = console.log;
+  console.log = (...values) => logs.push(values.join(" "));
+  t.after(() => {
+    console.log = originalLog;
+  });
+
+  await runCloudHostConnector([
+    "--config", configPath,
+    "--local-url", "http://127.0.0.1:4487",
+    "--local-token-file", tokenPath,
+    "--json",
+  ]);
+
+  const output = logs.join("\n");
+  const status = JSON.parse(output);
+  assert.equal(status.localUrl, "http://127.0.0.1:4487");
+  assert.equal(status.localTokenFile, tokenPath);
+  assert.equal(status.localAuthConfigured, true);
+  assert.doesNotMatch(output, /native-cli-token/u);
+});
+
+test("cloud host resolves CLAWDAD_CLOUD_LOCAL_TOKEN_FILE", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawdad-cloud-host-token-env-"));
+  const configPath = path.join(tempDir, "cloud.json");
+  const tokenPath = path.join(tempDir, "native-server.token");
+  await writeFile(configPath, JSON.stringify({}), "utf8");
+  await writeFile(tokenPath, "native-env-token\n", "utf8");
+
+  const previous = process.env.CLAWDAD_CLOUD_LOCAL_TOKEN_FILE;
+  process.env.CLAWDAD_CLOUD_LOCAL_TOKEN_FILE = tokenPath;
+  t.after(() => {
+    if (previous == null) {
+      delete process.env.CLAWDAD_CLOUD_LOCAL_TOKEN_FILE;
+    } else {
+      process.env.CLAWDAD_CLOUD_LOCAL_TOKEN_FILE = previous;
+    }
+  });
+
+  const resolved = await resolveCloudHostConfig({ config: configPath });
+  assert.equal(resolved.localToken, "native-env-token");
+  assert.equal(resolved.localTokenFile, tokenPath);
+});
 
 test("pair.request trusts a signed phone after QR token proof", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawdad-cloud-pair-"));

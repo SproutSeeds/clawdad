@@ -37,6 +37,8 @@ CLAWDAD_JQ="${CLAWDAD_JQ:-jq}"
 CLAWDAD_NODE="${CLAWDAD_NODE:-node}"
 CLAWDAD_CODEX="${CLAWDAD_CODEX:-codex}"
 CLAWDAD_CODEX_HOME="${CLAWDAD_CODEX_HOME:-$HOME/.codex}"
+CLAWDAD_CODEX_APP_SERVER_MODE="${CLAWDAD_CODEX_APP_SERVER_MODE:-auto}"
+CLAWDAD_CODEX_APP_SERVER_SOCKET="${CLAWDAD_CODEX_APP_SERVER_SOCKET:-$CLAWDAD_CODEX_HOME/app-server-control/app-server-control.sock}"
 if [[ -z "${CLAWDAD_CHIMERA:-}" ]]; then
   if command -v chimera &>/dev/null; then
     CLAWDAD_CHIMERA="chimera"

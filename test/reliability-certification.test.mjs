@@ -100,13 +100,13 @@ test("service health snapshots omit project paths and unexpected fields", () => 
 test("physical evidence requires the exact paired iPhone and Mac release", () => {
   const release = {
     expectedIosVersion: "0.7.0",
-    expectedIosBuild: "28",
+    expectedIosBuild: "31",
     expectedMacVersion: "0.7.0",
-    expectedMacBuild: "24",
+    expectedMacBuild: "26",
   };
   assert.equal(installedIosBuildMatchesRelease({
     version: "0.7.0",
-    build: "28",
+    build: "31",
     builtByDeveloper: true,
   }, release), true);
   assert.equal(installedIosBuildMatchesRelease({
@@ -116,13 +116,13 @@ test("physical evidence requires the exact paired iPhone and Mac release", () =>
   }, release), false);
   assert.equal(installedIosBuildMatchesRelease({
     version: "0.6.9",
-    build: "28",
+    build: "31",
     builtByDeveloper: false,
   }, release), false);
   assert.equal(installedMacBuildMatchesRelease({
     installed: true,
     version: "0.7.0",
-    build: "24",
+    build: "26",
   }, release), true);
   assert.equal(installedMacBuildMatchesRelease({
     installed: true,
@@ -134,20 +134,23 @@ test("physical evidence requires the exact paired iPhone and Mac release", () =>
 test("certification readiness requires the exact published iPhone and Mac builds", () => {
   const snapshot = {
     release: {
-      expectedVersion: "0.7.0-beta.7",
+      distributionMode: "native-private",
+      expectedVersion: "0.7.0-beta.10",
+      expectedRuntimeVersion: "0.7.0-beta.10",
       expectedIosVersion: "0.7.0",
-      expectedIosBuild: "28",
+      expectedIosBuild: "31",
       expectedMacVersion: "0.7.0",
-      expectedMacBuild: "24",
-      npm: { betaTag: "0.7.0-beta.7" },
+      expectedMacBuild: "26",
+      npm: { skipped: true },
     },
     mac: {
       localHealth: { ok: true },
       installedApp: {
         installed: true,
         version: "0.7.0",
-        build: "24",
+        build: "26",
       },
+      installedRuntimeVersion: "0.7.0-beta.10",
     },
     cloud: {
       health: { ok: true },
@@ -156,7 +159,7 @@ test("certification readiness requires the exact published iPhone and Mac builds
       release: {
         beta: {
           processingState: "VALID",
-          buildNumber: "28",
+          buildNumber: "31",
         },
       },
     },
@@ -164,7 +167,7 @@ test("certification readiness requires the exact published iPhone and Mac builds
       targetDevice: {
         installedApp: {
           version: "0.7.0",
-          build: "28",
+          build: "31",
           builtByDeveloper: true,
         },
       },
@@ -172,7 +175,9 @@ test("certification readiness requires the exact published iPhone and Mac builds
   };
 
   assert.deepEqual(summarizeCertificationSnapshot(snapshot), {
-    registryReady: true,
+    registryReady: false,
+    runtimeReady: true,
+    releaseSourceReady: true,
     localReady: true,
     macBuildReady: true,
     cloudReady: true,
@@ -180,9 +185,9 @@ test("certification readiness requires the exact published iPhone and Mac builds
     deviceConnected: true,
     deviceBuildReady: true,
     passed: 0,
-    total: 22,
+    total: 23,
     foundingBetaPassed: 0,
-    foundingBetaTotal: 21,
+    foundingBetaTotal: 22,
     foundingBetaPhysicalReady: false,
     physicalCertificationComplete: false,
     readyForPhysicalCertification: true,
@@ -194,7 +199,7 @@ test("certification readiness requires the exact published iPhone and Mac builds
     false,
   );
   assert.equal(summarizeCertificationSnapshot(snapshot).testFlightReady, false);
-  snapshot.appStore.release.beta.buildNumber = "28";
+  snapshot.appStore.release.beta.buildNumber = "31";
 
   snapshot.mac.installedApp.build = "21";
   assert.equal(
@@ -202,7 +207,7 @@ test("certification readiness requires the exact published iPhone and Mac builds
     false,
   );
   assert.equal(summarizeCertificationSnapshot(snapshot).macBuildReady, false);
-  snapshot.mac.installedApp.build = "24";
+  snapshot.mac.installedApp.build = "26";
 
   snapshot.iphone.targetDevice.installedApp.build = "15";
   assert.equal(
@@ -225,16 +230,16 @@ test("physical certification records evidence and reports completion", () => {
     checks = updatePhysicalCertification(checks, {
       check,
       state: "pass",
-      evidence: `Verified ${check} on build 28.`,
+      evidence: `Verified ${check} on build 31.`,
       recordedAt: "2026-07-30T14:00:00.000Z",
     });
   }
 
   assert.deepEqual(summarizePhysicalCertification(checks), {
-    passed: 22,
-    total: 22,
-    foundingBetaPassed: 21,
-    foundingBetaTotal: 21,
+    passed: 23,
+    total: 23,
+    foundingBetaPassed: 22,
+    foundingBetaTotal: 22,
     foundingBetaPhysicalReady: true,
     physicalCertificationComplete: true,
   });

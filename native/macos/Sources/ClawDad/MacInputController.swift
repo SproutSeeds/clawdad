@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import Carbon.HIToolbox
 import ClawDadRemoteAssistProtocol
 import CoreGraphics
 import Foundation
@@ -75,11 +76,24 @@ final class MacInputController {
     case noEditableElement(RemoteInputTarget?)
   }
 
-  private let source = CGEventSource(stateID: .hidSystemState)
+  private let source: CGEventSource
   private var clipboardCopyTask: Task<Void, Never>?
   private var inputProcessingTask: Task<Void, Never>?
   private var inputQueue: [PendingInput] = []
   private var lastTargetPID: pid_t?
+  private var lastPointerPoint: CGPoint?
+  private var leftMouseButtonDown = false
+  private var rightMouseButtonDown = false
+  private var activeRemoteModifierKeyCodes: Set<CGKeyCode> = []
+  private var activeDisplayID = CGMainDisplayID()
+  private var pointerInputEnabled = true
+
+  init?() {
+    guard let source = CGEventSource(stateID: .privateState) else {
+      return nil
+    }
+    self.source = source
+  }
 
   func handle(
     _ data: Data,
@@ -144,6 +158,24 @@ final class MacInputController {
     inputProcessingTask?.cancel()
     inputProcessingTask = nil
     inputQueue.removeAll()
+    releaseRemoteInputState()
+  }
+
+  func prepareForDisplayTransition() {
+    pointerInputEnabled = false
+    lastTargetPID = nil
+    releaseRemoteInputState()
+  }
+
+  func commitDisplayTransition(to displayID: CGDirectDisplayID) {
+    activeDisplayID = displayID
+    lastTargetPID = nil
+    pointerInputEnabled = true
+  }
+
+  func cancelDisplayTransition() {
+    lastTargetPID = nil
+    pointerInputEnabled = true
   }
 
   private func handleClipboard(
@@ -331,10 +363,13 @@ final class MacInputController {
   }
 
   private func handlePointer(_ object: [String: Any]) {
-    let point = screenPoint(
+    guard pointerInputEnabled,
+          let point = screenPoint(
       x: number(object["x"], fallback: 0.5),
       y: number(object["y"], fallback: 0.5)
-    )
+    ) else {
+      return
+    }
     let action = String(describing: object["action"] ?? "")
     let buttonName = String(describing: object["button"] ?? "left")
     let button: CGMouseButton = buttonName == "right" ? .right : .left
@@ -389,12 +424,30 @@ final class MacInputController {
     point: CGPoint,
     button: CGMouseButton
   ) {
-    CGEvent(
+    guard let event = CGEvent(
       mouseEventSource: source,
       mouseType: type,
       mouseCursorPosition: point,
       mouseButton: button
-    )?.post(tap: .cghidEventTap)
+    ) else {
+      return
+    }
+    event.flags = []
+    event.post(tap: .cghidEventTap)
+    lastPointerPoint = point
+
+    switch type {
+    case .leftMouseDown:
+      leftMouseButtonDown = true
+    case .leftMouseUp:
+      leftMouseButtonDown = false
+    case .rightMouseDown:
+      rightMouseButtonDown = true
+    case .rightMouseUp:
+      rightMouseButtonDown = false
+    default:
+      break
+    }
   }
 
   private func establishTarget(at point: CGPoint) {
@@ -429,16 +482,23 @@ final class MacInputController {
   }
 
   private func handleScroll(_ object: [String: Any]) {
+    guard pointerInputEnabled else {
+      return
+    }
     let deltaX = Int32(number(object["deltaX"], fallback: 0).rounded())
     let deltaY = Int32(number(object["deltaY"], fallback: 0).rounded())
-    CGEvent(
+    guard let event = CGEvent(
       scrollWheelEvent2Source: source,
       units: .pixel,
       wheelCount: 2,
       wheel1: -deltaY,
       wheel2: -deltaX,
       wheel3: 0
-    )?.post(tap: .cghidEventTap)
+    ) else {
+      return
+    }
+    event.flags = []
+    event.post(tap: .cghidEventTap)
   }
 
   private func enqueueInput(
@@ -820,23 +880,13 @@ final class MacInputController {
     _ stroke: MacKeyStroke,
     targetPID: pid_t
   ) -> Bool {
-    guard let keyDown = CGEvent(
-      keyboardEventSource: source,
-      virtualKey: stroke.keyCode,
-      keyDown: true
-    ),
-    let keyUp = CGEvent(
-      keyboardEventSource: source,
-      virtualKey: stroke.keyCode,
-      keyDown: false
-    ) else {
-      return false
-    }
-    keyDown.flags = stroke.flags
-    keyUp.flags = stroke.flags
-    keyDown.postToPid(targetPID)
-    keyUp.postToPid(targetPID)
-    return true
+    postKeyEventSteps(
+      macRemoteKeyEventSteps(
+        keyCode: stroke.keyCode,
+        flags: stroke.flags
+      ),
+      targetPID: targetPID
+    )
   }
 
   private func pasteTextPreservingClipboard(
@@ -885,22 +935,13 @@ final class MacInputController {
     default:
       keyCode = nil
     }
-    guard let keyCode,
-          let keyDown = CGEvent(
-            keyboardEventSource: source,
-            virtualKey: keyCode,
-            keyDown: true
-          ),
-          let keyUp = CGEvent(
-            keyboardEventSource: source,
-            virtualKey: keyCode,
-            keyDown: false
-          ) else {
+    guard let keyCode else {
       return false
     }
-    keyDown.postToPid(targetPID)
-    keyUp.postToPid(targetPID)
-    return true
+    return postKeyEventSteps(
+      macRemoteKeyEventSteps(keyCode: keyCode, flags: []),
+      targetPID: targetPID
+    )
   }
 
   private func pressRemoteShortcut(
@@ -908,56 +949,115 @@ final class MacInputController {
     targetPID: pid_t?
   ) -> Bool {
     let plan = macRemoteShortcutPlan(for: shortcut)
-    guard let keyDown = CGEvent(
-      keyboardEventSource: source,
-      virtualKey: plan.keyCode,
-      keyDown: true
-    ),
-    let keyUp = CGEvent(
-      keyboardEventSource: source,
-      virtualKey: plan.keyCode,
-      keyDown: false
-    ) else {
-      return false
-    }
-    keyDown.flags = plan.flags
-    keyUp.flags = plan.flags
-
     switch plan.delivery {
     case .focusedApplication:
       guard let targetPID else {
         return false
       }
-      keyDown.postToPid(targetPID)
-      keyUp.postToPid(targetPID)
+      return postKeyEventSteps(
+        macRemoteShortcutEventSteps(for: shortcut),
+        targetPID: targetPID
+      )
     case .system:
-      keyDown.post(tap: .cghidEventTap)
-      keyUp.post(tap: .cghidEventTap)
+      return postKeyEventSteps(
+        macRemoteShortcutEventSteps(for: shortcut),
+        targetPID: nil
+      )
     }
-    return true
   }
 
   private func pressCommandShortcut(
     keyCode: CGKeyCode,
     targetPID: pid_t
   ) -> Bool {
-    guard let keyDown = CGEvent(
-      keyboardEventSource: source,
-      virtualKey: keyCode,
-      keyDown: true
-    ),
-    let keyUp = CGEvent(
-      keyboardEventSource: source,
-      virtualKey: keyCode,
-      keyDown: false
-    ) else {
+    postKeyEventSteps(
+      macRemoteKeyEventSteps(
+        keyCode: keyCode,
+        flags: .maskCommand
+      ),
+      targetPID: targetPID
+    )
+  }
+
+  private func postKeyEventSteps(
+    _ steps: [MacRemoteKeyEventStep],
+    targetPID: pid_t?
+  ) -> Bool {
+    let events = steps.compactMap { step -> CGEvent? in
+      guard let event = CGEvent(
+        keyboardEventSource: source,
+        virtualKey: step.keyCode,
+        keyDown: step.keyDown
+      ) else {
+        return nil
+      }
+      event.flags = step.flags
+      return event
+    }
+    guard events.count == steps.count else {
       return false
     }
-    keyDown.flags = .maskCommand
-    keyUp.flags = .maskCommand
-    keyDown.postToPid(targetPID)
-    keyUp.postToPid(targetPID)
+    for (step, event) in zip(steps, events) {
+      if let targetPID {
+        event.postToPid(targetPID)
+      } else {
+        event.post(tap: .cghidEventTap)
+      }
+      updateRemoteModifierState(after: step)
+    }
     return true
+  }
+
+  private func releaseRemoteInputState() {
+    if leftMouseButtonDown, let lastPointerPoint {
+      postMouseEvent(
+        type: .leftMouseUp,
+        point: lastPointerPoint,
+        button: .left
+      )
+    }
+    if rightMouseButtonDown, let lastPointerPoint {
+      postMouseEvent(
+        type: .rightMouseUp,
+        point: lastPointerPoint,
+        button: .right
+      )
+    }
+    leftMouseButtonDown = false
+    rightMouseButtonDown = false
+    lastPointerPoint = nil
+
+    for keyCode in activeRemoteModifierKeyCodes.sorted() {
+      guard let event = CGEvent(
+        keyboardEventSource: source,
+        virtualKey: keyCode,
+        keyDown: false
+      ) else {
+        continue
+      }
+      event.flags = []
+      event.post(tap: .cghidEventTap)
+    }
+    activeRemoteModifierKeyCodes.removeAll()
+  }
+
+  private func updateRemoteModifierState(
+    after step: MacRemoteKeyEventStep
+  ) {
+    let modifierKeyCodes: Set<CGKeyCode> = [
+      CGKeyCode(kVK_Shift),
+      CGKeyCode(kVK_Control),
+      CGKeyCode(kVK_Option),
+      CGKeyCode(kVK_Command),
+    ]
+    guard modifierKeyCodes.contains(step.keyCode) else {
+      return
+    }
+    if step.keyDown {
+      activeRemoteModifierKeyCodes.insert(step.keyCode)
+    } else {
+      activeRemoteModifierKeyCodes.remove(step.keyCode)
+    }
   }
 
   private func stringAttribute(
@@ -990,11 +1090,14 @@ final class MacInputController {
     return (value as? NSNumber)?.boolValue
   }
 
-  private func screenPoint(x: Double, y: Double) -> CGPoint {
-    let bounds = CGDisplayBounds(CGMainDisplayID())
-    return CGPoint(
-      x: bounds.minX + min(1, max(0, x)) * bounds.width,
-      y: bounds.minY + min(1, max(0, y)) * bounds.height
+  private func screenPoint(x: Double, y: Double) -> CGPoint? {
+    guard CGDisplayIsActive(activeDisplayID) != 0 else {
+      return nil
+    }
+    return macRemoteScreenPoint(
+      x: x,
+      y: y,
+      bounds: CGDisplayBounds(activeDisplayID)
     )
   }
 

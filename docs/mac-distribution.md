@@ -5,6 +5,15 @@ customer build contains the ClawDad runtime, supervises its loopback service,
 stores local credentials in macOS Keychain, and receives signed updates through
 Sparkle.
 
+## Distribution Boundary
+
+The native Mac application is distributed as a signed, notarized app through
+its Sparkle update channel. The private iPhone companion is distributed through
+TestFlight. Root `npm` scripts are build and verification entry points for this
+monorepo; `npm publish` is a separate public CLI release and is not part of a
+native Mac or iPhone rollout unless that public publication is explicitly
+requested.
+
 ## Customer Install
 
 1. Download `ClawDad-<version>-mac.dmg` from the matching GitHub release.
@@ -21,8 +30,8 @@ Gatekeeper can verify them even when the Mac is offline.
 ClawDad requests each capability when the customer uses the matching feature:
 
 - Microphone access supports voice-to-text in the composer.
-- Screen Recording shares the primary display during a customer-started Remote
-  Assist session.
+- Screen Recording shares the display selected from the paired iPhone during a
+  customer-started Remote Assist session.
 - Accessibility sends keyboard and pointer input during Remote Assist.
 
 Settings explains the two Remote Assist permissions and links directly to the
@@ -78,6 +87,20 @@ Credentials remain outside the repository:
 - Notary profile: `ClawDad` in macOS Keychain
 - Sparkle signing account: `earth.frg.ClawDad` in macOS Keychain
 - Appcast publish token: service `clawdad-cloud-release`, account `appcast`
+
+CI or isolated release environments can provide App Store Connect API
+credentials directly with `CLAWDAD_NOTARY_KEY_PATH`,
+`CLAWDAD_NOTARY_KEY_ID`, and `CLAWDAD_NOTARY_ISSUER_ID`. Set all three
+together. Local releases continue to use the `ClawDad` Keychain profile by
+default.
+
+Set `CLAWDAD_SWIFT_SCRATCH_PATH` when SwiftPM build output must live outside
+the package's `.build` directory. The release pipeline uses the same scratch
+path for the app binary, Sparkle framework, and appcast generator.
+Set `CLAWDAD_SWIFT_DISABLE_SANDBOX=1` only when an outer build sandbox blocks
+SwiftPM's nested sandbox; ordinary local releases keep SwiftPM sandboxing on.
+An isolated builder that cannot run `iconutil` may provide the previously
+verified multi-resolution icon with `CLAWDAD_PREBUILT_ICON_PATH`.
 
 Set `CLAWDAD_PUBLISH_APPCAST=1` to publish the generated feed after its GitHub
 release archive is available. The public feed is read-only; publishing requires
