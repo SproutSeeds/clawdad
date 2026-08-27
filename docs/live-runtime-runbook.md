@@ -111,9 +111,46 @@ retired provisional ID.
 Failed queue items are retained with their error for diagnosis and are never
 silently resent after an ambiguous handoff.
 
+## Shared Codex Writer
+
+The production host maintains one local `codex app-server --listen unix://`
+process at `~/.codex/app-server-control/app-server-control.sock`. The directory
+is mode `0700`; the socket and runtime log are mode `0600`. This is Unix-domain
+IPC on the paired Mac and creates no Internet or cellular traffic while idle.
+
+Use these checks during an incident or rollout:
+
+```sh
+clawdad codex-runtime status --json
+clawdad codex-runtime ensure
+clawdad prod-doctor --json
+```
+
+Clawdad dispatch and Clawdad-opened Terminal sessions use the shared endpoint.
+The `clawdad codex-cli` wrapper forces it for manual Terminal use. A legacy
+Codex process opened before this runtime was enabled can retain the old writer
+lock; close that Codex session once and reopen it through the shared endpoint.
+Never delete or bypass a Codex writer lock.
+
+`CLAWDAD_CODEX_APP_SERVER_MODE=auto` is the default. A supported shared runtime
+keeps Codex dispatch fail-closed if startup fails, because silently spawning an
+isolated writer would recreate the collision. The rest of the Clawdad host
+starts in a degraded state so Remote Assist, pairing, history, health, and
+diagnostics remain available while the local health loop retries. `isolated` is
+the explicit rollback mode.
+
+Clawdad's existing durable queue remains the ordering authority. Once the
+shared thread is idle, the queued worker uses `turn/start` with the Clawdad
+working directory, permission sandbox, model, effort, attachments, and stable
+request ID. Direct delivery uses `turn/steer` only when the current turn accepts
+it; review, compaction, and tool-boundary states defer safely to an idle
+fully-configured turn. A per-thread/request atomic delivery claim is held for
+the dispatcher lifetime, so a duplicate worker waits and a dead worker is
+reconciled through `thread/read` before a retry can send.
+
 ## Long-Running Turns
 
-ClawDad has no default wall-clock, turn-idle, tool-idle, heartbeat-age, or native `thread/resume` cutoff for Codex turns. The dispatch worker writes a mailbox heartbeat while its process is alive, and the app-server bridge performs non-prompt `thread/read` liveness probes after a turn starts. A turn fails automatically only after a terminal Codex error or confirmed worker/app-server process death. Timeout environment variables remain available for controlled smoke tests, including `CLAWDAD_CODEX_RESUME_TIMEOUT_MS` when a bounded resume is explicitly required.
+ClawDad has no default wall-clock, turn-idle, tool-idle, heartbeat-age, or native `thread/resume` cutoff for Codex turns. The dispatch worker writes a mailbox heartbeat while its process is alive, and the app-server bridge performs non-prompt `thread/read` liveness probes after a turn starts. If a shared client connection drops, Clawdad reconnects once, resumes the thread, and reconciles the stable request ID before deciding whether the turn completed. A turn fails automatically after a terminal Codex error, an unrecoverable shared-runtime failure, or confirmed worker death. Timeout environment variables remain available for controlled smoke tests, including `CLAWDAD_CODEX_RESUME_TIMEOUT_MS` when a bounded resume is explicitly required.
 
 Provider history reads use a bounded recent transcript window controlled by `CLAWDAD_HISTORY_PROVIDER_TAIL_BYTES` (32 MB by default). This keeps image-heavy Codex compaction records from forcing the server to decode an entire multi-hundred-megabyte JSONL transcript for a phone history page.
 

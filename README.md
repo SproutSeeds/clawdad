@@ -367,7 +367,7 @@ clawdad dispatches to the right CLI based on the active session's `resumeTool`:
 
 | Provider | Interactive (human) | Non-interactive (clawdad) |
 |----------|-------------------|--------------------------|
-| Codex | `codex` or `codex resume <id>` | Native saved Codex thread created or adopted per repo, then Clawdad resumes that same thread programmatically |
+| Codex | `codex`, `codex resume <id>`, or the explicit `clawdad codex-cli ...` wrapper | Terminal and Clawdad share one private local app-server writer and the same saved thread |
 | Claude Code | `claude` or `claude --resume <id>` | `claude -p --session-id <id>` creates the session on first dispatch, then `claude -p --resume <id>` continues the same session |
 | Chimera | `chimera --resume <id>` | `chimera --model local --prompt "msg" --resume <id> --json` after Clawdad seeds and maintains the session file |
 
@@ -454,7 +454,38 @@ For Codex-backed projects, Clawdad now prefers native repo-attached Codex thread
 - if a repo has no saved Codex thread yet, the first `clawdad dispatch` creates a real native Codex thread for that repo and writes that thread id back into ORP
 - after that, later Clawdad dispatches resume the same saved Codex thread automatically
 
-That means later terminal use lines up much better with normal Codex behavior: when you return to that repo and use Codex there, you are looking at the same saved thread world instead of a separate Clawdad-only exec session type.
+Clawdad keeps one Codex app-server on the private Unix socket at
+`~/.codex/app-server-control/app-server-control.sock`. Terminal Codex and phone
+dispatches connect as clients of that one writer, so a phone message appears in
+an open Terminal thread and the full exchange remains visible after either
+client reconnects. An idle thread starts a normal turn, Direct delivery steers
+the active turn when Codex reports that it is steerable, and Queue delivery
+stays in Clawdad's durable FIFO until the shared thread is idle. Clawdad then
+starts a fully configured turn with its requested working directory, sandbox,
+model, effort, attachments, and stable request ID. Atomic local delivery claims
+reconcile retries and crashed workers before any message is sent again. Image
+attachments stay as local paths on the paired Mac and are consumed by that same
+app-server.
+
+The Clawdad listener starts and health-checks this local runtime. Ordinary
+`codex` commands discover the default socket; `clawdad codex-cli resume <id>`
+forces the shared endpoint when a shell profile or custom Codex option would
+otherwise select an embedded server. Inspect it with
+`clawdad codex-runtime status --json` or start it on demand with
+`clawdad codex-runtime ensure`.
+
+If the Codex runtime cannot start, the Clawdad host stays available for Remote
+Assist, pairing, history, and diagnostics while Codex dispatch reports the
+runtime fault and the health loop retries locally. The shared WebSocket client
+is isolated behind this compatibility mode because Codex currently labels that
+transport experimental.
+
+After upgrading from an older Clawdad build, close each already-open legacy
+Codex CLI session once and reopen it. Its saved history remains in place, and
+the reopened client joins the shared writer. Set
+`CLAWDAD_CODEX_APP_SERVER_MODE=isolated` only as an explicit rollback; `auto`
+is the default and falls back only when the installed Codex CLI conclusively
+lacks Unix-socket app-server support.
 
 Permission modes map to Codex sandbox behavior like this:
 
