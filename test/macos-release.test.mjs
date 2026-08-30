@@ -16,6 +16,12 @@ const buildScriptPath = path.join(
   "macos",
   "build-app.sh",
 );
+const entitlementsPath = path.join(
+  repoRoot,
+  "native",
+  "macos",
+  "ClawDad.entitlements",
+);
 const releaseNotesPath = path.join(
   repoRoot,
   "docs",
@@ -25,16 +31,23 @@ const releaseNotesPath = path.join(
 const packagePath = path.join(repoRoot, "package.json");
 
 test("Mac release pipeline signs, notarizes, staples, and publishes Sparkle artifacts", async () => {
-  const [releaseScript, buildScript, releaseNotes, packageSource] = await Promise.all([
+  const [
+    releaseScript,
+    buildScript,
+    entitlements,
+    releaseNotes,
+    packageSource,
+  ] = await Promise.all([
     readFile(releaseScriptPath, "utf8"),
     readFile(buildScriptPath, "utf8"),
+    readFile(entitlementsPath, "utf8"),
     readFile(releaseNotesPath, "utf8"),
     readFile(packagePath, "utf8"),
   ]);
 
   assert.match(packageSource, /"version": "0\.7\.0-beta\.10"/u);
   assert.match(releaseNotes, /ClawDad 0\.7 Native Beta/u);
-  assert.match(releaseScript, /CLAWDAD_APP_BUILD:-30/u);
+  assert.match(releaseScript, /CLAWDAD_APP_BUILD:-31/u);
   assert.match(releaseScript, /Developer ID Application/u);
   assert.match(releaseScript, /notarytool submit "\$zip_path"/u);
   assert.match(releaseScript, /CLAWDAD_NOTARY_KEY_PATH/u);
@@ -43,6 +56,10 @@ test("Mac release pipeline signs, notarizes, staples, and publishes Sparkle arti
   assert.match(buildScript, /CLAWDAD_SWIFT_DISABLE_SANDBOX/u);
   assert.match(buildScript, /CLAWDAD_PREBUILT_ICON_PATH/u);
   assert.match(buildScript, /<key>NSAppleEventsUsageDescription<\/key>/u);
+  assert.match(buildScript, /entitlements_path="\$script_dir\/ClawDad\.entitlements"/u);
+  assert.match(buildScript, /--entitlements "\$entitlements_path"/u);
+  assert.match(entitlements, /<key>com\.apple\.security\.automation\.apple-events<\/key>/u);
+  assert.match(entitlements, /<true\/>/u);
   assert.match(releaseScript, /stapler staple "\$app_dir"/u);
   assert.match(releaseScript, /generate_appcast/u);
   assert.match(releaseScript, /--account "\$sparkle_account"/u);

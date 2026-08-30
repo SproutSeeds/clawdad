@@ -6,11 +6,12 @@ repo_root=${script_dir:h:h}
 app_name="ClawDad"
 bundle_id="earth.frg.ClawDad"
 app_version="${CLAWDAD_APP_VERSION:-0.7.0}"
-app_build="${CLAWDAD_APP_BUILD:-30}"
+app_build="${CLAWDAD_APP_BUILD:-31}"
 sparkle_feed_url="${CLAWDAD_SPARKLE_FEED_URL:-https://clawdad-cloud.frg.earth/mac/appcast.xml}"
 sparkle_public_key="${CLAWDAD_SPARKLE_PUBLIC_KEY:-OjSne9VtiBjR3Ls2aaLTgEUeKtYzi9oAtexOiA5K+dI=}"
 dist_dir="$script_dir/dist"
 app_dir="$dist_dir/$app_name.app"
+entitlements_path="$script_dir/ClawDad.entitlements"
 icon_source="$repo_root/assets/clawdad-claw-hyperreal-icon.png"
 prebuilt_icon_source="${CLAWDAD_PREBUILT_ICON_PATH:-}"
 webrtc_framework_source="$repo_root/vendor/WebRTCPackage/WebRTC.xcframework/macos-x86_64_arm64/WebRTC.framework"
@@ -218,6 +219,7 @@ if [[ -n "$signing_identity" ]]; then
     --force \
     --options runtime \
     --timestamp \
+    --entitlements "$entitlements_path" \
     --sign "$signing_identity" \
     "$app_dir"
 else
@@ -232,7 +234,7 @@ else
   codesign --force --options runtime --sign - \
     "$app_dir/Contents/Frameworks/Sparkle.framework"
   codesign --force --sign - "$app_dir/Contents/Frameworks/WebRTC.framework"
-  codesign --force --sign - "$app_dir"
+  codesign --force --options runtime --entitlements "$entitlements_path" --sign - "$app_dir"
 fi
 
 printf '%s\n' "$app_dir"
