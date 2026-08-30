@@ -49,6 +49,38 @@ struct RemoteAnswerApplicationGate {
   }
 }
 
+struct RemoteDisplayAdvertisementPolicy {
+  static let retryIntervalsNanoseconds: [UInt64] = [
+    250_000_000,
+    750_000_000,
+    2_000_000_000,
+    5_000_000_000,
+  ]
+
+  static var retryOffsetsNanoseconds: [UInt64] {
+    retryIntervalsNanoseconds.reduce(into: []) { offsets, interval in
+      offsets.append((offsets.last ?? 0) + interval)
+    }
+  }
+}
+
+struct RemoteDisplayAdvertisementGate {
+  private(set) var generation: UInt64 = 0
+
+  mutating func begin() -> UInt64 {
+    generation &+= 1
+    return generation
+  }
+
+  mutating func invalidate() {
+    generation &+= 1
+  }
+
+  func isCurrent(_ expectedGeneration: UInt64) -> Bool {
+    generation == expectedGeneration
+  }
+}
+
 @MainActor
 final class MacRemotePeer: NSObject {
   struct Offer {
@@ -71,6 +103,8 @@ final class MacRemotePeer: NSObject {
   private var sessionStateTask: Task<Void, Never>?
   private var displaySelectionTask: Task<Void, Never>?
   private var displayRefreshTask: Task<Void, Never>?
+  private var displayAdvertisementTask: Task<Void, Never>?
+  private var displayAdvertisementGate = RemoteDisplayAdvertisementGate()
   private var displayOperationInProgress = false
   private var displayRefreshPending = false
   private var screenParametersObserver: NSObjectProtocol?
@@ -223,6 +257,7 @@ final class MacRemotePeer: NSObject {
 
   func stop() {
     answerApplicationGate.invalidate()
+    cancelDisplayAdvertisement()
     displaySelectionTask?.cancel()
     displaySelectionTask = nil
     displayRefreshTask?.cancel()
@@ -291,13 +326,14 @@ final class MacRemotePeer: NSObject {
   private func controlChannelStateChanged() {
     guard controlChannel?.readyState == .open else {
       inputController.cancelPendingOperations()
+      cancelDisplayAdvertisement()
       sessionStateTask?.cancel()
       sessionStateTask = nil
       lastPublishedScreenLocked = nil
       return
     }
     publishSessionState(force: true)
-    publishDisplayState()
+    startDisplayAdvertisement()
     guard sessionStateTask == nil else {
       return
     }
@@ -328,6 +364,39 @@ final class MacRemotePeer: NSObject {
       return
     }
     sendControl(RemoteDisplayMessage.state(state))
+  }
+
+  private func startDisplayAdvertisement() {
+    let generation = displayAdvertisementGate.begin()
+    displayAdvertisementTask?.cancel()
+    publishDisplayState()
+    displayAdvertisementTask = Task { @MainActor [weak self] in
+      for interval in RemoteDisplayAdvertisementPolicy.retryIntervalsNanoseconds {
+        do {
+          try await Task.sleep(nanoseconds: interval)
+        } catch {
+          break
+        }
+        guard let self,
+              !Task.isCancelled,
+              self.displayAdvertisementGate.isCurrent(generation),
+              self.controlChannel?.readyState == .open else {
+          break
+        }
+        self.publishDisplayState()
+      }
+      guard let self,
+            self.displayAdvertisementGate.isCurrent(generation) else {
+        return
+      }
+      self.displayAdvertisementTask = nil
+    }
+  }
+
+  private func cancelDisplayAdvertisement() {
+    displayAdvertisementGate.invalidate()
+    displayAdvertisementTask?.cancel()
+    displayAdvertisementTask = nil
   }
 
   private func handleDisplaySelection(_ message: RemoteDisplayMessage) {
