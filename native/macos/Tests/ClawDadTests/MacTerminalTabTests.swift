@@ -199,6 +199,30 @@ final class MacTerminalTabTests: XCTestCase {
     XCTAssertEqual(macTerminalTabTitle("\n\t"), "Terminal Tab")
   }
 
+  func testAutomationConsentStatusesMapToActionableFailures() {
+    XCTAssertNil(macTerminalAutomationFailure(for: noErr))
+    XCTAssertEqual(
+      macTerminalAutomationFailure(
+        for: OSStatus(errAEEventWouldRequireUserConsent)
+      )?.code,
+      "automation_denied"
+    )
+    XCTAssertEqual(
+      macTerminalAutomationFailure(
+        for: OSStatus(errAEEventNotPermitted)
+      )?.code,
+      "automation_denied"
+    )
+    XCTAssertEqual(
+      macTerminalAutomationFailure(for: OSStatus(procNotFound))?.code,
+      "terminal_not_running"
+    )
+    XCTAssertEqual(
+      macTerminalAutomationFailure(for: -12345)?.code,
+      "automation_failed"
+    )
+  }
+
   private var initialSnapshots: [MacTerminalTabSnapshot] {
     [
       snapshot(

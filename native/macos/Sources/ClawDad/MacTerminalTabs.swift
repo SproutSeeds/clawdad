@@ -1,5 +1,6 @@
 import AppKit
 import ClawDadRemoteAssistProtocol
+import CoreServices
 import Foundation
 
 struct MacTerminalTabSnapshot: Equatable, Sendable {
@@ -240,6 +241,34 @@ func macTerminalTabTitle(_ value: String) -> String {
   return result.isEmpty ? "Terminal Tab" : result
 }
 
+func macTerminalAutomationFailure(
+  for status: OSStatus
+) -> MacTerminalTabFailure? {
+  if status == noErr {
+    return nil
+  }
+  if status == OSStatus(errAEEventNotPermitted) ||
+      status == OSStatus(errAEEventWouldRequireUserConsent) {
+    return MacTerminalTabFailure(
+      code: "automation_denied",
+      message: "Allow ClawDad to control Terminal in System Settings > Privacy & Security > Automation.",
+      state: nil
+    )
+  }
+  if status == OSStatus(procNotFound) {
+    return MacTerminalTabFailure(
+      code: "terminal_not_running",
+      message: "Terminal is not open on the Mac.",
+      state: nil
+    )
+  }
+  return MacTerminalTabFailure(
+    code: "automation_failed",
+    message: "macOS could not check ClawDad's Terminal Automation permission (\(status)).",
+    state: nil
+  )
+}
+
 final class MacTerminalAutomation: MacTerminalAutomating, @unchecked Sendable {
   private let queue = DispatchQueue(
     label: "earth.frg.ClawDad.remote-assist.terminal",
@@ -256,6 +285,7 @@ final class MacTerminalAutomation: MacTerminalAutomating, @unchecked Sendable {
     return try await withCheckedThrowingContinuation { continuation in
       queue.async {
         continuation.resume(with: Result {
+          try Self.requestAutomationPermission()
           let descriptor = try Self.execute(Self.catalogScript)
           return try Self.parseCatalog(descriptor)
         })
@@ -279,6 +309,7 @@ final class MacTerminalAutomation: MacTerminalAutomating, @unchecked Sendable {
       (continuation: CheckedContinuation<Void, Error>) in
       queue.async {
         continuation.resume(with: Result {
+          try Self.requestAutomationPermission()
           _ = try Self.execute(script)
         })
       }
@@ -364,6 +395,28 @@ final class MacTerminalAutomation: MacTerminalAutomating, @unchecked Sendable {
       )
     }
     return descriptor
+  }
+
+  private static func requestAutomationPermission() throws {
+    let target = NSAppleEventDescriptor(
+      bundleIdentifier: "com.apple.Terminal"
+    )
+    guard let address = target.aeDesc else {
+      throw MacTerminalTabFailure(
+        code: "automation_failed",
+        message: "ClawDad could not identify Terminal for Automation access.",
+        state: nil
+      )
+    }
+    let status = AEDeterminePermissionToAutomateTarget(
+      address,
+      typeWildCard,
+      typeWildCard,
+      true
+    )
+    if let failure = macTerminalAutomationFailure(for: status) {
+      throw failure
+    }
   }
 
   private static func parseCatalog(

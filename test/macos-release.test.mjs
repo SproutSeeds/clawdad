@@ -34,7 +34,7 @@ test("Mac release pipeline signs, notarizes, staples, and publishes Sparkle arti
 
   assert.match(packageSource, /"version": "0\.7\.0-beta\.10"/u);
   assert.match(releaseNotes, /ClawDad 0\.7 Native Beta/u);
-  assert.match(releaseScript, /CLAWDAD_APP_BUILD:-29/u);
+  assert.match(releaseScript, /CLAWDAD_APP_BUILD:-30/u);
   assert.match(releaseScript, /Developer ID Application/u);
   assert.match(releaseScript, /notarytool submit "\$zip_path"/u);
   assert.match(releaseScript, /CLAWDAD_NOTARY_KEY_PATH/u);
