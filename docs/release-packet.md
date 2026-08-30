@@ -1,16 +1,16 @@
 # ClawDad 0.7 Native Beta 10 Release Packet
 
-Prepared: 2026-08-27
+Prepared: 2026-08-30
 
 ## Release Identity
 
 - Embedded runtime: `0.7.0-beta.10`
-- Mac app: `0.7.0 (26)`
-- iPhone app: `0.7.0 (31)`
+- Mac app: `0.7.0 (28)`
+- iPhone app: `0.7.0 (32)`
 - Distribution mode: `native-private`
 
-The signed and notarized Mac release is retained locally and build 26 is
-installed on the paired Mac. TestFlight build 31 is `VALID` and assigned only to
+The signed and notarized Mac release is retained locally and build 28 is
+installed on the paired Mac. TestFlight build 32 is `VALID` and assigned only to
 `ClawDad Internal`. The npm package, git tags, public GitHub release assets,
 public appcast, external TestFlight group, Beta App Review, and App Store
 submission are unchanged.
@@ -25,6 +25,11 @@ submission are unchanged.
   selection falls back to an available display.
 - Pointer mapping uses the selected display's real global bounds, including
   Retina scaling and displays with negative origins.
+- The Remote Assist command menu can request a privacy-minimized catalog of
+  Terminal.app windows and tabs, then focus an explicitly selected tab.
+- Terminal catalog rows contain only an opaque identifier, cleaned title,
+  window/tab position, selected state, and busy state. Terminal contents,
+  history, commands, and process lists stay on the Mac.
 - Command-T remains available in Special Commands, and iPhone and Mac composers
   retain clipboard-safe Cut behavior.
 
@@ -32,38 +37,38 @@ submission are unchanged.
 
 | Artifact | Local path | SHA-256 |
 | --- | --- | --- |
-| Mac DMG | `native/macos/dist/releases/0.7.0-beta.10/ClawDad-0.7.0-beta.10-mac.dmg` | `75aa977e13356c85b00f0ec0d0e9edc118a0a8afd2bcce6118ab1a11fc17bce9` |
-| Mac ZIP | `native/macos/dist/releases/0.7.0-beta.10/appcast/ClawDad-0.7.0-beta.10-mac.zip` | `fdd92aa9b9ef793cf42ec1c977771b5db2d99bb9652f8b338a554e6e882e17b1` |
-| Local signed appcast | `native/macos/dist/releases/0.7.0-beta.10/appcast/appcast.xml` | `f48725386e02ef046956bdfa7ea04e2eb2774df4a4af614348671e8a6fe93823` |
-| iPhone archive | `apps/ios/ClawDadMobile/build/ClawDadMobile-Founder-31.xcarchive` | Apple-accepted archive; direct upload retained no local IPA |
+| Mac DMG | `native/macos/dist/releases/0.7.0-beta.10-macos-28/ClawDad-0.7.0-beta.10-mac.dmg` | `b2e5d43b5dff03ef87dd5b7c85f9278279ef9efd96e9f63ccd33d531f0cee8e3` |
+| Mac ZIP | `native/macos/dist/releases/0.7.0-beta.10-macos-28/appcast/ClawDad-0.7.0-beta.10-mac.zip` | `f7e367f9729a0941aadfa420463b72944c7f764c102836cae102765473262248` |
+| Local signed appcast | `native/macos/dist/releases/0.7.0-beta.10-macos-28/appcast/appcast.xml` | `8ec83402c6bdab6f92afd6e00222433f257ae6c6e153b928cc11d5aaefb13933` |
+| iPhone archive | `apps/ios/ClawDadMobile/build/ClawDadMobile-Founder-32.xcarchive` | Apple-accepted upload source; direct upload retained no local IPA |
 
 The appcast and Mac artifacts remain local. Release notes are in
-`docs/releases/0.7.0-beta.10.md` and `docs/releases/0.7.0-ios-31.md`.
+`docs/releases/0.7.0-macos-28.md` and `docs/releases/0.7.0-ios-32.md`.
 
 ## Verification Completed
 
-- Node application/runtime suite: 448 tests passed on the merged release
+- Node application/runtime suite: 449 tests passed on the merged release
   checkpoint.
-- `swift test --package-path apps/ios/ClawDadMobile`: 35 tests passed.
-- `swift test --package-path native/ClawDadRemoteAssistProtocol`: 22 tests
+- `swift test --package-path apps/ios/ClawDadMobile`: 40 tests passed.
+- `swift test --package-path native/ClawDadRemoteAssistProtocol`: 28 tests
   passed.
-- `swift test --package-path native/macos`: 43 tests passed.
-- The iPhone archive is `0.7.0 (31)`, uses bundle ID
+- `swift test --package-path native/macos`: 52 tests passed.
+- The iPhone archive is `0.7.0 (32)`, uses bundle ID
   `earth.frg.clawdad.ios`, points to the production cloud endpoint, and was
   accepted by App Store Connect.
-- App Store Connect build ID `7336ea34-d9ab-4c47-b69e-76775d7554d2` is
+- App Store Connect build ID `f0d60bc9-c671-4bd5-9a31-f1b465f85cdf` is
   `VALID`, export compliance is clear, and the build is assigned to
   `ClawDad Internal`.
-- Mac build 26 and its DMG are Developer ID signed, notarized, stapled, and
+- Mac build 28 and its DMG are Developer ID signed, notarized, stapled, and
   accepted by Gatekeeper; all recorded SHA-256 checks pass.
-- `/Applications/ClawDad.app` reports version `0.7.0 (26)` with embedded runtime
+- `/Applications/ClawDad.app` reports version `0.7.0 (28)` with embedded runtime
   `0.7.0-beta.10`.
 - Native services are active only on port 4487; legacy service labels are
   disabled.
 
 ## Distribution Boundaries
 
-- Build 31 is assigned only to the private `ClawDad Internal` TestFlight group.
+- Build 32 is assigned only to the private `ClawDad Internal` TestFlight group.
 - The external founding-customer group is unassigned, its public link is
   disabled, and Beta App Review is not submitted.
 - Public npm, git tags, GitHub release assets, and the public appcast were not
@@ -73,9 +78,12 @@ The appcast and Mac artifacts remain local. Release notes are in
 
 ## Physical Device Gates
 
-- Install TestFlight build 31 on a physical iPhone from `ClawDad Internal` and
+- Install TestFlight build 32 on a physical iPhone from `ClawDad Internal` and
   confirm a clean launch.
-- Pair it to installed Mac build 26 with a fresh QR.
+- Pair it to installed Mac build 28 with a fresh QR.
+- Open Remote Assist, choose Terminal Tabs from the compact menu, approve the
+  one-time macOS Terminal Automation prompt if shown, and focus at least two
+  different Terminal rows.
 - With at least two connected displays, switch in both directions, verify the
   active label and click alignment, and confirm input stays paused until each
   switch commits.
@@ -86,7 +94,7 @@ The appcast and Mac artifacts remain local. Release notes are in
 
 ## Remaining Release Action
 
-Install TestFlight build 31 on the paired physical iPhone and complete the
+Install TestFlight build 32 on the paired physical iPhone and complete the
 physical acceptance checks above. Native artifact, Mac installation, and
 internal TestFlight distribution checks are complete.
 
