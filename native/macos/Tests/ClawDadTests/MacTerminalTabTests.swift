@@ -108,6 +108,85 @@ final class MacTerminalTabTests: XCTestCase {
     XCTAssertTrue(state.tabs.isEmpty)
   }
 
+  func testAutomationDenialOpensExactPrivacyPaneForCatalog() async {
+    let automation = StubTerminalAutomation(
+      snapshots: initialSnapshots,
+      readError: automationDeniedFailure
+    )
+    let permissionRouter = StubTerminalPermissionRouter()
+    let controller = MacTerminalTabController(
+      automation: automation,
+      permissionRouter: permissionRouter
+    )
+
+    do {
+      _ = try await controller.catalog()
+      XCTFail("Expected an Automation permission failure")
+    } catch let failure as MacTerminalTabFailure {
+      XCTAssertEqual(failure.code, "automation_denied")
+      XCTAssertEqual(permissionRouter.openCallCount, 1)
+      XCTAssertTrue(failure.message.contains("System Settings is open"))
+      XCTAssertTrue(failure.message.contains("tap Refresh"))
+    } catch {
+      XCTFail("Unexpected error: \(error)")
+    }
+
+    XCTAssertEqual(
+      macTerminalAutomationSettingsURL?.absoluteString,
+      "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
+    )
+  }
+
+  func testAutomationDenialOpensPrivacyPaneForFocus() async throws {
+    let automation = StubTerminalAutomation(
+      snapshots: initialSnapshots,
+      focusError: automationDeniedFailure
+    )
+    let permissionRouter = StubTerminalPermissionRouter()
+    let controller = MacTerminalTabController(
+      automation: automation,
+      permissionRouter: permissionRouter
+    )
+    let initial = try await controller.catalog()
+
+    do {
+      _ = try await controller.focus(
+        tabID: initial.tabs[1].id,
+        expectedRevision: initial.revision
+      )
+      XCTFail("Expected an Automation permission failure")
+    } catch let failure as MacTerminalTabFailure {
+      XCTAssertEqual(failure.code, "automation_denied")
+      XCTAssertEqual(permissionRouter.openCallCount, 1)
+    }
+  }
+
+  func testOtherAutomationFailuresDoNotOpenPrivacyPane() async {
+    let automation = StubTerminalAutomation(
+      snapshots: initialSnapshots,
+      readError: MacTerminalTabFailure(
+        code: "automation_failed",
+        message: "Terminal did not respond.",
+        state: nil
+      )
+    )
+    let permissionRouter = StubTerminalPermissionRouter()
+    let controller = MacTerminalTabController(
+      automation: automation,
+      permissionRouter: permissionRouter
+    )
+
+    do {
+      _ = try await controller.catalog()
+      XCTFail("Expected an Automation failure")
+    } catch let failure as MacTerminalTabFailure {
+      XCTAssertEqual(failure.code, "automation_failed")
+      XCTAssertEqual(permissionRouter.openCallCount, 0)
+    } catch {
+      XCTFail("Unexpected error: \(error)")
+    }
+  }
+
   func testTitlesRemoveControlCharactersAndStayBounded() {
     let longTitle = " clawdad\n\t" + String(repeating: "🦞", count: 200)
     let title = macTerminalTabTitle(longTitle)
@@ -153,23 +232,45 @@ final class MacTerminalTabTests: XCTestCase {
       isSelectedInWindow: true
     )
   }
+
+  private var automationDeniedFailure: MacTerminalTabFailure {
+    MacTerminalTabFailure(
+      code: "automation_denied",
+      message: "Allow ClawDad to control Terminal.",
+      state: nil
+    )
+  }
 }
 
 @MainActor
 private final class StubTerminalAutomation: MacTerminalAutomating {
   var snapshots: [MacTerminalTabSnapshot]
   var focusCalls: [FocusCall] = []
+  var readError: Error?
+  var focusError: Error?
 
-  init(snapshots: [MacTerminalTabSnapshot]) {
+  init(
+    snapshots: [MacTerminalTabSnapshot],
+    readError: Error? = nil,
+    focusError: Error? = nil
+  ) {
     self.snapshots = snapshots
+    self.readError = readError
+    self.focusError = focusError
   }
 
   func readTabs() async throws -> [MacTerminalTabSnapshot] {
-    snapshots
+    if let readError {
+      throw readError
+    }
+    return snapshots
   }
 
   func focusTab(windowID: Int, tabIndex: Int) async throws {
     focusCalls.append(FocusCall(windowID: windowID, tabIndex: tabIndex))
+    if let focusError {
+      throw focusError
+    }
     guard let targetIndex = snapshots.firstIndex(where: {
       $0.windowID == windowID && $0.tabIndex == tabIndex
     }) else {
@@ -200,6 +301,18 @@ private final class StubTerminalAutomation: MacTerminalAutomating {
       isBusy: target.isBusy,
       isSelectedInWindow: true
     ), at: 0)
+  }
+}
+
+@MainActor
+private final class StubTerminalPermissionRouter:
+  MacTerminalAutomationPermissionRouting
+{
+  var openCallCount = 0
+
+  func openAutomationSettings() -> Bool {
+    openCallCount += 1
+    return true
   }
 }
 

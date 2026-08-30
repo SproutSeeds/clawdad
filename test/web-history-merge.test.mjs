@@ -871,6 +871,9 @@ test("Remote Assist lists and focuses Terminal tabs without reading terminal con
   assert.match(macTerminalTabsSource, /NSRunningApplication\.runningApplications/u);
   assert.match(macTerminalTabsSource, /set selected tab of targetWindow to tab/u);
   assert.match(macTerminalTabsSource, /set frontmost of targetWindow to true/u);
+  assert.match(macTerminalTabsSource, /Privacy_Automation/u);
+  assert.match(macTerminalTabsSource, /permissionRouter\.openAutomationSettings\(\)/u);
+  assert.match(macTerminalTabsSource, /Mac System Settings is open/u);
   assert.doesNotMatch(macTerminalTabsSource, /contents of|history of|processes of/u);
   assert.match(macBuildSource, /<key>NSAppleEventsUsageDescription<\/key>/u);
   assert.match(macBuildSource, /current Terminal tab list or choose a tab from Remote Assist/u);

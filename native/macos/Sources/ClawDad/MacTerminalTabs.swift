@@ -41,16 +41,45 @@ protocol MacTerminalAutomating: AnyObject {
 }
 
 @MainActor
+protocol MacTerminalAutomationPermissionRouting: AnyObject {
+  @discardableResult
+  func openAutomationSettings() -> Bool
+}
+
+let macTerminalAutomationSettingsURL = URL(
+  string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
+)
+
+@MainActor
+final class MacTerminalAutomationPermissionRouter:
+  MacTerminalAutomationPermissionRouting
+{
+  @discardableResult
+  func openAutomationSettings() -> Bool {
+    guard let url = macTerminalAutomationSettingsURL else {
+      return false
+    }
+    return NSWorkspace.shared.open(url)
+  }
+}
+
+@MainActor
 final class MacTerminalTabController {
   private let automation: MacTerminalAutomating
+  private let permissionRouter: MacTerminalAutomationPermissionRouting
   private var revision = 1
   private var hasCatalog = false
   private var topology: [MacTerminalTabTopologyEntry] = []
   private var identifiers: [MacTerminalTabIdentity: String] = [:]
   private var snapshotsByIdentifier: [String: MacTerminalTabSnapshot] = [:]
 
-  init(automation: MacTerminalAutomating = MacTerminalAutomation()) {
+  init(
+    automation: MacTerminalAutomating = MacTerminalAutomation(),
+    permissionRouter: MacTerminalAutomationPermissionRouting? = nil
+  ) {
     self.automation = automation
+    self.permissionRouter = permissionRouter ??
+      MacTerminalAutomationPermissionRouter()
   }
 
   func catalog() async throws -> RemoteTerminalTabState {
@@ -58,7 +87,7 @@ final class MacTerminalTabController {
     do {
       snapshots = try await automation.readTabs()
     } catch let failure as MacTerminalTabFailure {
-      throw failure
+      throw routePermissionIfNeeded(failure)
     } catch {
       throw MacTerminalTabFailure(
         code: "automation_failed",
@@ -103,7 +132,7 @@ final class MacTerminalTabController {
         tabIndex: target.tabIndex
       )
     } catch let failure as MacTerminalTabFailure {
-      throw failure
+      throw routePermissionIfNeeded(failure)
     } catch {
       throw MacTerminalTabFailure(
         code: "focus_failed",
@@ -121,6 +150,20 @@ final class MacTerminalTabController {
       )
     }
     return updatedState
+  }
+
+  private func routePermissionIfNeeded(
+    _ failure: MacTerminalTabFailure
+  ) -> MacTerminalTabFailure {
+    guard failure.code == "automation_denied",
+          permissionRouter.openAutomationSettings() else {
+      return failure
+    }
+    return MacTerminalTabFailure(
+      code: failure.code,
+      message: "Mac System Settings is open. Turn on ClawDad for Terminal under Privacy & Security > Automation, then tap Refresh.",
+      state: failure.state
+    )
   }
 
   private func apply(
