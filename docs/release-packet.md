@@ -5,11 +5,11 @@ Prepared: 2026-08-30
 ## Release Identity
 
 - Embedded runtime: `0.7.0-beta.10`
-- Mac app: `0.7.0 (30)`
+- Mac app: `0.7.0 (31)`
 - iPhone app: `0.7.0 (32)`
 - Distribution mode: `native-private`
 
-The signed and notarized Mac release is retained locally and build 30 is
+The signed and notarized Mac release is retained locally and build 31 is
 installed on the paired Mac. TestFlight build 32 is `VALID` and assigned only to
 `ClawDad Internal`. The npm package, git tags, public GitHub release assets,
 public appcast, external TestFlight group, Beta App Review, and App Store
@@ -33,6 +33,8 @@ submission are unchanged.
 - ClawDad uses macOS's dedicated consent API to register ClawDad as the
   Automation client before reading Terminal tabs. A denied decision opens the
   exact Automation pane and keeps Refresh available on the iPhone.
+- The hardened Mac app is signed with Apple's Automation Apple Events
+  entitlement so macOS can present and persist the ClawDad to Terminal consent.
 - Command-T remains available in Special Commands, and iPhone and Mac composers
   retain clipboard-safe Cut behavior.
 
@@ -40,13 +42,13 @@ submission are unchanged.
 
 | Artifact | Local path | SHA-256 |
 | --- | --- | --- |
-| Mac DMG | `native/macos/dist/releases/0.7.0-beta.10-macos-30/ClawDad-0.7.0-beta.10-mac.dmg` | `902b4b0675b16db128c61395721d89e880e690703edd2f693c06a78582704253` |
-| Mac ZIP | `native/macos/dist/releases/0.7.0-beta.10-macos-30/appcast/ClawDad-0.7.0-beta.10-mac.zip` | `7af8303570fcf707374a5446ad91140e748505d3ea30208254648d5300720717` |
-| Local signed appcast | `native/macos/dist/releases/0.7.0-beta.10-macos-30/appcast/appcast.xml` | `a82fdab732469afe5ad7403f5e41fc06a4e69969482b8ec2ba8de5e9b522057b` |
+| Mac DMG | `native/macos/dist/releases/0.7.0-beta.10-macos-31/ClawDad-0.7.0-beta.10-mac.dmg` | `add5dbee82a7cf6da3e553f08ce279f5c0b65673afede26c3c1c350a629c7704` |
+| Mac ZIP | `native/macos/dist/releases/0.7.0-beta.10-macos-31/appcast/ClawDad-0.7.0-beta.10-mac.zip` | `fb3f58ab075aaf9518ebe788529533bf2c1a2f5a77ee8aff6d5d5c5655dc115e` |
+| Local signed appcast | `native/macos/dist/releases/0.7.0-beta.10-macos-31/appcast/appcast.xml` | `e8a87431b0b534abad593eee46ab718b663072383cbceb338312d254c7b7d599` |
 | iPhone archive | `apps/ios/ClawDadMobile/build/ClawDadMobile-Founder-32.xcarchive` | Apple-accepted upload source; direct upload retained no local IPA |
 
 The appcast and Mac artifacts remain local. Release notes are in
-`docs/releases/0.7.0-macos-30.md` and `docs/releases/0.7.0-ios-32.md`.
+`docs/releases/0.7.0-macos-31.md` and `docs/releases/0.7.0-ios-32.md`.
 
 ## Verification Completed
 
@@ -62,9 +64,10 @@ The appcast and Mac artifacts remain local. Release notes are in
 - App Store Connect build ID `f0d60bc9-c671-4bd5-9a31-f1b465f85cdf` is
   `VALID`, export compliance is clear, and the build is assigned to
   `ClawDad Internal`.
-- Mac build 30 and its DMG are Developer ID signed, notarized, stapled, and
-  accepted by Gatekeeper; all recorded SHA-256 checks pass.
-- `/Applications/ClawDad.app` reports version `0.7.0 (30)` with embedded runtime
+- Mac build 31 and its DMG are Developer ID signed, notarized, stapled, and
+  accepted by Gatekeeper; its installed signature contains the Automation
+  Apple Events entitlement and all recorded SHA-256 checks pass.
+- `/Applications/ClawDad.app` reports version `0.7.0 (31)` with embedded runtime
   `0.7.0-beta.10`.
 - Native services are active only on port 4487; legacy service labels are
   disabled.
@@ -83,7 +86,7 @@ The appcast and Mac artifacts remain local. Release notes are in
 
 - Install TestFlight build 32 on a physical iPhone from `ClawDad Internal` and
   confirm a clean launch.
-- Pair it to installed Mac build 30 with a fresh QR.
+- Pair it to installed Mac build 31 with a fresh QR.
 - Open Remote Assist, choose Terminal Tabs from the compact menu, approve the
   one-time macOS Terminal Automation prompt if shown, and focus at least two
   different Terminal rows. Confirm the consent dialog names ClawDad and Terminal,

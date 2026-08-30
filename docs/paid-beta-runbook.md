@@ -9,7 +9,7 @@
 4. Build, sign, notarize, staple, and checksum the Mac release.
 5. Keep this release on the private native lane: retain the signed Mac artifacts
    locally and leave npm, public GitHub assets, and the public appcast unchanged.
-6. Install Mac build 30 on the paired host and verify the bundled runtime, native
+6. Install Mac build 31 on the paired host and verify the bundled runtime, native
    cloud connector, and cloud health.
 7. Remove any development-signed ClawDad build from the iPhone, install
    TestFlight from the App Store when needed, then install build 32 from
