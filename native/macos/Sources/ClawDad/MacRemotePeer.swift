@@ -95,6 +95,7 @@ final class MacRemotePeer: NSObject {
 
   private let factory: RTCPeerConnectionFactory
   private let inputController: MacInputController
+  private let terminalTabController = MacTerminalTabController()
   private let iceServers: [RemoteIceServerConfiguration]
   private var peerConnection: RTCPeerConnection?
   private var controlChannel: RTCDataChannel?
@@ -104,6 +105,7 @@ final class MacRemotePeer: NSObject {
   private var displaySelectionTask: Task<Void, Never>?
   private var displayRefreshTask: Task<Void, Never>?
   private var displayAdvertisementTask: Task<Void, Never>?
+  private var terminalOperationTask: Task<Void, Never>?
   private var displayAdvertisementGate = RemoteDisplayAdvertisementGate()
   private var displayOperationInProgress = false
   private var displayRefreshPending = false
@@ -258,6 +260,8 @@ final class MacRemotePeer: NSObject {
   func stop() {
     answerApplicationGate.invalidate()
     cancelDisplayAdvertisement()
+    terminalOperationTask?.cancel()
+    terminalOperationTask = nil
     displaySelectionTask?.cancel()
     displaySelectionTask = nil
     displayRefreshTask?.cancel()
@@ -310,6 +314,13 @@ final class MacRemotePeer: NSObject {
 
   private func sendControl(_ message: RemoteDisplayMessage) {
     guard let data = try? RemoteDisplayCodec.encode(message) else {
+      return
+    }
+    sendControlData(data)
+  }
+
+  private func sendControl(_ message: RemoteTerminalTabMessage) {
+    guard let data = try? RemoteTerminalTabCodec.encode(message) else {
       return
     }
     sendControlData(data)
@@ -476,6 +487,114 @@ final class MacRemotePeer: NSObject {
         self.inputController.cancelDisplayTransition()
         self.onFatalError?(error)
       }
+    }
+  }
+
+  private func handleTerminalRequest(_ message: RemoteTerminalTabMessage) {
+    guard message.type == RemoteTerminalTabMessage.listType ||
+            message.type == RemoteTerminalTabMessage.focusType else {
+      return
+    }
+    guard !MacConsoleSessionState.isLocked() else {
+      sendTerminalFailure(
+        for: message,
+        code: "mac_locked",
+        error: "Unlock the Mac before choosing a Terminal tab.",
+        state: nil
+      )
+      return
+    }
+    guard terminalOperationTask == nil else {
+      sendTerminalFailure(
+        for: message,
+        code: "request_in_progress",
+        error: "ClawDad is already refreshing Terminal tabs.",
+        state: nil
+      )
+      return
+    }
+
+    terminalOperationTask = Task { @MainActor [weak self] in
+      guard let self else {
+        return
+      }
+      defer {
+        self.terminalOperationTask = nil
+      }
+      do {
+        switch message.type {
+        case RemoteTerminalTabMessage.listType:
+          let state = try await self.terminalTabController.catalog()
+          guard !Task.isCancelled else {
+            return
+          }
+          self.sendControl(.listSuccess(
+            requestId: message.requestId,
+            state: state
+          ))
+        case RemoteTerminalTabMessage.focusType:
+          guard let tabID = message.tabId,
+                let expectedRevision = message.expectedRevision else {
+            return
+          }
+          let state = try await self.terminalTabController.focus(
+            tabID: tabID,
+            expectedRevision: expectedRevision
+          )
+          guard !Task.isCancelled else {
+            return
+          }
+          self.sendControl(.focusSuccess(
+            requestId: message.requestId,
+            state: state
+          ))
+        default:
+          return
+        }
+      } catch let failure as MacTerminalTabFailure {
+        guard !Task.isCancelled else {
+          return
+        }
+        self.sendTerminalFailure(
+          for: message,
+          code: failure.code,
+          error: failure.message,
+          state: failure.state
+        )
+      } catch {
+        guard !Task.isCancelled else {
+          return
+        }
+        self.sendTerminalFailure(
+          for: message,
+          code: "automation_failed",
+          error: error.localizedDescription,
+          state: nil
+        )
+      }
+    }
+  }
+
+  private func sendTerminalFailure(
+    for request: RemoteTerminalTabMessage,
+    code: String,
+    error: String,
+    state: RemoteTerminalTabState?
+  ) {
+    if request.type == RemoteTerminalTabMessage.focusType {
+      sendControl(.focusFailure(
+        requestId: request.requestId,
+        errorCode: code,
+        error: error,
+        state: state
+      ))
+    } else {
+      sendControl(.listFailure(
+        requestId: request.requestId,
+        errorCode: code,
+        error: error,
+        state: state
+      ))
     }
   }
 
@@ -685,6 +804,12 @@ extension MacRemotePeer: RTCDataChannelDelegate {
       if let displayMessage = try? RemoteDisplayCodec.decode(data),
          displayMessage.type == RemoteDisplayMessage.selectType {
         self.handleDisplaySelection(displayMessage)
+        return
+      }
+      if let terminalMessage = try? RemoteTerminalTabCodec.decode(data),
+         terminalMessage.type == RemoteTerminalTabMessage.listType ||
+           terminalMessage.type == RemoteTerminalTabMessage.focusType {
+        self.handleTerminalRequest(terminalMessage)
         return
       }
       self.inputController.handle(

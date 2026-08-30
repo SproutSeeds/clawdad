@@ -62,6 +62,14 @@ const nativeMacShortcutPath = path.join(
   "ClawDad",
   "MacRemoteShortcut.swift",
 );
+const nativeMacTerminalTabsPath = path.join(
+  repoRoot,
+  "native",
+  "macos",
+  "Sources",
+  "ClawDad",
+  "MacTerminalTabs.swift",
+);
 const nativeMacRemotePeerPath = path.join(
   repoRoot,
   "native",
@@ -101,6 +109,14 @@ const remoteInputProtocolPath = path.join(
   "Sources",
   "ClawDadRemoteAssistProtocol",
   "RemoteInputProtocol.swift",
+);
+const remoteTerminalTabProtocolPath = path.join(
+  repoRoot,
+  "native",
+  "ClawDadRemoteAssistProtocol",
+  "Sources",
+  "ClawDadRemoteAssistProtocol",
+  "RemoteTerminalTabProtocol.swift",
 );
 const iosInfoPlistPath = path.join(repoRoot, "apps", "ios", "ClawDadMobile", "Resources", "Info.plist");
 const iosMascotContentsPath = path.join(
@@ -824,6 +840,40 @@ test("iPhone Remote Assist keeps one keyboard-safe launcher in the corner and ne
     remoteAssistSource,
     /Text\(controller\.remoteScreenLocked \? "Mac Locked" : "Remote Assist"\)/u,
   );
+});
+
+test("Remote Assist lists and focuses Terminal tabs without reading terminal contents", async () => {
+  const [
+    remoteAssistSource,
+    macTerminalTabsSource,
+    macPeerSource,
+    terminalTabProtocolSource,
+    macBuildSource,
+  ] = await Promise.all([
+    readFile(iosRemoteAssistPath, "utf8"),
+    readFile(nativeMacTerminalTabsPath, "utf8"),
+    readFile(nativeMacRemotePeerPath, "utf8"),
+    readFile(remoteTerminalTabProtocolPath, "utf8"),
+    readFile(nativeMacBuildPath, "utf8"),
+  ]);
+
+  assert.match(remoteAssistSource, /case terminalTabs/u);
+  assert.match(remoteAssistSource, /accessibilityLabel\("Choose Terminal tab"\)/u);
+  assert.match(remoteAssistSource, /Text\("Terminal Tabs"\)/u);
+  assert.match(remoteAssistSource, /accessibilityLabel\("Back to Remote Assist controls"\)/u);
+  assert.match(remoteAssistSource, /accessibilityLabel\("Refresh Terminal tabs"\)/u);
+  assert.match(remoteAssistSource, /controller\.focusRemoteTerminalTab\(tab\.id\)/u);
+  assert.match(terminalTabProtocolSource, /"terminal\.tabs\.request"/u);
+  assert.match(terminalTabProtocolSource, /"terminal\.tabs\.result"/u);
+  assert.match(terminalTabProtocolSource, /"terminal\.tab\.focus"/u);
+  assert.match(terminalTabProtocolSource, /"terminal\.tab\.focus\.result"/u);
+  assert.match(macPeerSource, /MacTerminalTabController\(\)/u);
+  assert.match(macTerminalTabsSource, /NSRunningApplication\.runningApplications/u);
+  assert.match(macTerminalTabsSource, /set selected tab of targetWindow to tab/u);
+  assert.match(macTerminalTabsSource, /set frontmost of targetWindow to true/u);
+  assert.doesNotMatch(macTerminalTabsSource, /contents of|history of|processes of/u);
+  assert.match(macBuildSource, /<key>NSAppleEventsUsageDescription<\/key>/u);
+  assert.match(macBuildSource, /current Terminal tab list or choose a tab from Remote Assist/u);
 });
 
 test("iPhone Remote Assist dismisses its keyboard before forwarding a viewport tap", async () => {

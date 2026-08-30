@@ -180,6 +180,133 @@ struct RemoteDisplaySelectionState: Equatable {
   }
 }
 
+enum RemoteTerminalTabRequestKind: Equatable {
+  case catalog
+  case focus(tabId: String)
+}
+
+struct RemoteTerminalTabRequestAttempt: Equatable {
+  let requestId: String
+  let kind: RemoteTerminalTabRequestKind
+}
+
+struct RemoteTerminalTabResultApplication: Equatable {
+  let acceptedState: Bool
+  let selectedTabChanged: Bool
+  let matchedPendingRequest: Bool
+}
+
+struct RemoteTerminalTabSelectionState: Equatable {
+  private(set) var canonicalState: RemoteTerminalTabState?
+  private(set) var pendingAttempt: RemoteTerminalTabRequestAttempt?
+
+  var tabs: [RemoteTerminalTabDescriptor] {
+    canonicalState?.tabs ?? []
+  }
+
+  var selectedTabId: String {
+    canonicalState?.selectedTabId ?? ""
+  }
+
+  var pendingTabId: String? {
+    guard case .focus(let tabId) = pendingAttempt?.kind else {
+      return nil
+    }
+    return tabId
+  }
+
+  var requestPending: Bool {
+    pendingAttempt != nil
+  }
+
+  var catalogLoading: Bool {
+    pendingAttempt?.kind == .catalog
+  }
+
+  mutating func reset() {
+    canonicalState = nil
+    pendingAttempt = nil
+  }
+
+  mutating func beginCatalog(
+    requestId: String
+  ) -> RemoteTerminalTabRequestAttempt? {
+    begin(kind: .catalog, requestId: requestId)
+  }
+
+  mutating func beginFocus(
+    tabId: String,
+    requestId: String
+  ) -> RemoteTerminalTabRequestAttempt? {
+    guard let canonicalState,
+          canonicalState.selectedTabId != tabId,
+          canonicalState.tabs.contains(where: { $0.id == tabId }) else {
+      return nil
+    }
+    return begin(kind: .focus(tabId: tabId), requestId: requestId)
+  }
+
+  mutating func applyResult(
+    _ message: RemoteTerminalTabMessage
+  ) -> RemoteTerminalTabResultApplication? {
+    guard message.type == RemoteTerminalTabMessage.listResultType ||
+            message.type == RemoteTerminalTabMessage.focusResultType else {
+      return nil
+    }
+    let expectedResultType: String?
+    switch pendingAttempt?.kind {
+    case .catalog:
+      expectedResultType = RemoteTerminalTabMessage.listResultType
+    case .focus:
+      expectedResultType = RemoteTerminalTabMessage.focusResultType
+    case nil:
+      expectedResultType = nil
+    }
+    let matchedPendingRequest = pendingAttempt?.requestId == message.requestId &&
+      expectedResultType == message.type
+    let previousSelectedTabId = canonicalState?.selectedTabId
+    var acceptedState = false
+    let currentRevision = canonicalState?.revision ?? 0
+    if let state = message.state,
+       state.revision >= currentRevision {
+      canonicalState = state
+      acceptedState = true
+    }
+    if matchedPendingRequest {
+      pendingAttempt = nil
+    }
+    return RemoteTerminalTabResultApplication(
+      acceptedState: acceptedState,
+      selectedTabChanged: acceptedState &&
+        previousSelectedTabId != canonicalState?.selectedTabId,
+      matchedPendingRequest: matchedPendingRequest
+    )
+  }
+
+  mutating func timeOut(requestId: String) -> Bool {
+    guard pendingAttempt?.requestId == requestId else {
+      return false
+    }
+    pendingAttempt = nil
+    return true
+  }
+
+  private mutating func begin(
+    kind: RemoteTerminalTabRequestKind,
+    requestId: String
+  ) -> RemoteTerminalTabRequestAttempt? {
+    guard pendingAttempt == nil, !requestId.isEmpty else {
+      return nil
+    }
+    let attempt = RemoteTerminalTabRequestAttempt(
+      requestId: requestId,
+      kind: kind
+    )
+    pendingAttempt = attempt
+    return attempt
+  }
+}
+
 struct RemoteViewportTransform: Equatable {
   static let minimumScale: CGFloat = 1
   static let maximumScale: CGFloat = 4
@@ -344,6 +471,12 @@ final class RemoteAssistController: NSObject, ObservableObject {
   @Published private(set) var pendingRemoteDisplayId: String?
   @Published private(set) var displaySelectionPending = false
   @Published private(set) var remoteDisplayChangeToken = 0
+  @Published private(set) var remoteTerminalTabs: [RemoteTerminalTabDescriptor] = []
+  @Published private(set) var selectedRemoteTerminalTabId = ""
+  @Published private(set) var pendingRemoteTerminalTabId: String?
+  @Published private(set) var terminalTabRequestPending = false
+  @Published private(set) var terminalTabCatalogLoading = false
+  @Published private(set) var terminalTabError: String?
 
   private weak var cloudSession: CloudSession?
   private let factory = RTCPeerConnectionFactory()
@@ -358,6 +491,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
   private var clipboardTimeoutTask: Task<Void, Never>?
   private var clipboardNoticeTask: Task<Void, Never>?
   private var displaySelectionTimeoutTask: Task<Void, Never>?
+  private var terminalTabTimeoutTask: Task<Void, Never>?
   private var textFlushTask: Task<Void, Never>?
   private var bufferedText = ""
   private var textBufferStartedAt: Date?
@@ -370,6 +504,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
     action: RemoteClipboardAction
   )?
   private var displaySelection = RemoteDisplaySelectionState()
+  private var terminalTabSelection = RemoteTerminalTabSelectionState()
   private var lastPointerSentAt = Date.distantPast
   private var remoteIceServers = [
     RTCIceServer(urlStrings: ["stun:stun.cloudflare.com:3478"])
@@ -757,6 +892,101 @@ final class RemoteAssistController: NSObject, ObservableObject {
         "The Mac did not confirm the display change. The current display will stay active.",
         isError: true
       )
+      UINotificationFeedbackGenerator().notificationOccurred(.error)
+    }
+  }
+
+  func requestRemoteTerminalTabs() {
+    guard phase == .connected,
+          !remoteScreenLocked,
+          !terminalTabSelection.requestPending else {
+      return
+    }
+    dismissKeyboard()
+    terminalTabError = nil
+    let requestId = UUID().uuidString.lowercased()
+    guard let attempt = terminalTabSelection.beginCatalog(
+      requestId: requestId
+    ) else {
+      return
+    }
+    sendTerminalTabRequest(
+      .listRequest(requestId: requestId),
+      attempt: attempt
+    )
+  }
+
+  func focusRemoteTerminalTab(_ tabId: String) {
+    guard phase == .connected,
+          !remoteScreenLocked,
+          !terminalTabSelection.requestPending,
+          let tab = remoteTerminalTabs.first(where: { $0.id == tabId }) else {
+      return
+    }
+    dismissKeyboard()
+    terminalTabError = nil
+    let requestId = UUID().uuidString.lowercased()
+    guard let attempt = terminalTabSelection.beginFocus(
+      tabId: tab.id,
+      requestId: requestId
+    ), let revision = terminalTabSelection.canonicalState?.revision else {
+      return
+    }
+    showClipboardNotice(
+      "Focusing \(tab.title)...",
+      isError: false,
+      autoDismiss: false
+    )
+    sendTerminalTabRequest(
+      .focusRequest(
+        tabId: tab.id,
+        expectedRevision: revision,
+        requestId: requestId
+      ),
+      attempt: attempt
+    )
+  }
+
+  private func sendTerminalTabRequest(
+    _ message: RemoteTerminalTabMessage,
+    attempt: RemoteTerminalTabRequestAttempt
+  ) {
+    let data: Data
+    do {
+      data = try RemoteTerminalTabCodec.encode(message)
+    } catch {
+      _ = terminalTabSelection.timeOut(requestId: attempt.requestId)
+      terminalTabError = error.localizedDescription
+      publishTerminalTabSelection()
+      showClipboardNotice(error.localizedDescription, isError: true)
+      return
+    }
+    publishTerminalTabSelection()
+    guard sendControlData(data) else {
+      _ = terminalTabSelection.timeOut(requestId: attempt.requestId)
+      terminalTabError = "Remote Assist is reconnecting."
+      publishTerminalTabSelection()
+      showClipboardNotice("Remote Assist is reconnecting.", isError: true)
+      return
+    }
+
+    terminalTabTimeoutTask?.cancel()
+    terminalTabTimeoutTask = Task { @MainActor [weak self] in
+      try? await Task.sleep(nanoseconds: 8_000_000_000)
+      guard !Task.isCancelled,
+            let self,
+            self.terminalTabSelection.timeOut(
+              requestId: attempt.requestId
+            ) else {
+        return
+      }
+      self.terminalTabTimeoutTask = nil
+      let timeoutMessage = attempt.kind == .catalog
+        ? "The Mac did not return Terminal tabs. Tap refresh to try again."
+        : "The Mac did not confirm the Terminal tab change."
+      self.terminalTabError = timeoutMessage
+      self.publishTerminalTabSelection()
+      self.showClipboardNotice(timeoutMessage, isError: true)
       UINotificationFeedbackGenerator().notificationOccurred(.error)
     }
   }
@@ -1210,6 +1440,43 @@ final class RemoteAssistController: NSObject, ObservableObject {
     }
   }
 
+  private func handleTerminalTabMessage(_ data: Data) -> Bool {
+    guard let message = try? RemoteTerminalTabCodec.decode(data),
+          message.type == RemoteTerminalTabMessage.listResultType ||
+            message.type == RemoteTerminalTabMessage.focusResultType else {
+      return false
+    }
+    let pendingBefore = terminalTabSelection.pendingAttempt
+    guard let application = terminalTabSelection.applyResult(message) else {
+      return true
+    }
+    if application.matchedPendingRequest {
+      terminalTabTimeoutTask?.cancel()
+      terminalTabTimeoutTask = nil
+    }
+    publishTerminalTabSelection()
+
+    if message.ok == true {
+      if application.acceptedState {
+        terminalTabError = nil
+      }
+      if application.matchedPendingRequest,
+         case .focus(let targetTabId) = pendingBefore?.kind,
+         selectedRemoteTerminalTabId == targetTabId,
+         let tab = remoteTerminalTabs.first(where: { $0.id == targetTabId }) {
+        showClipboardNotice("Focused \(tab.title)", isError: false)
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+      }
+    } else if application.matchedPendingRequest {
+      let failureMessage = message.error ??
+        "The Mac could not update Terminal tabs."
+      terminalTabError = failureMessage
+      showClipboardNotice(failureMessage, isError: true)
+      UINotificationFeedbackGenerator().notificationOccurred(.error)
+    }
+    return true
+  }
+
   private func publishDisplaySelection() {
     let previousSelectedDisplayId = selectedRemoteDisplayId
     remoteDisplays = displaySelection.displays
@@ -1227,6 +1494,14 @@ final class RemoteAssistController: NSObject, ObservableObject {
        !selectedRemoteDisplayId.isEmpty {
       remoteDisplayChangeToken &+= 1
     }
+  }
+
+  private func publishTerminalTabSelection() {
+    remoteTerminalTabs = terminalTabSelection.tabs
+    selectedRemoteTerminalTabId = terminalTabSelection.selectedTabId
+    pendingRemoteTerminalTabId = terminalTabSelection.pendingTabId
+    terminalTabRequestPending = terminalTabSelection.requestPending
+    terminalTabCatalogLoading = terminalTabSelection.catalogLoading
   }
 
   private func showInputError(_ text: String) {
@@ -1470,6 +1745,8 @@ final class RemoteAssistController: NSObject, ObservableObject {
     clipboardNoticeTask = nil
     displaySelectionTimeoutTask?.cancel()
     displaySelectionTimeoutTask = nil
+    terminalTabTimeoutTask?.cancel()
+    terminalTabTimeoutTask = nil
     textFlushTask?.cancel()
     textFlushTask = nil
     bufferedText = ""
@@ -1490,6 +1767,13 @@ final class RemoteAssistController: NSObject, ObservableObject {
     selectedRemoteDisplayId = ""
     pendingRemoteDisplayId = nil
     displaySelectionPending = false
+    terminalTabSelection.reset()
+    remoteTerminalTabs = []
+    selectedRemoteTerminalTabId = ""
+    pendingRemoteTerminalTabId = nil
+    terminalTabRequestPending = false
+    terminalTabCatalogLoading = false
+    terminalTabError = nil
     remoteAspectRatio = 16.0 / 9.0
     controlChannel?.delegate = nil
     controlChannel?.close()
@@ -1692,6 +1976,9 @@ extension RemoteAssistController: RTCDataChannelDelegate {
       if self.handleDisplayMessage(data) {
         return
       }
+      if self.handleTerminalTabMessage(data) {
+        return
+      }
       self.handleClipboardResponse(data)
     }
   }
@@ -1721,11 +2008,14 @@ private enum RemoteAssistControlPage: Equatable {
   case primary
   case shortcuts
   case screens
+  case terminalTabs
 }
 
 private enum RemoteAssistAccessibilityFocus: Hashable {
   case screenChooser
   case screensHeading
+  case terminalTabChooser
+  case terminalTabsHeading
 }
 
 private extension RemoteShortcut {
@@ -1783,6 +2073,7 @@ struct RemoteAssistView: View {
   )
   private static let shortcutControlPanelWidth: CGFloat = 196
   private static let screenControlPanelWidth: CGFloat = 228
+  private static let terminalTabControlPanelWidth: CGFloat = 260
 
   var body: some View {
     ZStack {
@@ -1903,8 +2194,8 @@ struct RemoteAssistView: View {
           )
           .accessibilityHint(
             controller.hasMultipleRemoteDisplays
-              ? "Shows Exit, Enter, clipboard, keyboard, shortcuts, display, and zoom controls"
-              : "Shows Exit, Enter, clipboard, keyboard, shortcuts, and zoom controls"
+              ? "Shows Exit, Enter, clipboard, keyboard, shortcuts, Terminal tabs, display, and zoom controls"
+              : "Shows Exit, Enter, clipboard, keyboard, shortcuts, Terminal tabs, and zoom controls"
           )
         }
         .animation(
@@ -1975,6 +2266,8 @@ struct RemoteAssistView: View {
         shortcutControlPanel
       case .screens:
         screenControlPanel
+      case .terminalTabs:
+        terminalTabControlPanel
       }
     }
     .frame(width: controlPanelWidth, alignment: .trailing)
@@ -1999,6 +2292,8 @@ struct RemoteAssistView: View {
       Self.shortcutControlPanelWidth
     case .screens:
       Self.screenControlPanelWidth
+    case .terminalTabs:
+      Self.terminalTabControlPanelWidth
     }
   }
 
@@ -2122,6 +2417,30 @@ struct RemoteAssistView: View {
         )
         .accessibilityLabel("Special commands")
         .accessibilityHint("Shows Control, navigation, and Mac app shortcuts")
+
+        Button {
+          controlPage = .terminalTabs
+          controller.requestRemoteTerminalTabs()
+          DispatchQueue.main.async {
+            accessibilityFocus = .terminalTabsHeading
+          }
+        } label: {
+          Image(systemName: "terminal")
+            .font(.system(size: 18, weight: .bold))
+            .frame(width: 44, height: 44)
+        }
+        .buttonStyle(RemoteAssistOverlayButtonStyle())
+        .disabled(
+          controller.phase != .connected ||
+            controller.remoteScreenLocked ||
+            controller.remoteInputSuppressed
+        )
+        .accessibilityLabel("Choose Terminal tab")
+        .accessibilityHint("Shows the Terminal tabs open on the Mac")
+        .accessibilityFocused(
+          $accessibilityFocus,
+          equals: .terminalTabChooser
+        )
 
         if controller.hasMultipleRemoteDisplays {
           Button {
@@ -2302,6 +2621,162 @@ struct RemoteAssistView: View {
         }
       }
       .frame(maxHeight: 238)
+    }
+  }
+
+  private var terminalTabControlPanel: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      HStack(spacing: 8) {
+        Button {
+          controlPage = .primary
+          DispatchQueue.main.async {
+            accessibilityFocus = .terminalTabChooser
+          }
+        } label: {
+          Image(systemName: "chevron.left")
+            .font(.system(size: 14, weight: .black))
+            .frame(width: 32, height: 32)
+        }
+        .buttonStyle(RemoteAssistOverlayButtonStyle())
+        .accessibilityLabel("Back to Remote Assist controls")
+
+        Text("Terminal Tabs")
+          .font(.caption.weight(.heavy))
+          .foregroundStyle(ClawDadTheme.cream)
+          .accessibilityAddTraits(.isHeader)
+          .accessibilityFocused(
+            $accessibilityFocus,
+            equals: .terminalTabsHeading
+          )
+
+        Spacer(minLength: 4)
+
+        if controller.terminalTabRequestPending {
+          ProgressView()
+            .controlSize(.small)
+            .tint(ClawDadTheme.gold)
+            .accessibilityHidden(true)
+        }
+
+        Button {
+          controller.requestRemoteTerminalTabs()
+        } label: {
+          Image(systemName: "arrow.clockwise")
+            .font(.system(size: 14, weight: .bold))
+            .frame(width: 32, height: 32)
+        }
+        .buttonStyle(RemoteAssistOverlayButtonStyle())
+        .disabled(
+          controller.phase != .connected ||
+            controller.remoteScreenLocked ||
+            controller.terminalTabRequestPending
+        )
+        .accessibilityLabel("Refresh Terminal tabs")
+      }
+
+      if controller.terminalTabCatalogLoading &&
+          controller.remoteTerminalTabs.isEmpty {
+        HStack(spacing: 8) {
+          ProgressView()
+            .controlSize(.small)
+            .tint(ClawDadTheme.gold)
+          Text("Loading Terminal tabs...")
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(ClawDadTheme.cream.opacity(0.78))
+        }
+        .frame(maxWidth: .infinity, minHeight: 54, alignment: .center)
+      } else if controller.remoteTerminalTabs.isEmpty {
+        Text(
+          controller.terminalTabError ??
+            "No Terminal tabs are open on the Mac."
+        )
+        .font(.footnote.weight(.semibold))
+        .foregroundStyle(
+          controller.terminalTabError == nil
+            ? ClawDadTheme.cream.opacity(0.78)
+            : ClawDadTheme.gold
+        )
+        .multilineTextAlignment(.leading)
+        .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
+        .padding(.horizontal, 4)
+      } else {
+        ScrollView {
+          LazyVStack(spacing: 6) {
+            ForEach(controller.remoteTerminalTabs, id: \.id) { tab in
+              let isSelected = tab.id ==
+                controller.selectedRemoteTerminalTabId
+              let isPending = tab.id ==
+                controller.pendingRemoteTerminalTabId
+              Button {
+                controller.focusRemoteTerminalTab(tab.id)
+              } label: {
+                HStack(spacing: 8) {
+                  Image(systemName: "terminal")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(
+                      tab.isBusy
+                        ? ClawDadTheme.gold
+                        : ClawDadTheme.cream.opacity(0.72)
+                    )
+
+                  VStack(alignment: .leading, spacing: 2) {
+                    Text(tab.title)
+                      .font(.footnote.weight(.bold))
+                      .lineLimit(1)
+                    Text(tab.detail + (tab.isBusy ? " • Busy" : ""))
+                      .font(.caption2.monospacedDigit())
+                      .foregroundStyle(ClawDadTheme.cream.opacity(0.68))
+                      .lineLimit(1)
+                  }
+
+                  Spacer(minLength: 4)
+
+                  if isPending {
+                    ProgressView()
+                      .controlSize(.small)
+                      .tint(ClawDadTheme.gold)
+                  } else if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                      .font(.system(size: 17, weight: .bold))
+                      .foregroundStyle(ClawDadTheme.good)
+                  }
+                }
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                .padding(.horizontal, 10)
+              }
+              .buttonStyle(
+                RemoteAssistDisplayButtonStyle(isSelected: isSelected)
+              )
+              .disabled(
+                controller.phase != .connected ||
+                  controller.remoteScreenLocked ||
+                  controller.terminalTabRequestPending ||
+                  isSelected
+              )
+              .accessibilityLabel(
+                "\(tab.title), \(tab.detail)" +
+                  (tab.isBusy ? ", busy" : "") +
+                  (isSelected ? ", selected" : "")
+              )
+              .accessibilityValue(isPending ? "Focusing" : "")
+              .accessibilityHint(
+                isSelected
+                  ? "Currently focused Terminal tab"
+                  : "Focuses this Terminal tab on the Mac"
+              )
+            }
+          }
+        }
+        .frame(maxHeight: 260)
+
+        if let error = controller.terminalTabError {
+          Text(error)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(ClawDadTheme.gold)
+            .multilineTextAlignment(.leading)
+            .padding(.horizontal, 4)
+        }
+      }
     }
   }
 
