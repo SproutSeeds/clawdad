@@ -45,7 +45,7 @@ final class MobileReadAloudController: NSObject, ObservableObject {
     self.requestId = requestId
     self.envelopeId = envelopeId
     phase = .preparing
-    statusMessage = "Sending text to your Mac..."
+    statusMessage = "Sending text to your paired computer..."
     errorMessage = ""
     timeoutTask = Task { [weak self] in
       try? await Task.sleep(nanoseconds: self?.prepareTimeoutNanoseconds ?? 0)
@@ -63,7 +63,7 @@ final class MobileReadAloudController: NSObject, ObservableObject {
     guard requestId == self.requestId, phase == .preparing else {
       return
     }
-    statusMessage = "Preparing audio on your Mac..."
+    statusMessage = "Preparing audio on your paired computer..."
   }
 
   func receiveChunk(
@@ -89,16 +89,16 @@ final class MobileReadAloudController: NSObject, ObservableObject {
           data.count <= maximumChunkBytes,
           (declaredBytes <= 0 || declaredBytes == data.count)
     else {
-      fail(requestId: requestId, message: "The Mac returned an invalid audio chunk.")
+      fail(requestId: requestId, message: "The paired computer returned an invalid audio chunk.")
       return
     }
 
     if expectedPartCount > 0, expectedPartCount != partCount {
-      fail(requestId: requestId, message: "The Mac returned inconsistent audio parts.")
+      fail(requestId: requestId, message: "The paired computer returned inconsistent audio parts.")
       return
     }
     if let expected = expectedChunkCounts[partIndex], expected != chunkCount {
-      fail(requestId: requestId, message: "The Mac returned inconsistent audio chunks.")
+      fail(requestId: requestId, message: "The paired computer returned inconsistent audio chunks.")
       return
     }
 
@@ -109,7 +109,7 @@ final class MobileReadAloudController: NSObject, ObservableObject {
     var partChunks = chunksByPart[partIndex] ?? [:]
     if let existing = partChunks[chunkIndex] {
       guard existing == data else {
-        fail(requestId: requestId, message: "The Mac returned a conflicting audio chunk.")
+        fail(requestId: requestId, message: "The paired computer returned a conflicting audio chunk.")
         return
       }
     } else {
@@ -122,7 +122,7 @@ final class MobileReadAloudController: NSObject, ObservableObject {
       chunksByPart[partIndex] = partChunks
     }
 
-    statusMessage = "Receiving audio from your Mac..."
+    statusMessage = "Receiving audio from your paired computer..."
     if partChunks.count == chunkCount {
       persistAudioPart(partIndex: partIndex, chunkCount: chunkCount)
     }
@@ -190,7 +190,7 @@ final class MobileReadAloudController: NSObject, ObservableObject {
     guard phase == .preparing else {
       return
     }
-    fail(requestId: requestId, message: "Connection to your Mac was lost while preparing audio.")
+    fail(requestId: requestId, message: "Connection to your paired computer was lost while preparing audio.")
   }
 
   func showFailure(key: String, message: String) {
@@ -447,6 +447,16 @@ final class CloudSession: ObservableObject {
   @Published var pairedHostPublicKeyPem: String {
     didSet { defaults.set(pairedHostPublicKeyPem, forKey: "clawdad.pairedHostPublicKeyPem") }
   }
+  @Published private(set) var pairedComputers: [PairedComputerProfile] = []
+  @Published private(set) var activeComputerId: String = "" {
+    didSet {
+      if activeComputerId.isEmpty {
+        defaults.removeObject(forKey: PairedComputerRegistry.activeComputerKey)
+      } else {
+        defaults.set(activeComputerId, forKey: PairedComputerRegistry.activeComputerKey)
+      }
+    }
+  }
   @Published private(set) var startupWorkspaceReady = false
   @Published private(set) var reconnecting = false
 
@@ -462,6 +472,11 @@ final class CloudSession: ObservableObject {
   private var pendingCatalogHistoryLimit: Int?
   private var pendingPairingHostPublicKeyPem = ""
   private var pendingPairingRelayToken = ""
+  private var pendingPairingHostName = ""
+  private var pendingPairingHostPlatform = ""
+  private var pendingPairingCapabilities: [String] = []
+  private var pendingPairingEnvelopeId = ""
+  private var pairingReturnComputerId = ""
   private var legacyRelayToken = ""
   private var lastEntitlementFingerprint = ""
   private var remoteAssistEnvelopeHandler: ((CloudEnvelope) -> Void)?
@@ -494,12 +509,62 @@ final class CloudSession: ObservableObject {
     self.selectedSessionId = defaults.string(forKey: "clawdad.selectedSessionId") ?? ""
     self.selectedModel = defaults.string(forKey: "clawdad.selectedModel") ?? "gpt-5.6-sol"
     self.selectedReasoningEffort = defaults.string(forKey: "clawdad.selectedReasoningEffort") ?? "ultra"
+    var storedComputers = PairedComputerRegistry.load(from: defaults)
+    if !self.pairedHostId.isEmpty, self.pairedHostId == self.hostId {
+      let legacyComputer = PairedComputerProfile(
+        displayName: self.hostId,
+        platform: "macos",
+        cloudUrl: self.cloudUrl,
+        accountId: self.accountId,
+        workspaceId: self.workspaceId,
+        hostId: self.hostId,
+        hostPublicKeyPem: self.pairedHostPublicKeyPem,
+        pairedAt: self.pairedAt,
+        selectedProjectPath: self.selectedProjectPath,
+        selectedSessionId: self.selectedSessionId,
+        selectedModel: self.selectedModel,
+        selectedReasoningEffort: self.selectedReasoningEffort,
+        capabilities: [],
+        lastUsedAt: self.pairedAt
+      )
+      storedComputers = PairedComputerRegistry.migratingLegacy(
+        legacyComputer,
+        into: storedComputers
+      )
+    }
+    let storedActiveId = defaults.string(
+      forKey: PairedComputerRegistry.activeComputerKey
+    ) ?? ""
+    let legacyActiveId = pairedComputerIdentifier(
+      accountId: self.accountId,
+      workspaceId: self.workspaceId,
+      hostId: self.hostId
+    )
+    let activeComputer = storedComputers.first { $0.id == storedActiveId }
+      ?? storedComputers.first { $0.id == legacyActiveId }
+      ?? storedComputers.first
+    self.pairedComputers = storedComputers
+    if let activeComputer {
+      self.activeComputerId = activeComputer.id
+      self.cloudUrl = activeComputer.cloudUrl
+      self.accountId = activeComputer.accountId
+      self.workspaceId = activeComputer.workspaceId
+      self.hostId = activeComputer.hostId
+      self.pairedHostId = activeComputer.hostId
+      self.pairedAt = activeComputer.pairedAt
+      self.pairedHostPublicKeyPem = activeComputer.hostPublicKeyPem
+      self.selectedProjectPath = activeComputer.selectedProjectPath
+      self.selectedSessionId = activeComputer.selectedSessionId
+      self.selectedModel = activeComputer.selectedModel
+      self.selectedReasoningEffort = activeComputer.selectedReasoningEffort
+    }
+    PairedComputerRegistry.save(storedComputers, to: defaults)
     if defaults.object(forKey: "clawdad.allowUmbraReadAloudFallback") != nil {
       self.allowUmbraReadAloudFallback = defaults.bool(
         forKey: "clawdad.allowUmbraReadAloudFallback"
       )
     }
-    self.startupWorkspaceReady = self.pairedHostId.isEmpty || self.pairedHostId != self.hostId
+    self.startupWorkspaceReady = !self.paired
   }
 
 #if DEBUG
@@ -515,6 +580,22 @@ final class CloudSession: ObservableObject {
     self.selectedSessionId = fixture.selectedSessionId
     self.selectedModel = fixture.modelOptions.first?.model ?? "gpt-5.6-sol"
     self.selectedReasoningEffort = "ultra"
+    let previewComputer = PairedComputerProfile(
+      displayName: "Preview Mac",
+      platform: "macos",
+      cloudUrl: "https://clawdad-cloud.frg.earth",
+      accountId: "preview-account",
+      workspaceId: fixture.workspace.id,
+      hostId: fixture.workspace.hostId,
+      hostPublicKeyPem: "app-store-preview",
+      pairedAt: "2026-07-30T14:00:00.000Z",
+      selectedProjectPath: fixture.selectedProjectPath,
+      selectedSessionId: fixture.selectedSessionId,
+      selectedModel: fixture.modelOptions.first?.model ?? "gpt-5.6-sol",
+      selectedReasoningEffort: "ultra"
+    )
+    self.pairedComputers = [previewComputer]
+    self.activeComputerId = previewComputer.id
     self.allowUmbraReadAloudFallback = true
     self.appStorePreviewMode = true
     self.state = .connected
@@ -536,6 +617,22 @@ final class CloudSession: ObservableObject {
 
   var paired: Bool {
     !pairedHostId.isEmpty && pairedHostId == hostId
+  }
+
+  var activeComputer: PairedComputerProfile? {
+    pairedComputers.first { $0.id == activeComputerId }
+  }
+
+  var activeComputerName: String {
+    activeComputer?.displayName ?? pairedComputerDisplayName("", hostId: hostId)
+  }
+
+  var activeComputerPlatformLabel: String {
+    activeComputer?.platformLabel ?? "Computer"
+  }
+
+  var activeComputerSupportsRemoteAssist: Bool {
+    activeComputer?.supportsRemoteAssist ?? true
   }
 
   var ready: Bool {
@@ -596,8 +693,8 @@ final class CloudSession: ObservableObject {
 
   func connect() {
     guard paired else {
-      pairingStatus = "Scan the Mac QR to pair this iPhone."
-      events.insert("Pair with Mac first", at: 0)
+      pairingStatus = "Scan a ClawDad computer QR to pair this iPhone."
+      events.insert("Pair with a computer first", at: 0)
       return
     }
     if case .connecting = state {
@@ -655,6 +752,8 @@ final class CloudSession: ObservableObject {
   }
 
   func forgetPairing() {
+    let forgottenComputerId = activeComputerId
+    let forgottenComputerName = activeComputerName
     disconnect()
     try? DeviceIdentity.shared.deleteRelayAccessToken(
       accountId: accountId,
@@ -663,6 +762,18 @@ final class CloudSession: ObservableObject {
     )
     pendingPairingRelayToken = ""
     legacyRelayToken = ""
+    pairedComputers = PairedComputerRegistry.removing(
+      id: forgottenComputerId,
+      from: pairedComputers
+    )
+    PairedComputerRegistry.save(pairedComputers, to: defaults)
+    if let nextComputer = pairedComputers.first {
+      activateComputer(nextComputer, shouldConnect: true)
+      pairingStatus = "Forgot \(forgottenComputerName). Switched to \(nextComputer.displayName)."
+      events.insert("Forgot \(forgottenComputerName)", at: 0)
+      return
+    }
+    activeComputerId = ""
     pairedHostId = ""
     pairedAt = ""
     pairedHostPublicKeyPem = ""
@@ -679,8 +790,122 @@ final class CloudSession: ObservableObject {
       hostId: hostId,
       projects: []
     )
-    pairingStatus = "Pairing cleared. Scan the Mac QR to pair this iPhone again."
+    pairingStatus = "Pairing cleared. Scan a ClawDad computer QR to pair this iPhone again."
     events.insert("Pairing cleared", at: 0)
+  }
+
+  func switchComputer(to computerId: String) {
+    guard let computer = pairedComputers.first(where: { $0.id == computerId }) else {
+      pairingStatus = "That saved computer is no longer available on this iPhone."
+      return
+    }
+    if computer.id == activeComputerId {
+      connectIfPaired()
+      return
+    }
+    persistActiveComputerSnapshot()
+    activateComputer(computer, shouldConnect: true)
+    pairingStatus = "Switching to \(computer.displayName)..."
+    events.insert("Switched to \(computer.displayName)", at: 0)
+  }
+
+  private func activateComputer(
+    _ computer: PairedComputerProfile,
+    shouldConnect: Bool
+  ) {
+    disconnect()
+    let activatedComputer = PairedComputerProfile(
+      displayName: computer.displayName,
+      platform: computer.platform,
+      cloudUrl: computer.cloudUrl,
+      accountId: computer.accountId,
+      workspaceId: computer.workspaceId,
+      hostId: computer.hostId,
+      hostPublicKeyPem: computer.hostPublicKeyPem,
+      pairedAt: computer.pairedAt,
+      selectedProjectPath: computer.selectedProjectPath,
+      selectedSessionId: computer.selectedSessionId,
+      selectedModel: computer.selectedModel,
+      selectedReasoningEffort: computer.selectedReasoningEffort,
+      capabilities: computer.capabilities,
+      lastUsedAt: ISO8601DateFormatter().string(from: Date())
+    )
+    pairedComputers = PairedComputerRegistry.upserting(
+      activatedComputer,
+      into: pairedComputers
+    )
+    PairedComputerRegistry.save(pairedComputers, to: defaults)
+    activeComputerId = activatedComputer.id
+    cloudUrl = activatedComputer.cloudUrl
+    accountId = activatedComputer.accountId
+    workspaceId = activatedComputer.workspaceId
+    hostId = activatedComputer.hostId
+    pairedHostId = activatedComputer.hostId
+    pairedAt = activatedComputer.pairedAt
+    pairedHostPublicKeyPem = activatedComputer.hostPublicKeyPem
+    selectedProjectPath = activatedComputer.selectedProjectPath
+    selectedSessionId = activatedComputer.selectedSessionId
+    selectedModel = activatedComputer.selectedModel.isEmpty
+      ? "gpt-5.6-sol"
+      : activatedComputer.selectedModel
+    selectedReasoningEffort = activatedComputer.selectedReasoningEffort.isEmpty
+      ? "ultra"
+      : activatedComputer.selectedReasoningEffort
+    historyItems = []
+    historyStatus = ""
+    pendingApprovals = []
+    modelOptions = []
+    pairingStatus = ""
+    pendingCatalogHistoryLimit = nil
+    pendingPairingHostPublicKeyPem = ""
+    pendingPairingRelayToken = ""
+    pendingPairingHostName = ""
+    pendingPairingHostPlatform = ""
+    pendingPairingCapabilities = []
+    pendingPairingEnvelopeId = ""
+    pairingReturnComputerId = ""
+    startupWorkspaceReady = false
+    workspace = MobileWorkspace(
+      id: workspaceId,
+      title: "Scratchpad",
+      hostId: hostId,
+      projects: []
+    )
+    seq = 0
+    connectionRequested = shouldConnect
+    if shouldConnect {
+      connectIfPaired()
+    }
+  }
+
+  private func persistActiveComputerSnapshot(markUsed: Bool = false) {
+    guard paired, !activeComputerId.isEmpty else {
+      return
+    }
+    let existing = pairedComputers.first { $0.id == activeComputerId }
+    let snapshot = PairedComputerProfile(
+      displayName: existing?.displayName ?? hostId,
+      platform: existing?.platform ?? pairedComputerPlatform("", hostId: hostId),
+      cloudUrl: cloudUrl,
+      accountId: accountId,
+      workspaceId: workspaceId,
+      hostId: hostId,
+      hostPublicKeyPem: pairedHostPublicKeyPem,
+      pairedAt: pairedAt,
+      selectedProjectPath: selectedProjectPath,
+      selectedSessionId: selectedSessionId,
+      selectedModel: selectedModel,
+      selectedReasoningEffort: selectedReasoningEffort,
+      capabilities: existing?.capabilities ?? [],
+      lastUsedAt: markUsed
+        ? ISO8601DateFormatter().string(from: Date())
+        : (existing?.lastUsedAt ?? pairedAt)
+    )
+    pairedComputers = PairedComputerRegistry.upserting(
+      snapshot,
+      into: pairedComputers
+    )
+    PairedComputerRegistry.save(pairedComputers, to: defaults)
   }
 
   func selectProject(_ project: ProjectSummary) {
@@ -688,6 +913,7 @@ final class CloudSession: ObservableObject {
     selectedSessionId = project.activeSessionId
     historyItems = []
     historyStatus = "Loading threads for \(project.name)..."
+    persistActiveComputerSnapshot()
     requestCatalog()
     requestModels()
   }
@@ -697,6 +923,7 @@ final class CloudSession: ObservableObject {
     selectedSessionId = thread.sessionId
     historyItems = []
     historyStatus = "Loading \(thread.title)..."
+    persistActiveComputerSnapshot()
     events.insert("Opened \(thread.projectName) ...\(thread.sessionId.suffix(5))", at: 0)
     let project = workspace.projects.first { $0.path == thread.projectPath }
     let threadIsTracked: Bool
@@ -760,6 +987,7 @@ final class CloudSession: ObservableObject {
     if !model.supportedReasoningEfforts.contains(selectedReasoningEffort) {
       selectedReasoningEffort = model.defaultReasoningEffort
     }
+    persistActiveComputerSnapshot()
   }
 
   func chooseReasoningEffort(_ effort: String) {
@@ -767,6 +995,7 @@ final class CloudSession: ObservableObject {
       return
     }
     selectedReasoningEffort = effort
+    persistActiveComputerSnapshot()
   }
 
   func createSession(title: String = "") {
@@ -799,7 +1028,7 @@ final class CloudSession: ObservableObject {
   func createProjectDirectory(name: String) {
     let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
     guard ready, !projectCreatePending else {
-      projectCreateError = "Reconnect to your paired Mac before creating a project."
+      projectCreateError = "Reconnect to \(activeComputerName) before creating a project."
       return
     }
     guard mobileProjectDirectoryNameIsValid(normalizedName) else {
@@ -809,7 +1038,7 @@ final class CloudSession: ObservableObject {
 
     let requestId = UUID().uuidString.lowercased()
     projectCreatePending = true
-    projectCreateStatus = "Creating the project on your Mac..."
+    projectCreateStatus = "Creating the project on \(activeComputerName)..."
     projectCreateError = ""
     lastCreatedProjectPath = ""
     pendingProjectCreateEnvelopeId = requestId
@@ -901,7 +1130,7 @@ final class CloudSession: ObservableObject {
 
   func decideApproval(_ approval: MobileApprovalRequest, approve: Bool) {
     guard ready else {
-      historyStatus = "Reconnect to your Mac before responding to this approval."
+      historyStatus = "Reconnect to \(activeComputerName) before responding to this approval."
       return
     }
     Task {
@@ -940,7 +1169,7 @@ final class CloudSession: ObservableObject {
       return
     }
     guard connected else {
-      pairingStatus = "Connect to your Mac before sending."
+      pairingStatus = "Connect to \(activeComputerName) before sending."
       events.insert("Connect to host first", at: 0)
       return
     }
@@ -1025,7 +1254,7 @@ final class CloudSession: ObservableObject {
           envelopeId: envelopeId
         )
         if voiceTranscriptionPending, pendingVoiceRequestId == requestId {
-          voiceTranscriptionStatus = "Waiting for your Mac..."
+          voiceTranscriptionStatus = "Waiting for \(activeComputerName)..."
         }
         events.insert("Voice note sent for transcription", at: 0)
       } catch {
@@ -1063,7 +1292,7 @@ final class CloudSession: ObservableObject {
     guard ready else {
       readAloud.showFailure(
         key: key,
-        message: "Reconnect to your paired Mac before using Read Aloud."
+        message: "Reconnect to \(activeComputerName) before using Read Aloud."
       )
       return
     }
@@ -1087,7 +1316,7 @@ final class CloudSession: ObservableObject {
           ],
           envelopeId: envelopeId
         )
-        events.insert("Requested \(kind.accessibilitySubject) audio from Mac", at: 0)
+        events.insert("Requested \(kind.accessibilitySubject) audio from \(activeComputerName)", at: 0)
       } catch {
         readAloud.failIfMatchingEnvelope(envelopeId, message: describe(error))
       }
@@ -1101,6 +1330,7 @@ final class CloudSession: ObservableObject {
         try await pair(with: payload)
       } catch {
         let message = describe(error)
+        restoreComputerAfterPairingFailureIfNeeded()
         pairingStatus = message
         events.insert("Pairing failed: \(message)", at: 0)
       }
@@ -1222,30 +1452,76 @@ final class CloudSession: ObservableObject {
   }
 
   private func pair(with payload: PairingPayload) async throws {
+    persistActiveComputerSnapshot()
+    pairingReturnComputerId = activeComputerId
+    disconnect()
+    connectionRequested = true
     cloudUrl = payload.cloudUrl
     accountId = payload.accountId
     workspaceId = payload.workspaceId
     hostId = payload.hostId
     pendingPairingHostPublicKeyPem = payload.hostPublicKeyPem ?? ""
     pendingPairingRelayToken = payload.token
+    pendingPairingHostName = payload.hostName ?? ""
+    pendingPairingHostPlatform = payload.hostPlatform ?? ""
+    pendingPairingCapabilities = payload.capabilities ?? []
+    pendingPairingEnvelopeId = UUID().uuidString.lowercased()
+    if let existing = pairedComputers.first(where: {
+      $0.id == pairedComputerIdentifier(
+        accountId: payload.accountId,
+        workspaceId: payload.workspaceId,
+        hostId: payload.hostId
+      )
+    }) {
+      selectedProjectPath = existing.selectedProjectPath
+      selectedSessionId = existing.selectedSessionId
+      selectedModel = existing.selectedModel
+      selectedReasoningEffort = existing.selectedReasoningEffort
+    } else {
+      selectedProjectPath = ""
+      selectedSessionId = ""
+    }
+    historyItems = []
+    historyStatus = ""
+    pendingApprovals = []
+    modelOptions = []
     startupWorkspaceReady = false
     workspace = MobileWorkspace(
       id: payload.workspaceId,
       title: "Scratchpad",
       hostId: payload.hostId,
-      projects: workspace.projects,
-      recentThreads: workspace.recentThreads
+      projects: []
     )
     pairingStatus = "Connecting to ClawDad..."
     try await connectAsync()
     pairingStatus = "Trusting this iPhone..."
-    try await sendEnvelope(type: "pair.request", body: [
-      "token": .string(payload.token),
-      "publicKeyPem": .string(try DeviceIdentity.shared.publicKeyExport()),
-      "keyId": .string(try DeviceIdentity.shared.publicKeyId()),
-      "deviceName": .string(deviceName()),
-      "platform": .string("ios")
-    ])
+    try await sendEnvelope(
+      type: "pair.request",
+      body: [
+        "token": .string(payload.token),
+        "publicKeyPem": .string(try DeviceIdentity.shared.publicKeyExport()),
+        "keyId": .string(try DeviceIdentity.shared.publicKeyId()),
+        "deviceName": .string(deviceName()),
+        "platform": .string("ios")
+      ],
+      envelopeId: pendingPairingEnvelopeId
+    )
+  }
+
+  private func restoreComputerAfterPairingFailureIfNeeded() {
+    let returnId = pairingReturnComputerId
+    pendingPairingHostPublicKeyPem = ""
+    pendingPairingRelayToken = ""
+    pendingPairingHostName = ""
+    pendingPairingHostPlatform = ""
+    pendingPairingCapabilities = []
+    pendingPairingEnvelopeId = ""
+    pairingReturnComputerId = ""
+    guard !returnId.isEmpty,
+          let computer = pairedComputers.first(where: { $0.id == returnId }) else {
+      return
+    }
+    activateComputer(computer, shouldConnect: true)
   }
 
   private func deviceName() -> String {
@@ -1389,7 +1665,7 @@ final class CloudSession: ObservableObject {
     resetSocket()
     state = .connecting
     reconnecting = true
-    historyStatus = "Secure connection interrupted. Reconnecting to your paired Mac automatically..."
+    historyStatus = "Secure connection interrupted. Reconnecting to \(activeComputerName) automatically..."
     events.insert("Connection interrupted: \(message)", at: 0)
     scheduleReconnect()
   }
@@ -1493,6 +1769,7 @@ final class CloudSession: ObservableObject {
         selectedSessionId = first.activeSessionId
       }
       startupWorkspaceReady = true
+      persistActiveComputerSnapshot()
       if catalogChanged {
         events.insert("Updated project catalog", at: 0)
       }
@@ -1522,7 +1799,7 @@ final class CloudSession: ObservableObject {
         projectCreatePending = false
         pendingProjectCreateEnvelopeId = ""
         projectCreateStatus = ""
-        projectCreateError = "Your Mac did not return the new project path."
+        projectCreateError = "\(activeComputerName) did not return the new project path."
         return
       }
       projectCreatePending = false
@@ -1532,6 +1809,7 @@ final class CloudSession: ObservableObject {
       lastCreatedProjectPath = projectPath
       selectedProjectPath = projectPath
       selectedSessionId = sessionId
+      persistActiveComputerSnapshot()
       historyItems = []
       historyStatus = "New project ready."
       events.insert("Created project \(URL(fileURLWithPath: projectPath).lastPathComponent)", at: 0)
@@ -1542,6 +1820,7 @@ final class CloudSession: ObservableObject {
       if !sessionId.isEmpty {
         selectedSessionId = sessionId
       }
+      persistActiveComputerSnapshot()
       historyItems = []
       historyStatus = "New Codex thread ready."
       events.insert("Started new thread ...\(sessionId.suffix(5))", at: 0)
@@ -1559,12 +1838,14 @@ final class CloudSession: ObservableObject {
       if !pageSessionId.isEmpty {
         selectedSessionId = pageSessionId
       }
+      persistActiveComputerSnapshot()
       historyItems = parseHistoryItems(envelope.body["items"])
       historyStatus = historyItems.isEmpty ? "No mirrored messages yet." : "Thread loaded"
     case "status.snapshot":
       applyStatusSnapshot(envelope)
     case "host.ready", "host.heartbeat":
       if envelope.sourceDeviceId == hostId {
+        updateActiveComputerMetadata(from: envelope)
         let firstHostSignal = !hostOnline
         hostOnline = true
         lastHostSeenAt = Date()
@@ -1619,6 +1900,7 @@ final class CloudSession: ObservableObject {
         ?? (requestState == "direct")
       if !acceptedSessionId.isEmpty {
         selectedSessionId = acceptedSessionId
+        persistActiveComputerSnapshot()
       }
       let suffix = requestId.isEmpty ? "" : " ...\(requestId.suffix(5))"
       if queued {
@@ -1634,6 +1916,21 @@ final class CloudSession: ObservableObject {
       requestCatalog()
       requestHistory()
     case "pair.accepted":
+      let acceptedPairingEnvelopeId = envelope.body["inReplyTo"]?.stringValue ?? ""
+      guard !pendingPairingEnvelopeId.isEmpty,
+            acceptedPairingEnvelopeId.isEmpty ||
+              acceptedPairingEnvelopeId == pendingPairingEnvelopeId,
+            !pendingPairingHostPublicKeyPem.isEmpty,
+            verifyHostEnvelope(
+              envelope,
+              publicKeyPem: pendingPairingHostPublicKeyPem
+            ) else {
+        let message = "ClawDad ignored an unauthenticated pairing response. Generate a fresh pairing code and try again."
+        restoreComputerAfterPairingFailureIfNeeded()
+        pairingStatus = message
+        events.insert("Pairing failed: host identity could not be verified", at: 0)
+        return
+      }
       let relayAccessToken = envelope.body["relayAccessToken"]?.stringValue ?? ""
       if !relayAccessToken.isEmpty {
         do {
@@ -1645,9 +1942,11 @@ final class CloudSession: ObservableObject {
           )
         } catch {
           pendingPairingRelayToken = ""
-          pairingStatus = "Pairing could not protect this device credential in Keychain."
+          let message = "Pairing could not protect this device credential in Keychain."
           events.insert("Pairing failed: Keychain could not save access", at: 0)
           disconnect()
+          restoreComputerAfterPairingFailureIfNeeded()
+          pairingStatus = message
           return
         }
       }
@@ -1655,15 +1954,66 @@ final class CloudSession: ObservableObject {
       pairedHostId = hostId
       pairedAt = envelope.body["trustedAt"]?.stringValue ?? ISO8601DateFormatter().string(from: Date())
       let acceptedHostKey = envelope.body["hostPublicKeyPem"]?.stringValue ?? ""
+      guard acceptedHostKey.isEmpty || hostPublicKeysMatch(
+        acceptedHostKey,
+        pendingPairingHostPublicKeyPem
+      ) else {
+        let message = "ClawDad ignored a pairing response whose computer identity changed. Generate a fresh pairing code and try again."
+        restoreComputerAfterPairingFailureIfNeeded()
+        pairingStatus = message
+        events.insert("Pairing failed: host identity changed", at: 0)
+        return
+      }
       pairedHostPublicKeyPem = acceptedHostKey.isEmpty
         ? pendingPairingHostPublicKeyPem
         : acceptedHostKey
+      let acceptedHostName = envelope.body["hostName"]?.stringValue ?? ""
+      let acceptedHostPlatform = envelope.body["hostPlatform"]?.stringValue ?? ""
+      let acceptedCapabilities: [String]
+      if case .array(let values) = envelope.body["capabilities"] {
+        acceptedCapabilities = values.map(\.stringValue)
+      } else {
+        acceptedCapabilities = []
+      }
+      let computer = PairedComputerProfile(
+        displayName: acceptedHostName.isEmpty
+          ? pendingPairingHostName
+          : acceptedHostName,
+        platform: acceptedHostPlatform.isEmpty
+          ? pendingPairingHostPlatform
+          : acceptedHostPlatform,
+        cloudUrl: cloudUrl,
+        accountId: accountId,
+        workspaceId: workspaceId,
+        hostId: hostId,
+        hostPublicKeyPem: pairedHostPublicKeyPem,
+        pairedAt: pairedAt,
+        selectedProjectPath: selectedProjectPath,
+        selectedSessionId: selectedSessionId,
+        selectedModel: selectedModel,
+        selectedReasoningEffort: selectedReasoningEffort,
+        capabilities: acceptedCapabilities.isEmpty
+          ? pendingPairingCapabilities
+          : acceptedCapabilities,
+        lastUsedAt: ISO8601DateFormatter().string(from: Date())
+      )
+      pairedComputers = PairedComputerRegistry.upserting(
+        computer,
+        into: pairedComputers
+      )
+      PairedComputerRegistry.save(pairedComputers, to: defaults)
+      activeComputerId = computer.id
       pendingPairingHostPublicKeyPem = ""
-      pairingStatus = "iPhone paired with \(hostId)"
-      events.insert("iPhone paired", at: 0)
+      pendingPairingHostName = ""
+      pendingPairingHostPlatform = ""
+      pendingPairingCapabilities = []
+      pendingPairingEnvelopeId = ""
+      pairingReturnComputerId = ""
+      pairingStatus = "iPhone paired with \(computer.displayName)"
+      events.insert("iPhone paired with \(computer.displayName)", at: 0)
       requestCatalog()
     case "entitlement.accepted":
-      events.insert("Subscription access synced to Mac", at: 0)
+      events.insert("Subscription access synced to \(activeComputerName)", at: 0)
     case "remote.assist.available",
          "remote.assist.offer",
          "remote.assist.ice",
@@ -1679,6 +2029,13 @@ final class CloudSession: ObservableObject {
       let message = envelope.body["error"]?.stringValue ?? "Cloud error"
       let inReplyTo = envelope.body["inReplyTo"]?.stringValue ?? ""
       let code = envelope.body["code"]?.stringValue ?? ""
+      if !pendingPairingEnvelopeId.isEmpty,
+         inReplyTo == pendingPairingEnvelopeId {
+        restoreComputerAfterPairingFailureIfNeeded()
+        pairingStatus = message
+        events.insert("Pairing failed: \(message)", at: 0)
+        return
+      }
       if projectCreatePending,
          !pendingProjectCreateEnvelopeId.isEmpty,
          inReplyTo == pendingProjectCreateEnvelopeId {
@@ -1696,8 +2053,8 @@ final class CloudSession: ObservableObject {
       if code == "host_unavailable" {
         hostOnline = false
         lastHostSeenAt = .distantPast
-        historyStatus = "Your ClawDad Mac is offline. ClawDad will reconnect automatically."
-        events.insert("Mac host unavailable", at: 0)
+        historyStatus = "\(activeComputerName) is offline. ClawDad will reconnect automatically."
+        events.insert("\(activeComputerName) unavailable", at: 0)
         return
       }
       if voiceTranscriptionPending,
@@ -1733,7 +2090,7 @@ final class CloudSession: ObservableObject {
         hostOnline = true
         lastHostSeenAt = Date()
         if firstHostPong {
-          events.insert("Mac host online", at: 0)
+          events.insert("\(activeComputerName) online", at: 0)
           requestCatalog()
         }
       }
@@ -1773,8 +2130,8 @@ final class CloudSession: ObservableObject {
           requestId == pendingVoiceRequestId else {
       return
     }
-    voiceTranscriptionStatus = "Transcribing on your Mac..."
-    events.insert("Mac accepted voice transcription", at: 0)
+    voiceTranscriptionStatus = "Transcribing on \(activeComputerName)..."
+    events.insert("\(activeComputerName) accepted voice transcription", at: 0)
   }
 
   private func finishVoiceTranscription(error: String) {
@@ -1802,7 +2159,7 @@ final class CloudSession: ObservableObject {
         return
       }
       self.finishVoiceTranscription(
-        error: "The transcript did not return. Confirm ClawDad is running on your Mac, then try again."
+        error: "The transcript did not return. Confirm ClawDad is running on \(self.activeComputerName), then try again."
       )
     }
   }
@@ -1830,6 +2187,50 @@ final class CloudSession: ObservableObject {
         ? configuredEffort
         : selected.defaultReasoningEffort
     }
+    persistActiveComputerSnapshot()
+  }
+
+  private func updateActiveComputerMetadata(from envelope: CloudEnvelope) {
+    guard envelope.sourceDeviceId == hostId,
+          paired,
+          let existing = activeComputer else {
+      return
+    }
+    let hostName = envelope.body["hostName"]?.stringValue ?? ""
+    let hostPlatform = envelope.body["hostPlatform"]?.stringValue ?? ""
+    let capabilities: [String]
+    if case .array(let values) = envelope.body["capabilities"] {
+      capabilities = values.map(\.stringValue)
+    } else {
+      capabilities = []
+    }
+    guard !hostName.isEmpty || !hostPlatform.isEmpty || !capabilities.isEmpty else {
+      return
+    }
+    let updated = PairedComputerProfile(
+      displayName: hostName.isEmpty ? existing.displayName : hostName,
+      platform: hostPlatform.isEmpty ? existing.platform : hostPlatform,
+      cloudUrl: existing.cloudUrl,
+      accountId: existing.accountId,
+      workspaceId: existing.workspaceId,
+      hostId: existing.hostId,
+      hostPublicKeyPem: existing.hostPublicKeyPem,
+      pairedAt: existing.pairedAt,
+      selectedProjectPath: selectedProjectPath,
+      selectedSessionId: selectedSessionId,
+      selectedModel: selectedModel,
+      selectedReasoningEffort: selectedReasoningEffort,
+      capabilities: capabilities.isEmpty ? existing.capabilities : capabilities,
+      lastUsedAt: existing.lastUsedAt
+    )
+    guard updated != existing else {
+      return
+    }
+    pairedComputers = PairedComputerRegistry.upserting(
+      updated,
+      into: pairedComputers
+    )
+    PairedComputerRegistry.save(pairedComputers, to: defaults)
   }
 
   private func applyStatusSnapshot(_ envelope: CloudEnvelope) {
@@ -2175,6 +2576,13 @@ final class CloudSession: ObservableObject {
   }
 
   private func verifyPairedHostEnvelope(_ envelope: CloudEnvelope) -> Bool {
+    verifyHostEnvelope(envelope, publicKeyPem: pairedHostPublicKeyPem)
+  }
+
+  private func verifyHostEnvelope(
+    _ envelope: CloudEnvelope,
+    publicKeyPem: String
+  ) -> Bool {
     guard envelope.sourceDeviceId == hostId,
           envelope.accountId == accountId,
           envelope.workspaceId == workspaceId,
@@ -2183,7 +2591,7 @@ final class CloudSession: ObservableObject {
           expiresAt.addingTimeInterval(5) >= Date(),
           let signature = envelope.signature,
           signature.alg == "ES256",
-          !pairedHostPublicKeyPem.isEmpty,
+          !publicKeyPem.isEmpty,
           let signatureData = Data(base64URLEncoded: signature.value)
     else {
       return false
@@ -2191,7 +2599,7 @@ final class CloudSession: ObservableObject {
 
     do {
       let publicKey = try P256.Signing.PublicKey(
-        pemRepresentation: pairedHostPublicKeyPem
+        pemRepresentation: publicKeyPem
       )
       let ecdsaSignature = try P256.Signing.ECDSASignature(
         derRepresentation: signatureData
@@ -2200,6 +2608,16 @@ final class CloudSession: ObservableObject {
         ecdsaSignature,
         for: try canonicalEnvelopeData(envelope)
       )
+    } catch {
+      return false
+    }
+  }
+
+  private func hostPublicKeysMatch(_ leftPem: String, _ rightPem: String) -> Bool {
+    do {
+      let left = try P256.Signing.PublicKey(pemRepresentation: leftPem)
+      let right = try P256.Signing.PublicKey(pemRepresentation: rightPem)
+      return left.rawRepresentation == right.rawRepresentation
     } catch {
       return false
     }
@@ -2245,9 +2663,9 @@ enum RemoteAssistCloudError: LocalizedError {
   var errorDescription: String? {
     switch self {
     case .authenticationRequired:
-      return "Re-pair this iPhone from ClawDad Settings on your Mac to enable Remote Assist."
+      return "Re-pair this iPhone from ClawDad Settings on the selected computer to enable Remote Assist."
     case .connectionUnavailable:
-      return "The secure connection to your paired Mac is reconnecting. Try Remote Assist again when the Mac shows connected."
+      return "The secure connection to the selected computer is reconnecting. Try Remote Assist again when it shows connected."
     }
   }
 }
@@ -2262,9 +2680,9 @@ enum PairingError: LocalizedError {
     case .invalidCode:
       return "That QR code is not a valid ClawDad pairing code."
     case .wrongCode:
-      return "That QR code is for something else. Open ClawDad Settings on your Mac and scan the Pair iPhone code."
+      return "That QR code is for something else. Open ClawDad Settings on the computer and scan the Pair iPhone code."
     case .expiredCode:
-      return "That pairing QR expired. Generate a fresh code in ClawDad Settings on your Mac."
+      return "That pairing QR expired. Generate a fresh code in ClawDad Settings on the computer."
     }
   }
 }

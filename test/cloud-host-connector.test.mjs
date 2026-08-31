@@ -17,8 +17,10 @@ import {
   cloudHostStatus,
   cloudHostReconnectDelayMs,
   createCloudPairingPayload,
+  defaultCloudHostCapabilities,
   ensureCloudRelayAccess,
   handleCloudEnvelope,
+  normalizeCloudHostPlatform,
   resolveCloudHostConfig,
   runCloudHostConnector,
 } from "../lib/cloud-host-connector.mjs";
@@ -49,6 +51,9 @@ function hostConfig({ trustedDevicePublicKeys = {}, allowUnverifiedCloudDevices 
     accountId: "acct-1",
     workspaceId: "scratchpad",
     hostId: "mac-host",
+    hostName: "Studio Mac",
+    hostPlatform: "macos",
+    capabilities: ["catalog", "remote-assist"],
     localUrl: "http://127.0.0.1:4477",
     localToken: "local-token",
     hostPrivateKeyPem: hostKeys.privateKey,
@@ -86,6 +91,15 @@ test("cloud host reads a native local token file ahead of a legacy cloud.json to
   assert.equal(status.localAuthConfigured, true);
   assert.equal(status.localTokenFile, tokenPath);
   assert.doesNotMatch(JSON.stringify(status), /native-file-token|legacy-cloud-json-token/u);
+});
+
+test("cloud host normalizes desktop platforms and platform capabilities", () => {
+  assert.equal(normalizeCloudHostPlatform("darwin"), "macos");
+  assert.equal(normalizeCloudHostPlatform("win32"), "windows");
+  assert.equal(normalizeCloudHostPlatform("linux"), "linux");
+  assert.equal(defaultCloudHostCapabilities("macos").includes("remote-assist"), true);
+  assert.equal(defaultCloudHostCapabilities("windows").includes("remote-assist"), false);
+  assert.equal(defaultCloudHostCapabilities("windows").includes("catalog"), true);
 });
 
 test("cloud host preserves legacy inline token config and explicit token precedence", async () => {
@@ -219,6 +233,10 @@ test("pair.request trusts a signed phone after QR token proof", async () => {
   assert.equal(sent[0].type, "pair.accepted");
   assert.equal(sent[0].body.deviceId, "ios-phone");
   assert.equal(sent[0].body.keyId, keyId);
+  assert.equal(sent[0].body.inReplyTo, envelope.id);
+  assert.equal(sent[0].body.hostName, "Studio Mac");
+  assert.equal(sent[0].body.hostPlatform, "macos");
+  assert.deepEqual(sent[0].body.capabilities, ["catalog", "remote-assist"]);
   assert.equal(config.trustedDevicePublicKeys["ios-phone"], normalizeCloudPublicKeyPem(deviceKeys.publicKey));
 
   const diskConfig = JSON.parse(await readFile(configPath, "utf8"));
@@ -229,7 +247,7 @@ test("pair.request trusts a signed phone after QR token proof", async () => {
   assert.deepEqual(pairingStore.tokens, []);
 });
 
-test("pairing creates and returns the Mac signing identity", async () => {
+test("pairing creates and returns the desktop signing identity and metadata", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawdad-cloud-host-identity-"));
   const configPath = path.join(tempDir, "cloud.json");
   const pairingPath = path.join(tempDir, "cloud-pairing.json");
@@ -244,10 +262,16 @@ test("pairing creates and returns the Mac signing identity", async () => {
   const payload = await createCloudPairingPayload({
     config: configPath,
     registerRelayAccess: false,
+    hostName: "Studio Mac",
+    hostPlatform: "darwin",
+    capabilities: "catalog,remote-assist,remote-assist",
   });
 
   assert.match(payload.hostPublicKeyPem, /BEGIN PUBLIC KEY/u);
   assert.equal(payload.hostKeyId, cloudPublicKeyFingerprint(payload.hostPublicKeyPem));
+  assert.equal(payload.hostName, "Studio Mac");
+  assert.equal(payload.hostPlatform, "macos");
+  assert.deepEqual(payload.capabilities, ["catalog", "remote-assist"]);
   const diskConfig = JSON.parse(await readFile(configPath, "utf8"));
   assert.equal(path.dirname(diskConfig.hostPrivateKeyPath), tempDir);
   assert.equal(path.dirname(diskConfig.hostPublicKeyPath), tempDir);
@@ -526,6 +550,7 @@ test("pair.request accepts and repairs build-3 CryptoKit raw P-256 public keys",
   assert.equal(result.ok, true);
   assert.equal(sent.length, 1);
   assert.equal(sent[0].type, "pair.accepted");
+  assert.equal(sent[0].body.inReplyTo, envelope.id);
   assert.equal(sent[0].body.keyId, canonicalKeyId);
   assert.equal(config.trustedDevicePublicKeys["ios-phone"], normalizeCloudPublicKeyPem(deviceKeys.publicKey));
   assert.doesNotThrow(() => crypto.createPublicKey(config.trustedDevicePublicKeys["ios-phone"]));

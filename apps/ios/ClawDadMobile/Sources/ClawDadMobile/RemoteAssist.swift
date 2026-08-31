@@ -439,7 +439,7 @@ enum RemoteAssistPhase: Equatable {
     case .authenticating:
       return "Confirming it is you..."
     case .requesting:
-      return "Opening your Mac..."
+      return "Opening your computer..."
     case .negotiating:
       return "Connecting securely..."
     case .connected:
@@ -518,6 +518,22 @@ final class RemoteAssistController: NSObject, ObservableObject {
     displaySelectionPending
   }
 
+  var remoteComputerName: String {
+    cloudSession?.activeComputerName ?? "your paired computer"
+  }
+
+  var remoteComputerKind: String {
+    isWindowsComputer ? "Windows computer" : "Mac"
+  }
+
+  var remoteTerminalName: String {
+    isWindowsComputer ? "Windows Terminal" : "Terminal"
+  }
+
+  var isWindowsComputer: Bool {
+    cloudSession?.activeComputer?.platform == "windows"
+  }
+
   override init() {
     RTCInitializeSSL()
     super.init()
@@ -535,17 +551,21 @@ final class RemoteAssistController: NSObject, ObservableObject {
       fail("ClawDad is not ready.")
       return
     }
+    guard cloudSession.activeComputerSupportsRemoteAssist else {
+      fail("Remote Assist is unavailable on \(remoteComputerName). Update the ClawDad companion on that computer and try again.")
+      return
+    }
     guard cloudSession.remoteAssistIdentityReady else {
-      fail("Re-pair this iPhone from ClawDad Settings on your Mac to enable Remote Assist.")
+      fail("Re-pair this iPhone from ClawDad Settings on \(remoteComputerName) to enable Remote Assist.")
       return
     }
     guard cloudSession.connected else {
       cloudSession.connectIfPaired()
-      fail("The secure connection was interrupted. ClawDad is reconnecting to your paired Mac automatically.")
+      fail("The secure connection was interrupted. ClawDad is reconnecting to \(remoteComputerName) automatically.")
       return
     }
     guard cloudSession.hostOnline else {
-      fail("The secure relay is online and your paired Mac is reconnecting. Keep ClawDad open on the Mac, then tap Try Again.")
+      fail("The secure relay is online and \(remoteComputerName) is reconnecting. Keep ClawDad open on that computer, then tap Try Again.")
       return
     }
     guard phase == .idle || isFailed else {
@@ -773,7 +793,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
     guard sendKey("enter") else {
       showClipboardNotice(
         displaySelection.inputSuppressed
-          ? "Wait for the Mac to finish switching displays."
+          ? "Wait for \(remoteComputerName) to finish switching displays."
           : "Remote Assist is reconnecting.",
         isError: true
       )
@@ -792,7 +812,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
     ) else {
       showClipboardNotice(
         displaySelection.inputSuppressed
-          ? "Wait for the Mac to finish switching displays."
+          ? "Wait for \(remoteComputerName) to finish switching displays."
           : "Remote Assist is reconnecting.",
         isError: true
       )
@@ -811,8 +831,8 @@ final class RemoteAssistController: NSObject, ObservableObject {
     sendClipboardRequest(
       .pasteRequest(text: text, requestId: requestId),
       pendingText: remoteScreenLocked
-        ? "Typing securely on Mac..."
-        : "Pasting to Mac..."
+        ? "Typing securely on \(remoteComputerName)..."
+        : "Pasting to \(remoteComputerName)..."
     )
   }
 
@@ -823,7 +843,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
     let requestId = UUID().uuidString.lowercased()
     sendClipboardRequest(
       .copyRequest(requestId: requestId),
-      pendingText: "Copying from Mac..."
+      pendingText: "Copying from \(remoteComputerName)..."
     )
   }
 
@@ -889,7 +909,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
       self.displaySelectionTimeoutTask = nil
       self.publishDisplaySelection()
       self.showClipboardNotice(
-        "The Mac did not confirm the display change. The current display will stay active.",
+        "\(self.remoteComputerName) did not confirm the display change. The current display will stay active.",
         isError: true
       )
       UINotificationFeedbackGenerator().notificationOccurred(.error)
@@ -982,8 +1002,8 @@ final class RemoteAssistController: NSObject, ObservableObject {
       }
       self.terminalTabTimeoutTask = nil
       let timeoutMessage = attempt.kind == .catalog
-        ? "The Mac did not return Terminal tabs. Tap refresh to try again."
-        : "The Mac did not confirm the Terminal tab change."
+        ? "\(self.remoteComputerName) did not return \(self.remoteTerminalName) tabs. Tap refresh to try again."
+        : "\(self.remoteComputerName) did not confirm the \(self.remoteTerminalName) tab change."
       self.terminalTabError = timeoutMessage
       self.publishTerminalTabSelection()
       self.showClipboardNotice(timeoutMessage, isError: true)
@@ -1007,7 +1027,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
     }
     try await context.evaluatePolicy(
       .deviceOwnerAuthentication,
-      localizedReason: "Open your paired Mac with Remote Assist"
+      localizedReason: "Open \(remoteComputerName) with Remote Assist"
     )
   }
 
@@ -1022,7 +1042,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
       phase = .negotiating
     case "remote.assist.offer":
       guard let sdp = envelope.body["sdp"]?.stringValue, !sdp.isEmpty else {
-        failAndRelease("Your Mac returned an invalid Remote Assist offer.")
+        failAndRelease("\(remoteComputerName) returned an invalid Remote Assist offer.")
         return
       }
       guard let attempt = offerGate.claimOffer(for: sessionId) else {
@@ -1074,7 +1094,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
       updatePeerIceServers(refreshedIceServers)
     case "remote.assist.stop":
       failAndRelease(
-        envelope.body["reason"]?.stringValue ?? "Your Mac ended Remote Assist.",
+        envelope.body["reason"]?.stringValue ?? "\(remoteComputerName) ended Remote Assist.",
         notifyMac: false
       )
     case "remote.assist.error":
@@ -1294,7 +1314,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
       }
       self.inputTimeoutTasks.removeValue(forKey: message.requestId)
       self.showInputError(
-        "The Mac did not accept input. Tap a text field and try again."
+        "\(self.remoteComputerName) did not accept input. Tap a text field and try again."
       )
     }
     return true
@@ -1312,7 +1332,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
     inputTimeoutTasks.removeValue(forKey: message.requestId)?.cancel()
     if message.ok != true {
       showInputError(
-        message.error ?? "The focused Mac app did not accept input."
+        message.error ?? "The focused app on \(remoteComputerName) did not accept input."
       )
     }
     return true
@@ -1327,8 +1347,8 @@ final class RemoteAssistController: NSObject, ObservableObject {
     if changed {
       showClipboardNotice(
         message.screenLocked
-          ? "Mac locked: secure keyboard mode"
-          : "Mac unlocked",
+          ? "\(remoteComputerKind) locked: secure keyboard mode"
+          : "\(remoteComputerKind) unlocked",
         isError: false
       )
     }
@@ -1368,7 +1388,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
         UINotificationFeedbackGenerator().notificationOccurred(.success)
       } else if application.pendingInvalidated {
         showClipboardNotice(
-          "That display is no longer available. The Mac kept the current display active.",
+          "That display is no longer available. \(remoteComputerName) kept the current display active.",
           isError: true
         )
         UINotificationFeedbackGenerator().notificationOccurred(.error)
@@ -1404,7 +1424,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
           UINotificationFeedbackGenerator().notificationOccurred(.success)
         } else {
           showClipboardNotice(
-            message.error ?? "The Mac could not switch displays.",
+            message.error ?? "\(remoteComputerName) could not switch displays.",
             isError: true
           )
           UINotificationFeedbackGenerator().notificationOccurred(.error)
@@ -1418,7 +1438,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
         UINotificationFeedbackGenerator().notificationOccurred(.success)
       } else if application.stateApplication.pendingInvalidated {
         showClipboardNotice(
-          "That display is no longer available. The Mac kept the current display active.",
+          "That display is no longer available. \(remoteComputerName) kept the current display active.",
           isError: true
         )
         UINotificationFeedbackGenerator().notificationOccurred(.error)
@@ -1469,7 +1489,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
       }
     } else if application.matchedPendingRequest {
       let failureMessage = message.error ??
-        "The Mac could not update Terminal tabs."
+        "\(remoteComputerName) could not update \(remoteTerminalName) tabs."
       terminalTabError = failureMessage
       showClipboardNotice(failureMessage, isError: true)
       UINotificationFeedbackGenerator().notificationOccurred(.error)
@@ -1560,7 +1580,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
         return
       }
       self.finishClipboardRequest(
-        notice: "The Mac did not answer the clipboard request.",
+        notice: "\(self.remoteComputerName) did not answer the clipboard request.",
         isError: true
       )
     }
@@ -1588,13 +1608,13 @@ final class RemoteAssistController: NSObject, ObservableObject {
       finishClipboardRequest(
         notice: remoteScreenLocked
           ? "Keys sent securely"
-          : "Pasted to Mac",
+          : "Pasted to \(remoteComputerName)",
         isError: false
       )
     case .copy:
       guard let text = message.text, !text.isEmpty else {
         finishClipboardRequest(
-          notice: "The Mac did not return any copied text.",
+          notice: "\(remoteComputerName) did not return any copied text.",
           isError: true
         )
         return
@@ -1670,7 +1690,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
       }
       if self.phase != .connected {
         self.failAndRelease(
-          "Your paired Mac did not answer within 25 seconds. Confirm ClawDad is open and Remote Assist is enabled, then tap Try Again."
+          "\(self.remoteComputerName) did not answer within 25 seconds. Confirm ClawDad is open and Remote Assist is enabled, then tap Try Again."
         )
       }
     }
@@ -2019,7 +2039,7 @@ private enum RemoteAssistAccessibilityFocus: Hashable {
 }
 
 private extension RemoteShortcut {
-  var keycap: String {
+  func keycap(isWindows: Bool) -> String {
     switch self {
     case .controlC: "⌃C"
     case .controlJ: "⌃J"
@@ -2030,12 +2050,12 @@ private extension RemoteShortcut {
     case .arrowLeft: "←"
     case .arrowRight: "→"
     case .controlL: "⌃L"
-    case .commandT: "⌘T"
-    case .commandTab: "⌘⇥"
+    case .commandT: isWindows ? "⌃T" : "⌘T"
+    case .commandTab: isWindows ? "alt⇥" : "⌘⇥"
     }
   }
 
-  var accessibilityName: String {
+  func accessibilityName(isWindows: Bool) -> String {
     switch self {
     case .controlC: "Control C"
     case .controlJ: "Control J"
@@ -2046,8 +2066,14 @@ private extension RemoteShortcut {
     case .arrowLeft: "Left Arrow"
     case .arrowRight: "Right Arrow"
     case .controlL: "Control L"
-    case .commandT: "Command T, open a new tab in the active Mac app"
-    case .commandTab: "Command Tab, switch Mac app"
+    case .commandT:
+      isWindows
+        ? "Control T, open a new tab in the active Windows app"
+        : "Command T, open a new tab in the active Mac app"
+    case .commandTab:
+      isWindows
+        ? "Alt Tab, switch Windows app"
+        : "Command Tab, switch Mac app"
     }
   }
 }
@@ -2300,7 +2326,9 @@ struct RemoteAssistView: View {
   private var primaryControlPanel: some View {
     VStack(alignment: .trailing, spacing: 8) {
       Label(
-        controller.remoteScreenLocked ? "Mac Locked" : "Secure session",
+        controller.remoteScreenLocked
+          ? "\(controller.remoteComputerKind) Locked"
+          : "Secure session",
         systemImage: "lock.fill"
       )
       .font(.caption.weight(.bold))
@@ -2340,7 +2368,7 @@ struct RemoteAssistView: View {
         .disabled(
           controller.phase != .connected || controller.remoteInputSuppressed
         )
-        .accessibilityLabel("Press Enter on Mac")
+        .accessibilityLabel("Press Enter on \(controller.remoteComputerName)")
 
         PasteButton(payloadType: String.self) { values in
           collapseControls()
@@ -2357,8 +2385,8 @@ struct RemoteAssistView: View {
         )
         .accessibilityLabel(
           controller.remoteScreenLocked
-            ? "Type iPhone clipboard securely on Mac"
-            : "Paste iPhone clipboard to Mac"
+            ? "Type iPhone clipboard securely on \(controller.remoteComputerName)"
+            : "Paste iPhone clipboard to \(controller.remoteComputerName)"
         )
 
         Button {
@@ -2378,8 +2406,8 @@ struct RemoteAssistView: View {
         )
         .accessibilityLabel(
           controller.remoteScreenLocked
-            ? "Copy unavailable while Mac is locked"
-            : "Copy Mac selection to iPhone"
+            ? "Copy unavailable while \(controller.remoteComputerName) is locked"
+            : "Copy selection from \(controller.remoteComputerName) to iPhone"
         )
 
         Button {
@@ -2416,7 +2444,7 @@ struct RemoteAssistView: View {
             controller.remoteInputSuppressed
         )
         .accessibilityLabel("Special commands")
-        .accessibilityHint("Shows Control, navigation, and Mac app shortcuts")
+        .accessibilityHint("Shows Control, navigation, and app shortcuts")
 
         Button {
           controlPage = .terminalTabs
@@ -2436,7 +2464,7 @@ struct RemoteAssistView: View {
             controller.remoteInputSuppressed
         )
         .accessibilityLabel("Choose Terminal tab")
-        .accessibilityHint("Shows the Terminal tabs open on the Mac")
+        .accessibilityHint("Shows the \(controller.remoteTerminalName) tabs open on \(controller.remoteComputerName)")
         .accessibilityFocused(
           $accessibilityFocus,
           equals: .terminalTabChooser
@@ -2458,8 +2486,8 @@ struct RemoteAssistView: View {
             controller.phase != .connected ||
               controller.remoteInputSuppressed
           )
-          .accessibilityLabel("Choose Mac display")
-          .accessibilityHint("Shows the available Mac displays")
+          .accessibilityLabel("Choose display on \(controller.remoteComputerName)")
+          .accessibilityHint("Shows the available displays")
           .accessibilityFocused(
             $accessibilityFocus,
             equals: .screenChooser
@@ -2511,7 +2539,7 @@ struct RemoteAssistView: View {
             collapseControls()
             controller.sendShortcut(shortcut)
           } label: {
-            Text(shortcut.keycap)
+            Text(shortcut.keycap(isWindows: controller.isWindowsComputer))
               .font(.system(size: 15, weight: .black, design: .rounded))
               .frame(width: 60, height: 46)
           }
@@ -2521,8 +2549,14 @@ struct RemoteAssistView: View {
               controller.remoteScreenLocked ||
               controller.remoteInputSuppressed
           )
-          .accessibilityLabel(shortcut.accessibilityName)
-          .accessibilityHint("Sends this command to the Mac")
+          .accessibilityLabel(
+            shortcut.accessibilityName(
+              isWindows: controller.isWindowsComputer
+            )
+          )
+          .accessibilityHint(
+            "Sends this command to \(controller.remoteComputerName)"
+          )
         }
       }
     }
@@ -2640,7 +2674,7 @@ struct RemoteAssistView: View {
         .buttonStyle(RemoteAssistOverlayButtonStyle())
         .accessibilityLabel("Back to Remote Assist controls")
 
-        Text("Terminal Tabs")
+        Text("\(controller.remoteTerminalName) Tabs")
           .font(.caption.weight(.heavy))
           .foregroundStyle(ClawDadTheme.cream)
           .accessibilityAddTraits(.isHeader)
@@ -2671,7 +2705,7 @@ struct RemoteAssistView: View {
             controller.remoteScreenLocked ||
             controller.terminalTabRequestPending
         )
-        .accessibilityLabel("Refresh Terminal tabs")
+        .accessibilityLabel("Refresh \(controller.remoteTerminalName) tabs")
       }
 
       if controller.terminalTabCatalogLoading &&
@@ -2680,7 +2714,7 @@ struct RemoteAssistView: View {
           ProgressView()
             .controlSize(.small)
             .tint(ClawDadTheme.gold)
-          Text("Loading Terminal tabs...")
+          Text("Loading \(controller.remoteTerminalName) tabs...")
             .font(.footnote.weight(.semibold))
             .foregroundStyle(ClawDadTheme.cream.opacity(0.78))
         }
@@ -2688,7 +2722,7 @@ struct RemoteAssistView: View {
       } else if controller.remoteTerminalTabs.isEmpty {
         Text(
           controller.terminalTabError ??
-            "No Terminal tabs are open on the Mac."
+            "No \(controller.remoteTerminalName) tabs are open on \(controller.remoteComputerName)."
         )
         .font(.footnote.weight(.semibold))
         .foregroundStyle(
@@ -2760,9 +2794,7 @@ struct RemoteAssistView: View {
               )
               .accessibilityValue(isPending ? "Focusing" : "")
               .accessibilityHint(
-                isSelected
-                  ? "Currently focused Terminal tab"
-                  : "Focuses this Terminal tab on the Mac"
+                terminalTabAccessibilityHint(isSelected: isSelected)
               )
             }
           }
@@ -2778,6 +2810,14 @@ struct RemoteAssistView: View {
         }
       }
     }
+  }
+
+  private func terminalTabAccessibilityHint(isSelected: Bool) -> String {
+    let terminalName = controller.remoteTerminalName
+    if isSelected {
+      return "Currently focused \(terminalName) tab"
+    }
+    return "Focuses this \(terminalName) tab on \(controller.remoteComputerName)"
   }
 
   private func collapseControls() {

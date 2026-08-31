@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ClawDad Remote Assist Bridge</title>
+  <style>
+    html, body, canvas { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+  <canvas id="screen" width="1280" height="720"></canvas>
+  <script>
+    (() => {
+      "use strict";
+
+      const canvas = document.querySelector("#screen");
+      const context = canvas.getContext("2d", { alpha: false });
+      let peer = null;
+      let control = null;
+      let stream = null;
+      let generation = 0;
+      let remoteDescriptionReady = false;
+      let pendingRemoteIce = [];
+      let drawing = false;
+      let pendingFrame = null;
+
+      function post(payload) {
+        window.chrome.webview.postMessage(payload);
+      }
+
+      function normalizeIceServers(servers) {
+        return (Array.isArray(servers) ? servers : []).map((server) => {
+          const result = { urls: Array.isArray(server.urls) ? server.urls : [server.urls] };
+          if (server.username) result.username = server.username;
+          if (server.credential) result.credential = server.credential;
+          return result;
+        }).filter((server) => server.urls.filter(Boolean).length > 0);
+      }
+
+      async function stop() {
+        generation += 1;
+        pendingFrame = null;
+        pendingRemoteIce = [];
+        remoteDescriptionReady = false;
+        if (control) {
+          control.onopen = null;
+          control.onclose = null;
+          control.onmessage = null;
+          try { control.close(); } catch {}
+        }
+        control = null;
+        if (peer) {
+          peer.onicecandidate = null;
+          peer.onconnectionstatechange = null;
+          try { peer.close(); } catch {}
+        }
+        peer = null;
+        if (stream) {
+          for (const track of stream.getTracks()) track.stop();
+        }
+        stream = null;
+        post({ type: "control-state", state: "closed" });
+      }
+
+      function bindControl(channel) {
+        control = channel;
+        control.binaryType = "arraybuffer";
+        control.onopen = () => post({ type: "control-state", state: "open" });
+        control.onclose = () => post({ type: "control-state", state: "closed" });
+        control.onerror = () => post({ type: "control-state", state: "closed" });
+        control.onmessage = (event) => {
+          if (typeof event.data === "string") {
+            post({ type: "control", data: event.data });
+            return;
+          }
+          const bytes = new Uint8Array(event.data);
+          post({ type: "control", data: new TextDecoder().decode(bytes) });
+        };
+      }
+
+      async function start(message) {
+        await stop();
+        generation = Number(message.generation) || generation + 1;
+        const ownGeneration = generation;
+        canvas.width = Math.max(2, Number(message.width) || 1280);
+        canvas.height = Math.max(2, Number(message.height) || 720);
+        context.fillStyle = "#000";
+        context.fillRect(0, 0, canvas.width, canvas.height);
+
+        peer = new RTCPeerConnection({
+          iceServers: normalizeIceServers(message.iceServers),
+          bundlePolicy: "max-bundle",
+        });
+        peer.onicecandidate = (event) => {
+          if (!event.candidate || ownGeneration !== generation) return;
+          post({
+            type: "ice",
+            candidate: event.candidate.candidate,
+            sdpMid: event.candidate.sdpMid || "",
+            sdpMLineIndex: event.candidate.sdpMLineIndex || 0,
+          });
+        };
+        peer.onconnectionstatechange = () => {
+          if (ownGeneration === generation) {
+            post({ type: "connection-state", state: peer.connectionState });
+          }
+        };
+        bindControl(peer.createDataChannel("clawdad-control", { ordered: true }));
+
+        stream = canvas.captureStream(12);
+        const videoTrack = stream.getVideoTracks()[0];
+        if ("contentHint" in videoTrack) videoTrack.contentHint = "detail";
+        peer.addTrack(videoTrack, stream);
+
+        const offer = await peer.createOffer({
+          offerToReceiveAudio: false,
+          offerToReceiveVideo: false,
+        });
+        await peer.setLocalDescription(offer);
+        if (ownGeneration !== generation) return;
+        post({ type: "offer", sdp: peer.localDescription.sdp });
+      }
+
+      async function applyAnswer(message) {
+        if (!peer || !message.sdp || peer.signalingState !== "have-local-offer") return;
+        await peer.setRemoteDescription({ type: "answer", sdp: message.sdp });
+        remoteDescriptionReady = true;
+        for (const candidate of pendingRemoteIce.splice(0)) {
+          try { await peer.addIceCandidate(candidate); } catch {}
+        }
+      }
+
+      async function addRemoteIce(message) {
+        if (!peer || !message.candidate) return;
+        const candidate = {
+          candidate: message.candidate,
+          sdpMid: message.sdpMid || "",
+          sdpMLineIndex: Number(message.sdpMLineIndex) || 0,
+        };
+        if (!remoteDescriptionReady) {
+          pendingRemoteIce.push(candidate);
+          return;
+        }
+        await peer.addIceCandidate(candidate);
+      }
+
+      async function drawFrame(frame) {
+        if (drawing) {
+          pendingFrame = frame;
+          return;
+        }
+        drawing = true;
+        try {
+          const binary = atob(frame.data);
+          const bytes = new Uint8Array(binary.length);
+          for (let index = 0; index < binary.length; index += 1) {
+            bytes[index] = binary.charCodeAt(index);
+          }
+          const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/jpeg" }));
+          if (Number(frame.generation) !== generation) {
+            bitmap.close();
+            return;
+          }
+          if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
+            canvas.width = bitmap.width;
+            canvas.height = bitmap.height;
+          }
+          context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+          bitmap.close();
+        } finally {
+          drawing = false;
+          const next = pendingFrame;
+          pendingFrame = null;
+          if (next) void drawFrame(next);
+        }
+      }
+
+      window.chrome.webview.addEventListener("message", (event) => {
+        const message = event.data || {};
+        Promise.resolve().then(async () => {
+          switch (message.action) {
+            case "start": await start(message); break;
+            case "answer": await applyAnswer(message); break;
+            case "remote-ice": await addRemoteIce(message); break;
+            case "ice-servers":
+              if (peer) peer.setConfiguration({ iceServers: normalizeIceServers(message.iceServers) });
+              break;
+            case "frame": await drawFrame(message); break;
+            case "send-control":
+              if (control?.readyState === "open") control.send(String(message.data || ""));
+              break;
+            case "stop": await stop(); break;
+          }
+        }).catch((error) => {
+          post({ type: "error", message: error?.message || String(error) });
+        });
+      });
+
+      post({ type: "ready" });
+    })();
+  </script>
+</body>
+</html>

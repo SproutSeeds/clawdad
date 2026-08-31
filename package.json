@@ -24,7 +24,8 @@
     "native:app": "zsh native/macos/build-app.sh",
     "native:release": "zsh native/macos/package-release.sh",
     "native:build": "./bin/fetch-webrtc-dependency && swift build --package-path native/macos",
-    "native:run": "./bin/fetch-webrtc-dependency && swift run --package-path native/macos ClawDad"
+    "native:run": "./bin/fetch-webrtc-dependency && swift run --package-path native/macos ClawDad",
+    "windows:build": "powershell -ExecutionPolicy Bypass -File native/windows/build.ps1"
   },
   "bin": {
     "clawdad": "bin/clawdad"

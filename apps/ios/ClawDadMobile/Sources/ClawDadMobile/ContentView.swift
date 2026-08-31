@@ -58,7 +58,7 @@ struct ContentView: View {
 
   private var threadTitle: String {
     guard session.paired else {
-      return "Scan Pair iPhone from your Mac"
+      return "Pair this iPhone with a computer"
     }
     if let selectedThreadSummary {
       return selectedThreadSummary.title
@@ -71,7 +71,7 @@ struct ContentView: View {
 
   private var threadSubtitle: String {
     guard session.paired else {
-      return "Settings on your Mac creates the QR"
+      return "ClawDad on the computer creates the QR"
     }
     guard session.connected else {
       return "Thread loads after project sync"
@@ -91,7 +91,7 @@ struct ContentView: View {
 
   private var projectSubtitle: String {
     if !session.paired {
-      return "Pair this iPhone with your Mac"
+      return "Pair this iPhone with a ClawDad computer"
     }
     if let selectedProject {
       return selectedProject.path
@@ -102,11 +102,11 @@ struct ContentView: View {
   private var startupStatusText: String {
     if !session.connected {
       return session.reconnecting
-        ? "Connection interrupted. Reconnecting to your Mac..."
+        ? "Connection interrupted. Reconnecting to \(session.activeComputerName)..."
         : "Connecting to ClawDad..."
     }
     if !session.hostOnline {
-      return "Finding your Mac..."
+      return "Finding \(session.activeComputerName)..."
     }
     return "Loading your workspace..."
   }
@@ -303,6 +303,7 @@ struct ContentView: View {
     ScrollView {
       VStack(spacing: 16) {
         brandHeader
+        computerSelector
         composerPanel
         if !session.pendingApprovals.isEmpty {
           approvalPanel
@@ -483,9 +484,15 @@ struct ContentView: View {
         .disabled(
           subscription.loading ||
           subscription.requiresPurchase ||
-          session.startupLoading
+          session.startupLoading ||
+          !session.activeComputerSupportsRemoteAssist
         )
-        .accessibilityLabel("Open Mac with Remote Assist")
+        .accessibilityLabel("Open \(session.activeComputerName) with Remote Assist")
+        .accessibilityHint(
+          session.activeComputerSupportsRemoteAssist
+            ? "Shows the selected computer and remote controls"
+            : "Update the ClawDad companion on this computer to enable Remote Assist"
+        )
 
         Spacer()
         Button {
@@ -528,6 +535,93 @@ struct ContentView: View {
     }
     .frame(maxWidth: .infinity)
     .padding(.top, 20)
+  }
+
+  private var computerSelector: some View {
+    Menu {
+      if !session.pairedComputers.isEmpty {
+        Section("Computers") {
+          ForEach(session.pairedComputers) { computer in
+            Button {
+              dismissKeyboard()
+              session.switchComputer(to: computer.id)
+            } label: {
+              Label {
+                Text(computer.displayName)
+              } icon: {
+                Image(
+                  systemName: computer.id == session.activeComputerId
+                    ? "checkmark.circle.fill"
+                    : computer.platformSymbolName
+                )
+              }
+            }
+          }
+        }
+      }
+      Button {
+        dismissKeyboard()
+        showingScanner = true
+      } label: {
+        Label("Add Computer", systemImage: "plus.circle")
+      }
+    } label: {
+      HStack(spacing: 12) {
+        Image(
+          systemName: session.activeComputer?.platformSymbolName
+            ?? "desktopcomputer"
+        )
+        .font(.system(size: 17, weight: .bold))
+        .foregroundStyle(ClawDadTheme.gold)
+        VStack(alignment: .leading, spacing: 2) {
+          Text(session.paired ? session.activeComputerName : "Add a computer")
+            .font(.subheadline.weight(.heavy))
+            .foregroundStyle(ClawDadTheme.cream)
+          Text(computerConnectionLabel)
+            .font(.caption.monospaced().weight(.semibold))
+            .foregroundStyle(
+              session.ready
+                ? ClawDadTheme.good
+                : ClawDadTheme.peach.opacity(0.72)
+            )
+        }
+        Spacer(minLength: 8)
+        Image(systemName: "chevron.up.chevron.down")
+          .font(.caption.weight(.black))
+          .foregroundStyle(ClawDadTheme.peach.opacity(0.72))
+      }
+      .padding(.horizontal, 14)
+      .frame(minHeight: 54)
+      .background(ClawDadTheme.panel.opacity(0.88))
+      .overlay {
+        RoundedRectangle(cornerRadius: 15)
+          .stroke(ClawDadTheme.gold.opacity(0.32), lineWidth: 1)
+      }
+      .clipShape(RoundedRectangle(cornerRadius: 15))
+      .contentShape(RoundedRectangle(cornerRadius: 15))
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel("Computer")
+    .accessibilityValue(
+      session.paired ? session.activeComputerName : "No computer paired"
+    )
+    .accessibilityHint("Shows paired computers and the Add Computer command")
+  }
+
+  private var computerConnectionLabel: String {
+    guard session.paired else {
+      return "Tap to pair"
+    }
+    if session.ready {
+      return "Connected - \(session.activeComputerPlatformLabel)"
+    }
+    if session.connected {
+      return "Relay connected - computer offline"
+    }
+    if session.reconnecting {
+      return "Reconnecting"
+    }
+    return "Tap to connect or switch"
   }
 
   private var composerPanel: some View {
@@ -1310,7 +1404,7 @@ struct ThreadTurnRow: View {
             .foregroundStyle(ClawDadTheme.peach.opacity(0.7))
         }
       }
-      Text(responseText.isEmpty ? "Waiting for the Mac thread to answer." : responseText)
+      Text(responseText.isEmpty ? "Waiting for the selected computer to answer." : responseText)
         .font(.caption)
         .foregroundStyle(responseText.isEmpty ? ClawDadTheme.peach.opacity(0.72) : ClawDadTheme.cream.opacity(0.88))
         .lineLimit(5)
@@ -2305,7 +2399,7 @@ struct ScannerScreen: View {
             Text("Pair iPhone")
               .font(.title2.weight(.heavy))
               .foregroundStyle(ClawDadTheme.cream)
-            Text("Scan the QR from ClawDad Settings on your Mac")
+            Text("Scan the QR from ClawDad Settings on your computer")
               .font(.footnote.weight(.semibold))
               .foregroundStyle(ClawDadTheme.peach.opacity(0.84))
           }
@@ -2612,7 +2706,7 @@ struct NewProjectDirectorySheet: View {
           .ignoresSafeArea()
 
         VStack(alignment: .leading, spacing: 16) {
-          Text("ClawDad will create this folder inside your Mac's configured Projects directory, register it with Codex, and select its first thread.")
+          Text("ClawDad will create this folder inside \(session.activeComputerName)'s configured Projects directory, register it with Codex, and select its first thread.")
             .font(.subheadline)
             .foregroundStyle(ClawDadTheme.peach.opacity(0.82))
 
@@ -3122,23 +3216,23 @@ struct SettingsView: View {
     switch session.state {
     case .connected:
       return session.hostOnline
-        ? "Connected to \(session.hostId)"
-        : "Relay connected, Mac reconnecting"
+        ? "Connected to \(session.activeComputerName)"
+        : "Relay connected, computer reconnecting"
     case .connecting:
       return session.reconnecting
-        ? "Reconnecting to \(session.hostId)"
-        : "Connecting to \(session.hostId)"
+        ? "Reconnecting to \(session.activeComputerName)"
+        : "Connecting to \(session.activeComputerName)"
     case .failed:
       return "Connection needs attention"
     case .disconnected:
-      return "Paired with \(session.pairedHostId)"
+      return "Paired with \(session.activeComputerName)"
     }
   }
 
   private var connectionDetail: String {
     if !session.paired {
       return session.pairingStatus.isEmpty
-        ? "Scan the Pair iPhone QR from ClawDad Settings on your Mac."
+        ? "Scan the Pair iPhone QR from ClawDad on your computer."
         : session.pairingStatus
     }
     if !session.pairingStatus.isEmpty {
@@ -3147,11 +3241,11 @@ struct SettingsView: View {
     switch session.state {
     case .connected:
       return session.hostOnline
-        ? "Projects and Codex threads sync through \(session.hostId)."
-        : "The secure relay is online. ClawDad will resume syncing when your Mac host returns."
+        ? "Projects and Codex threads sync through \(session.activeComputerName)."
+        : "The secure relay is online. ClawDad will resume syncing when this computer returns."
     case .connecting:
       return session.reconnecting
-        ? "The secure connection was interrupted. ClawDad is reconnecting to your paired Mac automatically."
+        ? "The secure connection was interrupted. ClawDad is reconnecting to your selected computer automatically."
         : "ClawDad is opening the secure relay."
     case .failed(let message):
       return message
@@ -3168,6 +3262,100 @@ struct SettingsView: View {
 
         ScrollView {
           VStack(spacing: 14) {
+            ClawDadPanel {
+              VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                  VStack(alignment: .leading, spacing: 3) {
+                    Text("Computers")
+                      .font(.caption.weight(.black))
+                      .textCase(.uppercase)
+                      .foregroundStyle(ClawDadTheme.gold)
+                    Text("Choose where projects, Codex threads, and Remote Assist come from.")
+                      .font(.caption)
+                      .foregroundStyle(ClawDadTheme.peach.opacity(0.72))
+                  }
+                  Spacer()
+                  Button {
+                    openScanner()
+                  } label: {
+                    Image(systemName: "plus")
+                      .font(.system(size: 15, weight: .black))
+                      .frame(width: 36, height: 36)
+                  }
+                  .buttonStyle(ClawDadSecondaryButtonStyle())
+                  .accessibilityLabel("Add Computer")
+                }
+
+                if session.pairedComputers.isEmpty {
+                  Text("Add your first Mac or Windows PC by scanning its ClawDad QR code.")
+                    .font(.subheadline)
+                    .foregroundStyle(ClawDadTheme.cream)
+                } else {
+                  VStack(spacing: 8) {
+                    ForEach(session.pairedComputers) { computer in
+                      Button {
+                        session.switchComputer(to: computer.id)
+                      } label: {
+                        HStack(spacing: 12) {
+                          Image(systemName: computer.platformSymbolName)
+                            .font(.system(size: 18, weight: .bold))
+                            .foregroundStyle(ClawDadTheme.gold)
+                            .frame(width: 28)
+                          VStack(alignment: .leading, spacing: 2) {
+                            Text(computer.displayName)
+                              .font(.subheadline.weight(.heavy))
+                              .foregroundStyle(ClawDadTheme.cream)
+                            Text(
+                              computer.platformLabel + " • " +
+                                (computer.supportsRemoteAssist
+                                  ? "Remote Assist"
+                                  : "Threads only")
+                            )
+                              .font(.caption.monospaced().weight(.semibold))
+                              .foregroundStyle(ClawDadTheme.peach.opacity(0.72))
+                          }
+                          Spacer()
+                          if computer.id == session.activeComputerId {
+                            Label(
+                              session.ready ? "Connected" : "Selected",
+                              systemImage: session.ready
+                                ? "checkmark.circle.fill"
+                                : "circle.dotted"
+                            )
+                            .font(.caption.weight(.black))
+                            .foregroundStyle(
+                              session.ready ? ClawDadTheme.good : ClawDadTheme.gold
+                            )
+                          } else {
+                            Text("Switch")
+                              .font(.caption.weight(.black))
+                              .foregroundStyle(ClawDadTheme.peach)
+                          }
+                        }
+                        .padding(.horizontal, 12)
+                        .frame(minHeight: 56)
+                        .background(ClawDadTheme.panel.opacity(0.66))
+                        .clipShape(RoundedRectangle(cornerRadius: 13))
+                        .contentShape(RoundedRectangle(cornerRadius: 13))
+                      }
+                      .buttonStyle(.plain)
+                      .accessibilityLabel("\(computer.displayName), \(computer.platformLabel)")
+                      .accessibilityValue(
+                        computer.id == session.activeComputerId
+                          ? (session.ready ? "Connected" : "Selected")
+                          : "Available"
+                      )
+                      .accessibilityHint(
+                        computer.id == session.activeComputerId
+                          ? "Reconnects this computer"
+                          : "Switches ClawDad to this computer"
+                      )
+                    }
+                  }
+                }
+              }
+            }
+
             ClawDadPanel {
               VStack(alignment: .leading, spacing: 12) {
                 Text("Connection")
@@ -3190,14 +3378,14 @@ struct SettingsView: View {
                   .font(.caption.weight(.black))
                   .textCase(.uppercase)
                   .foregroundStyle(ClawDadTheme.gold)
-                Text("Speech is generated on your paired Mac first.")
+                Text("Speech is generated on \(session.activeComputerName) first.")
                   .font(.headline.weight(.heavy))
                   .foregroundStyle(ClawDadTheme.cream)
                 Toggle(isOn: $session.allowUmbraReadAloudFallback) {
                   VStack(alignment: .leading, spacing: 3) {
                     Text("Allow Umbra fallback")
                       .font(.subheadline.weight(.bold))
-                    Text("If Mac speech is unavailable, Umbra may generate the requested audio.")
+                    Text("If local speech is unavailable, Umbra may generate the requested audio.")
                       .font(.caption)
                       .foregroundStyle(ClawDadTheme.peach.opacity(0.72))
                   }
@@ -3240,8 +3428,8 @@ struct SettingsView: View {
                     LabeledContent("Relay") {
                       Text(URL(string: session.cloudUrl)?.host ?? session.cloudUrl)
                     }
-                    LabeledContent("Mac") {
-                      Text(session.hostId)
+                    LabeledContent("Computer") {
+                      Text(session.activeComputerName)
                     }
                     LabeledContent("Device access") {
                       Text("Keychain protected")
@@ -3258,7 +3446,7 @@ struct SettingsView: View {
                       .font(.caption.weight(.black))
                       .textCase(.uppercase)
                       .foregroundStyle(ClawDadTheme.gold)
-                    Text("Relay, Mac, and protected device identity")
+                    Text("Relay, selected computer, and protected device identity")
                       .font(.caption)
                       .foregroundStyle(ClawDadTheme.peach.opacity(0.72))
                   }
@@ -3281,16 +3469,16 @@ struct SettingsView: View {
       .navigationTitle("Settings")
       .clawDadInlineNavigationTitle()
       .confirmationDialog(
-        "Forget this pairing?",
+        "Forget \(session.activeComputerName)?",
         isPresented: $showingForgetPairingConfirm,
         titleVisibility: .visible
       ) {
-        Button("Forget Pairing", role: .destructive) {
+        Button("Forget Computer", role: .destructive) {
           session.forgetPairing()
         }
         Button("Cancel", role: .cancel) {}
       } message: {
-        Text("This clears the saved trust on this iPhone and returns ClawDad to the QR pairing flow.")
+        Text("This removes this computer from the iPhone. Any other paired computers stay available.")
       }
     }
   }
@@ -3311,7 +3499,7 @@ struct SettingsView: View {
     Button {
       openScanner()
     } label: {
-      Label("Scan QR", systemImage: "qrcode.viewfinder")
+      Label("Add Computer", systemImage: "qrcode.viewfinder")
     }
     .buttonStyle(ClawDadPrimaryButtonStyle())
 
@@ -3342,7 +3530,7 @@ struct SettingsView: View {
       Button {
         showingForgetPairingConfirm = true
       } label: {
-        Label("Forget Pairing", systemImage: "trash")
+        Label("Forget Computer", systemImage: "trash")
       }
       .buttonStyle(ClawDadSecondaryButtonStyle())
     }

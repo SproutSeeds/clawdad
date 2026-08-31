@@ -8,6 +8,9 @@ node_modules/
 native/macos/.build/
 native/macos/dist/
 native/ClawDadRemoteAssistProtocol/.build/
+native/windows/**/bin/
+native/windows/**/obj/
+native/windows/dist/
 apps/ios/ClawDadMobile/.build/
 apps/ios/ClawDadMobile/build/
 apps/ios/ClawDadMobile/ClawDadMobile.xcodeproj/xcuserdata/

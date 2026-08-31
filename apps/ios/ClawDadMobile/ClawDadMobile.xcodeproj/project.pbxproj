@@ -15,6 +15,7 @@
 		790F723DF6F713A6DFC6D572 /* ClawDadRemoteAssistProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = 3E041F6ED9B6E45F5F37F06A /* ClawDadRemoteAssistProtocol */; };
 		854A5AC2401B066B721E86D2 /* ClawDadMobileUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11E193EDE43AF5D11AADF538 /* ClawDadMobileUITests.swift */; };
 		8A0DDACD490ED6B80E4A30CA /* QRScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26AABBF8F4DF0D8B38BF9365 /* QRScannerView.swift */; };
+		930C8384655B365B43D6B7D6 /* PairedComputer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A248092D559C4CD1B15AECEC /* PairedComputer.swift */; };
 		9FAEDA464727521A0D77839C /* RemoteAssist.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA4FB03C06FF3E3F780BF6B2 /* RemoteAssist.swift */; };
 		AB9E3EA912AF86012C19E96F /* DeviceIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EF3E28FFA532EBF14FEAF8B /* DeviceIdentity.swift */; };
 		F7211DC300102D784A05D5D1 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B8CED3140E0C0FA87EA0782 /* ContentView.swift */; };
@@ -46,6 +47,7 @@
 		8960C1531C592BD814505199 /* SubscriptionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionManager.swift; sourceTree = "<group>"; };
 		930A750132AFE74E66A35E11 /* PasskeyRequests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PasskeyRequests.swift; sourceTree = "<group>"; };
 		9EF3E28FFA532EBF14FEAF8B /* DeviceIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceIdentity.swift; sourceTree = "<group>"; };
+		A248092D559C4CD1B15AECEC /* PairedComputer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairedComputer.swift; sourceTree = "<group>"; };
 		A37F54FBA7123B5C6C46EEB6 /* ClawDadRemoteAssistProtocol */ = {isa = PBXFileReference; lastKnownFileType = folder; name = ClawDadRemoteAssistProtocol; path = ../../../native/ClawDadRemoteAssistProtocol; sourceTree = SOURCE_ROOT; };
 		AA4FB03C06FF3E3F780BF6B2 /* RemoteAssist.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteAssist.swift; sourceTree = "<group>"; };
 		D668F2D2DA41C5EF31F820B0 /* ClawDadMobileApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClawDadMobileApp.swift; sourceTree = "<group>"; };
@@ -86,6 +88,7 @@
 				395E23F4DD2363BA0762CE4C /* CloudModels.swift */,
 				3B8CED3140E0C0FA87EA0782 /* ContentView.swift */,
 				9EF3E28FFA532EBF14FEAF8B /* DeviceIdentity.swift */,
+				A248092D559C4CD1B15AECEC /* PairedComputer.swift */,
 				930A750132AFE74E66A35E11 /* PasskeyRequests.swift */,
 				26AABBF8F4DF0D8B38BF9365 /* QRScannerView.swift */,
 				AA4FB03C06FF3E3F780BF6B2 /* RemoteAssist.swift */,
@@ -245,6 +248,7 @@
 				3B51519C1804A2B28C237997 /* CloudModels.swift in Sources */,
 				F7211DC300102D784A05D5D1 /* ContentView.swift in Sources */,
 				AB9E3EA912AF86012C19E96F /* DeviceIdentity.swift in Sources */,
+				930C8384655B365B43D6B7D6 /* PairedComputer.swift in Sources */,
 				FDF87A63AB6BE997E8422599 /* PasskeyRequests.swift in Sources */,
 				8A0DDACD490ED6B80E4A30CA /* QRScannerView.swift in Sources */,
 				9FAEDA464727521A0D77839C /* RemoteAssist.swift in Sources */,

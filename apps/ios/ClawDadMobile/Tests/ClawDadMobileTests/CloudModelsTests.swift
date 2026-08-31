@@ -95,6 +95,9 @@ final class CloudModelsTests: XCTestCase {
         "accountId": "account",
         "workspaceId": "scratchpad",
         "hostId": "cody-mac",
+        "hostName": "Studio Mac",
+        "hostPlatform": "macos",
+        "capabilities": ["catalog", "remote-assist"],
         "hostPublicKeyPem": "-----BEGIN PUBLIC KEY-----\\nmac-key\\n-----END PUBLIC KEY-----",
         "hostKeyId": "mac-key-id",
         "token": "one-time-token",
@@ -106,6 +109,9 @@ final class CloudModelsTests: XCTestCase {
     let payload = try JSONDecoder().decode(PairingPayload.self, from: data)
 
     XCTAssertEqual(payload.hostId, "cody-mac")
+    XCTAssertEqual(payload.hostName, "Studio Mac")
+    XCTAssertEqual(payload.hostPlatform, "macos")
+    XCTAssertEqual(payload.capabilities, ["catalog", "remote-assist"])
     XCTAssertEqual(payload.hostKeyId, "mac-key-id")
     XCTAssertTrue(payload.hostPublicKeyPem?.contains("mac-key") == true)
   }

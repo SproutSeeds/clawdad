@@ -221,8 +221,12 @@ const elements = {
   settingsRemoteAssistSection: document.querySelector("#settingsRemoteAssistSection"),
   settingsRemoteAssistToggle: document.querySelector("#settingsRemoteAssistToggle"),
   settingsRemoteAssistStatus: document.querySelector("#settingsRemoteAssistStatus"),
+  settingsRemoteAssistSubhead: document.querySelector("#settingsRemoteAssistSubhead"),
   settingsRemoteAssistInfoButton: document.querySelector("#settingsRemoteAssistInfoButton"),
   settingsRemoteAssistInfo: document.querySelector("#settingsRemoteAssistInfo"),
+  settingsRemoteAssistMacHelp: document.querySelector("#settingsRemoteAssistMacHelp"),
+  settingsRemoteAssistWindowsHelp: document.querySelector("#settingsRemoteAssistWindowsHelp"),
+  settingsRemoteAssistPermissionGrid: document.querySelector("#settingsRemoteAssistPermissionGrid"),
   settingsRemoteAssistScreenButton: document.querySelector("#settingsRemoteAssistScreenButton"),
   settingsRemoteAssistScreenState: document.querySelector("#settingsRemoteAssistScreenState"),
   settingsRemoteAssistControlButton: document.querySelector("#settingsRemoteAssistControlButton"),
@@ -514,7 +518,21 @@ const featuredProjectRules = Object.freeze({});
 const nativeBridgeTimeoutMs = 30_000;
 const nativeBridge = (() => {
   const pending = new Map();
-  const messageHandler = () => window.webkit?.messageHandlers?.clawdadNative || null;
+  const messageHandler = () => {
+    const webKitHandler = window.webkit?.messageHandlers?.clawdadNative;
+    if (webKitHandler?.postMessage) {
+      return webKitHandler;
+    }
+    const webView = window.chrome?.webview;
+    if (webView?.postMessage) {
+      return {
+        postMessage(payload) {
+          webView.postMessage(payload);
+        },
+      };
+    }
+    return null;
+  };
   const bridge = {
     isAvailable() {
       return Boolean(messageHandler());
@@ -584,6 +602,23 @@ const nativeBridge = (() => {
   window.ClawDadNative = bridge;
   return bridge;
 })();
+
+window.chrome?.webview?.addEventListener?.("message", (event) => {
+  const payload = event.data;
+  if (!payload || typeof payload !== "object") {
+    return;
+  }
+  if (payload.channel === "clawdad-native-response") {
+    nativeBridge.__resolve(payload);
+    return;
+  }
+  if (payload.channel === "clawdad-native-remote-assist-status") {
+    window.dispatchEvent(new CustomEvent(
+      "clawdad-native-remote-assist-status",
+      { detail: payload.status || {} },
+    ));
+  }
+});
 
 window.addEventListener("clawdad-native-remote-assist-status", (event) => {
   state.remoteAssistStatus = event.detail && typeof event.detail === "object"
@@ -10881,7 +10916,7 @@ function voiceErrorMessage(error) {
   const name = String(error?.name || "");
   const message = String(error?.message || "").trim();
   if (name === "NotAllowedError" || name === "SecurityError") {
-    return "Microphone access is blocked. Allow ClawDad in macOS Privacy & Security > Microphone.";
+    return "Microphone access is blocked. Allow ClawDad in your system's microphone privacy settings.";
   }
   if (name === "NotFoundError" || name === "DevicesNotFoundError") {
     return "No microphone was found.";
@@ -11020,7 +11055,7 @@ function renderDesktopAppSettings() {
   } else if (!statusText && status?.serviceReady !== true) {
     statusText = "The ClawDad service is still starting.";
   } else if (!statusText && updateStatus.canCheckForUpdates === false) {
-    statusText = "The updater is getting ready.";
+    statusText = String(updateStatus.message || "Updates are installed from the private release package.");
   } else if (!statusText) {
     statusText = "Desktop service and secure updates are ready.";
   }
@@ -11069,6 +11104,28 @@ function renderDesktopAppSettings() {
   }
 }
 
+function applyDesktopPlatformCopy() {
+  const windows = state.desktopAppStatus?.platform === "windows";
+  const primaryRoot = windows
+    ? "C:\\Users\\you\\Projects"
+    : "/Volumes/Code_2TB/code";
+  const additionalRoot = windows
+    ? "D:\\Projects"
+    : "/Users/cody/Projects";
+  for (const input of [
+    elements.workspaceRootInput,
+    elements.settingsScratchpadInput,
+    elements.directoryBrowserPathInput,
+  ]) {
+    if (input) {
+      input.placeholder = primaryRoot;
+    }
+  }
+  if (elements.settingsNewRootInput) {
+    elements.settingsNewRootInput.placeholder = additionalRoot;
+  }
+}
+
 async function refreshDesktopAppStatus({ quiet = false } = {}) {
   if (!nativeBridge.isAvailable()) {
     return;
@@ -11080,6 +11137,7 @@ async function refreshDesktopAppStatus({ quiet = false } = {}) {
   }
   try {
     state.desktopAppStatus = await nativeBridge.getDesktopAppStatus();
+    applyDesktopPlatformCopy();
   } catch (error) {
     state.desktopAppMessage = String(error?.message || "Unable to read desktop app status.");
     if (!quiet) {
@@ -11132,7 +11190,9 @@ async function openDesktopAppLogs() {
   renderAll();
   try {
     await nativeBridge.openLogs();
-    state.desktopAppMessage = "Logs opened in Finder.";
+    state.desktopAppMessage = state.desktopAppStatus?.platform === "windows"
+      ? "Logs opened in File Explorer."
+      : "Logs opened in Finder.";
   } catch (error) {
     state.desktopAppMessage = String(error?.message || "Unable to open logs.");
     showError(error);
@@ -11175,8 +11235,27 @@ function renderRemoteAssistSettings() {
 
   const status = state.remoteAssistStatus;
   const pending = state.remoteAssistPending;
+  const windows = status?.platform === "windows" ||
+    state.desktopAppStatus?.platform === "windows";
   const screenAllowed = status?.screenRecordingGranted === true;
   const controlAllowed = status?.accessibilityGranted === true;
+
+  setText(
+    elements.settingsRemoteAssistSubhead,
+    windows
+      ? "Open this Windows computer from ClawDad on iPhone"
+      : "Open this Mac from ClawDad on iPhone",
+    { empty: false },
+  );
+  if (elements.settingsRemoteAssistMacHelp) {
+    elements.settingsRemoteAssistMacHelp.hidden = windows;
+  }
+  if (elements.settingsRemoteAssistWindowsHelp) {
+    elements.settingsRemoteAssistWindowsHelp.hidden = !windows;
+  }
+  if (elements.settingsRemoteAssistPermissionGrid) {
+    elements.settingsRemoteAssistPermissionGrid.hidden = windows;
+  }
 
   if (elements.settingsRemoteAssistToggle) {
     elements.settingsRemoteAssistToggle.checked = status?.enabled === true;
@@ -17071,6 +17150,7 @@ async function boot() {
   restoreCachedProjects();
   renderAll();
   void refreshTtsStatus({ quiet: true });
+  void refreshDesktopAppStatus({ quiet: true });
 
   try {
     await refreshProjects();

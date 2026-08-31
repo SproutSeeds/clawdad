@@ -716,7 +716,11 @@ test("iPhone thread cards read both sent messages and Codex responses aloud on d
   );
   assert.doesNotMatch(playbackSessionSource, /allowAirPlay|allowBluetoothA2DP/u);
   assert.match(infoPlist, /<key>UIBackgroundModes<\/key>[\s\S]*<string>audio<\/string>/u);
-  assert.match(contentSource, /Text\("Speech is generated on your paired Mac first\."\)/u);
+  assert.ok(
+    contentSource.includes(
+      'Text("Speech is generated on \\(session.activeComputerName) first.")',
+    ),
+  );
   assert.match(contentSource, /Toggle\(isOn: \$session\.allowUmbraReadAloudFallback\)/u);
 });
 
@@ -743,19 +747,24 @@ test("iPhone creates project directories through the paired Mac default root", a
   );
 });
 
-test("iPhone connection recovery names the paired Mac and avoids an indefinite Remote Assist spinner", async () => {
+test("iPhone connection recovery names the selected computer and avoids an indefinite Remote Assist spinner", async () => {
   const [contentSource, cloudSource, remoteAssistSource] = await Promise.all([
     readFile(iosContentPath, "utf8"),
     readFile(iosCloudClientPath, "utf8"),
     readFile(iosRemoteAssistPath, "utf8"),
   ]);
 
-  assert.match(
-    cloudSource,
-    /Secure connection interrupted\. Reconnecting to your paired Mac automatically/u,
+  assert.ok(
+    cloudSource.includes(
+      'Secure connection interrupted. Reconnecting to \\(activeComputerName) automatically...',
+    ),
   );
-  assert.match(contentSource, /Relay connected, Mac reconnecting/u);
-  assert.match(contentSource, /Connection interrupted\. Reconnecting to your Mac/u);
+  assert.match(contentSource, /Relay connected, computer reconnecting/u);
+  assert.ok(
+    contentSource.includes(
+      'Connection interrupted. Reconnecting to \\(session.activeComputerName)...',
+    ),
+  );
   assert.match(remoteAssistSource, /guard cloudSession\.connected else/u);
   assert.match(remoteAssistSource, /guard cloudSession\.hostOnline else/u);
   assert.match(remoteAssistSource, /did not answer within 25 seconds/u);
@@ -825,10 +834,11 @@ test("iPhone Remote Assist keeps one keyboard-safe launcher in the corner and ne
   assert.match(inputProtocolSource, /case controlL = "control_l"/u);
   assert.match(inputProtocolSource, /case commandT = "command_t"/u);
   assert.match(inputProtocolSource, /case commandTab = "command_tab"/u);
-  assert.match(remoteAssistSource, /case \.commandT: "⌘T"/u);
+  assert.match(remoteAssistSource, /case \.commandT: isWindows \? "⌃T" : "⌘T"/u);
+  assert.match(remoteAssistSource, /case \.commandTab: isWindows \? "alt⇥" : "⌘⇥"/u);
   assert.match(
     remoteAssistSource,
-    /case \.commandT: "Command T, open a new tab in the active Mac app"/u,
+    /case \.commandT:[\s\S]*"Control T, open a new tab in the active Windows app"[\s\S]*"Command T, open a new tab in the active Mac app"/u,
   );
   assert.match(
     shortcutSource,
@@ -859,9 +869,12 @@ test("Remote Assist lists and focuses Terminal tabs without reading terminal con
 
   assert.match(remoteAssistSource, /case terminalTabs/u);
   assert.match(remoteAssistSource, /accessibilityLabel\("Choose Terminal tab"\)/u);
-  assert.match(remoteAssistSource, /Text\("Terminal Tabs"\)/u);
+  assert.match(remoteAssistSource, /Text\("\\\(controller\.remoteTerminalName\) Tabs"\)/u);
   assert.match(remoteAssistSource, /accessibilityLabel\("Back to Remote Assist controls"\)/u);
-  assert.match(remoteAssistSource, /accessibilityLabel\("Refresh Terminal tabs"\)/u);
+  assert.match(
+    remoteAssistSource,
+    /accessibilityLabel\("Refresh \\\(controller\.remoteTerminalName\) tabs"\)/u,
+  );
   assert.match(remoteAssistSource, /controller\.focusRemoteTerminalTab\(tab\.id\)/u);
   assert.match(terminalTabProtocolSource, /"terminal\.tabs\.request"/u);
   assert.match(terminalTabProtocolSource, /"terminal\.tabs\.result"/u);
@@ -1002,7 +1015,11 @@ test("Remote Assist exposes acknowledged input and bidirectional clipboard contr
   assert.match(remoteAssistSource, /if self\.handleSessionState\(data\)/u);
   assert.match(remoteAssistSource, /self\.handleClipboardResponse\(data\)/u);
   assert.match(remoteAssistSource, /remoteScreenLocked/u);
-  assert.match(remoteAssistSource, /Mac locked: secure keyboard mode/u);
+  assert.ok(
+    remoteAssistSource.includes(
+      '? "\\(remoteComputerKind) locked: secure keyboard mode"',
+    ),
+  );
   assert.match(remoteAssistSource, /RemoteInputCodec\.encode\(message\)/u);
   assert.match(remoteAssistSource, /pendingInputRequests\[message\.requestId\]/u);
   assert.match(remoteAssistSource, /UIPasteboard\.general\.string = text/u);
@@ -1073,7 +1090,7 @@ test("ClawDad presents its transparent mascot and floating controls with optiona
   );
   const headerSource = contentSource.slice(
     contentSource.indexOf("private var brandHeader"),
-    contentSource.indexOf("private var composerPanel"),
+    contentSource.indexOf("private var computerSelector"),
   );
   const iconStyleSource = contentSource.slice(
     contentSource.indexOf("struct ClawDadIconButtonStyle"),
@@ -1124,7 +1141,7 @@ test("iPhone cold launch hides the fallback workspace until saved selection hydr
   );
   assert.match(
     cloudSource,
-    /self\.startupWorkspaceReady = self\.pairedHostId\.isEmpty \|\| self\.pairedHostId != self\.hostId/u,
+    /self\.startupWorkspaceReady = !self\.paired/u,
   );
   assert.match(
     cloudSource,

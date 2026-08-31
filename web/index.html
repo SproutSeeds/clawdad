@@ -782,7 +782,7 @@
             <div class="settings-section-head">
               <div>
                 <div id="settingsRemoteAssistTitle" class="settings-section-title">Remote Assist</div>
-                <div class="settings-section-subhead">Open this Mac from ClawDad on iPhone</div>
+                <div id="settingsRemoteAssistSubhead" class="settings-section-subhead">Open this computer from ClawDad on iPhone</div>
               </div>
               <label class="settings-switch">
                 <input id="settingsRemoteAssistToggle" type="checkbox">
@@ -804,6 +804,7 @@
               <span class="button-text">More Info</span>
             </button>
             <div id="settingsRemoteAssistInfo" class="settings-permission-help" hidden>
+              <div id="settingsRemoteAssistMacHelp">
               <div class="settings-permission-help-step">
                 <span class="settings-permission-help-index" aria-hidden="true">1.</span>
                 <div>
@@ -837,8 +838,31 @@
                 Remote Assist session starts. Permanent unattended capture requires
                 Apple's restricted Persistent Content Capture approval for VNC apps.
               </p>
+              </div>
+              <div id="settingsRemoteAssistWindowsHelp" hidden>
+                <div class="settings-permission-help-step">
+                  <span class="settings-permission-help-index" aria-hidden="true">1.</span>
+                  <div>
+                    <div class="settings-permission-help-title">Keep ClawDad running</div>
+                    <p>
+                      Windows screen sharing and control are available while ClawDad
+                      is open and Remote Assist is enabled.
+                    </p>
+                  </div>
+                </div>
+                <div class="settings-permission-help-step">
+                  <span class="settings-permission-help-index" aria-hidden="true">2.</span>
+                  <div>
+                    <div class="settings-permission-help-title">Match administrator access</div>
+                    <p>
+                      Windows protects administrator apps from standard apps. When
+                      controlling an elevated app, reopen ClawDad as administrator too.
+                    </p>
+                  </div>
+                </div>
+              </div>
             </div>
-            <div class="settings-permission-grid">
+            <div id="settingsRemoteAssistPermissionGrid" class="settings-permission-grid">
               <button id="settingsRemoteAssistScreenButton" class="detail-action-button is-quiet" type="button">
                 <span class="button-text">Screen Recording</span>
                 <span id="settingsRemoteAssistScreenState" class="settings-permission-state"></span>
@@ -873,7 +897,7 @@
             <div class="settings-device-head">
               <div>
                 <div class="settings-section-title">Paired Devices</div>
-                <div class="settings-section-subhead">Phones trusted to reach this Mac</div>
+                <div class="settings-section-subhead">Phones trusted to reach this computer</div>
               </div>
               <button id="settingsRefreshDevicesButton" class="settings-inline-info-button" type="button">
                 <span class="button-text">Refresh</span>

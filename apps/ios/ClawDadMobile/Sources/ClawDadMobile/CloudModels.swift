@@ -678,6 +678,9 @@ struct PairingPayload: Codable, Equatable {
   var accountId: String
   var workspaceId: String
   var hostId: String
+  var hostName: String?
+  var hostPlatform: String?
+  var capabilities: [String]?
   var hostPublicKeyPem: String?
   var hostKeyId: String?
   var token: String
