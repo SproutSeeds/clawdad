@@ -24,10 +24,11 @@ if [[ -n "$swift_scratch_path" ]]; then
     --package-path "$script_dir"
     --scratch-path "$swift_scratch_path"
     -c release
+    --arch "$target_arch"
   )
 else
   sparkle_framework_source="$script_dir/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
-  swift_build_args=(--package-path "$script_dir" -c release)
+  swift_build_args=(--package-path "$script_dir" -c release --arch "$target_arch")
 fi
 if [[ "$swift_disable_sandbox" == "1" ]]; then
   swift_build_args+=(--disable-sandbox)

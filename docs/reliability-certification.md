@@ -78,8 +78,8 @@ build 32.
 
 | Check | State | Acceptance |
 | --- | --- | --- |
-| Native distribution mode | Pass | The signed Mac installer is public on clawdad.earth while the iPhone remains confined to `ClawDad Internal` |
-| Mac artifact and installation | Pass | Beta 11 build 33 is arm64, signed with the Automation Apple Events entitlement, notarized, stapled, checksum-verified, Gatekeeper-approved, and installed |
+| Native distribution mode | Pass | The signed Apple-silicon and Intel Mac installers are public on clawdad.earth while the iPhone remains confined to `ClawDad Internal` |
+| Mac artifact and installation | Pass | Beta 11 build 33 has separate arm64 and x86_64 artifacts signed with the Automation Apple Events entitlement, notarized, stapled, checksum-verified, and Gatekeeper-approved; the arm64 build is installed on the Studio |
 | Internal TestFlight companion | Pass | Build 32 is `VALID` and assigned only to `ClawDad Internal` |
 | External TestFlight boundary | Pass | External build assignment and public link are false; Beta App Review is `NOT_SUBMITTED` |
 | Native service topology | Pass | App-managed native services use port 4487 only and legacy labels are disabled |

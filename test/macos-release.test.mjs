@@ -48,6 +48,8 @@ test("Mac release pipeline signs, notarizes, staples, and publishes Sparkle arti
   assert.match(packageSource, /"version": "0\.7\.0-beta\.11"/u);
   assert.match(releaseNotes, /ClawDad 0\.7 Native Beta/u);
   assert.match(releaseScript, /CLAWDAD_APP_BUILD:-33/u);
+  assert.match(releaseScript, /CLAWDAD_RELEASE_ARTIFACT_SUFFIX/u);
+  assert.match(releaseScript, /CLAWDAD_MAC_ARCH="\$mac_arch"/u);
   assert.match(releaseScript, /Developer ID Application/u);
   assert.match(releaseScript, /notarytool submit "\$zip_path"/u);
   assert.match(releaseScript, /CLAWDAD_NOTARY_KEY_PATH/u);
@@ -56,6 +58,7 @@ test("Mac release pipeline signs, notarizes, staples, and publishes Sparkle arti
   assert.match(buildScript, /CLAWDAD_SWIFT_DISABLE_SANDBOX/u);
   assert.match(buildScript, /CLAWDAD_PREBUILT_ICON_PATH/u);
   assert.match(buildScript, /CLAWDAD_MAC_ARCH/u);
+  assert.match(buildScript, /--arch "\$target_arch"/u);
   assert.match(buildScript, /lipo -thin "\$target_arch"/u);
   assert.match(buildScript, /<key>NSAppleEventsUsageDescription<\/key>/u);
   assert.match(buildScript, /entitlements_path="\$script_dir\/ClawDad\.entitlements"/u);
@@ -66,6 +69,7 @@ test("Mac release pipeline signs, notarizes, staples, and publishes Sparkle arti
   assert.match(releaseScript, /generate_appcast/u);
   assert.match(releaseScript, /--account "\$sparkle_account"/u);
   assert.match(releaseScript, /notarytool submit "\$dmg_path"/u);
+  assert.match(releaseScript, /-imagekey zlib-level=9/u);
   assert.match(releaseScript, /stapler staple "\$dmg_path"/u);
   assert.match(releaseScript, /spctl --assess/u);
   assert.match(releaseScript, /SHA256SUMS/u);

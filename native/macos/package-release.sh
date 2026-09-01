@@ -6,13 +6,18 @@ repo_root=${script_dir:h:h}
 package_version="${CLAWDAD_RELEASE_VERSION:-$(node -p "require('${repo_root}/package.json').version")}"
 app_version="${CLAWDAD_APP_VERSION:-0.7.0}"
 app_build="${CLAWDAD_APP_BUILD:-33}"
+mac_arch="${CLAWDAD_MAC_ARCH:-$(uname -m)}"
+artifact_suffix="${CLAWDAD_RELEASE_ARTIFACT_SUFFIX:-}"
+if [[ -n "$artifact_suffix" && "$artifact_suffix" != -* ]]; then
+  artifact_suffix="-$artifact_suffix"
+fi
 release_tag="${CLAWDAD_RELEASE_TAG:-v${package_version}}"
 release_dir="${CLAWDAD_RELEASE_DIR:-$script_dir/dist/releases/$package_version}"
 app_dir="$script_dir/dist/ClawDad.app"
 appcast_dir="$release_dir/appcast"
 staging_dir="$release_dir/dmg-root"
-zip_name="ClawDad-${package_version}-mac.zip"
-dmg_name="ClawDad-${package_version}-mac.dmg"
+zip_name="ClawDad-${package_version}-mac${artifact_suffix}.zip"
+dmg_name="ClawDad-${package_version}-mac${artifact_suffix}.dmg"
 zip_path="$appcast_dir/$zip_name"
 dmg_path="$release_dir/$dmg_name"
 appcast_path="$appcast_dir/appcast.xml"
@@ -76,6 +81,7 @@ mkdir -p "$appcast_dir"
 
 CLAWDAD_APP_VERSION="$app_version" \
 CLAWDAD_APP_BUILD="$app_build" \
+CLAWDAD_MAC_ARCH="$mac_arch" \
 CLAWDAD_CODESIGN_IDENTITY="$signing_identity" \
   zsh "$script_dir/build-app.sh"
 
@@ -115,6 +121,7 @@ hdiutil create \
   -srcfolder "$staging_dir" \
   -ov \
   -format UDZO \
+  -imagekey zlib-level=9 \
   "$dmg_path"
 codesign \
   --force \

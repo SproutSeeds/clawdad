@@ -17,9 +17,12 @@ rollout unless that public publication is explicitly requested.
 
 ## Private Native Install
 
-For the current native beta 11 candidate, use the locally retained DMG:
+For the current native beta 11 candidate, use the locally retained DMG that
+matches the Mac:
 
-1. Open `native/macos/dist/releases/0.7.0-beta.11-macos-33/ClawDad-0.7.0-beta.11-mac.dmg`.
+1. Open the Apple-silicon artifact under
+   `native/macos/dist/releases/0.7.0-beta.11-macos-33/`, or the Intel artifact
+   under `native/macos/dist/releases/0.7.0-beta.11-macos-33-intel/`.
 2. Quit ClawDad, drag ClawDad into Applications, and replace the previous app.
 3. Open `/Applications/ClawDad.app` and verify version `0.7.0 (33)` with embedded
    runtime `0.7.0-beta.11`.
@@ -28,7 +31,7 @@ For the current native beta 11 candidate, use the locally retained DMG:
 
 ## Published Customer Install
 
-1. Download the current Mac beta from `https://clawdad.earth/`.
+1. Download the Apple-silicon or Intel Mac beta from `https://clawdad.earth/`.
 2. Open the DMG and drag ClawDad into Applications.
 3. Open ClawDad from Applications.
 4. Choose the primary projects folder during setup.
@@ -60,9 +63,13 @@ Developer ID application.
 
 ## Updates And Diagnostics
 
-The app checks the HTTPS Sparkle feed daily:
+The Apple-silicon app checks the primary HTTPS Sparkle feed daily:
 
 `https://clawdad-cloud.frg.earth/mac/appcast.xml`
+
+The Intel app uses its architecture-specific HTTPS feed:
+
+`https://clawdad.earth/downloads/appcast-intel.xml`
 
 Every update archive is signed with the ClawDad Sparkle EdDSA key. The private
 key remains in macOS Keychain; the app contains only the public key. Customers
@@ -90,14 +97,31 @@ CLAWDAD_PUBLISH_APPCAST=0 \
   npm run native:release
 ```
 
+Build the matching Intel artifact with a separate release directory and
+filename suffix:
+
+```bash
+CLAWDAD_RELEASE_VERSION=0.7.0-beta.11 \
+CLAWDAD_APP_VERSION=0.7.0 \
+CLAWDAD_APP_BUILD=33 \
+CLAWDAD_MAC_ARCH=x86_64 \
+CLAWDAD_RELEASE_ARTIFACT_SUFFIX=intel \
+CLAWDAD_RELEASE_DIR="$PWD/native/macos/dist/releases/0.7.0-beta.11-macos-33-intel" \
+CLAWDAD_SPARKLE_FEED_URL=https://clawdad.earth/downloads/appcast-intel.xml \
+CLAWDAD_RELEASE_DOWNLOAD_URL_PREFIX=https://clawdad.earth/downloads/ \
+CLAWDAD_NOTARIZE=1 \
+CLAWDAD_PUBLISH_APPCAST=0 \
+  npm run native:release
+```
+
 The command:
 
 1. Builds the embedded ClawDad runtime.
-2. Thins the Apple-silicon release frameworks, then signs Sparkle, WebRTC, and
-   the host app in the required nested order.
+2. Cross-compiles the selected architecture, thins its release frameworks,
+   then signs Sparkle, WebRTC, and the host app in the required nested order.
 3. Submits the app archive to Apple, waits for notarization, and staples it.
 4. Generates the EdDSA-signed Sparkle appcast and update ZIP.
-5. Creates, signs, notarizes, and staples the customer DMG.
+5. Creates a maximum-compression DMG, then signs, notarizes, and staples it.
 6. Verifies Gatekeeper acceptance and writes `SHA256SUMS`.
 
 Credentials remain outside the repository:
@@ -138,6 +162,9 @@ xcrun stapler validate native/macos/dist/ClawDad.app
 xcrun stapler validate native/macos/dist/releases/<version>/ClawDad-<version>-mac.dmg
 shasum -a 256 -c native/macos/dist/releases/<version>/SHA256SUMS
 ```
+
+Repeat the architecture and Gatekeeper checks for the Intel release directory,
+and require `lipo -archs` to report `x86_64` for the app, WebRTC, and Sparkle.
 
 Gatekeeper should report `source=Notarized Developer ID`.
 
