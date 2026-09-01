@@ -6,7 +6,8 @@ repo_root=${script_dir:h:h}
 app_name="ClawDad"
 bundle_id="earth.frg.ClawDad"
 app_version="${CLAWDAD_APP_VERSION:-0.7.0}"
-app_build="${CLAWDAD_APP_BUILD:-31}"
+app_build="${CLAWDAD_APP_BUILD:-33}"
+target_arch="${CLAWDAD_MAC_ARCH:-$(uname -m)}"
 sparkle_feed_url="${CLAWDAD_SPARKLE_FEED_URL:-https://clawdad-cloud.frg.earth/mac/appcast.xml}"
 sparkle_public_key="${CLAWDAD_SPARKLE_PUBLIC_KEY:-OjSne9VtiBjR3Ls2aaLTgEUeKtYzi9oAtexOiA5K+dI=}"
 dist_dir="$script_dir/dist"
@@ -46,6 +47,28 @@ cp "$bin_dir/$app_name" "$app_dir/Contents/MacOS/$app_name"
 chmod +x "$app_dir/Contents/MacOS/$app_name"
 ditto "$webrtc_framework_source" "$app_dir/Contents/Frameworks/WebRTC.framework"
 ditto "$sparkle_framework_source" "$app_dir/Contents/Frameworks/Sparkle.framework"
+
+thin_macho_binary() {
+  local binary_path="$1"
+  local architectures
+  architectures=$(lipo -archs "$binary_path")
+  if [[ " $architectures " != *" $target_arch "* ]]; then
+    print -u2 "$binary_path does not contain the requested $target_arch architecture."
+    exit 1
+  fi
+  if [[ "$architectures" == *" "* ]]; then
+    local thin_path="${binary_path}.thin"
+    lipo -thin "$target_arch" "$binary_path" -output "$thin_path"
+    mv "$thin_path" "$binary_path"
+  fi
+}
+
+thin_macho_binary "$app_dir/Contents/Frameworks/WebRTC.framework/Versions/A/WebRTC"
+thin_macho_binary "$app_dir/Contents/Frameworks/Sparkle.framework/Versions/B/Sparkle"
+thin_macho_binary "$app_dir/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate"
+thin_macho_binary "$app_dir/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app/Contents/MacOS/Updater"
+thin_macho_binary "$app_dir/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Downloader.xpc/Contents/MacOS/Downloader"
+thin_macho_binary "$app_dir/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Installer.xpc/Contents/MacOS/Installer"
 install_name_tool \
   -add_rpath "@executable_path/../Frameworks" \
   "$app_dir/Contents/MacOS/$app_name"

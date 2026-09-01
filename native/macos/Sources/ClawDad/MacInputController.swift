@@ -207,7 +207,7 @@ final class MacInputController {
       respond(.failure(
         action: .paste,
         requestId: message.requestId,
-        error: "The iPhone clipboard did not contain any text."
+        error: "The paired device clipboard did not contain any text."
       ))
       return
     }

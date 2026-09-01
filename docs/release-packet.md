@@ -1,114 +1,95 @@
-# ClawDad 0.7 Native Beta 10 Release Packet
+# ClawDad 0.7 Native Beta 11 Release Packet
 
-Prepared: 2026-08-30
+Prepared: 2026-09-01
 
 ## Release Identity
 
-- Embedded runtime: `0.7.0-beta.10`
-- Mac app: `0.7.0 (31)`
+- Embedded runtime: `0.7.0-beta.11`
+- Mac app: `0.7.0 (33)`
 - iPhone app: `0.7.0 (32)`
-- Distribution mode: `native-private`
+- Distribution mode: public signed Mac download plus private internal iPhone
+  TestFlight
 
-The signed and notarized Mac release is retained locally and build 31 is
-installed on the paired Mac. TestFlight build 32 is `VALID` and assigned only to
-`ClawDad Internal`. The npm package, git tags, public GitHub release assets,
-public appcast, external TestFlight group, Beta App Review, and App Store
-submission are unchanged.
+The Mac installer is available directly from `https://clawdad.earth/`. The
+iPhone companion remains assigned only to `ClawDad Internal`. The npm package,
+git tags, public GitHub release assets, public Sparkle appcast, external
+TestFlight group, Beta App Review, and App Store submission are unchanged.
 
 ## Included Scope
 
-- The signed Mac app embeds one beta 10 runtime and owns the native service on
-  port 4487; legacy global service labels remain disabled.
-- The paired iPhone can select among connected Mac displays without opening a
-  second Remote Assist session.
-- Display switches pause input until the new capture commits, and a disconnected
-  selection falls back to an available display.
-- Pointer mapping uses the selected display's real global bounds, including
-  Retina scaling and displays with negative origins.
-- The Remote Assist command menu can request a privacy-minimized catalog of
-  Terminal.app windows and tabs, then focus an explicitly selected tab.
-- Terminal catalog rows contain only an opaque identifier, cleaned title,
-  window/tab position, selected state, and busy state. Terminal contents,
-  history, commands, and process lists stay on the Mac.
-- ClawDad uses macOS's dedicated consent API to register ClawDad as the
-  Automation client before reading Terminal tabs. A denied decision opens the
-  exact Automation pane and keeps Refresh available on the iPhone.
-- The hardened Mac app is signed with Apple's Automation Apple Events
-  entitlement so macOS can present and persist the ClawDad to Terminal consent.
-- Command-T remains available in Special Commands, and iPhone and Mac composers
-  retain clipboard-safe Cut behavior.
+- Every Mac installation now owns a separate signed controller identity in
+  Keychain in addition to its existing host identity.
+- Desktop Settings includes **Remote Computers** for pairing, opening, and
+  forgetting another Mac with a short-lived code.
+- Pair acceptance and every Remote Assist response are verified against the
+  host public key pinned in that code.
+- Relay credentials are scoped per saved computer in Keychain and excluded from
+  saved profiles and diagnostics.
+- The native Mac viewer requires Touch ID or the Mac login password, then
+  supports pointer and keyboard input, multi-display selection, clipboard
+  exchange, and special commands.
+- Pairing remains directional. A fresh reverse pairing is required when both
+  Macs should control each other.
+- The Mac release frameworks are thinned to arm64 before signing so the
+  notarized installer fits the clawdad.earth single-file delivery boundary.
 
 ## Release Artifacts
 
 | Artifact | Local path | SHA-256 |
 | --- | --- | --- |
-| Mac DMG | `native/macos/dist/releases/0.7.0-beta.10-macos-31/ClawDad-0.7.0-beta.10-mac.dmg` | `add5dbee82a7cf6da3e553f08ce279f5c0b65673afede26c3c1c350a629c7704` |
-| Mac ZIP | `native/macos/dist/releases/0.7.0-beta.10-macos-31/appcast/ClawDad-0.7.0-beta.10-mac.zip` | `fb3f58ab075aaf9518ebe788529533bf2c1a2f5a77ee8aff6d5d5c5655dc115e` |
-| Local signed appcast | `native/macos/dist/releases/0.7.0-beta.10-macos-31/appcast/appcast.xml` | `e8a87431b0b534abad593eee46ab718b663072383cbceb338312d254c7b7d599` |
-| iPhone archive | `apps/ios/ClawDadMobile/build/ClawDadMobile-Founder-32.xcarchive` | Apple-accepted upload source; direct upload retained no local IPA |
+| Mac DMG | `native/macos/dist/releases/0.7.0-beta.11-macos-33/ClawDad-0.7.0-beta.11-mac.dmg` | `192a6c2dead6660ae2393e875f21610432da53f9a756bb29730d5245c608f252` |
+| Mac ZIP | `native/macos/dist/releases/0.7.0-beta.11-macos-33/appcast/ClawDad-0.7.0-beta.11-mac.zip` | `19318ba0ea36ad4e7abffc416a9f713dd4d9283778b58284266ac94868c29587` |
+| Local signed appcast | `native/macos/dist/releases/0.7.0-beta.11-macos-33/appcast/appcast.xml` | `2a87597eb7873084ea8239a86c787ba9612475b87b4cb6c36016b97eebd6d156` |
+| Live website DMG | `https://clawdad.earth/downloads/ClawDad-0.7.0-beta.11-mac.dmg` | `192a6c2dead6660ae2393e875f21610432da53f9a756bb29730d5245c608f252` |
 
-The appcast and Mac artifacts remain local. Release notes are in
-`docs/releases/0.7.0-macos-31.md` and `docs/releases/0.7.0-ios-32.md`.
+The live response is `application/octet-stream`, has a content length of
+`25,266,379` bytes, and matches the local notarized DMG byte for byte.
 
 ## Verification Completed
 
-- Node application/runtime suite: 449 tests passed on the merged release
-  checkpoint.
-- `swift test --package-path apps/ios/ClawDadMobile`: 40 tests passed.
-- `swift test --package-path native/ClawDadRemoteAssistProtocol`: 28 tests
-  passed.
-- `swift test --package-path native/macos`: 56 tests passed.
-- The iPhone archive is `0.7.0 (32)`, uses bundle ID
-  `earth.frg.clawdad.ios`, points to the production cloud endpoint, and was
-  accepted by App Store Connect.
-- App Store Connect build ID `f0d60bc9-c671-4bd5-9a31-f1b465f85cdf` is
-  `VALID`, export compliance is clear, and the build is assigned to
-  `ClawDad Internal`.
-- Mac build 31 and its DMG are Developer ID signed, notarized, stapled, and
-  accepted by Gatekeeper; its installed signature contains the Automation
-  Apple Events entitlement and all recorded SHA-256 checks pass.
-- `/Applications/ClawDad.app` reports version `0.7.0 (31)` with embedded runtime
-  `0.7.0-beta.10`.
-- Native services are active only on port 4487; legacy service labels are
-  disabled.
-
-## Distribution Boundaries
-
-- Build 32 is assigned only to the private `ClawDad Internal` TestFlight group.
-- The external founding-customer group is unassigned, its public link is
-  disabled, and Beta App Review is not submitted.
-- Public npm, git tags, GitHub release assets, and the public appcast were not
-  changed by this release.
-- Native artifact and internal TestFlight checks are complete; physical iPhone
-  behavior remains a separate acceptance gate.
+- Node application/runtime suite: 462 tests passed.
+- iPhone Swift suite: 45 tests passed.
+- Shared Remote Assist protocol suite: 28 tests passed.
+- Mac Swift suite: 59 tests passed.
+- Marketing site lint completed with zero errors and 14 pre-existing image
+  optimization warnings; its production build completed with the home, About,
+  Privacy, Release Notes, and Support routes.
+- The Mac app and DMG are Developer ID signed, notarized, stapled, and accepted
+  by Gatekeeper.
+- The installed `/Applications/ClawDad.app` reports `0.7.0 (33)`, embeds runtime
+  `0.7.0-beta.11`, and uses arm64 WebRTC and Sparkle frameworks.
+- One native runtime and one native cloud-host process are active; port 4487 has
+  one listener and `/healthz` reports the beta 11 runtime ready with the shared
+  Codex app-server.
+- clawdad.earth serves beta 11 build 33, the Mac-to-Mac release notes, and the
+  exact verified DMG.
 
 ## Physical Device Gates
 
-- Install TestFlight build 32 on a physical iPhone from `ClawDad Internal` and
-  confirm a clean launch.
-- Pair it to installed Mac build 31 with a fresh QR.
-- Open Remote Assist, choose Terminal Tabs from the compact menu, approve the
-  one-time macOS Terminal Automation prompt if shown, and focus at least two
-  different Terminal rows. Confirm the consent dialog names ClawDad and Terminal,
-  then verify ClawDad appears as a top-level Automation row after allowing it.
-- With at least two connected displays, switch in both directions, verify the
-  active label and click alignment, and confirm input stays paused until each
-  switch commits.
-- Rearrange displays to create a negative global origin, then disconnect the
-  selected display and verify clean fallback.
-- Recheck Command-T, Command-Tab, Cut, pointer input, keyboard dismissal,
-  clipboard, reconnect, Mac lock/unlock, and Wi-Fi-to-cellular recovery.
+- Download build 33 from clawdad.earth on the Mac laptop, install it, and open
+  ClawDad.
+- On the Studio, open Settings, choose **Allow a Device**, and copy the current
+  short-lived pairing code.
+- On the laptop, paste that code under **Remote Computers**, pair, then open the
+  Studio with Remote Assist.
+- Verify Touch ID or login authentication, display selection, click and typing
+  alignment, copy, paste, Command-Tab, and Command-T.
+- Generate a fresh code on the laptop and repeat from the Studio to verify the
+  reverse direction.
+- Pair the iPhone with both Macs and confirm each appears as an independent
+  thread and Remote Assist source.
 
 ## Remaining Release Action
 
-Install TestFlight build 32 on the paired physical iPhone and complete the
-physical acceptance checks above. Native artifact, Mac installation, and
-internal TestFlight distribution checks are complete.
+The artifact, installed Studio host, and website download gates are complete.
+The release becomes physically accepted after the laptop and iPhone checks
+above are observed on the actual devices.
 
 ## Preserved Outside This Release
 
-- The original working checkout and its unrelated edits
-- `assets/wordmark-explorations/`
-- unrelated local Codex hook/plugin changes
-- credentials, pairing tickets, relay tokens, and Apple-signed transactions
-- local logs and customer project data
+- The public npm package and its authentication flow
+- Public GitHub release assets, git tags, and the public Sparkle appcast
+- External TestFlight and App Store release state
+- Unrelated working-tree changes and `assets/wordmark-explorations/`
+- Credentials, pairing tickets, relay tokens, logs, project contents, and
+  customer data

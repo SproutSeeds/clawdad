@@ -782,7 +782,7 @@
             <div class="settings-section-head">
               <div>
                 <div id="settingsRemoteAssistTitle" class="settings-section-title">Remote Assist</div>
-                <div id="settingsRemoteAssistSubhead" class="settings-section-subhead">Open this computer from ClawDad on iPhone</div>
+                <div id="settingsRemoteAssistSubhead" class="settings-section-subhead">Open this computer from a paired ClawDad device</div>
               </div>
               <label class="settings-switch">
                 <input id="settingsRemoteAssistToggle" type="checkbox">
@@ -831,7 +831,7 @@
               </div>
               <p class="settings-permission-help-ready">
                 Remote Assist is ready when the toggle is on and both permission
-                buttons say Allowed. Then tap the desktop icon in ClawDad on iPhone.
+                buttons say Allowed. Then open Remote Assist from a paired ClawDad device.
               </p>
               <p class="settings-permission-help-ready">
                 macOS may still ask you to confirm direct screen access when a new
@@ -880,30 +880,66 @@
           <section class="settings-section settings-pairing-section" aria-labelledby="settingsPairingTitle">
             <div class="settings-section-head">
               <div>
-                <div id="settingsPairingTitle" class="settings-section-title">Phone Pairing</div>
-                <div class="settings-section-subhead">Connect ClawDad on iPhone</div>
+                <div id="settingsPairingTitle" class="settings-section-title">Device Pairing</div>
+                <div class="settings-section-subhead">Allow an iPhone or another Mac to reach this computer</div>
               </div>
               <button id="settingsPairIphoneButton" class="detail-action-button settings-picker-button" type="button">
                 <svg viewBox="0 0 18 18" fill="none" aria-hidden="true">
                   <path d="M5.25 2.75h7.5v12.5h-7.5a1.5 1.5 0 0 1-1.5-1.5v-9.5a1.5 1.5 0 0 1 1.5-1.5Z" stroke="currentColor" stroke-width="1.25"></path>
                   <path d="M7.25 5.25h3M7.25 12.75h3M13.75 7.25h1.5M14.5 6.5v1.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"></path>
                 </svg>
-                <span class="button-text">Pair iPhone</span>
+                <span class="button-text">Allow a Device</span>
               </button>
             </div>
             <div id="settingsPairingStatus" class="settings-pairing-status" aria-live="polite"></div>
             <div id="settingsPairingQr" class="settings-pairing-qr" hidden></div>
             <div id="settingsPairingExpiry" class="settings-root-meta"></div>
+            <button id="settingsCopyPairingCodeButton" class="detail-action-button is-quiet" type="button" hidden>
+              <span class="button-text">Copy Pairing Code</span>
+            </button>
             <div class="settings-device-head">
               <div>
                 <div class="settings-section-title">Paired Devices</div>
-                <div class="settings-section-subhead">Phones trusted to reach this computer</div>
+                <div class="settings-section-subhead">Devices trusted to reach this computer</div>
               </div>
               <button id="settingsRefreshDevicesButton" class="settings-inline-info-button" type="button">
                 <span class="button-text">Refresh</span>
               </button>
             </div>
             <div id="settingsPairedDevices" class="settings-device-list"></div>
+          </section>
+
+          <section id="settingsRemoteComputersSection" class="settings-section settings-pairing-section" aria-labelledby="settingsRemoteComputersTitle" hidden>
+            <div class="settings-section-head">
+              <div>
+                <div id="settingsRemoteComputersTitle" class="settings-section-title">Remote Computers</div>
+                <div class="settings-section-subhead">Open a paired Mac from this ClawDad app</div>
+              </div>
+              <button id="settingsPairRemoteComputerButton" class="detail-action-button settings-picker-button" type="button">
+                <svg viewBox="0 0 18 18" fill="none" aria-hidden="true">
+                  <rect x="2.25" y="3.25" width="13.5" height="9" rx="1.5" stroke="currentColor" stroke-width="1.25"></rect>
+                  <path d="M6.25 15h5.5M9 12.5V15M13.5 6.25h2.75M14.875 4.875v2.75" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"></path>
+                </svg>
+                <span class="button-text">Pair a Mac</span>
+              </button>
+            </div>
+            <p class="settings-remote-pairing-help">
+              On the other Mac, open Settings → Device Pairing → Allow a Device, copy its pairing code, then paste it here. Repeat in the opposite direction when you want both Macs to control each other.
+            </p>
+            <div id="settingsRemotePairingForm" class="settings-remote-pairing-form" hidden>
+              <label class="settings-field-label" for="settingsRemotePairingCode">Pairing code from the other Mac</label>
+              <textarea id="settingsRemotePairingCode" class="settings-pairing-code-input" rows="5" spellcheck="false" autocomplete="off" placeholder="Paste the complete ClawDad pairing code"></textarea>
+              <div class="settings-remote-pairing-actions">
+                <button id="settingsRemotePairingCancel" class="detail-action-button is-quiet" type="button">
+                  <span class="button-text">Cancel</span>
+                </button>
+                <button id="settingsRemotePairingSubmit" class="detail-action-button" type="button">
+                  <span class="button-text">Pair Securely</span>
+                </button>
+              </div>
+            </div>
+            <div id="settingsRemoteComputersStatus" class="settings-pairing-status" aria-live="polite"></div>
+            <div id="settingsRemoteComputersList" class="settings-device-list"></div>
           </section>
 
           <div class="settings-actions">

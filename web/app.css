@@ -3393,6 +3393,54 @@ button.detail-backdrop:focus-visible:not(:disabled) {
   line-height: 1.4;
 }
 
+.settings-remote-pairing-help {
+  margin: 0;
+  color: rgba(255, 218, 185, 0.72);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.settings-remote-pairing-form {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid rgba(240, 208, 109, 0.22);
+  border-radius: 12px;
+  background: rgba(22, 1, 4, 0.34);
+}
+
+.settings-remote-pairing-form[hidden] {
+  display: none;
+}
+
+.settings-pairing-code-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 116px;
+  resize: vertical;
+  padding: 10px;
+  border: 1px solid rgba(240, 208, 109, 0.32);
+  border-radius: 10px;
+  color: var(--cream);
+  background: rgba(8, 0, 1, 0.56);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+.settings-pairing-code-input:focus-visible {
+  outline: 2px solid rgba(240, 208, 109, 0.8);
+  outline-offset: 2px;
+}
+
+.settings-remote-pairing-actions,
+.settings-device-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .settings-inline-info-button.is-danger {
   color: rgba(255, 158, 151, 0.88);
 }

@@ -26,7 +26,7 @@ const releaseNotesPath = path.join(
   repoRoot,
   "docs",
   "releases",
-  "0.7.0-beta.10.md",
+  "0.7.0-beta.11.md",
 );
 const packagePath = path.join(repoRoot, "package.json");
 
@@ -45,9 +45,9 @@ test("Mac release pipeline signs, notarizes, staples, and publishes Sparkle arti
     readFile(packagePath, "utf8"),
   ]);
 
-  assert.match(packageSource, /"version": "0\.7\.0-beta\.10"/u);
+  assert.match(packageSource, /"version": "0\.7\.0-beta\.11"/u);
   assert.match(releaseNotes, /ClawDad 0\.7 Native Beta/u);
-  assert.match(releaseScript, /CLAWDAD_APP_BUILD:-31/u);
+  assert.match(releaseScript, /CLAWDAD_APP_BUILD:-33/u);
   assert.match(releaseScript, /Developer ID Application/u);
   assert.match(releaseScript, /notarytool submit "\$zip_path"/u);
   assert.match(releaseScript, /CLAWDAD_NOTARY_KEY_PATH/u);
@@ -55,6 +55,8 @@ test("Mac release pipeline signs, notarizes, staples, and publishes Sparkle arti
   assert.match(releaseScript, /CLAWDAD_NOTARY_ISSUER_ID/u);
   assert.match(buildScript, /CLAWDAD_SWIFT_DISABLE_SANDBOX/u);
   assert.match(buildScript, /CLAWDAD_PREBUILT_ICON_PATH/u);
+  assert.match(buildScript, /CLAWDAD_MAC_ARCH/u);
+  assert.match(buildScript, /lipo -thin "\$target_arch"/u);
   assert.match(buildScript, /<key>NSAppleEventsUsageDescription<\/key>/u);
   assert.match(buildScript, /entitlements_path="\$script_dir\/ClawDad\.entitlements"/u);
   assert.match(buildScript, /--entitlements "\$entitlements_path"/u);

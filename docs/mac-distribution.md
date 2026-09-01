@@ -17,18 +17,18 @@ rollout unless that public publication is explicitly requested.
 
 ## Private Native Install
 
-For a private candidate such as native beta 10, use the locally retained DMG:
+For the current native beta 11 candidate, use the locally retained DMG:
 
-1. Open `native/macos/dist/releases/0.7.0-beta.10/ClawDad-0.7.0-beta.10-mac.dmg`.
+1. Open `native/macos/dist/releases/0.7.0-beta.11-macos-33/ClawDad-0.7.0-beta.11-mac.dmg`.
 2. Quit ClawDad, drag ClawDad into Applications, and replace the previous app.
-3. Open `/Applications/ClawDad.app` and verify version `0.7.0 (26)` with embedded
-   runtime `0.7.0-beta.10`.
+3. Open `/Applications/ClawDad.app` and verify version `0.7.0 (33)` with embedded
+   runtime `0.7.0-beta.11`.
 4. Confirm only the app-managed native services are active on port 4487 and the
    legacy service labels remain disabled.
 
 ## Published Customer Install
 
-1. Download `ClawDad-<version>-mac.dmg` from the matching GitHub release.
+1. Download the current Mac beta from `https://clawdad.earth/`.
 2. Open the DMG and drag ClawDad into Applications.
 3. Open ClawDad from Applications.
 4. Choose the primary projects folder during setup.
@@ -81,9 +81,10 @@ Desktop Settings provides:
 For the current private native release, run:
 
 ```bash
-CLAWDAD_RELEASE_VERSION=0.7.0-beta.10 \
+CLAWDAD_RELEASE_VERSION=0.7.0-beta.11 \
 CLAWDAD_APP_VERSION=0.7.0 \
-CLAWDAD_APP_BUILD=26 \
+CLAWDAD_APP_BUILD=33 \
+CLAWDAD_MAC_ARCH=arm64 \
 CLAWDAD_NOTARIZE=1 \
 CLAWDAD_PUBLISH_APPCAST=0 \
   npm run native:release
@@ -92,7 +93,8 @@ CLAWDAD_PUBLISH_APPCAST=0 \
 The command:
 
 1. Builds the embedded ClawDad runtime.
-2. Signs Sparkle, WebRTC, and the host app in the required nested order.
+2. Thins the Apple-silicon release frameworks, then signs Sparkle, WebRTC, and
+   the host app in the required nested order.
 3. Submits the app archive to Apple, waits for notarization, and staples it.
 4. Generates the EdDSA-signed Sparkle appcast and update ZIP.
 5. Creates, signs, notarizes, and staples the customer DMG.

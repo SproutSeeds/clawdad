@@ -44,7 +44,7 @@ enum RemoteAssistHostError: LocalizedError {
     case .invalidCloudConfiguration:
       return "ClawDad Cloud is not configured on this Mac."
     case .hostIdentityMissing:
-      return "Generate a fresh Pair iPhone code, then scan it again to enable Remote Assist."
+      return "Generate a fresh device pairing code, then pair ClawDad again to enable Remote Assist."
     case .noDisplayAvailable:
       return "ClawDad could not find a display to share."
     case .peerConnectionUnavailable:
@@ -131,13 +131,13 @@ final class RemoteAssistHost: NSObject {
     if !enabled {
       message = "Remote Assist is off."
     } else if !configured {
-      message = "Create a fresh Pair iPhone code to finish Remote Assist setup."
+      message = "Create a fresh device pairing code to finish Remote Assist setup."
     } else if pairedDeviceCount == 0 {
-      message = "Pair an iPhone before using Remote Assist."
+      message = "Pair an iPhone or another Mac before using Remote Assist."
     } else if !screenGranted || !controlGranted {
       message = "Allow Screen Recording and Accessibility for ClawDad."
     } else if active {
-      message = "Your paired iPhone is controlling this Mac."
+      message = "A paired ClawDad device is controlling this Mac."
     } else if relayConnected {
       message = "Remote Assist is ready."
     } else {
@@ -348,7 +348,7 @@ final class RemoteAssistHost: NSObject {
         return
       }
       stopActiveSession(
-        reason: "Remote Assist was closed on the iPhone.",
+        reason: "Remote Assist was closed on the paired device.",
         notifyPhone: false
       )
     default:
@@ -403,7 +403,7 @@ final class RemoteAssistHost: NSObject {
       return
     case .replaceCurrent:
       stopActiveSession(
-        reason: "Remote Assist reconnected from the same iPhone.",
+        reason: "Remote Assist reconnected from the same paired device.",
         notifyPhone: false
       )
     case .rejectBusy:

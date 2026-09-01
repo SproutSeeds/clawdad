@@ -15,6 +15,7 @@ const state = {
   cloudPairingPending: false,
   cloudPairingStatus: "",
   cloudPairingQrSvg: "",
+  cloudPairingCode: "",
   cloudPairingExpiresAt: "",
   cloudDevices: [],
   cloudDevicesPending: false,
@@ -167,6 +168,11 @@ const state = {
   remoteAssistStatus: null,
   remoteAssistPending: false,
   remoteAssistInfoOpen: false,
+  remoteComputers: [],
+  remoteComputersPending: false,
+  remoteComputersStatus: "",
+  remotePairingOpen: false,
+  remotePairingCode: "",
   queueArchiveConfirmEntryId: "",
 };
 
@@ -236,8 +242,17 @@ const elements = {
   settingsPairingQr: document.querySelector("#settingsPairingQr"),
   settingsPairingStatus: document.querySelector("#settingsPairingStatus"),
   settingsPairingExpiry: document.querySelector("#settingsPairingExpiry"),
+  settingsCopyPairingCodeButton: document.querySelector("#settingsCopyPairingCodeButton"),
   settingsRefreshDevicesButton: document.querySelector("#settingsRefreshDevicesButton"),
   settingsPairedDevices: document.querySelector("#settingsPairedDevices"),
+  settingsRemoteComputersSection: document.querySelector("#settingsRemoteComputersSection"),
+  settingsPairRemoteComputerButton: document.querySelector("#settingsPairRemoteComputerButton"),
+  settingsRemotePairingForm: document.querySelector("#settingsRemotePairingForm"),
+  settingsRemotePairingCode: document.querySelector("#settingsRemotePairingCode"),
+  settingsRemotePairingCancel: document.querySelector("#settingsRemotePairingCancel"),
+  settingsRemotePairingSubmit: document.querySelector("#settingsRemotePairingSubmit"),
+  settingsRemoteComputersStatus: document.querySelector("#settingsRemoteComputersStatus"),
+  settingsRemoteComputersList: document.querySelector("#settingsRemoteComputersList"),
   settingsCancelButton: document.querySelector("#settingsCancelButton"),
   settingsSaveButton: document.querySelector("#settingsSaveButton"),
   directoryBrowserModal: document.querySelector("#directoryBrowserModal"),
@@ -573,6 +588,18 @@ const nativeBridge = (() => {
     stopRemoteAssist() {
       return bridge.call("stopRemoteAssist");
     },
+    getRemoteComputers() {
+      return bridge.call("getRemoteComputers");
+    },
+    pairRemoteComputer(code) {
+      return bridge.call("pairRemoteComputer", { code: String(code || "") });
+    },
+    openRemoteComputer(computerId) {
+      return bridge.call("openRemoteComputer", { computerId: String(computerId || "") });
+    },
+    forgetRemoteComputer(computerId) {
+      return bridge.call("forgetRemoteComputer", { computerId: String(computerId || "") });
+    },
     getDesktopAppStatus() {
       return bridge.call("getDesktopAppStatus");
     },
@@ -617,6 +644,13 @@ window.chrome?.webview?.addEventListener?.("message", (event) => {
       "clawdad-native-remote-assist-status",
       { detail: payload.status || {} },
     ));
+    return;
+  }
+  if (payload.channel === "clawdad-native-remote-computers-status") {
+    window.dispatchEvent(new CustomEvent(
+      "clawdad-native-remote-computers-status",
+      { detail: payload.status || {} },
+    ));
   }
 });
 
@@ -624,6 +658,11 @@ window.addEventListener("clawdad-native-remote-assist-status", (event) => {
   state.remoteAssistStatus = event.detail && typeof event.detail === "object"
     ? event.detail
     : null;
+  renderAll();
+});
+
+window.addEventListener("clawdad-native-remote-computers-status", (event) => {
+  applyRemoteComputersStatus(event.detail);
   renderAll();
 });
 
@@ -6822,7 +6861,7 @@ function renderCloudDevices() {
   if (state.cloudDevices.length === 0) {
     const empty = document.createElement("div");
     empty.className = "settings-device-empty";
-    empty.textContent = "No iPhones are paired yet.";
+    empty.textContent = "No devices are paired yet.";
     elements.settingsPairedDevices.append(empty);
     return;
   }
@@ -6834,7 +6873,7 @@ function renderCloudDevices() {
     details.className = "settings-device-details";
     const name = document.createElement("div");
     name.className = "settings-root-path";
-    name.textContent = String(device.deviceName || device.deviceId || "iPhone");
+    name.textContent = String(device.deviceName || device.deviceId || "ClawDad device");
     const meta = document.createElement("div");
     meta.className = "settings-root-meta";
     const seenAt = formatTimestamp(device.lastSeenAt || device.trustedAt);
@@ -6851,6 +6890,103 @@ function renderCloudDevices() {
     });
     row.append(details, revoke);
     elements.settingsPairedDevices.append(row);
+  }
+}
+
+function applyRemoteComputersStatus(value) {
+  const status = value && typeof value === "object" ? value : {};
+  state.remoteComputers = Array.isArray(status.computers) ? status.computers : [];
+  if (status.state && !state.remoteComputersPending) {
+    state.remoteComputersStatus = String(status.state) === "Disconnected"
+      ? ""
+      : String(status.state);
+  }
+}
+
+function renderRemoteComputers() {
+  const section = elements.settingsRemoteComputersSection;
+  if (!section) {
+    return;
+  }
+  const available = nativeBridge.isAvailable() &&
+    state.desktopAppStatus?.platform === "macos";
+  section.hidden = !available;
+  if (!available) {
+    return;
+  }
+
+  elements.settingsRemotePairingForm.hidden = !state.remotePairingOpen;
+  if (elements.settingsRemotePairingCode.value !== state.remotePairingCode) {
+    elements.settingsRemotePairingCode.value = state.remotePairingCode;
+  }
+  elements.settingsRemotePairingCode.disabled = state.remoteComputersPending;
+  elements.settingsRemotePairingSubmit.disabled =
+    state.remoteComputersPending || !state.remotePairingCode.trim();
+  elements.settingsRemotePairingCancel.disabled = state.remoteComputersPending;
+  elements.settingsPairRemoteComputerButton.disabled = state.remoteComputersPending;
+  setText(
+    elements.settingsPairRemoteComputerButton.querySelector(".button-text"),
+    state.remotePairingOpen ? "Pairing Code" : "Pair a Mac",
+  );
+  setText(
+    elements.settingsRemotePairingSubmit.querySelector(".button-text"),
+    state.remoteComputersPending ? "Pairing..." : "Pair Securely",
+  );
+  setText(elements.settingsRemoteComputersStatus, state.remoteComputersStatus, {
+    empty: !state.remoteComputersStatus,
+  });
+
+  clearNode(elements.settingsRemoteComputersList);
+  if (state.remoteComputersPending && state.remoteComputers.length === 0) {
+    const pending = document.createElement("div");
+    pending.className = "settings-device-empty";
+    pending.textContent = "Checking paired computers...";
+    elements.settingsRemoteComputersList.append(pending);
+    return;
+  }
+  if (state.remoteComputers.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "settings-device-empty";
+    empty.textContent = "No remote computers are paired with this Mac yet.";
+    elements.settingsRemoteComputersList.append(empty);
+    return;
+  }
+
+  for (const computer of state.remoteComputers) {
+    const row = document.createElement("div");
+    row.className = "settings-device-row";
+    const details = document.createElement("div");
+    details.className = "settings-device-details";
+    const name = document.createElement("div");
+    name.className = "settings-root-path";
+    name.textContent = String(computer.displayName || computer.hostId || "Paired Mac");
+    const meta = document.createElement("div");
+    meta.className = "settings-root-meta";
+    const pairedAt = formatTimestamp(computer.pairedAt);
+    meta.textContent = pairedAt ? `Paired ${pairedAt}` : "Securely paired";
+    details.append(name, meta);
+
+    const actions = document.createElement("div");
+    actions.className = "settings-device-actions";
+    const open = document.createElement("button");
+    open.className = "detail-action-button settings-picker-button";
+    open.type = "button";
+    open.textContent = "Open Remote Assist";
+    open.disabled = state.remoteComputersPending || computer.supportsRemoteAssist === false;
+    open.addEventListener("click", () => {
+      void openRemoteComputer(computer.id);
+    });
+    const forget = document.createElement("button");
+    forget.className = "settings-inline-info-button is-danger";
+    forget.type = "button";
+    forget.textContent = "Forget";
+    forget.disabled = state.remoteComputersPending;
+    forget.addEventListener("click", () => {
+      void forgetRemoteComputer(computer.id);
+    });
+    actions.append(open, forget);
+    row.append(details, actions);
+    elements.settingsRemoteComputersList.append(row);
   }
 }
 
@@ -6922,7 +7058,7 @@ function renderSettingsModal() {
     elements.settingsPairIphoneButton.disabled =
       state.settingsWorkspacePending || state.cloudPairingPending || Boolean(state.directoryPickerPending);
     elements.settingsPairIphoneButton.querySelector(".button-text").textContent =
-      state.cloudPairingPending ? "Generating..." : "Pair iPhone";
+      state.cloudPairingPending ? "Generating..." : "Allow a Device";
   }
   if (elements.settingsPairingStatus) {
     setText(elements.settingsPairingStatus, state.cloudPairingStatus, {
@@ -6944,12 +7080,17 @@ function renderSettingsModal() {
       : "";
     setText(elements.settingsPairingExpiry, expiryText, { empty: !expiryText });
   }
+  if (elements.settingsCopyPairingCodeButton) {
+    elements.settingsCopyPairingCodeButton.hidden = !state.cloudPairingCode;
+    elements.settingsCopyPairingCodeButton.disabled = state.cloudPairingPending;
+  }
   if (elements.settingsRefreshDevicesButton) {
     elements.settingsRefreshDevicesButton.disabled = state.cloudDevicesPending;
     elements.settingsRefreshDevicesButton.querySelector(".button-text").textContent =
       state.cloudDevicesPending ? "Checking..." : "Refresh";
   }
   renderCloudDevices();
+  renderRemoteComputers();
   elements.settingsCancelButton.disabled =
     state.settingsWorkspacePending || Boolean(state.directoryPickerPending);
   elements.settingsSaveButton.disabled =
@@ -11243,8 +11384,8 @@ function renderRemoteAssistSettings() {
   setText(
     elements.settingsRemoteAssistSubhead,
     windows
-      ? "Open this Windows computer from ClawDad on iPhone"
-      : "Open this Mac from ClawDad on iPhone",
+      ? "Open this Windows computer from a paired ClawDad device"
+      : "Open this Mac from an iPhone or another Mac",
     { empty: false },
   );
   if (elements.settingsRemoteAssistMacHelp) {
@@ -15686,6 +15827,7 @@ function openSettingsModal() {
   void refreshSubscriptionEntitlement();
   void refreshRemoteAssistStatus();
   void refreshCloudDevices({ quiet: true });
+  void refreshRemoteComputers({ quiet: true });
 }
 
 function closeSettingsModal({ restoreFocus = true } = {}) {
@@ -15694,6 +15836,8 @@ function closeSettingsModal({ restoreFocus = true } = {}) {
   }
   state.settingsModalOpen = false;
   state.remoteAssistInfoOpen = false;
+  state.remotePairingOpen = false;
+  state.remotePairingCode = "";
   state.settingsWorkspacePending = false;
   state.settingsWorkspaceStatus = "";
   state.settingsWorkspaceNewRootDraft = "";
@@ -15889,6 +16033,7 @@ async function startCloudPairing() {
   state.cloudPairingPending = true;
   state.cloudPairingStatus = "Generating secure QR...";
   state.cloudPairingQrSvg = "";
+  state.cloudPairingCode = "";
   state.cloudPairingExpiresAt = "";
   renderAll();
   try {
@@ -15896,15 +16041,120 @@ async function startCloudPairing() {
       method: "POST",
     });
     state.cloudPairingQrSvg = String(payload.qrSvg || "");
+    state.cloudPairingCode = payload.pairing
+      ? JSON.stringify(payload.pairing)
+      : "";
     state.cloudPairingExpiresAt = String(payload.pairing?.expiresAt || "");
     state.cloudPairingStatus = state.cloudPairingQrSvg
-      ? "Scan this with ClawDad on iPhone."
-      : "Pairing code generated.";
+      ? "Scan this on iPhone, or copy the code into ClawDad on another Mac."
+      : "Pairing code generated for another ClawDad device.";
   } catch (error) {
     state.cloudPairingStatus = error.message;
     showError(error);
   } finally {
     state.cloudPairingPending = false;
+    renderAll();
+  }
+}
+
+async function copyCloudPairingCode() {
+  if (!state.cloudPairingCode) {
+    return;
+  }
+  try {
+    await copyText(state.cloudPairingCode);
+    state.cloudPairingStatus = "Pairing code copied. Paste it into ClawDad on the other Mac.";
+  } catch (error) {
+    state.cloudPairingStatus = String(error?.message || "Unable to copy the pairing code.");
+    showError(error);
+  } finally {
+    renderAll();
+  }
+}
+
+async function refreshRemoteComputers({ quiet = false } = {}) {
+  if (!nativeBridge.isAvailable() || state.remoteComputersPending) {
+    return;
+  }
+  if (!quiet) {
+    state.remoteComputersPending = true;
+    state.remoteComputersStatus = "Checking paired computers...";
+    renderAll();
+  }
+  try {
+    applyRemoteComputersStatus(await nativeBridge.getRemoteComputers());
+    if (!quiet) {
+      state.remoteComputersStatus = "";
+    }
+  } catch (error) {
+    state.remoteComputersStatus = String(error?.message || "Unable to load paired computers.");
+    if (!quiet) {
+      showError(error);
+    }
+  } finally {
+    state.remoteComputersPending = false;
+    renderAll();
+  }
+}
+
+async function pairRemoteComputer() {
+  const code = state.remotePairingCode.trim();
+  if (!code || state.remoteComputersPending) {
+    return;
+  }
+  state.remoteComputersPending = true;
+  state.remoteComputersStatus = "Verifying the other Mac...";
+  renderAll();
+  try {
+    const result = await nativeBridge.pairRemoteComputer(code);
+    applyRemoteComputersStatus(result?.status);
+    const name = String(result?.computer?.displayName || "the other Mac");
+    state.remoteComputersStatus = `Paired securely with ${name}.`;
+    state.remotePairingCode = "";
+    state.remotePairingOpen = false;
+  } catch (error) {
+    state.remoteComputersStatus = String(error?.message || "Pairing failed.");
+    showError(error);
+  } finally {
+    state.remoteComputersPending = false;
+    renderAll();
+  }
+}
+
+async function openRemoteComputer(computerId) {
+  if (!computerId || state.remoteComputersPending) {
+    return;
+  }
+  state.remoteComputersPending = true;
+  state.remoteComputersStatus = "Opening Remote Assist...";
+  renderAll();
+  try {
+    await nativeBridge.openRemoteComputer(computerId);
+    state.remoteComputersStatus = "Remote Assist opened in a new window.";
+  } catch (error) {
+    state.remoteComputersStatus = String(error?.message || "Remote Assist could not open.");
+    showError(error);
+  } finally {
+    state.remoteComputersPending = false;
+    renderAll();
+  }
+}
+
+async function forgetRemoteComputer(computerId) {
+  if (!computerId || state.remoteComputersPending) {
+    return;
+  }
+  state.remoteComputersPending = true;
+  state.remoteComputersStatus = "Removing this computer...";
+  renderAll();
+  try {
+    applyRemoteComputersStatus(await nativeBridge.forgetRemoteComputer(computerId));
+    state.remoteComputersStatus = "Computer forgotten. You can pair it again at any time.";
+  } catch (error) {
+    state.remoteComputersStatus = String(error?.message || "Unable to forget this computer.");
+    showError(error);
+  } finally {
+    state.remoteComputersPending = false;
     renderAll();
   }
 }
@@ -15951,7 +16201,7 @@ async function forgetCloudDevice(deviceId) {
       (device) => device.deviceId !== normalizedDeviceId,
     );
     state.cloudDevicesStatus = state.cloudDevices.length === 0
-      ? "No iPhones are paired yet."
+      ? "No devices are paired yet."
       : "";
   } catch (error) {
     state.cloudDevicesStatus = error.message;
@@ -16929,8 +17179,32 @@ function bindEvents() {
   elements.settingsPairIphoneButton?.addEventListener("click", () => {
     void startCloudPairing();
   });
+  elements.settingsCopyPairingCodeButton?.addEventListener("click", () => {
+    void copyCloudPairingCode();
+  });
   elements.settingsRefreshDevicesButton?.addEventListener("click", () => {
     void refreshCloudDevices();
+  });
+  elements.settingsPairRemoteComputerButton?.addEventListener("click", () => {
+    state.remotePairingOpen = true;
+    state.remoteComputersStatus = "";
+    renderAll();
+    window.requestAnimationFrame(() => elements.settingsRemotePairingCode?.focus());
+  });
+  elements.settingsRemotePairingCode?.addEventListener("input", (event) => {
+    state.remotePairingCode = String(event.target.value || "");
+    state.remoteComputersStatus = "";
+    renderAll();
+  });
+  elements.settingsRemotePairingCancel?.addEventListener("click", () => {
+    state.remotePairingOpen = false;
+    state.remotePairingCode = "";
+    state.remoteComputersStatus = "";
+    renderAll();
+    elements.settingsPairRemoteComputerButton?.focus();
+  });
+  elements.settingsRemotePairingSubmit?.addEventListener("click", () => {
+    void pairRemoteComputer();
   });
   elements.settingsForm?.addEventListener("submit", (event) => {
     event.preventDefault();

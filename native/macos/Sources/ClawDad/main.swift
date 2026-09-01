@@ -350,7 +350,7 @@ final class ClawDadService {
     }
 
     do {
-      status("Connecting paired iPhone...")
+      status("Connecting paired ClawDad devices...")
       try startManagedCloudHost(port: port, configURL: cloudConfig)
     } catch {
       appendNativeCloudHostDiagnostic(error.localizedDescription)
@@ -702,6 +702,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
   private var webView: WKWebView?
   private var service: ClawDadService?
   private var remoteAssistHost: RemoteAssistHost?
+  private var remoteComputerManager: MacRemoteComputerManager?
+  private var remoteAssistClient: MacRemoteAssistClient?
+  private var remoteAssistWindowController: MacRemoteAssistWindowController?
   private var remoteAssistIndicator: NSPanel?
   private var nativeInstanceGuard: NativeAppInstanceGuard?
   private let updateController = ClawDadUpdateController()
@@ -735,6 +738,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     buildWindow()
     showLaunchScreen("Starting ClawDad...")
     startRemoteAssistHost()
+    startRemoteComputerManager()
     startService()
   }
 
@@ -756,6 +760,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
   }
 
   func applicationWillTerminate(_ notification: Notification) {
+    remoteAssistWindowController?.closeSession()
+    remoteComputerManager?.stop()
     remoteAssistHost?.stop()
     service?.stop()
   }
@@ -767,6 +773,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     }
     remoteAssistHost = host
     host.startIfEnabled()
+  }
+
+  private func startRemoteComputerManager() {
+    let manager = MacRemoteComputerManager()
+    manager.onChange = { [weak self] in
+      self?.publishRemoteComputerStatus()
+    }
+    remoteComputerManager = manager
   }
 
   private func buildWindow() {
@@ -912,6 +926,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         "platform": "macos",
         "chooseFolder": true,
         "remoteAssist": true,
+        "remoteComputers": true,
         "updates": true,
         "diagnostics": true
       ])
@@ -952,6 +967,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         id: id,
         result: remoteAssistHost?.status.dictionary ?? [:]
       )
+    case "getRemoteComputers":
+      resolveNativeMessage(
+        id: id,
+        result: remoteComputerManager?.statusDictionary ?? [
+          "computers": [],
+          "connected": false,
+          "hostOnline": false,
+          "activeComputerId": "",
+          "state": "Unavailable"
+        ]
+      )
+    case "pairRemoteComputer":
+      let code = params["code"] as? String ?? ""
+      guard !code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            let manager = remoteComputerManager else {
+        resolveNativeMessage(id: id, error: "Paste a ClawDad pairing code from the other computer.")
+        return
+      }
+      Task { @MainActor [weak self] in
+        do {
+          let profile = try await manager.pair(code: code)
+          self?.resolveNativeMessage(id: id, result: [
+            "paired": true,
+            "computer": profile.dictionary,
+            "status": manager.statusDictionary
+          ])
+        } catch is CancellationError {
+          self?.resolveNativeMessage(id: id, error: "Pairing was cancelled.")
+        } catch {
+          self?.resolveNativeMessage(id: id, error: error.localizedDescription)
+        }
+      }
+    case "openRemoteComputer":
+      let computerId = params["computerId"] as? String ?? ""
+      do {
+        try openRemoteComputer(computerId: computerId)
+        resolveNativeMessage(id: id, result: ["opened": true])
+      } catch {
+        resolveNativeMessage(id: id, error: error.localizedDescription)
+      }
+    case "forgetRemoteComputer":
+      let computerId = params["computerId"] as? String ?? ""
+      do {
+        try remoteComputerManager?.forget(computerId: computerId)
+        resolveNativeMessage(
+          id: id,
+          result: remoteComputerManager?.statusDictionary ?? [:]
+        )
+      } catch {
+        resolveNativeMessage(id: id, error: error.localizedDescription)
+      }
     case "getDesktopAppStatus":
       resolveNativeMessage(id: id, result: desktopAppStatus())
     case "checkForUpdates":
@@ -1051,7 +1117,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
       "Screen Recording: \(remoteStatus?.screenRecordingGranted == true ? "allowed" : "required")",
       "Control Access: \(remoteStatus?.accessibilityGranted == true ? "allowed" : "required")",
       "Relay connected: \(remoteStatus?.relayConnected == true ? "yes" : "no")",
-      "Remote session active: \(remoteStatus?.active == true ? "yes" : "no")"
+      "Remote session active: \(remoteStatus?.active == true ? "yes" : "no")",
+      "Paired computers available to control: \(remoteComputerManager?.profiles.count ?? 0)",
+      "Remote computer connection: \(remoteComputerManager?.connectionState.label ?? "unavailable")"
     ]
     return lines.joined(separator: "\n")
   }
@@ -1088,6 +1156,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     }
     webView?.evaluateJavaScript(
       "window.dispatchEvent(new CustomEvent('clawdad-native-remote-assist-status', { detail: \(json) }));"
+    )
+  }
+
+  private func openRemoteComputer(computerId: String) throws {
+    guard let manager = remoteComputerManager,
+          let profile = manager.profiles.first(where: { $0.id == computerId }) else {
+      throw MacRemoteComputerError.profileNotFound
+    }
+    guard profile.supportsRemoteAssist else {
+      throw MacRemoteComputerError.remoteAssistUnavailable
+    }
+    remoteAssistWindowController?.closeSession()
+    let client = MacRemoteAssistClient(manager: manager)
+    let controller = MacRemoteAssistWindowController(
+      client: client,
+      computer: profile
+    )
+    controller.onClose = { [weak self, weak controller] in
+      guard self?.remoteAssistWindowController === controller else {
+        return
+      }
+      self?.remoteAssistWindowController = nil
+      self?.remoteAssistClient = nil
+    }
+    remoteAssistClient = client
+    remoteAssistWindowController = controller
+    controller.open()
+  }
+
+  private func publishRemoteComputerStatus() {
+    guard let status = remoteComputerManager?.statusDictionary,
+          let data = try? JSONSerialization.data(withJSONObject: status),
+          let json = String(data: data, encoding: .utf8) else {
+      return
+    }
+    webView?.evaluateJavaScript(
+      "window.dispatchEvent(new CustomEvent('clawdad-native-remote-computers-status', { detail: \(json) }));"
     )
   }
 
