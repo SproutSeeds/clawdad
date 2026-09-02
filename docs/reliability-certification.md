@@ -98,7 +98,7 @@ build 36 and iPhone build 33.
 | Controller-only readiness | Pending | Choose controller-only on a Mac without local Codex and confirm setup completes without an install or release request |
 | Mac laptop to Studio pairing | Pending | Install build 36 from clawdad.earth, pair with a fresh Studio code, and open the Studio in native Remote Assist |
 | Studio to Mac laptop pairing | Pending | Repeat with a fresh laptop code and confirm the Studio can open the laptop independently |
-| Fresh TestFlight install | Pending | Build 33 launches to the subscription or pairing surface without stale workspace flash |
+| Fresh TestFlight install | Pending | The connected iPhone reported build 32 in the beta 14 release snapshot; update through TestFlight and confirm build 33 launches to the subscription or pairing surface without stale workspace flash |
 | Purchase monthly | Pending | Sandbox purchase grants iPhone access and syncs verified access to Mac |
 | Restore purchase | Pending | Reinstall or sign-out path restores access |
 | Cancel renewal | Pending | Access remains through expiration; status updates without exposing transaction data |

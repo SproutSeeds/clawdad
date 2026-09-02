@@ -101,6 +101,11 @@ embedding these binaries in the website deployment.
   exactly one local server and one relay worker as direct children, listened on
   port 4487, reported runtime beta 14 with the shared Codex app-server ready,
   and established an outbound relay connection.
+- The privacy-safe certification snapshot reports the beta 14 runtime, release
+  source, local Mac build 36, cloud service, and internal TestFlight build as
+  ready. The connected iPhone is still on build 32, so device-build readiness
+  and physical certification correctly remain pending until build 33 is
+  installed from TestFlight.
 - Apple accepted notarization submissions
   `726f5d96-cf23-4b68-85f5-f5e07e308b89` and
   `1be4be18-cbf9-4619-b334-5cb144edbc0c` for the Apple-silicon ZIP and DMG,
@@ -118,9 +123,9 @@ embedding these binaries in the website deployment.
 - Pair laptop to Studio and Studio to laptop with separate fresh codes. Confirm
   native Remote Assist, display selection, Terminal tabs, pointer alignment,
   typing, clipboard, Command-Tab, and Command-T in both directions.
-- Keep TestFlight build 33 on the iPhone, pair both Macs, and confirm each host
-  restores its own project and thread before Direct, Queue, directory creation,
-  Read Aloud, and Remote Assist actions.
+- Update the connected iPhone from build 32 to TestFlight build 33, pair both
+  Macs, and confirm each host restores its own project and thread before Direct,
+  Queue, directory creation, Read Aloud, and Remote Assist actions.
 - Repeat connection recovery from Wi-Fi to cellular and on a restrictive
   network.
 
