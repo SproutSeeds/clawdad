@@ -13,6 +13,7 @@ const disconnectOnce = scenario === "disconnect-once";
 const foreignApproval = scenario === "foreign-approval";
 const crashAfterAccept = scenario === "crash-after-accept";
 const nonSteerable = scenario === "non-steerable";
+const historyUnavailable = ["history-unavailable", "history-unavailable-active"].includes(scenario);
 const httpServer = createServer();
 const webSocketServer = new WebSocketServer({ server: httpServer });
 const completedTurns = new Map();
@@ -23,6 +24,8 @@ let didDisconnect = false;
 let foreignTurnActive = foreignApproval;
 let didScheduleForeignApproval = false;
 let nonSteerableTurnActive = nonSteerable;
+let historyUnavailableTurnActive = scenario === "history-unavailable-active";
+let didScheduleHistoryUnavailableTurn = false;
 
 function log(value) {
   appendFileSync(eventLogPath, `${JSON.stringify(value)}\n`, "utf8");
@@ -38,14 +41,15 @@ function thread() {
     id: "thread-test",
     source: "cli",
     path: null,
-    status: active || disconnectedActive || foreignTurnActive || nonSteerableTurnActive || inProgressTurns.size > 0
+    status: active || disconnectedActive || foreignTurnActive || nonSteerableTurnActive || historyUnavailableTurnActive || inProgressTurns.size > 0
       ? { type: "active", activeFlags: [] }
       : { type: "idle" },
-    canAcceptDirectInput: active || disconnectedActive || foreignTurnActive || nonSteerableTurnActive || inProgressTurns.size > 0,
+    canAcceptDirectInput: active || disconnectedActive || foreignTurnActive || nonSteerableTurnActive || historyUnavailableTurnActive || inProgressTurns.size > 0,
     turns: [
       ...(active ? [{ id: "turn-active", status: "inProgress", items: [] }] : []),
       ...(foreignTurnActive ? [{ id: "turn-terminal", status: "inProgress", items: [] }] : []),
       ...(nonSteerableTurnActive ? [{ id: "turn-review", status: "inProgress", items: [] }] : []),
+      ...(historyUnavailableTurnActive ? [{ id: "turn-history-hidden", status: "inProgress", items: [] }] : []),
       ...(disconnectedTurn ? [disconnectedTurn] : []),
       ...inProgressTurns.values(),
       ...completedTurns.values(),
@@ -116,6 +120,13 @@ webSocketServer.on("connection", (socket) => {
     }
     if (message.method === "thread/resume" || message.method === "thread/start") {
       send(socket, { id: message.id, result: { thread: thread() } });
+      if (historyUnavailableTurnActive && !didScheduleHistoryUnavailableTurn) {
+        didScheduleHistoryUnavailableTurn = true;
+        setTimeout(() => {
+          historyUnavailableTurnActive = false;
+          log({ type: "historyUnavailableTurnCompleted", turnId: "turn-history-hidden" });
+        }, 125);
+      }
       if (foreignApproval && !didScheduleForeignApproval) {
         didScheduleForeignApproval = true;
         setTimeout(() => {
@@ -330,7 +341,19 @@ webSocketServer.on("connection", (socket) => {
       return;
     }
     if (message.method === "thread/read") {
-      send(socket, { id: message.id, result: { thread: thread() } });
+      if (historyUnavailable && message.params?.includeTurns === true) {
+        send(socket, { id: message.id, error: { message: "list_turns is not supported yet" } });
+        return;
+      }
+      const currentThread = thread();
+      send(socket, {
+        id: message.id,
+        result: {
+          thread: historyUnavailable
+            ? { ...currentThread, turns: [] }
+            : currentThread,
+        },
+      });
       return;
     }
     send(socket, { id: message.id, error: { message: `unsupported test method: ${message.method}` } });

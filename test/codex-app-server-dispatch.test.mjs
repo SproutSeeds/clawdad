@@ -1952,6 +1952,100 @@ test("shared direct dispatch starts an idle turn with the stable request id", as
   });
 });
 
+test("shared dispatch falls back to summary reads when Codex turn history is unavailable", async () => {
+  await withTempDir(async (root) => {
+    await withFakeSharedAppServer(root, { scenario: "history-unavailable" }, async ({ socketPath, snapshot }) => {
+      const result = await execFileCapture(process.execPath, [
+        dispatchScript,
+        "--project-path",
+        root,
+        "--message",
+        "Start this while persisted turn history is unavailable.",
+        "--session-id",
+        "thread-test",
+        "--session-seeded",
+        "--app-server-mode",
+        "shared",
+        "--app-server-socket",
+        socketPath,
+        "--dispatch-mode",
+        "direct",
+        "--request-id",
+        "request-history-unavailable",
+        "--codex-binary",
+        path.join(root, "codex-must-not-be-spawned"),
+        "--turn-timeout-ms",
+        "2000",
+        "--request-timeout-ms",
+        "1000",
+        "--liveness-interval-ms",
+        "50",
+      ], { timeout: 10000 });
+
+      assert.equal(result.stderr, "");
+      assert.equal(result.exitCode, 0, result.stdout || result.stderr);
+      const output = JSON.parse(result.stdout.trim());
+      assert.equal(output.result_text, "shared start response");
+      assert.equal(output.delivery_mode, "start");
+      const state = await snapshot();
+      const threadReads = state.requests.filter((entry) => entry.method === "thread/read");
+      assert.equal(threadReads[0]?.params?.includeTurns, true);
+      assert.ok(threadReads.some((entry) => entry.params?.includeTurns === undefined));
+      assert.equal(state.requests.filter((entry) => entry.method === "turn/start").length, 1);
+    });
+  });
+});
+
+test("summary-only shared dispatch waits for an active thread before starting", async () => {
+  await withTempDir(async (root) => {
+    await withFakeSharedAppServer(root, { scenario: "history-unavailable-active" }, async ({ socketPath, snapshot }) => {
+      const result = await execFileCapture(process.execPath, [
+        dispatchScript,
+        "--project-path",
+        root,
+        "--message",
+        "Run after the hidden active turn becomes idle.",
+        "--session-id",
+        "thread-test",
+        "--session-seeded",
+        "--app-server-mode",
+        "shared",
+        "--app-server-socket",
+        socketPath,
+        "--dispatch-mode",
+        "direct",
+        "--request-id",
+        "request-history-unavailable-active",
+        "--codex-binary",
+        path.join(root, "codex-must-not-be-spawned"),
+        "--turn-timeout-ms",
+        "3000",
+        "--request-timeout-ms",
+        "1000",
+        "--liveness-interval-ms",
+        "50",
+      ], { timeout: 10000 });
+
+      assert.equal(result.stderr, "");
+      assert.equal(result.exitCode, 0, result.stdout || result.stderr);
+      const output = JSON.parse(result.stdout.trim());
+      assert.equal(output.result_text, "shared start response");
+      assert.equal(output.delivery_mode, "deferred_start");
+      const state = await snapshot();
+      const activeTurnCompletedIndex = state.entries.findIndex((entry) => (
+        entry.type === "historyUnavailableTurnCompleted"
+      ));
+      const ownStartIndex = state.entries.findIndex((entry) => (
+        entry.type === "request" && entry.message?.method === "turn/start"
+      ));
+      assert.ok(activeTurnCompletedIndex >= 0);
+      assert.ok(ownStartIndex > activeTurnCompletedIndex);
+      assert.equal(state.requests.some((entry) => entry.method === "turn/steer"), false);
+      assert.equal(state.requests.filter((entry) => entry.method === "turn/start").length, 1);
+    });
+  });
+});
+
 test("shared direct dispatch defers a structured non-steerable turn and starts safely when idle", async () => {
   await withTempDir(async (root) => {
     await withFakeSharedAppServer(root, { scenario: "non-steerable" }, async ({ socketPath, snapshot }) => {
