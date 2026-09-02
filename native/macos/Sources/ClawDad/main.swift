@@ -87,6 +87,9 @@ final class ClawDadService {
   let tokenFile: URL
   let token: String
   let runtimeVersion: String
+  private let processLock = NSLock()
+  private var managedServerProcess: Process?
+  private var managedCloudHostProcess: Process?
 
   init() throws {
     let supportDir = try Self.applicationSupportDir()
@@ -116,6 +119,13 @@ final class ClawDadService {
   func start(status: @escaping (String) -> Void, ready: @escaping (Result<URL, Error>) -> Void) {
     DispatchQueue.global(qos: .userInitiated).async {
       do {
+        // Builds through 34 registered the managed runtime directly with
+        // launchd. That detached Node from the signed app which prevented
+        // macOS from attributing removable-volume consent to ClawDad. Migrate
+        // those transient jobs before choosing a port; the replacement stays
+        // a child of this app for its entire lifetime.
+        Self.removeManagedService(label: Self.managedCloudServiceLabel)
+        Self.removeManagedService(label: Self.managedServiceLabel)
         status("Checking local ClawDad service...")
         let port = self.choosePort()
         if let health = self.health(port: port), health.ok, health.service == "clawdad-server" {
@@ -144,8 +154,16 @@ final class ClawDadService {
   }
 
   func stop() {
-    // The loopback helper stays alive under launchd so reopening the window is
-    // immediate and paired-phone chat remains available.
+    processLock.lock()
+    let processes = [managedCloudHostProcess, managedServerProcess].compactMap { $0 }
+    managedCloudHostProcess = nil
+    managedServerProcess = nil
+    processLock.unlock()
+    for process in processes where process.isRunning {
+      process.terminate()
+    }
+    Self.removeManagedService(label: Self.managedCloudServiceLabel)
+    Self.removeManagedService(label: Self.managedServiceLabel)
   }
 
   private func choosePort() -> Int {
@@ -279,26 +297,13 @@ final class ClawDadService {
     try stdoutHandle.close()
     try stderrHandle.close()
 
-    Self.removeManagedService(label: Self.managedServiceLabel)
-
     let environment = Self.serverEnvironment(
       repoRoot: repoRoot,
       tokenFile: tokenFile
     )
     let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+    process.executableURL = nodeURL
     process.arguments = [
-      "submit",
-      "-l", Self.managedServiceLabel,
-      "-o", stdout.path,
-      "-e", stderr.path,
-      "--",
-      "/usr/bin/env"
-    ] + Self.launchEnvironmentArguments(
-      environment,
-      extra: ["CLAWDAD_NATIVE_RUNTIME_VERSION": runtimeVersion]
-    ) + [
-      nodeURL.path,
       serverPath.path,
       "serve",
       "--host", localHost,
@@ -306,27 +311,22 @@ final class ClawDadService {
       "--auth-mode", "token",
       "--token-file", tokenFile.path
     ]
-    let launchOutput = Pipe()
-    process.standardOutput = launchOutput
-    process.standardError = launchOutput
+    process.currentDirectoryURL = repoRoot
+    process.environment = environment.merging([
+      "CLAWDAD_NATIVE_RUNTIME_VERSION": runtimeVersion
+    ]) { _, replacement in replacement }
+    let serviceStdoutHandle = try FileHandle(forWritingTo: stdout)
+    let serviceStderrHandle = try FileHandle(forWritingTo: stderr)
+    try serviceStdoutHandle.seekToEnd()
+    try serviceStderrHandle.seekToEnd()
+    process.standardOutput = serviceStdoutHandle
+    process.standardError = serviceStderrHandle
     try process.run()
-    process.waitUntilExit()
-    guard process.terminationStatus == 0 else {
-      let detail = String(
-        data: launchOutput.fileHandleForReading.readDataToEndOfFile(),
-        encoding: .utf8
-      )?.trimmingCharacters(in: .whitespacesAndNewlines)
-      throw NSError(
-        domain: "ClawDad",
-        code: 6,
-        userInfo: [
-          NSLocalizedDescriptionKey:
-            detail?.isEmpty == false
-              ? "Could not start ClawDad helper: \(detail!)"
-              : "Could not start ClawDad helper."
-        ]
-      )
-    }
+    try? serviceStdoutHandle.close()
+    try? serviceStderrHandle.close()
+    processLock.lock()
+    managedServerProcess = process
+    processLock.unlock()
   }
 
   private func startManagedCloudHostIfNeeded(
@@ -373,52 +373,35 @@ final class ClawDadService {
     FileManager.default.createFile(atPath: stdout.path, contents: nil)
     FileManager.default.createFile(atPath: stderr.path, contents: nil)
 
-    Self.removeManagedService(label: Self.managedCloudServiceLabel)
     let environment = Self.serverEnvironment(
       repoRoot: repoRoot,
       tokenFile: tokenFile
     )
     let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+    process.executableURL = nodeURL
     process.arguments = [
-      "submit",
-      "-l", Self.managedCloudServiceLabel,
-      "-o", stdout.path,
-      "-e", stderr.path,
-      "--",
-      "/usr/bin/env"
-    ] + Self.launchEnvironmentArguments(
-      environment,
-      extra: ["CLAWDAD_NATIVE_RUNTIME_VERSION": runtimeVersion]
-    ) + [
-      nodeURL.path,
       serverPath.path,
       "cloud-host",
       "--config", configURL.path,
       "--local-url", baseURL(port: port).absoluteString,
       "--local-token-file", tokenFile.path
     ]
-    let launchOutput = Pipe()
-    process.standardOutput = launchOutput
-    process.standardError = launchOutput
+    process.currentDirectoryURL = repoRoot
+    process.environment = environment.merging([
+      "CLAWDAD_NATIVE_RUNTIME_VERSION": runtimeVersion
+    ]) { _, replacement in replacement }
+    let cloudStdoutHandle = try FileHandle(forWritingTo: stdout)
+    let cloudStderrHandle = try FileHandle(forWritingTo: stderr)
+    try cloudStdoutHandle.seekToEnd()
+    try cloudStderrHandle.seekToEnd()
+    process.standardOutput = cloudStdoutHandle
+    process.standardError = cloudStderrHandle
     try process.run()
-    process.waitUntilExit()
-    guard process.terminationStatus == 0 else {
-      let detail = String(
-        data: launchOutput.fileHandleForReading.readDataToEndOfFile(),
-        encoding: .utf8
-      )?.trimmingCharacters(in: .whitespacesAndNewlines)
-      throw NSError(
-        domain: "ClawDad",
-        code: 8,
-        userInfo: [
-          NSLocalizedDescriptionKey:
-            detail?.isEmpty == false
-              ? "Could not start paired-phone connector: \(detail!)"
-              : "Could not start paired-phone connector."
-        ]
-      )
-    }
+    try? cloudStdoutHandle.close()
+    try? cloudStderrHandle.close()
+    processLock.lock()
+    managedCloudHostProcess = process
+    processLock.unlock()
   }
 
   private func appendNativeCloudHostDiagnostic(_ message: String) {
@@ -489,6 +472,7 @@ final class ClawDadService {
     environment["CLAWDAD_ROOT"] = repoRoot.path
     environment["CLAWDAD_SERVER_TOKEN_FILE"] = tokenFile.path
     environment["CLAWDAD_DISABLE_DELEGATE_SUPERVISOR_RESUME"] = "1"
+    environment["CLAWDAD_DISABLE_QUEUED_DISPATCH_RESUME"] = "1"
     let codexHome = environment["CODEX_HOME"]?.trimmingCharacters(
       in: .whitespacesAndNewlines
     ) ?? ""
@@ -513,6 +497,7 @@ final class ClawDadService {
       "CLAWDAD_ROOT",
       "CLAWDAD_SERVER_TOKEN_FILE",
       "CLAWDAD_DISABLE_DELEGATE_SUPERVISOR_RESUME",
+      "CLAWDAD_DISABLE_QUEUED_DISPATCH_RESUME",
       "CLAWDAD_ORP",
       "CLAWDAD_CODEX",
       "CLAWDAD_CODEX_HOME",

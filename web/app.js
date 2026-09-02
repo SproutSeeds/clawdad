@@ -14641,6 +14641,9 @@ async function refreshForegroundState() {
   if (document.visibilityState === "hidden") {
     return;
   }
+  if (systemSetupIsOpen()) {
+    return;
+  }
   if (state.foregroundRefreshPromise) {
     return state.foregroundRefreshPromise;
   }
@@ -17987,15 +17990,20 @@ async function boot() {
   renderAll();
   void refreshTtsStatus({ quiet: true });
   void refreshDesktopAppStatus({ quiet: true });
-  void refreshSystemReadiness({ quiet: true });
+  await refreshSystemReadiness({ quiet: true });
 
-  try {
-    await refreshProjects();
-  } catch (error) {
-    showError(error);
+  if (!systemSetupIsOpen()) {
+    try {
+      await refreshProjects();
+    } catch (error) {
+      showError(error);
+    }
   }
 
   window.setInterval(async () => {
+    if (systemSetupIsOpen()) {
+      return;
+    }
     try {
       await refreshProjects();
       await refreshProjectSummaries();
@@ -18007,6 +18015,9 @@ async function boot() {
   }, autoRefreshMs);
 
   window.setInterval(async () => {
+    if (systemSetupIsOpen()) {
+      return;
+    }
     try {
       await refreshProjectSummaries();
       await refreshDelegates();

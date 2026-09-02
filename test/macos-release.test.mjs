@@ -38,7 +38,7 @@ const releaseNotesPath = path.join(
   repoRoot,
   "docs",
   "releases",
-  "0.7.0-beta.12.md",
+  "0.7.0-beta.13.md",
 );
 const packagePath = path.join(repoRoot, "package.json");
 
@@ -61,9 +61,9 @@ test("Mac release pipeline signs, notarizes, staples, and publishes Sparkle arti
     readFile(packagePath, "utf8"),
   ]);
 
-  assert.match(packageSource, /"version": "0\.7\.0-beta\.12"/u);
+  assert.match(packageSource, /"version": "0\.7\.0-beta\.13"/u);
   assert.match(releaseNotes, /ClawDad 0\.7 Native Beta/u);
-  assert.match(releaseScript, /CLAWDAD_APP_BUILD:-34/u);
+  assert.match(releaseScript, /CLAWDAD_APP_BUILD:-35/u);
   assert.match(releaseScript, /CLAWDAD_RELEASE_ARTIFACT_SUFFIX/u);
   assert.match(releaseScript, /CLAWDAD_MAC_ARCH="\$mac_arch"/u);
   assert.match(releaseScript, /Developer ID Application/u);

@@ -59,7 +59,10 @@ private struct MacCapturedCommand {
 
 final class MacSystemReadiness {
   private static let roleKey = "clawdad.setup.role.v1"
-  private static let completedKey = "clawdad.setup.completed.v1"
+  // v2 adds an explicit user-selected project folder before any managed
+  // runtime scans a removable volume. Existing native-beta installs revisit
+  // the assistant once so macOS can attribute that consent to ClawDad.
+  private static let completedKey = "clawdad.setup.completed.v2"
   private static let officialCodexInstaller = URL(
     string: "https://chatgpt.com/codex/install.sh"
   )!

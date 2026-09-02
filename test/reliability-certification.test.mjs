@@ -102,7 +102,7 @@ test("physical evidence requires the exact paired iPhone and Mac release", () =>
     expectedIosVersion: "0.7.0",
     expectedIosBuild: "33",
     expectedMacVersion: "0.7.0",
-    expectedMacBuild: "34",
+    expectedMacBuild: "35",
   };
   assert.equal(installedIosBuildMatchesRelease({
     version: "0.7.0",
@@ -122,7 +122,7 @@ test("physical evidence requires the exact paired iPhone and Mac release", () =>
   assert.equal(installedMacBuildMatchesRelease({
     installed: true,
     version: "0.7.0",
-    build: "34",
+    build: "35",
   }, release), true);
   assert.equal(installedMacBuildMatchesRelease({
     installed: true,
@@ -135,12 +135,12 @@ test("certification readiness requires the exact published iPhone and Mac builds
   const snapshot = {
     release: {
       distributionMode: "native-private",
-      expectedVersion: "0.7.0-beta.12",
-      expectedRuntimeVersion: "0.7.0-beta.12",
+      expectedVersion: "0.7.0-beta.13",
+      expectedRuntimeVersion: "0.7.0-beta.13",
       expectedIosVersion: "0.7.0",
       expectedIosBuild: "33",
       expectedMacVersion: "0.7.0",
-      expectedMacBuild: "34",
+      expectedMacBuild: "35",
       npm: { skipped: true },
     },
     mac: {
@@ -148,9 +148,9 @@ test("certification readiness requires the exact published iPhone and Mac builds
       installedApp: {
         installed: true,
         version: "0.7.0",
-        build: "34",
+        build: "35",
       },
-      installedRuntimeVersion: "0.7.0-beta.12",
+      installedRuntimeVersion: "0.7.0-beta.13",
     },
     cloud: {
       health: { ok: true },
@@ -207,7 +207,7 @@ test("certification readiness requires the exact published iPhone and Mac builds
     false,
   );
   assert.equal(summarizeCertificationSnapshot(snapshot).macBuildReady, false);
-  snapshot.mac.installedApp.build = "34";
+  snapshot.mac.installedApp.build = "35";
 
   snapshot.iphone.targetDevice.installedApp.build = "15";
   assert.equal(

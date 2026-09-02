@@ -6,7 +6,7 @@ repo_root=${script_dir:h:h}
 app_name="ClawDad"
 bundle_id="earth.frg.ClawDad"
 app_version="${CLAWDAD_APP_VERSION:-0.7.0}"
-app_build="${CLAWDAD_APP_BUILD:-34}"
+app_build="${CLAWDAD_APP_BUILD:-35}"
 target_arch="${CLAWDAD_MAC_ARCH:-$(uname -m)}"
 node_version="${CLAWDAD_BUNDLED_NODE_VERSION:-24.20.0}"
 node_download_root="${CLAWDAD_NODE_DOWNLOAD_ROOT:-https://nodejs.org/download/release}"
@@ -237,6 +237,14 @@ cat > "$app_dir/Contents/Info.plist" <<PLIST
   <true/>
   <key>NSMicrophoneUsageDescription</key>
   <string>ClawDad uses the microphone to record voice messages and transcribe them into the composer.</string>
+  <key>NSRemovableVolumesUsageDescription</key>
+  <string>ClawDad accesses project folders you choose on external drives so it can open Codex threads and create project directories there.</string>
+  <key>NSDesktopFolderUsageDescription</key>
+  <string>ClawDad accesses a Desktop project folder only when you choose it as a workspace.</string>
+  <key>NSDocumentsFolderUsageDescription</key>
+  <string>ClawDad accesses a Documents project folder only when you choose it as a workspace.</string>
+  <key>NSDownloadsFolderUsageDescription</key>
+  <string>ClawDad accesses a Downloads project folder only when you choose it as a workspace.</string>
   <key>NSScreenCaptureUsageDescription</key>
   <string>ClawDad shares the display you choose only during a Remote Assist session you start from your paired iPhone.</string>
   <key>NSAppleEventsUsageDescription</key>
