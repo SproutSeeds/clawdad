@@ -750,6 +750,9 @@
             <div id="settingsDesktopAppStatus" class="settings-pairing-status" aria-live="polite"></div>
             <div id="settingsSubscriptionStatus" class="settings-entitlement-status" aria-live="polite"></div>
             <div class="settings-desktop-actions">
+              <button id="settingsOpenSetupButton" class="detail-action-button" type="button">
+                <span class="button-text">Setup Assistant</span>
+              </button>
               <button id="settingsCheckUpdatesButton" class="detail-action-button is-quiet" type="button">
                 <svg viewBox="0 0 18 18" fill="none" aria-hidden="true">
                   <path d="M14.1 5.2A5.8 5.8 0 0 0 4.25 4.1L3 5.35M3.85 12.8a5.8 5.8 0 0 0 9.85 1.1l1.3-1.25" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"></path>
@@ -1007,6 +1010,94 @@
             </button>
           </div>
         </div>
+      </section>
+    </div>
+
+    <div id="systemSetupModal" class="system-setup-modal" hidden>
+      <section class="system-setup-panel" role="dialog" aria-modal="true" aria-labelledby="systemSetupTitle">
+        <header class="system-setup-header">
+          <button id="systemSetupBackButton" class="system-setup-back" type="button" aria-label="Back">
+            <span aria-hidden="true">‹</span>
+            <span>Back</span>
+          </button>
+          <div>
+            <div class="system-setup-eyebrow">ClawDad setup</div>
+            <h1 id="systemSetupTitle">Prepare this Mac</h1>
+          </div>
+          <div id="systemSetupProgress" class="system-setup-progress" aria-live="polite">1 of 4</div>
+        </header>
+
+        <div class="system-setup-body">
+          <section id="systemSetupRoleStep" class="system-setup-step" aria-labelledby="systemSetupRoleTitle">
+            <h2 id="systemSetupRoleTitle">How will you use this Mac?</h2>
+            <p>ClawDad uses this choice to prepare only the local capabilities this computer needs.</p>
+            <div class="system-role-grid" role="radiogroup" aria-label="Computer role">
+              <button class="system-role-card" type="button" data-system-role="both" role="radio" aria-checked="false">
+                <strong>Codex + controller</strong>
+                <span>Work locally, pair your iPhone, and control other ClawDad computers.</span>
+              </button>
+              <button class="system-role-card" type="button" data-system-role="host" role="radio" aria-checked="false">
+                <strong>Codex host</strong>
+                <span>Run Codex projects and make this Mac available to paired devices.</span>
+              </button>
+              <button class="system-role-card" type="button" data-system-role="controller" role="radio" aria-checked="false">
+                <strong>Controller only</strong>
+                <span>Use this Mac to reach another ClawDad computer without setting up Codex locally.</span>
+              </button>
+            </div>
+          </section>
+
+          <section id="systemSetupRuntimeStep" class="system-setup-step" aria-labelledby="systemSetupRuntimeTitle" hidden>
+            <h2 id="systemSetupRuntimeTitle">System readiness</h2>
+            <p>ClawDad carries its own Node and ORP runtimes. Codex uses the official OpenAI installer and your shared Terminal login.</p>
+            <div class="system-readiness-list">
+              <div class="system-readiness-row">
+                <div><strong>Managed Node</strong><span id="systemSetupNodeDetail">Checking bundled runtime…</span></div>
+                <span id="systemSetupNodeState" class="system-readiness-state">Checking</span>
+              </div>
+              <div class="system-readiness-row">
+                <div><strong>Managed ORP</strong><span id="systemSetupOrpDetail">Checking bundled runtime…</span></div>
+                <span id="systemSetupOrpState" class="system-readiness-state">Checking</span>
+              </div>
+              <div id="systemSetupCodexRow" class="system-readiness-row">
+                <div><strong>Codex CLI</strong><span id="systemSetupCodexDetail">Checking ~/.local/bin and shared Codex home…</span></div>
+                <span id="systemSetupCodexState" class="system-readiness-state">Checking</span>
+              </div>
+            </div>
+            <div id="systemSetupCodexActions" class="system-setup-inline-actions">
+              <button id="systemSetupInstallCodexButton" class="detail-action-button" type="button">Install official Codex</button>
+              <button id="systemSetupLoginCodexButton" class="detail-action-button" type="button">Sign in with ChatGPT</button>
+              <button id="systemSetupRefreshButton" class="detail-action-button is-quiet" type="button">Refresh</button>
+            </div>
+            <div id="systemSetupRuntimeStatus" class="system-setup-status" aria-live="polite"></div>
+          </section>
+
+          <section id="systemSetupWorkspaceStep" class="system-setup-step" aria-labelledby="systemSetupWorkspaceTitle" hidden>
+            <h2 id="systemSetupWorkspaceTitle">Choose the project home</h2>
+            <p id="systemSetupWorkspaceText">New project directories and local Codex threads will be scoped to this Mac and this folder.</p>
+            <div class="system-setup-folder-row">
+              <label class="sr-only" for="systemSetupWorkspaceInput">Projects folder</label>
+              <input id="systemSetupWorkspaceInput" type="text" autocomplete="off" spellcheck="false" placeholder="/Volumes/Code_2TB/code">
+              <button id="systemSetupWorkspaceChooseButton" class="detail-action-button" type="button">Browse</button>
+            </div>
+            <div id="systemSetupWorkspaceStatus" class="system-setup-status" aria-live="polite"></div>
+          </section>
+
+          <section id="systemSetupFinishStep" class="system-setup-step" aria-labelledby="systemSetupFinishTitle" hidden>
+            <h2 id="systemSetupFinishTitle">Ready to pair and work</h2>
+            <p id="systemSetupFinishText">This Mac is ready for local Codex threads and secure Remote Assist pairing.</p>
+            <div class="system-finish-list">
+              <div><strong>iPhone and Mac controllers</strong><span>Use Settings → Device Pairing → Allow a Device.</span></div>
+              <div><strong>Remote Assist</strong><span>Enable it in Settings and approve Screen Recording and Control Access when requested.</span></div>
+              <div><strong>Terminal continuity</strong><span>Codex and ClawDad share ~/.codex, so <code>codex resume</code> sees this Mac's local threads.</span></div>
+            </div>
+          </section>
+        </div>
+
+        <footer class="system-setup-footer">
+          <div id="systemSetupFooterStatus" class="system-setup-status" aria-live="polite"></div>
+          <button id="systemSetupNextButton" class="thread-button" type="button">Continue</button>
+        </footer>
       </section>
     </div>
 

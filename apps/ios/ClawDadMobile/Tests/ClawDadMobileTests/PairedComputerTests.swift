@@ -73,6 +73,39 @@ final class PairedComputerTests: XCTestCase {
     )
   }
 
+  func testRegistryKeepsProjectAndThreadSelectionScopedToEachComputer() {
+    var studio = computer(
+      name: "Studio Mac",
+      platform: "macos",
+      workspaceId: "studio-workspace",
+      hostId: "studio-mac",
+      lastUsedAt: "2026-09-01T17:00:00Z"
+    )
+    studio.selectedProjectPath = "/Volumes/Code_2TB/code/clawdad"
+    studio.selectedSessionId = "studio-thread"
+    var laptop = computer(
+      name: "MacBook Pro",
+      platform: "macos",
+      workspaceId: "laptop-workspace",
+      hostId: "macbook-pro",
+      lastUsedAt: "2026-09-01T18:00:00Z"
+    )
+    laptop.selectedProjectPath = "/Users/example/code/website"
+    laptop.selectedSessionId = "laptop-thread"
+
+    let profiles = PairedComputerRegistry.normalized([studio, laptop])
+
+    XCTAssertEqual(profiles.count, 2)
+    XCTAssertEqual(
+      profiles.first(where: { $0.id == studio.id })?.selectedSessionId,
+      "studio-thread"
+    )
+    XCTAssertEqual(
+      profiles.first(where: { $0.id == laptop.id })?.selectedSessionId,
+      "laptop-thread"
+    )
+  }
+
   func testRegistryRoundTripStoresProfilesWithoutRelayCredentials() throws {
     let suiteName = "PairedComputerTests.\(UUID().uuidString)"
     let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))

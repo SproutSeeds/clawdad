@@ -163,6 +163,13 @@ const state = {
   desktopAppStatus: null,
   desktopAppPending: "",
   desktopAppMessage: "",
+  systemReadiness: null,
+  systemSetupStep: 0,
+  systemSetupForcedOpen: false,
+  systemSetupPending: "",
+  systemSetupStatus: "",
+  systemSetupWorkspaceDraft: "",
+  systemSetupPollTimer: null,
   subscriptionEntitlement: null,
   subscriptionEntitlementStatus: "",
   remoteAssistStatus: null,
@@ -221,6 +228,7 @@ const elements = {
   settingsDesktopAppVersion: document.querySelector("#settingsDesktopAppVersion"),
   settingsDesktopAppStatus: document.querySelector("#settingsDesktopAppStatus"),
   settingsSubscriptionStatus: document.querySelector("#settingsSubscriptionStatus"),
+  settingsOpenSetupButton: document.querySelector("#settingsOpenSetupButton"),
   settingsCheckUpdatesButton: document.querySelector("#settingsCheckUpdatesButton"),
   settingsOpenLogsButton: document.querySelector("#settingsOpenLogsButton"),
   settingsCopyDiagnosticsButton: document.querySelector("#settingsCopyDiagnosticsButton"),
@@ -255,6 +263,33 @@ const elements = {
   settingsRemoteComputersList: document.querySelector("#settingsRemoteComputersList"),
   settingsCancelButton: document.querySelector("#settingsCancelButton"),
   settingsSaveButton: document.querySelector("#settingsSaveButton"),
+  systemSetupModal: document.querySelector("#systemSetupModal"),
+  systemSetupBackButton: document.querySelector("#systemSetupBackButton"),
+  systemSetupProgress: document.querySelector("#systemSetupProgress"),
+  systemSetupRoleStep: document.querySelector("#systemSetupRoleStep"),
+  systemSetupRuntimeStep: document.querySelector("#systemSetupRuntimeStep"),
+  systemSetupWorkspaceStep: document.querySelector("#systemSetupWorkspaceStep"),
+  systemSetupFinishStep: document.querySelector("#systemSetupFinishStep"),
+  systemSetupRoleButtons: [...document.querySelectorAll("[data-system-role]")],
+  systemSetupNodeDetail: document.querySelector("#systemSetupNodeDetail"),
+  systemSetupNodeState: document.querySelector("#systemSetupNodeState"),
+  systemSetupOrpDetail: document.querySelector("#systemSetupOrpDetail"),
+  systemSetupOrpState: document.querySelector("#systemSetupOrpState"),
+  systemSetupCodexRow: document.querySelector("#systemSetupCodexRow"),
+  systemSetupCodexDetail: document.querySelector("#systemSetupCodexDetail"),
+  systemSetupCodexState: document.querySelector("#systemSetupCodexState"),
+  systemSetupCodexActions: document.querySelector("#systemSetupCodexActions"),
+  systemSetupInstallCodexButton: document.querySelector("#systemSetupInstallCodexButton"),
+  systemSetupLoginCodexButton: document.querySelector("#systemSetupLoginCodexButton"),
+  systemSetupRefreshButton: document.querySelector("#systemSetupRefreshButton"),
+  systemSetupRuntimeStatus: document.querySelector("#systemSetupRuntimeStatus"),
+  systemSetupWorkspaceText: document.querySelector("#systemSetupWorkspaceText"),
+  systemSetupWorkspaceInput: document.querySelector("#systemSetupWorkspaceInput"),
+  systemSetupWorkspaceChooseButton: document.querySelector("#systemSetupWorkspaceChooseButton"),
+  systemSetupWorkspaceStatus: document.querySelector("#systemSetupWorkspaceStatus"),
+  systemSetupFinishText: document.querySelector("#systemSetupFinishText"),
+  systemSetupFooterStatus: document.querySelector("#systemSetupFooterStatus"),
+  systemSetupNextButton: document.querySelector("#systemSetupNextButton"),
   directoryBrowserModal: document.querySelector("#directoryBrowserModal"),
   directoryBrowserBackdrop: document.querySelector("#directoryBrowserBackdrop"),
   directoryBrowserClose: document.querySelector("#directoryBrowserClose"),
@@ -572,6 +607,21 @@ const nativeBridge = (() => {
     },
     chooseFolder(params = {}) {
       return bridge.call("chooseFolder", params);
+    },
+    getSystemReadiness() {
+      return bridge.call("getSystemReadiness");
+    },
+    setComputerRole(role) {
+      return bridge.call("setComputerRole", { role: String(role || "") });
+    },
+    installCodex() {
+      return bridge.call("installCodex");
+    },
+    openCodexLogin() {
+      return bridge.call("openCodexLogin");
+    },
+    completeSystemSetup() {
+      return bridge.call("completeSystemSetup");
     },
     getRemoteAssistStatus() {
       return bridge.call("getRemoteAssistStatus");
@@ -2387,6 +2437,12 @@ function applyWorkspacePayload(workspace) {
   state.workspace = normalizeWorkspacePayload(workspace);
   if (!state.workspaceSetupDraft) {
     state.workspaceSetupDraft =
+      state.workspace.primaryRoot ||
+      state.workspace.suggestions[0] ||
+      "";
+  }
+  if (!state.systemSetupWorkspaceDraft) {
+    state.systemSetupWorkspaceDraft =
       state.workspace.primaryRoot ||
       state.workspace.suggestions[0] ||
       "";
@@ -7488,6 +7544,7 @@ function updateBodyModalState() {
       Boolean(state.sessionTitleModalProject) ||
       Boolean(state.settingsModalOpen) ||
       Boolean(state.directoryBrowserOpen) ||
+      systemSetupIsOpen() ||
       terminalPanelIsOpen() ||
       Boolean(state.queueArchiveConfirmEntryId),
   );
@@ -11220,6 +11277,10 @@ function renderDesktopAppSettings() {
   }
 
   const pending = state.desktopAppPending;
+  if (elements.settingsOpenSetupButton) {
+    elements.settingsOpenSetupButton.hidden = status?.platform === "windows";
+    elements.settingsOpenSetupButton.disabled = Boolean(pending);
+  }
   if (elements.settingsCheckUpdatesButton) {
     elements.settingsCheckUpdatesButton.disabled =
       Boolean(pending) || updateStatus.canCheckForUpdates === false;
@@ -11288,6 +11349,472 @@ async function refreshDesktopAppStatus({ quiet = false } = {}) {
     state.desktopAppPending = "";
     renderAll();
   }
+}
+
+function systemSetupIsOpen() {
+  return Boolean(
+    nativeBridge.isAvailable() &&
+    state.systemReadiness &&
+    (state.systemSetupForcedOpen || state.systemReadiness.setupRequired),
+  );
+}
+
+function applySystemReadiness(status = {}) {
+  state.systemReadiness = status && typeof status === "object" ? status : null;
+  if (!state.systemSetupWorkspaceDraft) {
+    state.systemSetupWorkspaceDraft = String(
+      state.workspace?.primaryRoot || state.workspace?.suggestions?.[0] || "",
+    );
+  }
+}
+
+function stopSystemSetupPolling() {
+  if (state.systemSetupPollTimer) {
+    window.clearTimeout(state.systemSetupPollTimer);
+    state.systemSetupPollTimer = null;
+  }
+}
+
+function scheduleSystemSetupPolling() {
+  stopSystemSetupPolling();
+  if (state.systemReadiness?.install?.state !== "installing") {
+    return;
+  }
+  state.systemSetupPollTimer = window.setTimeout(() => {
+    state.systemSetupPollTimer = null;
+    void refreshSystemReadiness({ quiet: true });
+  }, 1200);
+}
+
+async function refreshSystemReadiness({ quiet = false } = {}) {
+  if (!nativeBridge.isAvailable() || state.systemSetupPending === "status") {
+    return;
+  }
+  if (!quiet) {
+    state.systemSetupPending = "status";
+    state.systemSetupStatus = "Checking this Mac…";
+    renderAll();
+  }
+  try {
+    applySystemReadiness(await nativeBridge.getSystemReadiness());
+    state.systemSetupStatus = "";
+  } catch (error) {
+    state.systemSetupStatus = String(
+      error?.message || "ClawDad could not check this Mac.",
+    );
+    if (!quiet) {
+      showError(error);
+    }
+  } finally {
+    if (state.systemSetupPending === "status") {
+      state.systemSetupPending = "";
+    }
+    scheduleSystemSetupPolling();
+    renderAll();
+  }
+}
+
+async function openSystemSetupAssistant() {
+  state.systemSetupForcedOpen = true;
+  state.systemSetupStep = 0;
+  state.systemSetupStatus = "";
+  if (state.settingsModalOpen) {
+    closeSettingsModal({ restoreFocus: false });
+  }
+  await refreshSystemReadiness({ quiet: true });
+  renderAll();
+  focusSystemSetupStep();
+}
+
+function closeSystemSetupAssistant() {
+  if (state.systemReadiness?.setupRequired) {
+    return false;
+  }
+  state.systemSetupForcedOpen = false;
+  state.systemSetupStep = 0;
+  state.systemSetupStatus = "";
+  stopSystemSetupPolling();
+  renderAll();
+  elements.settingsOpenSetupButton?.focus();
+  return true;
+}
+
+function focusSystemSetupStep() {
+  window.requestAnimationFrame(() => {
+    const step = [
+      elements.systemSetupRoleStep,
+      elements.systemSetupRuntimeStep,
+      elements.systemSetupWorkspaceStep,
+      elements.systemSetupFinishStep,
+    ][state.systemSetupStep];
+    const heading = step?.querySelector("h2");
+    if (heading) {
+      heading.tabIndex = -1;
+      heading.focus({ preventScroll: true });
+    }
+  });
+}
+
+function setSystemSetupStep(nextStep) {
+  state.systemSetupStep = Math.max(0, Math.min(3, Number(nextStep) || 0));
+  state.systemSetupStatus = "";
+  renderAll();
+  focusSystemSetupStep();
+}
+
+function goBackSystemSetup() {
+  if (!systemSetupIsOpen()) {
+    return false;
+  }
+  if (state.systemSetupPending) {
+    return true;
+  }
+  if (state.systemSetupStep > 0) {
+    setSystemSetupStep(state.systemSetupStep - 1);
+    return true;
+  }
+  closeSystemSetupAssistant();
+  return true;
+}
+
+async function selectSystemSetupRole(role) {
+  if (!nativeBridge.isAvailable() || state.systemSetupPending) {
+    return;
+  }
+  state.systemSetupPending = "role";
+  state.systemSetupStatus = "Saving how this Mac will be used…";
+  renderAll();
+  try {
+    applySystemReadiness(await nativeBridge.setComputerRole(role));
+    state.systemSetupStatus = "";
+  } catch (error) {
+    state.systemSetupStatus = String(error?.message || "The computer role could not be saved.");
+    showError(error);
+  } finally {
+    state.systemSetupPending = "";
+    renderAll();
+  }
+}
+
+async function startSystemSetupCodexInstall() {
+  if (!nativeBridge.isAvailable() || state.systemSetupPending) {
+    return;
+  }
+  state.systemSetupPending = "install";
+  state.systemSetupStatus = "Starting the official Codex installer…";
+  renderAll();
+  try {
+    await nativeBridge.installCodex();
+    state.systemSetupStatus = "Codex is installing. ClawDad will refresh automatically.";
+    await refreshSystemReadiness({ quiet: true });
+  } catch (error) {
+    state.systemSetupStatus = String(error?.message || "Codex installation could not start.");
+    showError(error);
+  } finally {
+    state.systemSetupPending = "";
+    scheduleSystemSetupPolling();
+    renderAll();
+  }
+}
+
+async function openSystemSetupCodexLogin() {
+  if (!nativeBridge.isAvailable() || state.systemSetupPending) {
+    return;
+  }
+  state.systemSetupPending = "login";
+  state.systemSetupStatus = "Opening the Codex sign-in window…";
+  renderAll();
+  try {
+    await nativeBridge.openCodexLogin();
+    state.systemSetupStatus = "Finish signing in with ChatGPT, return here, then click Refresh.";
+  } catch (error) {
+    state.systemSetupStatus = String(error?.message || "Codex sign in could not open.");
+    showError(error);
+  } finally {
+    state.systemSetupPending = "";
+    renderAll();
+  }
+}
+
+async function chooseSystemSetupWorkspace() {
+  if (!nativeBridge.isAvailable() || state.systemSetupPending) {
+    return;
+  }
+  state.systemSetupPending = "workspace-picker";
+  state.systemSetupStatus = "Opening the folder picker…";
+  renderAll();
+  try {
+    const result = await nativeBridge.chooseFolder({
+      purpose: "setup",
+      defaultPath: state.systemSetupWorkspaceDraft || state.workspace?.suggestions?.[0] || "",
+    });
+    if (!result?.cancelled && result?.path) {
+      state.systemSetupWorkspaceDraft = String(result.path);
+      state.systemSetupStatus = "";
+    }
+  } catch (error) {
+    state.systemSetupStatus = String(error?.message || "The folder picker could not open.");
+    showError(error);
+  } finally {
+    state.systemSetupPending = "";
+    renderAll();
+  }
+}
+
+async function saveSystemSetupWorkspace() {
+  if (state.systemReadiness?.needsLocalCodex !== true) {
+    return true;
+  }
+  const primaryRoot = state.systemSetupWorkspaceDraft.trim();
+  if (!primaryRoot) {
+    state.systemSetupStatus = "Choose the folder that will contain this Mac's projects.";
+    renderAll();
+    return false;
+  }
+  state.systemSetupPending = "workspace";
+  state.systemSetupStatus = "Saving this Mac's project home…";
+  renderAll();
+  try {
+    const payload = await fetchJson("/v1/workspace", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        primaryRoot,
+        projectRoots: [primaryRoot],
+      }),
+    });
+    applyWorkspacePayload(payload.workspace);
+    state.systemSetupWorkspaceDraft = String(payload.workspace?.primaryRoot || primaryRoot);
+    state.systemSetupStatus = "";
+    await refreshProjectRoots();
+    await refreshProjects();
+    return true;
+  } catch (error) {
+    state.systemSetupStatus = String(error?.message || "The project home could not be saved.");
+    showError(error);
+    return false;
+  } finally {
+    state.systemSetupPending = "";
+    renderAll();
+  }
+}
+
+async function advanceSystemSetup() {
+  if (!systemSetupIsOpen() || state.systemSetupPending) {
+    return;
+  }
+  if (state.systemSetupStep === 0) {
+    setSystemSetupStep(1);
+    return;
+  }
+  if (state.systemSetupStep === 1) {
+    if (state.systemReadiness?.canComplete !== true) {
+      state.systemSetupStatus = state.systemReadiness?.needsLocalCodex
+        ? "Install Codex and sign in with ChatGPT to continue."
+        : "The managed ClawDad runtime is still being checked.";
+      renderAll();
+      return;
+    }
+    setSystemSetupStep(2);
+    return;
+  }
+  if (state.systemSetupStep === 2) {
+    if (await saveSystemSetupWorkspace()) {
+      setSystemSetupStep(3);
+    }
+    return;
+  }
+
+  state.systemSetupPending = "complete";
+  state.systemSetupStatus = "Finishing setup…";
+  renderAll();
+  try {
+    applySystemReadiness(await nativeBridge.completeSystemSetup());
+    state.systemSetupForcedOpen = false;
+    state.systemSetupStep = 0;
+    state.systemSetupStatus = "";
+    stopSystemSetupPolling();
+  } catch (error) {
+    state.systemSetupStatus = String(error?.message || "Setup could not be completed.");
+    showError(error);
+  } finally {
+    state.systemSetupPending = "";
+    renderAll();
+  }
+}
+
+function setSystemReadinessState(element, label, { ready = false, error = false } = {}) {
+  if (!element) {
+    return;
+  }
+  element.textContent = label;
+  element.classList.toggle("is-ready", ready);
+  element.classList.toggle("is-error", error);
+}
+
+function renderSystemSetupAssistant() {
+  if (!elements.systemSetupModal) {
+    return;
+  }
+  const open = systemSetupIsOpen();
+  elements.systemSetupModal.hidden = !open;
+  if (!open) {
+    return;
+  }
+
+  const readiness = state.systemReadiness || {};
+  const role = String(readiness.role || "both");
+  const needsCodex = readiness.needsLocalCodex === true;
+  const node = readiness.node || {};
+  const orp = readiness.orp || {};
+  const codex = readiness.codex || {};
+  const install = readiness.install || {};
+  const steps = [
+    elements.systemSetupRoleStep,
+    elements.systemSetupRuntimeStep,
+    elements.systemSetupWorkspaceStep,
+    elements.systemSetupFinishStep,
+  ];
+  steps.forEach((step, index) => {
+    if (step) {
+      step.hidden = index !== state.systemSetupStep;
+    }
+  });
+  setText(elements.systemSetupProgress, `${state.systemSetupStep + 1} of 4`, { empty: false });
+
+  const canClose = readiness.setupRequired !== true && state.systemSetupStep === 0;
+  if (elements.systemSetupBackButton) {
+    elements.systemSetupBackButton.disabled = state.systemSetupPending || (state.systemSetupStep === 0 && !canClose);
+    const backLabel = elements.systemSetupBackButton.querySelector("span:last-child");
+    if (backLabel) {
+      backLabel.textContent = canClose ? "Close" : "Back";
+    }
+  }
+  for (const button of elements.systemSetupRoleButtons) {
+    const selected = button.dataset.systemRole === role;
+    button.setAttribute("aria-checked", selected ? "true" : "false");
+    button.disabled = Boolean(state.systemSetupPending);
+  }
+
+  setText(
+    elements.systemSetupNodeDetail,
+    node.ready ? `${node.version || "Bundled"} • maintained by ClawDad` : "Managed Node is missing from this app build.",
+    { empty: false },
+  );
+  setSystemReadinessState(elements.systemSetupNodeState, node.ready ? "Ready" : "Repair needed", {
+    ready: node.ready === true,
+    error: node.ready !== true,
+  });
+  setText(
+    elements.systemSetupOrpDetail,
+    orp.ready ? "Bundled with the ClawDad runtime" : "Managed ORP is missing from this app build.",
+    { empty: false },
+  );
+  setSystemReadinessState(elements.systemSetupOrpState, orp.ready ? "Ready" : "Repair needed", {
+    ready: orp.ready === true,
+    error: orp.ready !== true,
+  });
+
+  if (elements.systemSetupCodexRow) {
+    elements.systemSetupCodexRow.hidden = !needsCodex;
+  }
+  if (elements.systemSetupCodexActions) {
+    elements.systemSetupCodexActions.hidden = !needsCodex;
+  }
+  const codexReady = codex.installed === true && codex.loggedIn === true;
+  setText(
+    elements.systemSetupCodexDetail,
+    codexReady
+      ? `${codex.version || "Codex"} • signed in • shared ${codex.home || "~/.codex"}`
+      : codex.installed
+        ? `${codex.version || "Codex installed"} • sign in with ChatGPT`
+        : "Install the official standalone Codex CLI into ~/.local/bin.",
+    { empty: false },
+  );
+  setSystemReadinessState(
+    elements.systemSetupCodexState,
+    codexReady ? "Ready" : codex.installed ? "Sign in" : "Install",
+    { ready: codexReady, error: false },
+  );
+  if (elements.systemSetupInstallCodexButton) {
+    elements.systemSetupInstallCodexButton.disabled =
+      Boolean(state.systemSetupPending) || codex.installed === true || install.state === "installing";
+    elements.systemSetupInstallCodexButton.textContent = install.state === "installing"
+      ? "Installing Codex…"
+      : codex.installed
+        ? "Codex installed"
+        : "Install official Codex";
+  }
+  if (elements.systemSetupLoginCodexButton) {
+    elements.systemSetupLoginCodexButton.disabled =
+      Boolean(state.systemSetupPending) || codex.installed !== true || codex.loggedIn === true;
+    elements.systemSetupLoginCodexButton.textContent = codex.loggedIn
+      ? "Signed in"
+      : "Sign in with ChatGPT";
+  }
+  if (elements.systemSetupRefreshButton) {
+    elements.systemSetupRefreshButton.disabled = Boolean(state.systemSetupPending);
+  }
+  setText(
+    elements.systemSetupRuntimeStatus,
+    String(install.message || (needsCodex ? "ClawDad checks login status without reading your credentials." : "Local Codex is optional for a controller-only Mac.")),
+    { empty: false },
+  );
+
+  const folderRow = elements.systemSetupWorkspaceInput?.closest(".system-setup-folder-row");
+  if (folderRow) {
+    folderRow.hidden = !needsCodex;
+  }
+  setText(
+    elements.systemSetupWorkspaceText,
+    needsCodex
+      ? "New project directories and local Codex threads will be scoped to this Mac and this folder."
+      : "This controller keeps each paired computer's own projects and Codex threads separate. You can add a computer after setup.",
+    { empty: false },
+  );
+  if (elements.systemSetupWorkspaceInput && elements.systemSetupWorkspaceInput.value !== state.systemSetupWorkspaceDraft) {
+    elements.systemSetupWorkspaceInput.value = state.systemSetupWorkspaceDraft;
+  }
+  if (elements.systemSetupWorkspaceInput) {
+    elements.systemSetupWorkspaceInput.disabled = Boolean(state.systemSetupPending);
+  }
+  if (elements.systemSetupWorkspaceChooseButton) {
+    elements.systemSetupWorkspaceChooseButton.disabled = Boolean(state.systemSetupPending);
+  }
+  setText(elements.systemSetupWorkspaceStatus, state.systemSetupStatus, {
+    empty: !state.systemSetupStatus,
+  });
+  setText(
+    elements.systemSetupFinishText,
+    needsCodex
+      ? "This Mac is ready for local Codex threads, paired controllers, and Remote Assist."
+      : "This Mac is ready to pair with another ClawDad computer and control its workspace.",
+    { empty: false },
+  );
+
+  let nextLabel = "Continue";
+  let nextDisabled = Boolean(state.systemSetupPending);
+  if (state.systemSetupStep === 1 && readiness.canComplete !== true) {
+    nextDisabled = true;
+  } else if (state.systemSetupStep === 2) {
+    nextLabel = needsCodex ? "Save & Continue" : "Continue";
+    if (needsCodex && !state.systemSetupWorkspaceDraft.trim()) {
+      nextDisabled = true;
+    }
+  } else if (state.systemSetupStep === 3) {
+    nextLabel = "Finish Setup";
+  }
+  if (elements.systemSetupNextButton) {
+    elements.systemSetupNextButton.disabled = nextDisabled;
+    elements.systemSetupNextButton.textContent = state.systemSetupPending === "complete"
+      ? "Finishing…"
+      : nextLabel;
+  }
+  setText(
+    elements.systemSetupFooterStatus,
+    state.systemSetupStep === 2 ? "" : state.systemSetupStatus,
+    { empty: state.systemSetupStep === 2 || !state.systemSetupStatus },
+  );
 }
 
 async function refreshSubscriptionEntitlement() {
@@ -13292,6 +13819,7 @@ function renderTerminalPanel() {
 
 function renderAll() {
   pruneCopyFeedback();
+  renderSystemSetupAssistant();
   renderWorkspaceTabs();
   renderWorkspaceSetup();
   renderSettingsModal();
@@ -16575,6 +17103,9 @@ async function handleDispatch(event) {
 }
 
 function goBackOneStep() {
+  if (systemSetupIsOpen()) {
+    return goBackSystemSetup();
+  }
   if (terminalPanelIsOpen()) {
     closeTerminalStreamPanel();
     return true;
@@ -17152,6 +17683,37 @@ function bindEvents() {
   elements.settingsRefreshVoiceDevicesButton?.addEventListener("click", () => {
     void refreshVoiceInputDevices({ requestPermission: true });
   });
+  elements.settingsOpenSetupButton?.addEventListener("click", () => {
+    void openSystemSetupAssistant();
+  });
+  elements.systemSetupBackButton?.addEventListener("click", () => {
+    goBackSystemSetup();
+  });
+  for (const button of elements.systemSetupRoleButtons) {
+    button.addEventListener("click", () => {
+      void selectSystemSetupRole(String(button.dataset.systemRole || ""));
+    });
+  }
+  elements.systemSetupInstallCodexButton?.addEventListener("click", () => {
+    void startSystemSetupCodexInstall();
+  });
+  elements.systemSetupLoginCodexButton?.addEventListener("click", () => {
+    void openSystemSetupCodexLogin();
+  });
+  elements.systemSetupRefreshButton?.addEventListener("click", () => {
+    void refreshSystemReadiness();
+  });
+  elements.systemSetupWorkspaceInput?.addEventListener("input", (event) => {
+    state.systemSetupWorkspaceDraft = String(event.target.value || "");
+    state.systemSetupStatus = "";
+    renderAll();
+  });
+  elements.systemSetupWorkspaceChooseButton?.addEventListener("click", () => {
+    void chooseSystemSetupWorkspace();
+  });
+  elements.systemSetupNextButton?.addEventListener("click", () => {
+    void advanceSystemSetup();
+  });
   elements.settingsCheckUpdatesButton?.addEventListener("click", () => {
     void checkDesktopAppUpdates();
   });
@@ -17425,6 +17987,7 @@ async function boot() {
   renderAll();
   void refreshTtsStatus({ quiet: true });
   void refreshDesktopAppStatus({ quiet: true });
+  void refreshSystemReadiness({ quiet: true });
 
   try {
     await refreshProjects();

@@ -350,8 +350,12 @@ struct MobileHistoryItem: Identifiable, Equatable {
 }
 
 struct MobileThreadSelection: Identifiable, Equatable {
-  var id = UUID()
+  var computerId: String = ""
   var initialThread: MobileThreadSummary
+
+  var id: String {
+    "\(computerId)::\(initialThread.projectPath)::\(initialThread.sessionId)"
+  }
 }
 
 #if DEBUG

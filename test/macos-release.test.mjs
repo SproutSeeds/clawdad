@@ -22,11 +22,23 @@ const entitlementsPath = path.join(
   "macos",
   "ClawDad.entitlements",
 );
+const nodeEntitlementsPath = path.join(
+  repoRoot,
+  "native",
+  "macos",
+  "ClawDadNode.entitlements",
+);
+const intelNodeEntitlementsPath = path.join(
+  repoRoot,
+  "native",
+  "macos",
+  "ClawDadNodeIntel.entitlements",
+);
 const releaseNotesPath = path.join(
   repoRoot,
   "docs",
   "releases",
-  "0.7.0-beta.11.md",
+  "0.7.0-beta.12.md",
 );
 const packagePath = path.join(repoRoot, "package.json");
 
@@ -35,19 +47,23 @@ test("Mac release pipeline signs, notarizes, staples, and publishes Sparkle arti
     releaseScript,
     buildScript,
     entitlements,
+    nodeEntitlements,
+    intelNodeEntitlements,
     releaseNotes,
     packageSource,
   ] = await Promise.all([
     readFile(releaseScriptPath, "utf8"),
     readFile(buildScriptPath, "utf8"),
     readFile(entitlementsPath, "utf8"),
+    readFile(nodeEntitlementsPath, "utf8"),
+    readFile(intelNodeEntitlementsPath, "utf8"),
     readFile(releaseNotesPath, "utf8"),
     readFile(packagePath, "utf8"),
   ]);
 
-  assert.match(packageSource, /"version": "0\.7\.0-beta\.11"/u);
+  assert.match(packageSource, /"version": "0\.7\.0-beta\.12"/u);
   assert.match(releaseNotes, /ClawDad 0\.7 Native Beta/u);
-  assert.match(releaseScript, /CLAWDAD_APP_BUILD:-33/u);
+  assert.match(releaseScript, /CLAWDAD_APP_BUILD:-34/u);
   assert.match(releaseScript, /CLAWDAD_RELEASE_ARTIFACT_SUFFIX/u);
   assert.match(releaseScript, /CLAWDAD_MAC_ARCH="\$mac_arch"/u);
   assert.match(releaseScript, /Developer ID Application/u);
@@ -58,6 +74,20 @@ test("Mac release pipeline signs, notarizes, staples, and publishes Sparkle arti
   assert.match(buildScript, /CLAWDAD_SWIFT_DISABLE_SANDBOX/u);
   assert.match(buildScript, /CLAWDAD_PREBUILT_ICON_PATH/u);
   assert.match(buildScript, /CLAWDAD_MAC_ARCH/u);
+  assert.match(buildScript, /CLAWDAD_BUNDLED_NODE_VERSION:-24\.20\.0/u);
+  assert.match(buildScript, /SHASUMS256/u);
+  assert.match(buildScript, /runtime_dir\/bin\/node/u);
+  assert.match(buildScript, /node_modules\/open-research-protocol\/package\.json/u);
+  assert.match(buildScript, /ClawDadNode\.entitlements/u);
+  assert.match(buildScript, /ClawDadNodeIntel\.entitlements/u);
+  assert.match(buildScript, /https:\/\/clawdad\.earth\/downloads\/appcast-intel\.xml/u);
+  assert.match(nodeEntitlements, /<key>com\.apple\.security\.cs\.allow-jit<\/key>/u);
+  assert.match(intelNodeEntitlements, /<key>com\.apple\.security\.cs\.allow-jit<\/key>/u);
+  assert.match(
+    intelNodeEntitlements,
+    /<key>com\.apple\.security\.cs\.allow-unsigned-executable-memory<\/key>/u,
+  );
+  assert.match(buildScript, /clawdad-managed-node-ok/u);
   assert.match(buildScript, /--arch "\$target_arch"/u);
   assert.match(buildScript, /lipo -thin "\$target_arch"/u);
   assert.match(buildScript, /<key>NSAppleEventsUsageDescription<\/key>/u);

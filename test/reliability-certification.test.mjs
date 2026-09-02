@@ -100,13 +100,13 @@ test("service health snapshots omit project paths and unexpected fields", () => 
 test("physical evidence requires the exact paired iPhone and Mac release", () => {
   const release = {
     expectedIosVersion: "0.7.0",
-    expectedIosBuild: "32",
+    expectedIosBuild: "33",
     expectedMacVersion: "0.7.0",
-    expectedMacBuild: "33",
+    expectedMacBuild: "34",
   };
   assert.equal(installedIosBuildMatchesRelease({
     version: "0.7.0",
-    build: "32",
+    build: "33",
     builtByDeveloper: true,
   }, release), true);
   assert.equal(installedIosBuildMatchesRelease({
@@ -116,13 +116,13 @@ test("physical evidence requires the exact paired iPhone and Mac release", () =>
   }, release), false);
   assert.equal(installedIosBuildMatchesRelease({
     version: "0.6.9",
-    build: "32",
+    build: "33",
     builtByDeveloper: false,
   }, release), false);
   assert.equal(installedMacBuildMatchesRelease({
     installed: true,
     version: "0.7.0",
-    build: "33",
+    build: "34",
   }, release), true);
   assert.equal(installedMacBuildMatchesRelease({
     installed: true,
@@ -135,12 +135,12 @@ test("certification readiness requires the exact published iPhone and Mac builds
   const snapshot = {
     release: {
       distributionMode: "native-private",
-      expectedVersion: "0.7.0-beta.11",
-      expectedRuntimeVersion: "0.7.0-beta.11",
+      expectedVersion: "0.7.0-beta.12",
+      expectedRuntimeVersion: "0.7.0-beta.12",
       expectedIosVersion: "0.7.0",
-      expectedIosBuild: "32",
+      expectedIosBuild: "33",
       expectedMacVersion: "0.7.0",
-      expectedMacBuild: "33",
+      expectedMacBuild: "34",
       npm: { skipped: true },
     },
     mac: {
@@ -148,9 +148,9 @@ test("certification readiness requires the exact published iPhone and Mac builds
       installedApp: {
         installed: true,
         version: "0.7.0",
-        build: "33",
+        build: "34",
       },
-      installedRuntimeVersion: "0.7.0-beta.11",
+      installedRuntimeVersion: "0.7.0-beta.12",
     },
     cloud: {
       health: { ok: true },
@@ -159,7 +159,7 @@ test("certification readiness requires the exact published iPhone and Mac builds
       release: {
         beta: {
           processingState: "VALID",
-          buildNumber: "32",
+          buildNumber: "33",
         },
       },
     },
@@ -167,7 +167,7 @@ test("certification readiness requires the exact published iPhone and Mac builds
       targetDevice: {
         installedApp: {
           version: "0.7.0",
-          build: "32",
+          build: "33",
           builtByDeveloper: true,
         },
       },
@@ -199,7 +199,7 @@ test("certification readiness requires the exact published iPhone and Mac builds
     false,
   );
   assert.equal(summarizeCertificationSnapshot(snapshot).testFlightReady, false);
-  snapshot.appStore.release.beta.buildNumber = "32";
+  snapshot.appStore.release.beta.buildNumber = "33";
 
   snapshot.mac.installedApp.build = "21";
   assert.equal(
@@ -207,7 +207,7 @@ test("certification readiness requires the exact published iPhone and Mac builds
     false,
   );
   assert.equal(summarizeCertificationSnapshot(snapshot).macBuildReady, false);
-  snapshot.mac.installedApp.build = "33";
+  snapshot.mac.installedApp.build = "34";
 
   snapshot.iphone.targetDevice.installedApp.build = "15";
   assert.equal(

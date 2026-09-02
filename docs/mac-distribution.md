@@ -17,15 +17,15 @@ rollout unless that public publication is explicitly requested.
 
 ## Private Native Install
 
-For the current native beta 11 candidate, use the locally retained DMG that
+For the current native beta 12 candidate, use the locally retained DMG that
 matches the Mac:
 
 1. Open the Apple-silicon artifact under
-   `native/macos/dist/releases/0.7.0-beta.11-macos-33/`, or the Intel artifact
-   under `native/macos/dist/releases/0.7.0-beta.11-macos-33-intel/`.
+   `native/macos/dist/releases/0.7.0-beta.12-macos-34/`, or the Intel artifact
+   under `native/macos/dist/releases/0.7.0-beta.12-macos-34-intel/`.
 2. Quit ClawDad, drag ClawDad into Applications, and replace the previous app.
-3. Open `/Applications/ClawDad.app` and verify version `0.7.0 (33)` with embedded
-   runtime `0.7.0-beta.11`.
+3. Open `/Applications/ClawDad.app` and verify version `0.7.0 (34)` with embedded
+   runtime `0.7.0-beta.12`.
 4. Confirm only the app-managed native services are active on port 4487 and the
    legacy service labels remain disabled.
 
@@ -34,11 +34,20 @@ matches the Mac:
 1. Download the Apple-silicon or Intel Mac beta from `https://clawdad.earth/`.
 2. Open the DMG and drag ClawDad into Applications.
 3. Open ClawDad from Applications.
-4. Choose the primary projects folder during setup.
-5. Open Settings to pair an iPhone or add more project folders.
+4. Use the setup assistant to choose controller, host, or combined mode.
+5. Confirm the managed Node and ORP runtime. On a host, approve the official
+   standalone Codex installation if needed and complete ChatGPT sign-in.
+6. Choose the primary projects folder, then pair the other computers and phones
+   that should reach this host.
 
 The DMG and app are signed with Developer ID, notarized by Apple, and stapled so
 Gatekeeper can verify them even when the Mac is offline.
+
+ClawDad embeds Node 24.20.0 and ORP inside the app bundle. It does not require a
+global Node installation. When the customer approves Codex installation, the
+setup assistant uses OpenAI's official standalone installer for
+`~/.local/bin/codex`; ClawDad and Terminal then share the account and thread
+history under `~/.codex`.
 
 ## First-Run Permissions
 
@@ -88,9 +97,9 @@ Desktop Settings provides:
 For the current private native release, run:
 
 ```bash
-CLAWDAD_RELEASE_VERSION=0.7.0-beta.11 \
+CLAWDAD_RELEASE_VERSION=0.7.0-beta.12 \
 CLAWDAD_APP_VERSION=0.7.0 \
-CLAWDAD_APP_BUILD=33 \
+CLAWDAD_APP_BUILD=34 \
 CLAWDAD_MAC_ARCH=arm64 \
 CLAWDAD_NOTARIZE=1 \
 CLAWDAD_PUBLISH_APPCAST=0 \
@@ -101,14 +110,14 @@ Build the matching Intel artifact with a separate release directory and
 filename suffix:
 
 ```bash
-CLAWDAD_RELEASE_VERSION=0.7.0-beta.11 \
+CLAWDAD_RELEASE_VERSION=0.7.0-beta.12 \
 CLAWDAD_APP_VERSION=0.7.0 \
-CLAWDAD_APP_BUILD=33 \
+CLAWDAD_APP_BUILD=34 \
 CLAWDAD_MAC_ARCH=x86_64 \
 CLAWDAD_RELEASE_ARTIFACT_SUFFIX=intel \
-CLAWDAD_RELEASE_DIR="$PWD/native/macos/dist/releases/0.7.0-beta.11-macos-33-intel" \
+CLAWDAD_RELEASE_DIR="$PWD/native/macos/dist/releases/0.7.0-beta.12-macos-34-intel" \
 CLAWDAD_SPARKLE_FEED_URL=https://clawdad.earth/downloads/appcast-intel.xml \
-CLAWDAD_RELEASE_DOWNLOAD_URL_PREFIX=https://clawdad.earth/downloads/ \
+CLAWDAD_RELEASE_DOWNLOAD_URL_PREFIX=https://github.com/SproutSeeds/clawdad/releases/download/v0.7.0-beta.12/ \
 CLAWDAD_NOTARIZE=1 \
 CLAWDAD_PUBLISH_APPCAST=0 \
   npm run native:release

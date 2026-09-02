@@ -186,6 +186,15 @@ test("normalizes shared runtime modes and derives private default socket URLs", 
   assert.equal(codexSharedWebSocketUrl(socketPath), `ws+unix://${socketPath}`);
 });
 
+test("probe reports an overlong Unix socket path without crashing the process", async () => {
+  const socketPath = `/tmp/${"c".repeat(140)}.sock`;
+  const result = await probeCodexSharedRuntime({ socketPath });
+
+  assert.equal(result.ready, false);
+  assert.equal(result.errorCode, "ENAMETOOLONG");
+  assert.match(result.error, /socket path exceeds/u);
+});
+
 test("probe completes the initialize handshake over a Unix WebSocket", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-shared-probe-"));
   const socketPath = path.join(root, "codex.sock");

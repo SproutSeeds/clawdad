@@ -260,7 +260,7 @@ final class ClawDadService {
         userInfo: [NSLocalizedDescriptionKey: "Could not find \(serverPath.path)"]
       )
     }
-    let nodeURL = try Self.nodeExecutableURL()
+    let nodeURL = try Self.nodeExecutableURL(repoRoot: repoRoot)
 
     let logsDir = supportDir.appendingPathComponent("logs")
     try FileManager.default.createDirectory(at: logsDir, withIntermediateDirectories: true)
@@ -293,12 +293,11 @@ final class ClawDadService {
       "-o", stdout.path,
       "-e", stderr.path,
       "--",
-      "/usr/bin/env",
-      "PATH=\(environment["PATH"] ?? "")",
-      "CLAWDAD_ROOT=\(repoRoot.path)",
-      "CLAWDAD_SERVER_TOKEN_FILE=\(tokenFile.path)",
-      "CLAWDAD_DISABLE_DELEGATE_SUPERVISOR_RESUME=1",
-      "CLAWDAD_NATIVE_RUNTIME_VERSION=\(runtimeVersion)",
+      "/usr/bin/env"
+    ] + Self.launchEnvironmentArguments(
+      environment,
+      extra: ["CLAWDAD_NATIVE_RUNTIME_VERSION": runtimeVersion]
+    ) + [
       nodeURL.path,
       serverPath.path,
       "serve",
@@ -366,7 +365,7 @@ final class ClawDadService {
         userInfo: [NSLocalizedDescriptionKey: "Could not find \(serverPath.path)"]
       )
     }
-    let nodeURL = try Self.nodeExecutableURL()
+    let nodeURL = try Self.nodeExecutableURL(repoRoot: repoRoot)
     let logsDir = supportDir.appendingPathComponent("logs")
     try FileManager.default.createDirectory(at: logsDir, withIntermediateDirectories: true)
     let stdout = logsDir.appendingPathComponent("native-cloud-host.stdout.log")
@@ -387,11 +386,11 @@ final class ClawDadService {
       "-o", stdout.path,
       "-e", stderr.path,
       "--",
-      "/usr/bin/env",
-      "PATH=\(environment["PATH"] ?? "")",
-      "CLAWDAD_ROOT=\(repoRoot.path)",
-      "CLAWDAD_DISABLE_DELEGATE_SUPERVISOR_RESUME=1",
-      "CLAWDAD_NATIVE_RUNTIME_VERSION=\(runtimeVersion)",
+      "/usr/bin/env"
+    ] + Self.launchEnvironmentArguments(
+      environment,
+      extra: ["CLAWDAD_NATIVE_RUNTIME_VERSION": runtimeVersion]
+    ) + [
       nodeURL.path,
       serverPath.path,
       "cloud-host",
@@ -442,12 +441,13 @@ final class ClawDadService {
     try? handle.write(contentsOf: data)
   }
 
-  private static func nodeExecutableURL() throws -> URL {
+  private static func nodeExecutableURL(repoRoot: URL) throws -> URL {
     var candidates: [String] = []
     if let envNode = ProcessInfo.processInfo.environment["CLAWDAD_NODE_PATH"], !envNode.isEmpty {
       candidates.append(envNode)
     }
     candidates.append(contentsOf: [
+      repoRoot.appendingPathComponent("bin/node").path,
       "/opt/homebrew/bin/node",
       "/usr/local/bin/node",
       "/usr/bin/node"
@@ -464,27 +464,73 @@ final class ClawDadService {
       code: 4,
       userInfo: [
         NSLocalizedDescriptionKey:
-          "Could not find Node.js. Install Node or set CLAWDAD_NODE_PATH to the node executable."
+          "ClawDad's managed Node runtime is missing. Reinstall ClawDad or set CLAWDAD_NODE_PATH to a compatible node executable."
       ]
     )
   }
 
   private static func serverEnvironment(repoRoot: URL, tokenFile: URL) -> [String: String] {
     var environment = ProcessInfo.processInfo.environment
-    let fallbackPath = [
+    let home = FileManager.default.homeDirectoryForCurrentUser
+    let pathEntries = [
+      repoRoot.appendingPathComponent("bin").path,
+      repoRoot.appendingPathComponent("node_modules/.bin").path,
+      home.appendingPathComponent(".local/bin").path,
       "/opt/homebrew/bin",
       "/usr/local/bin",
       "/usr/bin",
       "/bin",
       "/usr/sbin",
       "/sbin"
-    ].joined(separator: ":")
+    ]
     let existingPath = environment["PATH"] ?? ""
-    environment["PATH"] = existingPath.isEmpty ? fallbackPath : "\(fallbackPath):\(existingPath)"
+    environment["PATH"] = (pathEntries + (existingPath.isEmpty ? [] : [existingPath]))
+      .joined(separator: ":")
     environment["CLAWDAD_ROOT"] = repoRoot.path
     environment["CLAWDAD_SERVER_TOKEN_FILE"] = tokenFile.path
     environment["CLAWDAD_DISABLE_DELEGATE_SUPERVISOR_RESUME"] = "1"
+    let codexHome = environment["CODEX_HOME"]?.trimmingCharacters(
+      in: .whitespacesAndNewlines
+    ) ?? ""
+    let sharedCodexHome = codexHome.isEmpty
+      ? home.appendingPathComponent(".codex", isDirectory: true).path
+      : codexHome
+    environment["CODEX_HOME"] = sharedCodexHome
+    environment["CLAWDAD_CODEX_HOME"] = sharedCodexHome
+    let bundledOrp = repoRoot.appendingPathComponent("node_modules/.bin/orp")
+    if FileManager.default.isExecutableFile(atPath: bundledOrp.path) {
+      environment["CLAWDAD_ORP"] = bundledOrp.path
+    }
     return environment
+  }
+
+  private static func launchEnvironmentArguments(
+    _ environment: [String: String],
+    extra: [String: String] = [:]
+  ) -> [String] {
+    let keys = [
+      "PATH",
+      "CLAWDAD_ROOT",
+      "CLAWDAD_SERVER_TOKEN_FILE",
+      "CLAWDAD_DISABLE_DELEGATE_SUPERVISOR_RESUME",
+      "CLAWDAD_ORP",
+      "CLAWDAD_CODEX",
+      "CLAWDAD_CODEX_HOME",
+      "CODEX_HOME"
+    ]
+    var values = keys.compactMap { key -> String? in
+      guard let value = environment[key], !value.isEmpty else {
+        return nil
+      }
+      return "\(key)=\(value)"
+    }
+    values.append(contentsOf: extra.keys.sorted().compactMap { key in
+      guard let value = extra[key], !value.isEmpty else {
+        return nil
+      }
+      return "\(key)=\(value)"
+    })
+    return values
   }
 
   private static func removeManagedService(label: String) {
@@ -630,8 +676,12 @@ final class ClawDadService {
   private static func runtimeRootIsValid(_ root: URL) -> Bool {
     let package = root.appendingPathComponent("package.json")
     let server = root.appendingPathComponent("lib/server.mjs")
+    let node = root.appendingPathComponent("bin/node")
+    let orp = root.appendingPathComponent("node_modules/.bin/orp")
     return FileManager.default.fileExists(atPath: package.path)
       && FileManager.default.fileExists(atPath: server.path)
+      && FileManager.default.isExecutableFile(atPath: node.path)
+      && FileManager.default.isExecutableFile(atPath: orp.path)
   }
 
   private static func runtimeVersion(for root: URL) -> String {
@@ -701,6 +751,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
   private var statusLabel: NSTextField!
   private var webView: WKWebView?
   private var service: ClawDadService?
+  private var systemReadiness: MacSystemReadiness?
   private var remoteAssistHost: RemoteAssistHost?
   private var remoteComputerManager: MacRemoteComputerManager?
   private var remoteAssistClient: MacRemoteAssistClient?
@@ -865,6 +916,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     do {
       let service = try ClawDadService()
       self.service = service
+      self.systemReadiness = MacSystemReadiness(
+        repoRoot: service.repoRoot,
+        supportDir: service.supportDir
+      )
       service.start(status: updateStatus) { result in
         DispatchQueue.main.async {
           switch result {
@@ -927,9 +982,66 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         "chooseFolder": true,
         "remoteAssist": true,
         "remoteComputers": true,
+        "systemReadiness": true,
         "updates": true,
         "diagnostics": true
       ])
+    case "getSystemReadiness":
+      guard let systemReadiness else {
+        resolveNativeMessage(id: id, error: "System readiness is unavailable.")
+        return
+      }
+      systemReadiness.status { [weak self] status in
+        self?.resolveNativeMessage(id: id, result: status)
+      }
+    case "setComputerRole":
+      guard let systemReadiness else {
+        resolveNativeMessage(id: id, error: "System readiness is unavailable.")
+        return
+      }
+      do {
+        try systemReadiness.setRole(params["role"] as? String ?? "")
+        systemReadiness.status { [weak self] status in
+          self?.resolveNativeMessage(id: id, result: status)
+        }
+      } catch {
+        resolveNativeMessage(id: id, error: error.localizedDescription)
+      }
+    case "installCodex":
+      guard let systemReadiness else {
+        resolveNativeMessage(id: id, error: "System readiness is unavailable.")
+        return
+      }
+      do {
+        try systemReadiness.startCodexInstall()
+        resolveNativeMessage(id: id, result: ["started": true])
+      } catch {
+        resolveNativeMessage(id: id, error: error.localizedDescription)
+      }
+    case "openCodexLogin":
+      guard let systemReadiness else {
+        resolveNativeMessage(id: id, error: "System readiness is unavailable.")
+        return
+      }
+      do {
+        try systemReadiness.openCodexLogin()
+        resolveNativeMessage(id: id, result: ["opened": true])
+      } catch {
+        resolveNativeMessage(id: id, error: error.localizedDescription)
+      }
+    case "completeSystemSetup":
+      guard let systemReadiness else {
+        resolveNativeMessage(id: id, error: "System readiness is unavailable.")
+        return
+      }
+      systemReadiness.complete { [weak self] result in
+        switch result {
+        case .success(let status):
+          self?.resolveNativeMessage(id: id, result: status)
+        case .failure(let error):
+          self?.resolveNativeMessage(id: id, error: error.localizedDescription)
+        }
+      }
     case "chooseFolder":
       chooseFolder(id: id, params: params)
     case "getRemoteAssistStatus":
@@ -1074,6 +1186,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
   private func desktopAppStatus() -> [String: Any] {
     let bundle = Bundle.main
     var status: [String: Any] = [
+      "platform": "macos",
+      "architecture": nativeArchitecture,
       "version": bundle.object(
         forInfoDictionaryKey: "CFBundleShortVersionString"
       ) as? String ?? "development",
@@ -1287,11 +1401,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
 }
 
 #if arch(arm64)
-private let nativeArchitecture = "Apple silicon"
+let nativeArchitecture = "Apple silicon"
 #elseif arch(x86_64)
-private let nativeArchitecture = "Intel"
+let nativeArchitecture = "Intel"
 #else
-private let nativeArchitecture = "Unknown"
+let nativeArchitecture = "Unknown"
 #endif
 
 let app = NSApplication.shared

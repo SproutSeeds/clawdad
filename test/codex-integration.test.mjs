@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -242,6 +242,11 @@ test("server Codex integration endpoints install and report the pack", async () 
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
+    let childStderr = "";
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => {
+      childStderr += chunk;
+    });
 
     try {
       const baseUrl = `http://127.0.0.1:${port}`;
@@ -271,8 +276,67 @@ test("server Codex integration endpoints install and report the pack", async () 
       const doctorPayload = await doctorResponse.json();
       assert.equal(doctorPayload.ok, true);
       assert.equal(doctorPayload.failCount, 0);
+    } catch (error) {
+      error.message = `${error.message}${childStderr ? `\n${childStderr}` : ""}`;
+      throw error;
     } finally {
       await stopServer(child);
+    }
+  });
+});
+
+test("server control plane becomes healthy before a slow shared Codex runtime", async () => {
+  await withTempProject(async ({ root, codexHome }) => {
+    const port = await freePort();
+    const shortSocketRoot = await mkdtemp("/tmp/clawdad-shared-runtime-");
+    const socketPath = path.join(shortSocketRoot, "codex.sock");
+    const configPath = path.join(root, "server.json");
+    const fakeCodex = path.join(root, "slow-codex");
+    await writeFile(
+      configPath,
+      JSON.stringify({ host: "127.0.0.1", port, authMode: "token" }, null, 2),
+      "utf8",
+    );
+    await writeFile(fakeCodex, "#!/bin/sh\nsleep 4\n", "utf8");
+    await chmod(fakeCodex, 0o755);
+    const startedAt = Date.now();
+    const child = spawn(process.execPath, [serverScript, "serve", "--config", configPath], {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        HOME: root,
+        CODEX_HOME: codexHome,
+        CLAWDAD_HOME: path.join(root, "clawdad-home"),
+        CLAWDAD_ROOT: repoRoot,
+        CLAWDAD_CODEX: fakeCodex,
+        CLAWDAD_CODEX_APP_SERVER_MODE: "shared",
+        CLAWDAD_CODEX_APP_SERVER_SOCKET: socketPath,
+        CLAWDAD_DISABLE_DELEGATE_SUPERVISOR_RESUME: "1",
+        CLAWDAD_SERVER_TOKEN: "test-token",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let childStderr = "";
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => {
+      childStderr += chunk;
+    });
+
+    try {
+      const baseUrl = `http://127.0.0.1:${port}`;
+      await waitForHealth(baseUrl, child);
+      const elapsedMs = Date.now() - startedAt;
+      const health = await (await fetch(`${baseUrl}/healthz`)).json();
+      assert.ok(elapsedMs < 1_500, `control plane took ${elapsedMs}ms to become healthy`);
+      assert.equal(health.ok, true);
+      assert.equal(health.codexAppServer.ready, false);
+      assert.equal(health.codexAppServer.state, "starting");
+    } catch (error) {
+      error.message = `${error.message}${childStderr ? `\n${childStderr}` : ""}`;
+      throw error;
+    } finally {
+      await stopServer(child);
+      await rm(shortSocketRoot, { recursive: true, force: true });
     }
   });
 });

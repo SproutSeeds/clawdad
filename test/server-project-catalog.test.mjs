@@ -607,8 +607,17 @@ process.on("SIGTERM", shutdown);
   try {
     const baseUrl = `http://127.0.0.1:${port}`;
     await waitForHealth(baseUrl, child);
-    let response = await fetch(`${baseUrl}/healthz`);
-    let health = await response.json();
+    const unavailableDeadline = Date.now() + 3_000;
+    let response;
+    let health;
+    do {
+      response = await fetch(`${baseUrl}/healthz`);
+      health = await response.json();
+      if (health.codexAppServer.state !== "starting") {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    } while (Date.now() < unavailableDeadline);
     assert.equal(response.status, 200);
     assert.equal(health.ok, true);
     assert.deepEqual(

@@ -270,6 +270,9 @@ struct ContentView: View {
           session.connectIfPaired()
         }
       }
+      .onChange(of: session.activeComputerId) { _, _ in
+        selectedThreadSelection = nil
+      }
       .onChange(of: voiceRecorder.state) { _, nextState in
         voicePulse = false
         if nextState == .recording {
@@ -295,7 +298,10 @@ struct ContentView: View {
     else {
       return
     }
-    selectedThreadSelection = MobileThreadSelection(initialThread: thread)
+    selectedThreadSelection = MobileThreadSelection(
+      computerId: session.activeComputerId,
+      initialThread: thread
+    )
 #endif
   }
 
@@ -985,7 +991,10 @@ struct ContentView: View {
               Button {
                 dismissKeyboard()
                 session.selectThread(thread, historyLimit: 50)
-                selectedThreadSelection = MobileThreadSelection(initialThread: thread)
+                selectedThreadSelection = MobileThreadSelection(
+                  computerId: session.activeComputerId,
+                  initialThread: thread
+                )
               } label: {
                 ThreadHistoryCard(
                   thread: thread,
