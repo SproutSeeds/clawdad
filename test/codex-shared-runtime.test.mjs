@@ -5,6 +5,7 @@ import {
   chmod,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   stat,
   symlink,
@@ -172,6 +173,29 @@ server.listen(process.argv[2], () => process.stdout.write("ready\\n"));
   child.kill("SIGKILL");
   await new Promise((resolve) => child.once("close", resolve));
   assert.equal((await stat(socketPath)).isSocket(), true);
+}
+
+async function startPoisonedUnixServer(root, socketPath, { gracefulTermination = true } = {}) {
+  const scriptPath = path.join(root, "poisoned-codex-server.mjs");
+  await writeFile(scriptPath, `
+import { createServer } from "node:http";
+import { mkdirSync } from "node:fs";
+import path from "node:path";
+const socketPath = process.argv[2];
+mkdirSync(path.dirname(socketPath), { recursive: true });
+const server = createServer((_request, response) => response.destroy());
+server.on("upgrade", (_request, socket) => socket.destroy());
+server.listen(socketPath, () => process.stdout.write("ready\\n"));
+${gracefulTermination ? 'process.on("SIGTERM", () => server.close(() => process.exit(0)));' : ''}
+`, "utf8");
+  const child = spawn(process.execPath, [scriptPath, socketPath], {
+    stdio: ["ignore", "pipe", "inherit"],
+  });
+  await new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.stdout.once("data", resolve);
+  });
+  return child;
 }
 
 test("normalizes shared runtime modes and derives private default socket URLs", () => {
@@ -398,6 +422,78 @@ test("ensure replaces a repeatedly refused stale socket only after verifying its
   assert.equal(result.started, true);
   assert.equal(result.ready, true);
   assert.equal((await probeCodexSharedRuntime({ socketPath, timeoutMs: 500 })).ready, true);
+});
+
+test("ensure restarts a repeatedly unhealthy socket only after verifying its Codex owner", async (t) => {
+  const root = await mkdtemp("/tmp/clawdad-shared-poisoned-");
+  const socketPath = path.join(root, "codex.sock");
+  const codexBinary = await writeFakeCodexBinary(root);
+  const poisoned = await startPoisonedUnixServer(root, socketPath, {
+    gracefulTermination: false,
+  });
+  t.after(() => stopOwnedProcess(poisoned.pid));
+
+  const result = await ensureCodexSharedRuntime({
+    mode: "shared",
+    env: {
+      ...process.env,
+      HOME: root,
+      CLAWDAD_HOME: path.join(root, "clawdad-home"),
+    },
+    socketPath,
+    codexBinary,
+    cwd: root,
+    startupTimeoutMs: 5_000,
+    probeTimeoutMs: 200,
+    staleSocketProbeDelayMs: 25,
+    socketOwnerResolver: async () => ({
+      pid: poisoned.pid,
+      uid: typeof process.getuid === "function" ? process.getuid() : null,
+      command: `${codexBinary} app-server --listen ${codexSharedRemoteUrl(socketPath)}`,
+      executable: codexBinary,
+    }),
+  });
+  t.after(() => stopOwnedProcess(result.pid));
+
+  assert.equal(await waitForProcessExit(poisoned.pid), true);
+  assert.equal(result.started, true);
+  assert.equal(result.ready, true);
+  assert.equal((await probeCodexSharedRuntime({ socketPath, timeoutMs: 500 })).ready, true);
+
+  const metadataFiles = await readdir(path.join(root, "clawdad-home", "runtime"));
+  assert.ok(metadataFiles.some((name) => /^codex-app-server-runtime-[a-f0-9]{16}\.json$/u.test(name)));
+});
+
+test("ensure leaves an unhealthy socket untouched when its owner is not a verified Codex listener", async (t) => {
+  const root = await mkdtemp("/tmp/clawdad-shared-unverified-");
+  const socketPath = path.join(root, "codex.sock");
+  const poisoned = await startPoisonedUnixServer(root, socketPath);
+  t.after(() => stopOwnedProcess(poisoned.pid));
+
+  await assert.rejects(
+    ensureCodexSharedRuntime({
+      mode: "shared",
+      env: {
+        ...process.env,
+        HOME: root,
+        CLAWDAD_HOME: path.join(root, "clawdad-home"),
+      },
+      socketPath,
+      codexBinary: await writeFakeCodexBinary(root),
+      probeTimeoutMs: 100,
+      staleSocketProbeDelayMs: 20,
+      capabilityCheck: async () => ({ supported: true }),
+      socketOwnerResolver: async () => ({
+        pid: poisoned.pid,
+        uid: typeof process.getuid === "function" ? process.getuid() : null,
+        command: `${process.execPath} ${path.join(root, "poisoned-codex-server.mjs")}`,
+        executable: process.execPath,
+      }),
+    }),
+    /shared socket exists but did not pass its initialize probe/u,
+  );
+  assert.equal(await waitForProcessExit(poisoned.pid, 100), false);
+  assert.equal((await stat(socketPath)).isSocket(), true);
 });
 
 test("startup timeout terminates only the runtime child spawned by that ensure", async () => {

@@ -51,12 +51,13 @@
             id="headerCarouselButton"
             class="mascot-carousel"
             type="button"
-            aria-label="Next mascot photo"
+            aria-label="ClawDad baby crawfish mascot"
+            data-static-brand="iphone"
           >
             <img
               id="headerCarouselImage"
               class="mascot-photo"
-              src="/assets/clawdad-header-01.jpg?v=20260406m"
+              src="/assets/clawdad-baby-mascot.png?v=20260902a"
               loading="eager"
               fetchpriority="high"
               decoding="async"
@@ -64,7 +65,7 @@
             >
           </button>
         </div>
-        <p id="headerCatchphrase" class="header-catchphrase">"Pass dat clawdad glow, cher"</p>
+        <p id="headerCatchphrase" class="header-catchphrase">"Run dat crawfish cool, cher"</p>
       </header>
 
       <form id="dispatchForm" class="composer">
@@ -307,6 +308,19 @@
                   <option value="repo">Repo scoped</option>
                   <option value="full">Full access</option>
                 </select>
+              </div>
+              <div class="composer-tools-mode-group" aria-label="Codex model">
+                <label class="composer-tools-label" for="composerModelSelect">Model</label>
+                <select id="composerModelSelect" class="composer-access-select" name="model" disabled>
+                  <option value="">Loading Codex models…</option>
+                </select>
+              </div>
+              <div class="composer-tools-mode-group" aria-label="Reasoning effort">
+                <label class="composer-tools-label" for="composerReasoningSelect">Reasoning effort</label>
+                <select id="composerReasoningSelect" class="composer-access-select" name="reasoningEffort" disabled>
+                  <option value="">Loading reasoning levels…</option>
+                </select>
+                <div id="composerModelStatus" class="composer-model-status" role="status" aria-live="polite"></div>
               </div>
             </section>
             <section

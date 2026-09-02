@@ -164,6 +164,24 @@ body::-webkit-scrollbar {
   opacity: 0.74;
 }
 
+.mascot-carousel[data-static-brand="iphone"] {
+  overflow: visible;
+  border-radius: 0;
+  pointer-events: none;
+}
+
+.mascot-carousel[data-static-brand="iphone"] .mascot-photo {
+  width: min(24vw, 96px);
+  height: min(36vw, 144px);
+  object-fit: contain;
+  object-position: center bottom;
+  border: 0;
+  border-radius: 0;
+  transform: none;
+  box-shadow: none;
+  filter: drop-shadow(0 12px 16px rgba(45, 7, 9, 0.34));
+}
+
 .mascot-carousel.is-static .mascot-photo {
   transition: opacity 180ms ease, transform 180ms ease, filter 180ms ease;
 }
@@ -1083,6 +1101,8 @@ textarea {
   bottom: calc(100% + 8px);
   z-index: 45;
   width: min(360px, calc(100vw - 40px));
+  max-height: min(75vh, 680px);
+  overflow-y: auto;
   display: grid;
   gap: 10px;
   padding: 10px;
@@ -1188,6 +1208,17 @@ textarea {
   background-color: rgba(54, 7, 10, 0.52);
   color: rgba(255, 244, 227, 0.88);
   cursor: pointer;
+}
+
+.composer-model-status {
+  margin-top: 7px;
+  color: rgba(255, 181, 163, 0.92);
+  font-size: 0.68rem;
+  line-height: 1.35;
+}
+
+.composer-model-status[hidden] {
+  display: none;
 }
 
 #dispatchButton {

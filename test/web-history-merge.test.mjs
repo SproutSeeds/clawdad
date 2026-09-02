@@ -2240,6 +2240,8 @@ test("web composer exposes Direct and Queue dispatch modes", async () => {
   assert.match(html, /data-dispatch-mode="queue"/u);
   assert.doesNotMatch(html, /data-dispatch-mode="(?:linear|interject)"/u);
   assert.match(html, /id="composerAccessSelect"/u);
+  assert.match(html, /id="composerModelSelect"/u);
+  assert.match(html, /id="composerReasoningSelect"/u);
   assert.match(html, /<option value="repo">Repo scoped<\/option>/u);
   assert.match(html, /<option value="full">Full access<\/option>/u);
   const actionsStart = html.indexOf('class="composer-actions"');
@@ -2256,6 +2258,12 @@ test("web composer exposes Direct and Queue dispatch modes", async () => {
   assert.match(source, /const dispatchModes = \["direct", "queue"\]/u);
   assert.match(source, /const accessModes = \["repo", "full"\]/u);
   assert.match(source, /function permissionModeForAccessMode/u);
+  assert.match(source, /async function refreshCodexModels/u);
+  assert.match(source, /\/v1\/models\?project=/u);
+  assert.match(source, /formData\.append\("model", state\.selectedModel\)/u);
+  assert.match(source, /formData\.append\("reasoningEffort", state\.selectedReasoningEffort\)/u);
+  assert.match(source, /model: state\.selectedModel/u);
+  assert.match(source, /reasoningEffort: state\.selectedReasoningEffort/u);
   assert.match(source, /function cycleDispatchMode\(\)/u);
   assert.match(source, /function setDispatchMode\(mode/u);
   assert.match(source, /function setAccessMode\(mode/u);
@@ -2279,6 +2287,25 @@ test("web composer exposes Direct and Queue dispatch modes", async () => {
   assert.match(css, /\.composer-mode-options/u);
   assert.match(css, /\.composer-access-select/u);
   assert.match(css, /grid-template-columns: 48px minmax\(0, 1fr\) 48px;/u);
+});
+
+test("Mac web shell reuses the iPhone wordmark and baby crawfish branding", async () => {
+  const [html, css, serverSource, buildSource, iosMascot] = await Promise.all([
+    readFile(webIndexPath, "utf8"),
+    readFile(webCssPath, "utf8"),
+    readFile(path.join(repoRoot, "lib", "server.mjs"), "utf8"),
+    readFile(nativeMacBuildPath, "utf8"),
+    readFile(iosMascotImagePath),
+  ]);
+
+  assert.match(html, /src="\/assets\/clawdad-wordmark\.png/u);
+  assert.match(html, /src="\/assets\/clawdad-baby-mascot\.png/u);
+  assert.match(html, /data-static-brand="iphone"/u);
+  assert.match(html, /Run dat crawfish cool, cher/u);
+  assert.match(css, /\.mascot-carousel\[data-static-brand="iphone"\] \.mascot-photo/u);
+  assert.match(serverSource, /"\/assets\/clawdad-baby-mascot\.png": babyMascotAssetPath/u);
+  assert.match(buildSource, /clawdad-mascot\.png" \\\n+  "\$runtime_dir\/assets\/clawdad-baby-mascot\.png"/u);
+  assert.ok(iosMascot.length > 100_000);
 });
 
 test("web queue cards expose swipe-left archive confirmation", async () => {

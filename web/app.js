@@ -107,6 +107,12 @@ const state = {
   dispatchPending: false,
   dispatchMode: "direct",
   accessMode: "repo",
+  modelOptions: [],
+  modelCatalogProject: "",
+  modelsLoading: false,
+  modelsError: "",
+  selectedModel: "",
+  selectedReasoningEffort: "",
   sessionSwitchPending: false,
   projectModalPending: false,
   projectsRefreshPromise: null,
@@ -324,6 +330,9 @@ const elements = {
   quickPromptButton: document.querySelector("#quickPromptButton"),
   currentTerminalButton: document.querySelector("#currentTerminalButton"),
   composerAccessSelect: document.querySelector("#composerAccessSelect"),
+  composerModelSelect: document.querySelector("#composerModelSelect"),
+  composerReasoningSelect: document.querySelector("#composerReasoningSelect"),
+  composerModelStatus: document.querySelector("#composerModelStatus"),
   terminalPanel: document.querySelector("#terminalPanel"),
   terminalPanelBack: document.querySelector("#terminalPanelBack"),
   terminalPanelTitle: document.querySelector("#terminalPanelTitle"),
@@ -524,6 +533,8 @@ let terminalPanelStickToBottom = true;
 const quickPromptTitleMax = 80;
 const quickPromptTextMax = 12_000;
 const composerAccessModeKey = "clawdad-composer-access-mode-v1";
+const composerModelKey = "clawdad-composer-model-v1";
+const composerReasoningEffortKey = "clawdad-composer-reasoning-effort-v1";
 const voiceInputDeviceKey = "clawdad-voice-input-device-v1";
 const newSessionSelectValue = "__clawdad_new_session__";
 const dispatchModes = ["direct", "queue"];
@@ -1746,6 +1757,17 @@ function preloadHeaderCarouselWindow(startIndex = headerCarousel.index, count = 
 
 async function initHeaderCarousel() {
   if (!elements.headerCarouselImage) {
+    return;
+  }
+
+  if (elements.headerCarouselButton?.dataset.staticBrand === "iphone") {
+    clearHeaderCarouselTimer();
+    headerCarousel.images = [elements.headerCarouselImage.getAttribute("src") || ""].filter(Boolean);
+    headerCarousel.index = 0;
+    headerCatchphrases.phrases = ["Run dat crawfish cool, cher"];
+    resetHeaderCatchphraseCycle();
+    applyHeaderCatchphrase("Run dat crawfish cool, cher", { animate: false });
+    updateHeaderCarouselAvailability();
     return;
   }
 
@@ -13455,6 +13477,205 @@ function updateAccessModeControl() {
   elements.composerAccessSelect.title = mode === "full" ? "Full access" : "Repo scoped";
 }
 
+function normalizeCodexModelOption(value = {}) {
+  const supportedReasoningEfforts = Array.isArray(value.supportedReasoningEfforts)
+    ? value.supportedReasoningEfforts.map((effort) => String(effort || "").trim()).filter(Boolean)
+    : [];
+  const model = String(value.model || value.id || "").trim();
+  return {
+    id: String(value.id || model).trim(),
+    model,
+    displayName: String(value.displayName || model).trim(),
+    description: String(value.description || "").trim(),
+    isDefault: value.isDefault === true,
+    defaultReasoningEffort: String(
+      value.defaultReasoningEffort || supportedReasoningEfforts[0] || "",
+    ).trim(),
+    supportedReasoningEfforts,
+  };
+}
+
+function reasoningEffortLabel(effort) {
+  const normalized = String(effort || "").trim().toLowerCase();
+  if (normalized === "xhigh") return "XHigh";
+  return normalized ? `${normalized[0].toUpperCase()}${normalized.slice(1)}` : "";
+}
+
+function selectedCodexModelOption() {
+  return state.modelOptions.find((option) => option.model === state.selectedModel) || null;
+}
+
+function selectedModelReasoningEfforts() {
+  const model = selectedCodexModelOption();
+  const efforts = Array.isArray(model?.supportedReasoningEfforts)
+    ? model.supportedReasoningEfforts
+    : [];
+  return efforts.length > 0
+    ? efforts
+    : [state.selectedReasoningEffort || model?.defaultReasoningEffort].filter(Boolean);
+}
+
+function restoreComposerModelPreferences() {
+  try {
+    state.selectedModel = String(localStorage.getItem(composerModelKey) || "").trim();
+    state.selectedReasoningEffort = String(
+      localStorage.getItem(composerReasoningEffortKey) || "",
+    ).trim();
+  } catch {
+    state.selectedModel = "";
+    state.selectedReasoningEffort = "";
+  }
+}
+
+function persistComposerModelPreferences() {
+  try {
+    if (state.selectedModel) {
+      localStorage.setItem(composerModelKey, state.selectedModel);
+    }
+    if (state.selectedReasoningEffort) {
+      localStorage.setItem(composerReasoningEffortKey, state.selectedReasoningEffort);
+    }
+  } catch {
+    // Keep the active in-memory selection when WebKit storage is unavailable.
+  }
+}
+
+function setSelectedCodexModel(modelId) {
+  const option = state.modelOptions.find((candidate) => candidate.model === modelId);
+  if (!option) return;
+  state.selectedModel = option.model;
+  if (!option.supportedReasoningEfforts.includes(state.selectedReasoningEffort)) {
+    state.selectedReasoningEffort = option.defaultReasoningEffort || option.supportedReasoningEfforts[0] || "";
+  }
+  persistComposerModelPreferences();
+  renderComposerModelControls();
+}
+
+function setSelectedReasoningEffort(effort) {
+  const normalized = String(effort || "").trim();
+  if (!selectedModelReasoningEfforts().includes(normalized)) return;
+  state.selectedReasoningEffort = normalized;
+  persistComposerModelPreferences();
+  renderComposerModelControls();
+}
+
+function renderComposerModelControls() {
+  const modelSelect = elements.composerModelSelect;
+  const reasoningSelect = elements.composerReasoningSelect;
+  if (!modelSelect || !reasoningSelect) return;
+
+  const modelRenderKey = JSON.stringify([
+    state.modelsLoading,
+    state.modelsError,
+    state.selectedModel,
+    state.modelOptions.map((option) => [option.model, option.displayName]),
+  ]);
+  if (modelSelect.dataset.renderKey !== modelRenderKey) {
+    modelSelect.replaceChildren();
+    if (state.modelOptions.length === 0) {
+      const option = document.createElement("option");
+      option.value = "";
+      option.textContent = state.modelsLoading ? "Loading Codex models…" : "Models unavailable";
+      modelSelect.append(option);
+    } else {
+      for (const model of state.modelOptions) {
+        const option = document.createElement("option");
+        option.value = model.model;
+        option.textContent = model.displayName;
+        modelSelect.append(option);
+      }
+      modelSelect.value = state.selectedModel;
+    }
+    modelSelect.dataset.renderKey = modelRenderKey;
+  }
+  modelSelect.disabled = state.modelsLoading || state.modelOptions.length === 0;
+
+  const reasoningEfforts = selectedModelReasoningEfforts();
+  const reasoningRenderKey = JSON.stringify([
+    state.modelsLoading,
+    state.selectedReasoningEffort,
+    reasoningEfforts,
+  ]);
+  if (reasoningSelect.dataset.renderKey !== reasoningRenderKey) {
+    reasoningSelect.replaceChildren();
+    if (reasoningEfforts.length === 0) {
+      const option = document.createElement("option");
+      option.value = "";
+      option.textContent = state.modelsLoading ? "Loading reasoning levels…" : "Reasoning unavailable";
+      reasoningSelect.append(option);
+    } else {
+      for (const effort of reasoningEfforts) {
+        const option = document.createElement("option");
+        option.value = effort;
+        option.textContent = reasoningEffortLabel(effort);
+        reasoningSelect.append(option);
+      }
+      reasoningSelect.value = state.selectedReasoningEffort;
+    }
+    reasoningSelect.dataset.renderKey = reasoningRenderKey;
+  }
+  reasoningSelect.disabled = state.modelsLoading || reasoningEfforts.length === 0;
+
+  if (elements.composerModelStatus) {
+    elements.composerModelStatus.textContent = state.modelsError || "";
+    elements.composerModelStatus.hidden = !state.modelsError;
+  }
+}
+
+async function refreshCodexModels({ force = false } = {}) {
+  const project = String(state.selectedProject || "").trim();
+  if (!project) {
+    state.modelOptions = [];
+    state.modelCatalogProject = "";
+    state.modelsError = "";
+    renderComposerModelControls();
+    return;
+  }
+  if (!force && state.modelsLoading && state.modelCatalogProject === project) return;
+  if (!force && state.modelOptions.length > 0 && state.modelCatalogProject === project) return;
+
+  state.modelsLoading = true;
+  state.modelsError = "";
+  state.modelCatalogProject = project;
+  renderComposerModelControls();
+  try {
+    const payload = await fetchJson(`/v1/models?project=${encodeURIComponent(project)}`);
+    if (state.selectedProject !== project) return;
+    const models = (Array.isArray(payload.models) ? payload.models : [])
+      .map(normalizeCodexModelOption)
+      .filter((model) => model.model);
+    if (models.length === 0) {
+      throw new Error("Codex did not return any available models.");
+    }
+    state.modelOptions = models;
+    const configuredModel = String(payload.configuredModel || "").trim();
+    if (!models.some((model) => model.model === state.selectedModel)) {
+      state.selectedModel = models.some((model) => model.model === configuredModel)
+        ? configuredModel
+        : models[0].model;
+    }
+    const selected = selectedCodexModelOption();
+    if (!selected?.supportedReasoningEfforts.includes(state.selectedReasoningEffort)) {
+      const configuredEffort = String(payload.configuredReasoningEffort || "").trim();
+      state.selectedReasoningEffort =
+        selected?.model === configuredModel && selected.supportedReasoningEfforts.includes(configuredEffort)
+          ? configuredEffort
+          : selected?.defaultReasoningEffort || selected?.supportedReasoningEfforts[0] || "";
+    }
+    persistComposerModelPreferences();
+  } catch (error) {
+    if (state.selectedProject === project) {
+      state.modelOptions = [];
+      state.modelsError = error.message || "Codex models could not be loaded.";
+    }
+  } finally {
+    if (state.selectedProject === project) {
+      state.modelsLoading = false;
+      renderComposerModelControls();
+    }
+  }
+}
+
 function dispatchModeAllowsBusySend(mode = state.dispatchMode) {
   return dispatchModes.includes(normalizeDispatchMode(mode));
 }
@@ -13881,6 +14102,7 @@ function renderAll() {
   renderModal();
   renderComposerAttachments();
   renderComposerToolsMenu();
+  renderComposerModelControls();
   renderQuickPromptModal();
   renderSessionImportModal();
   renderSessionTitleModal();
@@ -14225,6 +14447,7 @@ async function refreshProjects() {
       syncSelectedSession(state.selectedSessionId);
       cacheProjects(payload);
       renderAll();
+      void refreshCodexModels().catch(() => {});
       if (payload.autoImportScheduled && !state.projectAutoImportRefreshTimer) {
         state.projectAutoImportRefreshTimer = window.setTimeout(() => {
           state.projectAutoImportRefreshTimer = null;
@@ -14546,6 +14769,8 @@ async function handleSessionCreate() {
       body: JSON.stringify({
         project: project.path,
         provider: project.provider || "codex",
+        model: state.selectedModel,
+        reasoningEffort: state.selectedReasoningEffort,
       }),
     });
 
@@ -16245,6 +16470,9 @@ async function selectProjectPath(projectPath) {
   }
   clearControlInteraction("project-select");
   state.selectedProject = normalizedPath;
+  state.modelOptions = [];
+  state.modelCatalogProject = "";
+  state.modelsError = "";
   syncSelectedSession("", { preferCurrent: false });
   state.threadPreviewError = "";
   renderAll();
@@ -16253,6 +16481,7 @@ async function selectProjectPath(projectPath) {
     if (selected?.untracked) {
       await ensureProjectTrackedFromSelection(selected);
     }
+    void refreshCodexModels({ force: true });
     void refreshRecentHistory({ force: true, project: state.selectedProject }).catch(() => {});
     await refreshThreads();
   } catch (error) {
@@ -17077,6 +17306,10 @@ async function handleDispatch(event) {
           formData.append("wait", "false");
           formData.append("dispatchMode", dispatchMode);
           formData.append("permissionMode", permissionMode);
+          if (state.selectedModel) formData.append("model", state.selectedModel);
+          if (state.selectedReasoningEffort) {
+            formData.append("reasoningEffort", state.selectedReasoningEffort);
+          }
           for (const attachment of composerAttachments) {
             formData.append("attachments", attachment.file, attachment.fileName);
           }
@@ -17097,6 +17330,8 @@ async function handleDispatch(event) {
             wait: false,
             dispatchMode,
             permissionMode,
+            model: state.selectedModel,
+            reasoningEffort: state.selectedReasoningEffort,
           }),
         };
     const payload = await fetchJson("/v1/dispatch", requestOptions);
@@ -17250,6 +17485,12 @@ function bindEvents() {
   }
   elements.composerAccessSelect?.addEventListener("change", (event) => {
     setAccessMode(event.target.value);
+  });
+  elements.composerModelSelect?.addEventListener("change", (event) => {
+    setSelectedCodexModel(event.target.value);
+  });
+  elements.composerReasoningSelect?.addEventListener("change", (event) => {
+    setSelectedReasoningEffort(event.target.value);
   });
   elements.projectSummaryButton?.addEventListener("click", () => {
     void openProjectSummary();
@@ -18029,6 +18270,7 @@ async function boot() {
   restoreQueueCollapsed();
   restoreArtifactShelfCollapsed();
   restoreComposerAccessMode();
+  restoreComposerModelPreferences();
   restoreVoiceInputDevice();
   restoreCachedProjects();
   renderAll();

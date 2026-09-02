@@ -6,7 +6,7 @@ repo_root=${script_dir:h:h}
 app_name="ClawDad"
 bundle_id="earth.frg.ClawDad"
 app_version="${CLAWDAD_APP_VERSION:-0.7.0}"
-app_build="${CLAWDAD_APP_BUILD:-36}"
+app_build="${CLAWDAD_APP_BUILD:-37}"
 target_arch="${CLAWDAD_MAC_ARCH:-$(uname -m)}"
 node_version="${CLAWDAD_BUNDLED_NODE_VERSION:-24.20.0}"
 node_download_root="${CLAWDAD_NODE_DOWNLOAD_ROOT:-https://nodejs.org/download/release}"
@@ -167,6 +167,9 @@ runtime_assets=(
 for asset_name in "${runtime_assets[@]}"; do
   cp "$repo_root/assets/$asset_name" "$runtime_dir/assets/$asset_name"
 done
+cp \
+  "$repo_root/apps/ios/ClawDadMobile/Resources/Assets.xcassets/ClawDadMascot.imageset/clawdad-mascot.png" \
+  "$runtime_dir/assets/clawdad-baby-mascot.png"
 for header_asset in "$repo_root"/assets/clawdad-header-*.jpg; do
   cp "$header_asset" "$runtime_dir/assets/${header_asset:t}"
 done
