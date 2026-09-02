@@ -1017,6 +1017,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
       } catch {
         resolveNativeMessage(id: id, error: error.localizedDescription)
       }
+    case "reauthenticateCodex":
+      guard let systemReadiness else {
+        resolveNativeMessage(id: id, error: "System readiness is unavailable.")
+        return
+      }
+      do {
+        try systemReadiness.openCodexLogin(resetCredentials: true)
+        resolveNativeMessage(id: id, result: ["opened": true])
+      } catch {
+        resolveNativeMessage(id: id, error: error.localizedDescription)
+      }
     case "completeSystemSetup":
       guard let systemReadiness else {
         resolveNativeMessage(id: id, error: "System readiness is unavailable.")

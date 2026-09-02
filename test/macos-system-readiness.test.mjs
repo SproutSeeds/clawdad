@@ -48,4 +48,13 @@ test("Mac setup separates Codex usability from current release status", async ()
     /refreshSystemReadiness\(\{ forceCodexUpdateCheck: true \}\)/u,
   );
   assert.match(webIndex, /checks OpenAI's current release separately/u);
+  assert.match(readinessSource, /macCodexAuthenticationNeedsSignIn/u);
+  assert.match(readinessSource, /"requiresReauthentication"/u);
+  assert.match(readinessSource, /app-server daemon stop/u);
+  assert.match(readinessSource, /logout >\/dev\/null/u);
+  assert.match(readinessSource, /app-server daemon restart/u);
+  assert.match(nativeBridgeSource, /case "reauthenticateCodex"/u);
+  assert.match(webApp, /requestCodexAuthenticationRecovery/u);
+  assert.match(webApp, /Sign In Again/u);
+  assert.match(webApp, /ClawDad opened the secure sign-in flow/u);
 });

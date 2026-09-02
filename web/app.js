@@ -176,6 +176,9 @@ const state = {
   systemSetupStatus: "",
   systemSetupWorkspaceDraft: "",
   systemSetupPollTimer: null,
+  codexRecoveryAuthIssue: "",
+  codexRecoveryLoginOpened: false,
+  codexRecoveryAutoOpening: false,
   subscriptionEntitlement: null,
   subscriptionEntitlementStatus: "",
   remoteAssistStatus: null,
@@ -632,6 +635,9 @@ const nativeBridge = (() => {
     },
     openCodexLogin() {
       return bridge.call("openCodexLogin");
+    },
+    reauthenticateCodex() {
+      return bridge.call("reauthenticateCodex");
     },
     completeSystemSetup() {
       return bridge.call("completeSystemSetup");
@@ -4880,12 +4886,26 @@ function appendThreadEntry(entry) {
 }
 
 function completeThreadEntry(entry, patch) {
-  updateThreadEntry(entry.id, patch);
+  const resolvedPatch = typeof patch === "function" ? patch(entry) : patch;
+  const authenticationFailure =
+    String(resolvedPatch?.status || "").trim().toLowerCase() === "failed" &&
+    codexAuthenticationFailure(resolvedPatch?.response);
+  const effectivePatch = authenticationFailure
+    ? {
+        ...resolvedPatch,
+        diagnosticResponse: String(resolvedPatch?.response || ""),
+        response: codexAuthenticationRecoveryMessage(),
+      }
+    : resolvedPatch;
+  updateThreadEntry(entry.id, effectivePatch);
   const completedEntry = entryById(entry.id) || {
     ...entry,
-    ...(typeof patch === "function" ? patch(entry) : patch),
+    ...effectivePatch,
   };
   hydrateHistoryFromThreadEntry(completedEntry);
+  if (authenticationFailure) {
+    requestCodexAuthenticationRecovery(resolvedPatch?.response);
+  }
   if (entryHasReturned(completedEntry)) {
     void prefetchSessionHistory(completedEntry.projectPath, completedEntry.sessionId, { force: true });
   }
@@ -11352,6 +11372,46 @@ function applyDesktopPlatformCopy() {
   }
 }
 
+function codexAuthenticationFailure(value = "") {
+  const text = String(value || "").trim();
+  if (!text) {
+    return false;
+  }
+  return (
+    /refresh token was already used/iu.test(text) ||
+    /access token could not be refreshed/iu.test(text) ||
+    /(?:authentication|authorization|auth) (?:failed|required|expired)/iu.test(text) ||
+    /(?:please|must) (?:log|sign) (?:out and )?(?:log|sign) in again/iu.test(text) ||
+    /(?:invalid|expired) (?:access|refresh) token/iu.test(text)
+  );
+}
+
+function codexAuthenticationRecoveryMessage() {
+  return nativeBridge.isAvailable()
+    ? "Codex needs a fresh ChatGPT sign-in on this Mac. ClawDad opened the secure sign-in flow; finish it, return here, and resend this message."
+    : "Codex needs a fresh ChatGPT sign-in on the host computer. Open ClawDad there, choose Sign In Again, then resend this message.";
+}
+
+function requestCodexAuthenticationRecovery(value, { automatic = true } = {}) {
+  if (!codexAuthenticationFailure(value) || !nativeBridge.isAvailable()) {
+    return false;
+  }
+  state.codexRecoveryAuthIssue = codexAuthenticationRecoveryMessage();
+  state.systemSetupForcedOpen = true;
+  state.systemSetupStep = 1;
+  state.systemSetupStatus = state.codexRecoveryAuthIssue;
+  renderAll();
+  focusSystemSetupStep();
+  if (automatic && !state.codexRecoveryLoginOpened && !state.codexRecoveryAutoOpening) {
+    state.codexRecoveryAutoOpening = true;
+    window.setTimeout(() => {
+      state.codexRecoveryAutoOpening = false;
+      void openSystemSetupCodexLogin({ resetCredentials: true });
+    }, 0);
+  }
+  return true;
+}
+
 async function refreshDesktopAppStatus({ quiet = false } = {}) {
   if (!nativeBridge.isAvailable()) {
     return;
@@ -11385,6 +11445,24 @@ function systemSetupIsOpen() {
 
 function applySystemReadiness(status = {}) {
   state.systemReadiness = status && typeof status === "object" ? status : null;
+  const codex = state.systemReadiness?.codex || {};
+  const authenticationReady =
+    codex.loggedIn === true &&
+    codex.requiresReauthentication !== true &&
+    codex.authenticationState === "ready";
+  if (authenticationReady) {
+    state.codexRecoveryAuthIssue = "";
+    state.codexRecoveryLoginOpened = false;
+    state.codexRecoveryAutoOpening = false;
+  } else if (
+    state.systemReadiness?.completed === true &&
+    state.systemReadiness?.needsLocalCodex === true &&
+    codex.requiresReauthentication === true
+  ) {
+    requestCodexAuthenticationRecovery(
+      `authentication required: ${codex.authenticationMessage || codex.loginStatus || "fresh ChatGPT sign-in needed"}`,
+    );
+  }
   if (!state.systemSetupWorkspaceDraft) {
     state.systemSetupWorkspaceDraft = String(
       state.workspace?.primaryRoot || state.workspace?.suggestions?.[0] || "",
@@ -11401,13 +11479,16 @@ function stopSystemSetupPolling() {
 
 function scheduleSystemSetupPolling() {
   stopSystemSetupPolling();
-  if (state.systemReadiness?.install?.state !== "installing") {
+  const authenticationRunning =
+    state.systemReadiness?.codex?.authenticationState === "reauthenticating" ||
+    state.codexRecoveryLoginOpened;
+  if (state.systemReadiness?.install?.state !== "installing" && !authenticationRunning) {
     return;
   }
   state.systemSetupPollTimer = window.setTimeout(() => {
     state.systemSetupPollTimer = null;
     void refreshSystemReadiness({ quiet: true });
-  }, 1200);
+  }, authenticationRunning ? 1800 : 1200);
 }
 
 async function refreshSystemReadiness({ quiet = false, forceCodexUpdateCheck = false } = {}) {
@@ -11546,21 +11627,34 @@ async function startSystemSetupCodexInstall() {
   }
 }
 
-async function openSystemSetupCodexLogin() {
+async function openSystemSetupCodexLogin({ resetCredentials = null } = {}) {
   if (!nativeBridge.isAvailable() || state.systemSetupPending) {
     return;
   }
+  const shouldReset = resetCredentials ?? Boolean(
+    state.codexRecoveryAuthIssue ||
+    state.systemReadiness?.codex?.requiresReauthentication,
+  );
   state.systemSetupPending = "login";
-  state.systemSetupStatus = "Opening the Codex sign-in window…";
+  state.systemSetupStatus = shouldReset
+    ? "Opening a fresh Codex sign-in window…"
+    : "Opening the Codex sign-in window…";
   renderAll();
   try {
-    await nativeBridge.openCodexLogin();
-    state.systemSetupStatus = "Finish signing in with ChatGPT, return here, then click Refresh.";
+    if (shouldReset) {
+      state.codexRecoveryLoginOpened = true;
+      await nativeBridge.reauthenticateCodex();
+    } else {
+      await nativeBridge.openCodexLogin();
+    }
+    state.systemSetupStatus = "Finish signing in with ChatGPT. ClawDad will verify it automatically.";
   } catch (error) {
+    state.codexRecoveryLoginOpened = false;
     state.systemSetupStatus = String(error?.message || "Codex sign in could not open.");
     showError(error);
   } finally {
     state.systemSetupPending = "";
+    scheduleSystemSetupPolling();
     renderAll();
   }
 }
@@ -11751,14 +11845,24 @@ function renderSystemSetupAssistant() {
   if (elements.systemSetupCodexActions) {
     elements.systemSetupCodexActions.hidden = !needsCodex;
   }
-  const codexUsable = codex.installed === true && codex.loggedIn === true;
+  const codexNeedsReauthentication = Boolean(
+    state.codexRecoveryAuthIssue || codex.requiresReauthentication === true,
+  );
+  const codexUsable =
+    codex.installed === true &&
+    codex.loggedIn === true &&
+    !codexNeedsReauthentication;
   const codexUpdateAvailable = codexUpdate.state === "available" && codexUpdate.available === true;
   const codexUpdateCurrent = codexUpdate.state === "current";
   const codexVersion = codex.installedVersion || codex.version || "Codex";
   let codexDetail = "Install the official standalone Codex CLI into ~/.local/bin.";
   if (codex.installed) {
     const detailParts = [codexVersion];
-    detailParts.push(codex.loggedIn ? "signed in" : "sign in with ChatGPT");
+    detailParts.push(codexNeedsReauthentication
+      ? "fresh ChatGPT sign-in needed"
+      : codex.loggedIn
+        ? "signed in"
+        : "sign in with ChatGPT");
     if (codexUpdateAvailable) {
       detailParts.push(`${codexUpdate.latestVersion || "new release"} available`);
     } else if (codexUpdateCurrent) {
@@ -11778,7 +11882,11 @@ function renderSystemSetupAssistant() {
   );
   let codexStateLabel = "Install";
   let codexStateReady = false;
-  if (codex.installed && !codex.loggedIn) {
+  if (codex.installed && codexNeedsReauthentication) {
+    codexStateLabel = codex.authenticationState === "reauthenticating"
+      ? "Signing in"
+      : "Sign in again";
+  } else if (codex.installed && !codex.loggedIn) {
     codexStateLabel = "Sign in";
   } else if (codexUsable && codexUpdateAvailable) {
     codexStateLabel = "Update available";
@@ -11810,8 +11918,14 @@ function renderSystemSetupAssistant() {
   }
   if (elements.systemSetupLoginCodexButton) {
     elements.systemSetupLoginCodexButton.disabled =
-      Boolean(state.systemSetupPending) || codex.installed !== true || codex.loggedIn === true;
-    elements.systemSetupLoginCodexButton.textContent = codex.loggedIn
+      Boolean(state.systemSetupPending) ||
+      codex.installed !== true ||
+      (codex.loggedIn === true && !codexNeedsReauthentication);
+    elements.systemSetupLoginCodexButton.textContent = codexNeedsReauthentication
+      ? codex.authenticationState === "reauthenticating"
+        ? "Sign-in window opened"
+        : "Sign In Again"
+      : codex.loggedIn
       ? "Signed in"
       : "Sign in with ChatGPT";
   }
@@ -11823,7 +11937,15 @@ function renderSystemSetupAssistant() {
   }
   setText(
     elements.systemSetupRuntimeStatus,
-    String(install.message || codexUpdate.message || (needsCodex ? "ClawDad checks login status without reading your credentials." : "Local Codex is optional for a controller-only Mac.")),
+    String(
+      state.codexRecoveryAuthIssue ||
+      codex.authenticationMessage ||
+      install.message ||
+      codexUpdate.message ||
+      (needsCodex
+        ? "ClawDad checks login status without reading your credentials."
+        : "Local Codex is optional for a controller-only Mac."),
+    ),
     { empty: false },
   );
 
@@ -13668,6 +13790,7 @@ async function refreshCodexModels({ force = false } = {}) {
       state.modelOptions = [];
       state.modelsError = error.message || "Codex models could not be loaded.";
     }
+    requestCodexAuthenticationRecovery(error.message);
   } finally {
     if (state.selectedProject === project) {
       state.modelsLoading = false;
@@ -14684,6 +14807,7 @@ async function refreshArtifacts({ force = false } = {}) {
 }
 
 function showError(error) {
+  requestCodexAuthenticationRecovery(error?.message);
   setText(elements.mailboxState, "error", { empty: false });
   renderQueueList();
   updateSendAvailability();
@@ -17335,6 +17459,19 @@ async function handleDispatch(event) {
           }),
         };
     const payload = await fetchJson("/v1/dispatch", requestOptions);
+    if (payload.sessionRecovery?.sessionId) {
+      const recoveredSessionId = String(payload.sessionRecovery.sessionId);
+      const recoveredProject = payload.sessionRecovery.projectDetails;
+      if (recoveredProject) {
+        upsertProject(recoveredProject);
+      }
+      state.selectedSessionId = recoveredSessionId;
+      entry.sessionId = recoveredSessionId;
+      entry.sessionLabel = sessionOptionLabel(
+        payload.sessionRecovery.session,
+        project,
+      );
+    }
     const directAccepted = Boolean(payload.direct || payload.interjected);
     const effectiveScheduleMode =
       normalizeHistoryScheduleMode(payload.effectiveDispatchMode || payload.dispatchMode || payload.scheduleMode) ||

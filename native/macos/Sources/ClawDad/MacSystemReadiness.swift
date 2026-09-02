@@ -144,6 +144,25 @@ func macCodexLatestVersion(from releaseData: Data) -> String? {
   return macCodexNormalizedVersion(tag)
 }
 
+func macCodexAuthenticationNeedsSignIn(
+  status: Int32,
+  output: String,
+  timedOut: Bool = false
+) -> Bool {
+  if timedOut || status != 0 {
+    return true
+  }
+  let value = output.lowercased()
+  return value.contains("refresh token was already used") ||
+    value.contains("access token could not be refreshed") ||
+    value.contains("authentication failed") ||
+    value.contains("authentication required") ||
+    value.contains("invalid refresh token") ||
+    value.contains("expired refresh token") ||
+    value.contains("sign in again") ||
+    value.contains("log in again")
+}
+
 private struct MacCapturedCommand {
   var status: Int32
   var output: String
@@ -180,6 +199,8 @@ final class MacSystemReadiness {
   private let stateLock = NSLock()
   private var installState = "idle"
   private var installMessage = ""
+  private var authenticationState = "idle"
+  private var authenticationMessage = ""
   private var latestReleaseSnapshot: MacCodexLatestReleaseSnapshot?
 
   init(
@@ -291,7 +312,7 @@ final class MacSystemReadiness {
     }
   }
 
-  func openCodexLogin() throws {
+  func openCodexLogin(resetCredentials: Bool = false) throws {
     guard let codexPath = detectedCodexPath() else {
       throw NSError(
         domain: "ClawDad",
@@ -308,12 +329,28 @@ final class MacSystemReadiness {
       withIntermediateDirectories: true
     )
     let commandURL = loginDir.appendingPathComponent("Sign In to Codex.command")
+    let resultURL = loginDir.appendingPathComponent("codex-login-result.txt")
+    try? FileManager.default.removeItem(at: resultURL)
+    updateAuthenticationState(
+      state: "reauthenticating",
+      message: resetCredentials
+        ? "A fresh ChatGPT sign-in is open in Terminal."
+        : "ChatGPT sign-in is open in Terminal."
+    )
     let home = FileManager.default.homeDirectoryForCurrentUser
     let codexHome = ProcessInfo.processInfo.environment["CODEX_HOME"]?
       .trimmingCharacters(in: .whitespacesAndNewlines)
     let sharedCodexHome = (codexHome?.isEmpty == false)
       ? codexHome!
       : home.appendingPathComponent(".codex", isDirectory: true).path
+    let resetScript = resetCredentials
+      ? """
+        echo "Clearing the expired Codex sign-in..."
+        \(shellQuote(codexPath)) app-server daemon stop >/dev/null 2>&1 || true
+        \(shellQuote(codexPath)) logout >/dev/null 2>&1 || true
+        echo
+        """
+      : ""
     let script = """
     #!/bin/zsh
     export CODEX_HOME=\(shellQuote(sharedCodexHome))
@@ -322,9 +359,26 @@ final class MacSystemReadiness {
     echo "ClawDad Codex sign in"
     echo "Your browser will open so you can sign in with ChatGPT."
     echo
+    \(resetScript)
     \(shellQuote(codexPath)) login
+    login_exit=$?
     echo
-    \(shellQuote(codexPath)) login status
+    if [ "$login_exit" -eq 0 ]; then
+      \(shellQuote(codexPath)) app-server daemon restart >/dev/null 2>&1 || true
+      \(shellQuote(codexPath)) login status
+      status_exit=$?
+    else
+      status_exit=$login_exit
+    fi
+    if [ "$status_exit" -eq 0 ]; then
+      /usr/bin/printf 'ready\n' > \(shellQuote(resultURL.path))
+      echo
+      echo "Codex is signed in and ready for ClawDad."
+    else
+      /usr/bin/printf 'failed\n' > \(shellQuote(resultURL.path))
+      echo
+      echo "Codex sign in did not finish. Return to ClawDad to try again."
+    fi
     echo
     echo "You can close this Terminal window and return to ClawDad."
     read -k 1 "?Press any key to close..."
@@ -367,13 +421,29 @@ final class MacSystemReadiness {
     let login = codexPath.map {
       capture($0, ["login", "status"], timeout: 10)
     }
-    let codexLoggedIn = login?.status == 0 && login?.timedOut == false
+    let loginNeedsSignIn = login.map {
+      macCodexAuthenticationNeedsSignIn(
+        status: $0.status,
+        output: $0.output,
+        timedOut: $0.timedOut
+      )
+    } ?? true
+    let codexLoggedIn = !loginNeedsSignIn
+    let authentication = currentAuthenticationState(
+      loginReady: codexLoggedIn,
+      loginOutput: login?.output ?? ""
+    )
+    let requiresReauthentication = currentRole.needsLocalCodex && (
+      loginNeedsSignIn ||
+      authentication.state == "reauthenticating" ||
+      authentication.state == "failed"
+    )
     let state = currentInstallState()
     let completed = defaults.bool(forKey: Self.completedKey)
     let canComplete = nodeReady && orpReady && MacSystemReadinessPolicy.canComplete(
       role: currentRole,
       codexInstalled: codexPath != nil,
-      codexLoggedIn: codexLoggedIn
+      codexLoggedIn: codexLoggedIn && !requiresReauthentication
     )
     let home = FileManager.default.homeDirectoryForCurrentUser
     let codexHome = ProcessInfo.processInfo.environment["CODEX_HOME"]?
@@ -404,6 +474,9 @@ final class MacSystemReadiness {
         "version": codexVersion,
         "installedVersion": macCodexNormalizedVersion(codexVersion) ?? "",
         "loggedIn": codexLoggedIn,
+        "requiresReauthentication": requiresReauthentication,
+        "authenticationState": authentication.state,
+        "authenticationMessage": authentication.message,
         "loginStatus": login?.output ?? "",
         "home": (codexHome?.isEmpty == false)
           ? codexHome!
@@ -650,6 +723,44 @@ final class MacSystemReadiness {
     installState = state
     installMessage = message
     stateLock.unlock()
+  }
+
+  private func updateAuthenticationState(state: String, message: String) {
+    stateLock.lock()
+    authenticationState = state
+    authenticationMessage = message
+    stateLock.unlock()
+  }
+
+  private func currentAuthenticationState(
+    loginReady: Bool,
+    loginOutput: String
+  ) -> (state: String, message: String) {
+    let resultURL = supportDir
+      .appendingPathComponent("setup", isDirectory: true)
+      .appendingPathComponent("codex-login-result.txt")
+    let result = (try? String(contentsOf: resultURL, encoding: .utf8))?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .lowercased() ?? ""
+
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    if result == "ready", loginReady {
+      authenticationState = "ready"
+      authenticationMessage = "Codex is signed in and ready."
+    } else if result == "failed" {
+      authenticationState = "failed"
+      authenticationMessage = "Codex sign in did not finish. Click Sign In Again to retry."
+    } else if !loginReady && authenticationState != "reauthenticating" {
+      authenticationState = "required"
+      authenticationMessage = loginOutput.isEmpty
+        ? "Sign in with ChatGPT to use Codex on this Mac."
+        : "Codex needs a fresh ChatGPT sign-in on this Mac."
+    } else if loginReady && authenticationState == "idle" {
+      authenticationState = "ready"
+      authenticationMessage = "Codex is signed in and ready."
+    }
+    return (authenticationState, authenticationMessage)
   }
 
   private func currentInstallState() -> (state: String, message: String) {

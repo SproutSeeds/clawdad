@@ -3601,7 +3601,7 @@ test("prod-doctor emits live runtime and session health summary", async () => {
   }
 });
 
-test("dispatch rejects a seeded Codex session whose transcript belongs to another project", async () => {
+test("dispatch recovery replaces an active Codex session from another project and dispatches on the fresh thread", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-dispatch-binding-"));
   const home = path.join(root, "home");
   const codexHome = path.join(root, "codex-home");
@@ -3648,9 +3648,26 @@ test("dispatch rejects a seeded Codex session whose transcript belongs to anothe
   );
   await writeFile(
     mockBinPath,
-    `#!/bin/sh
-printf invoked > ${JSON.stringify(invokedPath)}
-exit 0
+    `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = require("node:path");
+const args = process.argv.slice(2);
+fs.writeFileSync(${JSON.stringify(invokedPath)}, "invoked");
+const projectPath = args[1];
+const sessionIndex = args.indexOf("--session");
+fs.writeFileSync(
+  path.join(projectPath, ".clawdad", "mailbox", "status.json"),
+  JSON.stringify({
+    state: "running",
+    request_id: "req-recovered-session",
+    session_id: sessionIndex >= 0 ? args[sessionIndex + 1] : null,
+    dispatched_at: new Date().toISOString(),
+    heartbeat_at: new Date().toISOString(),
+    completed_at: null,
+    error: null,
+    pid: process.pid,
+  }, null, 2),
+);
 `,
     "utf8",
   );
@@ -3700,12 +3717,134 @@ exit 0
         message: "Run the next step.",
       }),
     });
-    assert.equal(response.status, 409);
     const payload = await response.json();
-    assert.equal(payload.ok, false);
-    assert.equal(payload.reason, "cwd_mismatch");
-    assert.match(payload.error, /belongs to/u);
-    await assert.rejects(readFile(invokedPath, "utf8"), { code: "ENOENT" });
+    const debugState = JSON.parse(await readFile(path.join(home, "state.json"), "utf8"));
+    assert.equal(response.status, 202, JSON.stringify({ payload, debugState }));
+    assert.equal(payload.ok, true);
+    assert.equal(payload.requestId, "req-recovered-session");
+    assert.equal(payload.sessionRecovery.kind, "stale_active_session");
+    assert.equal(payload.sessionRecovery.previousSessionId, sessionId);
+    assert.notEqual(payload.sessionRecovery.sessionId, sessionId);
+    assert.equal(payload.sessionRecovery.session.providerSessionSeeded, false);
+    assert.equal(await readFile(invokedPath, "utf8"), "invoked");
+
+    const state = JSON.parse(await readFile(path.join(home, "state.json"), "utf8"));
+    const projectState = state.projects[projectPath];
+    assert.equal(
+      projectState.quarantined_sessions[sessionId].reason,
+      "codex_session_not_found_for_project",
+    );
+    assert.equal(projectState.session_aliases[sessionId], payload.sessionRecovery.sessionId);
+    assert.equal(projectState.active_session_id, payload.sessionRecovery.sessionId);
+    assert.equal(
+      projectState.sessions[payload.sessionRecovery.sessionId].provider_session_seeded,
+      "false",
+    );
+  } finally {
+    await stopServer(child);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("read endpoint marks refresh-token reuse as a Codex reauthentication recovery", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-auth-recovery-"));
+  const home = path.join(root, "home");
+  const projectPath = path.join(root, "scratchpad");
+  const mailboxPath = path.join(projectPath, ".clawdad", "mailbox");
+  const configPath = path.join(root, "server.json");
+  const mockBinPath = path.join(root, "clawdad-mock");
+  const sessionId = "local-auth-session";
+  const authError = "Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.";
+
+  await mkdir(mailboxPath, { recursive: true });
+  await mkdir(home, { recursive: true });
+  await writeFile(
+    path.join(home, "state.json"),
+    JSON.stringify({
+      version: 3,
+      projects: {
+        [projectPath]: {
+          status: "failed",
+          active_session_id: sessionId,
+          sessions: {
+            [sessionId]: {
+              slug: "Scratchpad Chat",
+              provider: "codex",
+              provider_session_seeded: "false",
+              status: "failed",
+            },
+          },
+        },
+      },
+    }, null, 2),
+    "utf8",
+  );
+  await writeFile(
+    path.join(mailboxPath, "status.json"),
+    JSON.stringify({
+      state: "failed",
+      request_id: "req-auth-recovery",
+      session_id: sessionId,
+      completed_at: "2026-09-02T08:00:00.000Z",
+      error: authError,
+      pid: null,
+    }, null, 2),
+    "utf8",
+  );
+  await writeFile(
+    path.join(mailboxPath, "response.md"),
+    [
+      "# Response: req-auth-recovery",
+      "",
+      "Completed: 2026-09-02T08:00:00.000Z",
+      `Session: ${sessionId}`,
+      "Exit code: 1",
+      "",
+      "---",
+      "",
+      authError,
+    ].join("\n"),
+    "utf8",
+  );
+  await writeFile(mockBinPath, "#!/bin/sh\nexit 1\n", "utf8");
+  await chmod(mockBinPath, 0o755);
+  const port = await freePort();
+  await writeFile(
+    configPath,
+    JSON.stringify({
+      host: "127.0.0.1",
+      port,
+      defaultProject: projectPath,
+      authMode: "tailscale",
+      allowedUsers: ["tester@example.com"],
+    }, null, 2),
+    "utf8",
+  );
+
+  const child = spawn(process.execPath, [serverScript, "serve", "--config", configPath], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      CLAWDAD_TTS_ENABLED: "false",
+      CLAWDAD_HOME: home,
+      CLAWDAD_BIN_PATH: mockBinPath,
+      CLAWDAD_CODEX_APP_SERVER_MODE: "isolated",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  try {
+    const baseUrl = `http://127.0.0.1:${port}`;
+    await waitForHealth(baseUrl, child);
+    const response = await fetch(
+      `${baseUrl}/v1/read?project=${encodeURIComponent(projectPath)}&raw=1`,
+      { headers: { "tailscale-user-login": "tester@example.com" } },
+    );
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.output, authError);
+    assert.equal(payload.recovery.kind, "codex_reauthentication");
+    assert.equal(payload.recovery.action, "sign_in_again");
   } finally {
     await stopServer(child);
     await rm(root, { recursive: true, force: true });

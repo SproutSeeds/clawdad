@@ -113,4 +113,28 @@ final class MacSystemReadinessTests: XCTestCase {
     XCTAssertEqual(macCodexLatestVersion(from: data), "0.152.1")
     XCTAssertNil(macCodexLatestVersion(from: Data("{}".utf8)))
   }
+
+  func testCodexAuthenticationClassifierRecognizesRefreshTokenReuse() {
+    XCTAssertTrue(
+      macCodexAuthenticationNeedsSignIn(
+        status: 1,
+        output: "Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again."
+      )
+    )
+    XCTAssertTrue(
+      macCodexAuthenticationNeedsSignIn(
+        status: 0,
+        output: "authentication required"
+      )
+    )
+  }
+
+  func testCodexAuthenticationClassifierAcceptsHealthyLoginStatus() {
+    XCTAssertFalse(
+      macCodexAuthenticationNeedsSignIn(
+        status: 0,
+        output: "Logged in using ChatGPT"
+      )
+    )
+  }
 }
