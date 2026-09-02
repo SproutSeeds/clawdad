@@ -1,18 +1,18 @@
-# ClawDad 0.7 Native Beta 12 Release Packet
+# ClawDad 0.7 Native Beta 13 Release Packet
 
 Prepared: 2026-09-01
 
 ## Release Identity
 
-- Embedded runtime: `0.7.0-beta.12`
-- Mac app: `0.7.0 (34)`
+- Embedded runtime: `0.7.0-beta.13`
+- Mac app: `0.7.0 (35)`
 - iPhone app: `0.7.0 (33)`
 - Managed Node runtime: `24.20.0`
 - Distribution mode: public signed Mac downloads plus private internal iPhone
   TestFlight
 
 The Mac download page is `https://clawdad.earth/`. Its architecture buttons
-resolve to the signed assets on the public `v0.7.0-beta.12` GitHub release. The
+resolve to the signed assets on the public `v0.7.0-beta.13` GitHub release. The
 iPhone companion is assigned only to `ClawDad Internal`. The public npm package,
 primary cloud Sparkle appcast, external TestFlight group, Beta App Review, and
 App Store submission remain unchanged. Intel updates use the small signed
@@ -32,6 +32,11 @@ downloads its signed ZIP from the same GitHub release.
 - The native control plane opens before Codex finishes starting. Setup,
   diagnostics, and recovery remain available when Codex is missing, logged out,
   slow, or temporarily unhealthy.
+- The setup assistant obtains the customer's workspace selection before loading
+  the project catalog. Managed Node processes stay direct children of the
+  signed ClawDad app so macOS attributes removable-volume access to ClawDad.
+- Native startup defers saved queue and delegate scans until setup is complete,
+  preventing an external workspace from blocking the first window.
 - The iPhone computer selector owns a separate project, thread, model,
   reasoning setting, directory-creation destination, and Remote Assist target
   for every paired host.
@@ -44,26 +49,27 @@ downloads its signed ZIP from the same GitHub release.
 
 | Artifact | Local path | SHA-256 |
 | --- | --- | --- |
-| Apple-silicon DMG | `native/macos/dist/releases/0.7.0-beta.12-macos-34/ClawDad-0.7.0-beta.12-mac.dmg` | `e4ff8e6d7f96d626778a43ae478cbb7aade27c9f322ea471f5f5a8a169fc2ba0` |
-| Apple-silicon ZIP | `native/macos/dist/releases/0.7.0-beta.12-macos-34/appcast/ClawDad-0.7.0-beta.12-mac.zip` | `a20a25c39501874aeae1d4fb5ca9cc0d82357f77f7db7333d16de573a153e0eb` |
-| Intel DMG | `native/macos/dist/releases/0.7.0-beta.12-macos-34-intel/ClawDad-0.7.0-beta.12-mac-intel.dmg` | `7ad449116777ec6b6055827b390c3b0b8b1daf8a87ec835879a6c59ebefa9a08` |
-| Intel ZIP | `native/macos/dist/releases/0.7.0-beta.12-macos-34-intel/appcast/ClawDad-0.7.0-beta.12-mac-intel.zip` | `a9645aa7a80bd793bde8fdf348064876e936bab74a967c3b0aada4cd34240cea` |
-| Intel signed appcast | `native/macos/dist/releases/0.7.0-beta.12-macos-34-intel/appcast/appcast.xml` | `3bb8421f1f2c25a297691ec73720baf95380251e9411981541f36b81cc156fd1` |
+| Apple-silicon DMG | `native/macos/dist/releases/0.7.0-beta.13-macos-35/ClawDad-0.7.0-beta.13-mac.dmg` | `4f8499336cddea08e4fbd643c4ba5ded172b8d536ab477e5f49c26298adcc48f` |
+| Apple-silicon ZIP | `native/macos/dist/releases/0.7.0-beta.13-macos-35/appcast/ClawDad-0.7.0-beta.13-mac.zip` | `71cd9c518bf8da947e2d81821a8e07a28400240b80001676232cf7e18c463dcd` |
+| Intel DMG | `native/macos/dist/releases/0.7.0-beta.13-macos-35-intel/ClawDad-0.7.0-beta.13-mac-intel.dmg` | `cd65cdfd606fe449274e6dad4b91eb94cf3feb7a2cbdda74256e76f68371a0f2` |
+| Intel ZIP | `native/macos/dist/releases/0.7.0-beta.13-macos-35-intel/appcast/ClawDad-0.7.0-beta.13-mac-intel.zip` | `ddc4346adb0fca94cf3c2979eb0b042f8f91f73592d9ceb7c175e99d6811b1b3` |
+| Intel signed appcast | `native/macos/dist/releases/0.7.0-beta.13-macos-35-intel/appcast/appcast.xml` | `14c2b5368415dd0bd78d93a27fbf5c1050c11d8d78cfa60c70ffe1917365d368` |
 
 Public assets:
 
-- `https://github.com/SproutSeeds/clawdad/releases/download/v0.7.0-beta.12/ClawDad-0.7.0-beta.12-mac.dmg`
-- `https://github.com/SproutSeeds/clawdad/releases/download/v0.7.0-beta.12/ClawDad-0.7.0-beta.12-mac-intel.dmg`
-- `https://github.com/SproutSeeds/clawdad/releases/download/v0.7.0-beta.12/ClawDad-0.7.0-beta.12-mac-intel.zip`
+- `https://github.com/SproutSeeds/clawdad/releases/download/v0.7.0-beta.13/ClawDad-0.7.0-beta.13-mac.dmg`
+- `https://github.com/SproutSeeds/clawdad/releases/download/v0.7.0-beta.13/ClawDad-0.7.0-beta.13-mac-intel.dmg`
+- `https://github.com/SproutSeeds/clawdad/releases/download/v0.7.0-beta.13/ClawDad-0.7.0-beta.13-mac-intel.zip`
 
-The Apple-silicon DMG is `64,216,527` bytes and the Intel DMG is
-`67,581,876` bytes. The managed runtime makes these larger than the previous
+The Apple-silicon DMG is `64,212,062` bytes and the Intel DMG is
+`67,537,457` bytes. The managed runtime makes these larger than the previous
 thin installers, so clawdad.earth links to release storage instead of embedding
 the binaries in the website deployment.
 
 ## Verification Completed
 
-- Node application/runtime suite: 464 tests passed.
+- Node application/runtime suite: 462 tests passed from the clean release
+  checkpoint; ten repeated app-server process-exit regressions also passed.
 - iPhone Swift suite: 46 tests passed.
 - Shared Remote Assist protocol suite: 28 tests passed.
 - Mac Swift suite: 63 tests passed.
@@ -73,7 +79,11 @@ the binaries in the website deployment.
 - Both architecture-specific apps and DMGs are Developer ID signed, notarized,
   stapled, and accepted by Gatekeeper.
 - Mounted-DMG inspection reports `arm64` for the Apple-silicon app and Node and
-  `x86_64` for the Intel app and Node. Both report app build 34.
+  `x86_64` for the Intel app and Node. Both report app build 35 and embedded
+  runtime `0.7.0-beta.13`.
+- The signed app carries Automation and microphone entitlements plus explicit
+  removable-volume and protected-folder usage descriptions. The managed Node
+  carries the architecture-appropriate V8 entitlements.
 - The embedded Node executable runs after final hardened signing. The arm64
   build carries the required JIT entitlement; the Intel build also carries the
   unsigned-executable-memory entitlement required by V8 on Intel Macs.
@@ -81,12 +91,16 @@ the binaries in the website deployment.
   Node and ORP runtime, without a system Node dependency.
 - TestFlight build 33 is `VALID`, export-compliance metadata is complete, and
   the build is assigned only to `ClawDad Internal`.
+- Apple accepted notarization submissions `e6ac46e7-c950-4c7f-929d-f26e9c3bd574`
+  and `74899da5-b707-4f74-847b-6cc5b1d067e2` for the Apple-silicon ZIP and DMG,
+  and `15c6c550-5ecd-4acc-be82-6087891cee5b` and
+  `272ba8fc-478b-457f-b4e5-34bcd6789c95` for the Intel ZIP and DMG.
 
 ## Physical Device Gates
 
-- Open the installed Studio build 34 and complete the new setup assistant as a
+- Open the installed Studio build 35 and complete the new setup assistant as a
   combined controller and host.
-- Download the matching build 34 architecture from clawdad.earth on the Mac
+- Download the matching build 35 architecture from clawdad.earth on the Mac
   laptop, install it, and complete setup.
 - Pair laptop to Studio and Studio to laptop with separate fresh codes. Confirm
   native Remote Assist, display selection, Terminal tabs, pointer alignment,
