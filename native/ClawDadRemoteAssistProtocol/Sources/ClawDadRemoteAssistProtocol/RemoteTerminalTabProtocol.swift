@@ -10,19 +10,44 @@ public struct RemoteTerminalTabDescriptor: Codable, Equatable, Sendable {
   public let detail: String
   public let isSelected: Bool
   public let isBusy: Bool
+  public let hasUnreadActivity: Bool
 
   public init(
     id: String,
     title: String,
     detail: String,
     isSelected: Bool,
-    isBusy: Bool
+    isBusy: Bool,
+    hasUnreadActivity: Bool = false
   ) {
     self.id = id
     self.title = title
     self.detail = detail
     self.isSelected = isSelected
     self.isBusy = isBusy
+    self.hasUnreadActivity = hasUnreadActivity
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case id
+    case title
+    case detail
+    case isSelected
+    case isBusy
+    case hasUnreadActivity
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decode(String.self, forKey: .id)
+    title = try container.decode(String.self, forKey: .title)
+    detail = try container.decode(String.self, forKey: .detail)
+    isSelected = try container.decode(Bool.self, forKey: .isSelected)
+    isBusy = try container.decode(Bool.self, forKey: .isBusy)
+    hasUnreadActivity = try container.decodeIfPresent(
+      Bool.self,
+      forKey: .hasUnreadActivity
+    ) ?? false
   }
 
   fileprivate func validate() throws {

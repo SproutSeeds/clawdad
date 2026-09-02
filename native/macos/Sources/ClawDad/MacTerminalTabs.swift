@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import ClawDadRemoteAssistProtocol
 import CoreServices
 import Foundation
@@ -11,6 +12,32 @@ struct MacTerminalTabSnapshot: Equatable, Sendable {
   let tty: String
   let isBusy: Bool
   let isSelectedInWindow: Bool
+  let hasUnreadActivity: Bool
+
+  init(
+    windowID: Int,
+    windowIndex: Int,
+    tabIndex: Int,
+    customTitle: String,
+    tty: String,
+    isBusy: Bool,
+    isSelectedInWindow: Bool,
+    hasUnreadActivity: Bool = false
+  ) {
+    self.windowID = windowID
+    self.windowIndex = windowIndex
+    self.tabIndex = tabIndex
+    self.customTitle = customTitle
+    self.tty = tty
+    self.isBusy = isBusy
+    self.isSelectedInWindow = isSelectedInWindow
+    self.hasUnreadActivity = hasUnreadActivity
+  }
+}
+
+private struct MacTerminalTabLocation: Hashable {
+  let windowIndex: Int
+  let tabIndex: Int
 }
 
 private struct MacTerminalTabIdentity: Hashable {
@@ -202,7 +229,8 @@ final class MacTerminalTabController {
         title: macTerminalTabTitle(snapshot.customTitle),
         detail: "Window \(snapshot.windowIndex) • Tab \(snapshot.tabIndex)",
         isSelected: isSelected,
-        isBusy: snapshot.isBusy
+        isBusy: snapshot.isBusy,
+        hasUnreadActivity: snapshot.hasUnreadActivity && !isSelected
       )
     }
     return RemoteTerminalTabState(
@@ -287,7 +315,11 @@ final class MacTerminalAutomation: MacTerminalAutomating, @unchecked Sendable {
         continuation.resume(with: Result {
           try Self.requestAutomationPermission()
           let descriptor = try Self.execute(Self.catalogScript)
-          return try Self.parseCatalog(descriptor)
+          let snapshots = try Self.parseCatalog(descriptor)
+          return Self.applyUnreadActivity(
+            Self.unreadActivityLocations(),
+            to: snapshots
+          )
         })
       }
     }
@@ -417,6 +449,151 @@ final class MacTerminalAutomation: MacTerminalAutomating, @unchecked Sendable {
     if let failure = macTerminalAutomationFailure(for: status) {
       throw failure
     }
+  }
+
+  private static func unreadActivityLocations() -> Set<MacTerminalTabLocation> {
+    guard AXIsProcessTrusted(),
+          let terminal = NSRunningApplication.runningApplications(
+            withBundleIdentifier: "com.apple.Terminal"
+          ).first else {
+      return []
+    }
+
+    let application = AXUIElementCreateApplication(
+      terminal.processIdentifier
+    )
+    let terminalWindows = accessibilityElements(
+      application,
+      attribute: kAXWindowsAttribute as CFString
+    ).compactMap { window -> (AXUIElement, AXUIElement)? in
+      guard let tabGroup = firstAccessibilityElement(
+        withRole: kAXTabGroupRole as String,
+        in: window,
+        maximumDepth: 2
+      ) else {
+        return nil
+      }
+      return (window, tabGroup)
+    }
+
+    var locations: Set<MacTerminalTabLocation> = []
+    for (windowOffset, terminalWindow) in terminalWindows.enumerated() {
+      let tabGroup = terminalWindow.1
+      let tabButtons = accessibilityElements(
+        tabGroup,
+        attribute: kAXChildrenAttribute as CFString
+      ).filter {
+        accessibilityString(
+          $0,
+          attribute: kAXRoleAttribute as CFString
+        ) == kAXRadioButtonRole as String
+      }
+      for (tabOffset, tabButton) in tabButtons.enumerated() {
+        let hasTabAlert = accessibilityElements(
+          tabButton,
+          attribute: kAXChildrenAttribute as CFString
+        ).contains {
+          accessibilityString(
+            $0,
+            attribute: kAXDescriptionAttribute as CFString
+          ) == "TabAlert"
+        }
+        if hasTabAlert {
+          locations.insert(MacTerminalTabLocation(
+            windowIndex: windowOffset + 1,
+            tabIndex: tabOffset + 1
+          ))
+        }
+      }
+    }
+    return locations
+  }
+
+  private static func applyUnreadActivity(
+    _ locations: Set<MacTerminalTabLocation>,
+    to snapshots: [MacTerminalTabSnapshot]
+  ) -> [MacTerminalTabSnapshot] {
+    snapshots.map { snapshot in
+      MacTerminalTabSnapshot(
+        windowID: snapshot.windowID,
+        windowIndex: snapshot.windowIndex,
+        tabIndex: snapshot.tabIndex,
+        customTitle: snapshot.customTitle,
+        tty: snapshot.tty,
+        isBusy: snapshot.isBusy,
+        isSelectedInWindow: snapshot.isSelectedInWindow,
+        hasUnreadActivity: locations.contains(MacTerminalTabLocation(
+          windowIndex: snapshot.windowIndex,
+          tabIndex: snapshot.tabIndex
+        ))
+      )
+    }
+  }
+
+  private static func firstAccessibilityElement(
+    withRole role: String,
+    in root: AXUIElement,
+    maximumDepth: Int
+  ) -> AXUIElement? {
+    guard maximumDepth >= 0 else {
+      return nil
+    }
+    let children = accessibilityElements(
+      root,
+      attribute: kAXChildrenAttribute as CFString
+    )
+    if let match = children.first(where: {
+      accessibilityString(
+        $0,
+        attribute: kAXRoleAttribute as CFString
+      ) == role
+    }) {
+      return match
+    }
+    guard maximumDepth > 0 else {
+      return nil
+    }
+    for child in children {
+      if let match = firstAccessibilityElement(
+        withRole: role,
+        in: child,
+        maximumDepth: maximumDepth - 1
+      ) {
+        return match
+      }
+    }
+    return nil
+  }
+
+  private static func accessibilityElements(
+    _ element: AXUIElement,
+    attribute: CFString
+  ) -> [AXUIElement] {
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(
+      element,
+      attribute,
+      &value
+    ) == .success,
+    let elements = value as? [AXUIElement] else {
+      return []
+    }
+    return elements
+  }
+
+  private static func accessibilityString(
+    _ element: AXUIElement,
+    attribute: CFString
+  ) -> String? {
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(
+      element,
+      attribute,
+      &value
+    ) == .success else {
+      return nil
+    }
+    return value as? String
   }
 
   private static func parseCatalog(

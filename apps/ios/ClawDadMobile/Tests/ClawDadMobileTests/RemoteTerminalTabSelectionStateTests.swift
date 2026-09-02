@@ -96,9 +96,27 @@ final class RemoteTerminalTabSelectionStateTests: XCTestCase {
     XCTAssertFalse(selection.requestPending)
   }
 
+  func testSameRevisionRefreshPublishesUnreadActivity() {
+    var selection = RemoteTerminalTabSelectionState()
+    _ = selection.applyResult(
+      .listSuccess(requestId: "bootstrap", state: state())
+    )
+
+    let application = selection.applyResult(
+      .listSuccess(
+        requestId: "poll",
+        state: state(unreadTabId: "tab-two")
+      )
+    )
+
+    XCTAssertEqual(application?.acceptedState, true)
+    XCTAssertEqual(selection.tabs[1].hasUnreadActivity, true)
+  }
+
   private func state(
     revision: Int = 1,
-    selectedTabId: String = "tab-one"
+    selectedTabId: String = "tab-one",
+    unreadTabId: String? = nil
   ) -> RemoteTerminalTabState {
     RemoteTerminalTabState(
       revision: revision,
@@ -109,14 +127,16 @@ final class RemoteTerminalTabSelectionStateTests: XCTestCase {
           title: "clawdad",
           detail: "Window 1 • Tab 1",
           isSelected: selectedTabId == "tab-one",
-          isBusy: true
+          isBusy: true,
+          hasUnreadActivity: unreadTabId == "tab-one"
         ),
         RemoteTerminalTabDescriptor(
           id: "tab-two",
           title: "life-ops",
           detail: "Window 2 • Tab 1",
           isSelected: selectedTabId == "tab-two",
-          isBusy: false
+          isBusy: false,
+          hasUnreadActivity: unreadTabId == "tab-two"
         ),
       ]
     )

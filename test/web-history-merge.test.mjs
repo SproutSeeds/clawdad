@@ -876,10 +876,15 @@ test("Remote Assist lists and focuses Terminal tabs without reading terminal con
     /accessibilityLabel\("Refresh \\\(controller\.remoteTerminalName\) tabs"\)/u,
   );
   assert.match(remoteAssistSource, /controller\.focusRemoteTerminalTab\(tab\.id\)/u);
+  assert.match(remoteAssistSource, /func pollRemoteTerminalTabs\(\)/u);
+  assert.match(remoteAssistSource, /Task\.sleep\(nanoseconds: 2_000_000_000\)/u);
+  assert.match(remoteAssistSource, /tab\.hasUnreadActivity/u);
+  assert.match(remoteAssistSource, /Response ready/u);
   assert.match(terminalTabProtocolSource, /"terminal\.tabs\.request"/u);
   assert.match(terminalTabProtocolSource, /"terminal\.tabs\.result"/u);
   assert.match(terminalTabProtocolSource, /"terminal\.tab\.focus"/u);
   assert.match(terminalTabProtocolSource, /"terminal\.tab\.focus\.result"/u);
+  assert.match(terminalTabProtocolSource, /hasUnreadActivity/u);
   assert.match(macPeerSource, /MacTerminalTabController\(\)/u);
   assert.match(macTerminalTabsSource, /NSRunningApplication\.runningApplications/u);
   assert.match(macTerminalTabsSource, /set selected tab of targetWindow to tab/u);
@@ -889,6 +894,8 @@ test("Remote Assist lists and focuses Terminal tabs without reading terminal con
   assert.match(macTerminalTabsSource, /typeWildCard,[\s\S]*typeWildCard,[\s\S]*true/u);
   assert.match(macTerminalTabsSource, /permissionRouter\.openAutomationSettings\(\)/u);
   assert.match(macTerminalTabsSource, /Mac System Settings is open/u);
+  assert.match(macTerminalTabsSource, /kAXDescriptionAttribute/u);
+  assert.match(macTerminalTabsSource, /"TabAlert"/u);
   assert.doesNotMatch(macTerminalTabsSource, /contents of|history of|processes of/u);
   assert.match(macBuildSource, /<key>NSAppleEventsUsageDescription<\/key>/u);
   assert.match(macBuildSource, /--entitlements "\$entitlements_path"/u);

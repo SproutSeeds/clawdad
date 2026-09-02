@@ -18,7 +18,8 @@ final class RemoteTerminalTabProtocolTests: XCTestCase {
         title: "life-ops",
         detail: "Window 2 • Tab 1",
         isSelected: false,
-        isBusy: false
+        isBusy: false,
+        hasUnreadActivity: true
       ),
     ]
   )
@@ -73,6 +74,30 @@ final class RemoteTerminalTabProtocolTests: XCTestCase {
       try RemoteTerminalTabCodec.decode(RemoteTerminalTabCodec.encode(response)),
       response
     )
+  }
+
+  func testUnreadActivityRoundTrips() throws {
+    let response = RemoteTerminalTabMessage.listSuccess(
+      requestId: "request-unread",
+      state: state
+    )
+
+    let decoded = try RemoteTerminalTabCodec.decode(
+      RemoteTerminalTabCodec.encode(response)
+    )
+
+    XCTAssertEqual(decoded.state?.tabs[1].hasUnreadActivity, true)
+  }
+
+  func testLegacyDescriptorWithoutUnreadActivityDefaultsToFalse() throws {
+    let legacy = Data(#"{"id":"tab-one","title":"clawdad","detail":"Window 1 • Tab 1","isSelected":true,"isBusy":true}"#.utf8)
+
+    let descriptor = try JSONDecoder().decode(
+      RemoteTerminalTabDescriptor.self,
+      from: legacy
+    )
+
+    XCTAssertFalse(descriptor.hasUnreadActivity)
   }
 
   func testEmptyCatalogIsValid() throws {

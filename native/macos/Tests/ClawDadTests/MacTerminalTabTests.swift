@@ -20,6 +20,8 @@ final class MacTerminalTabTests: XCTestCase {
     ])
     XCTAssertEqual(first.tabs.filter(\.isSelected).count, 1)
     XCTAssertEqual(first.selectedTabId, first.tabs.first?.id)
+    XCTAssertFalse(first.tabs[0].hasUnreadActivity)
+    XCTAssertTrue(first.tabs[1].hasUnreadActivity)
     XCTAssertFalse(first.tabs[0].id.contains("ttys"))
   }
 
@@ -35,10 +37,12 @@ final class MacTerminalTabTests: XCTestCase {
       customTitle: "renamed",
       tty: "/dev/ttys001",
       isBusy: false,
-      isSelectedInWindow: true
+      isSelectedInWindow: true,
+      hasUnreadActivity: true
     )
     let presentationChange = try await controller.catalog()
     XCTAssertEqual(presentationChange.revision, first.revision)
+    XCTAssertFalse(presentationChange.tabs[0].hasUnreadActivity)
 
     automation.snapshots.swapAt(0, 1)
     automation.snapshots[0] = snapshot(
@@ -229,13 +233,15 @@ final class MacTerminalTabTests: XCTestCase {
         windowID: 10,
         windowIndex: 1,
         title: "clawdad",
-        tty: "/dev/ttys001"
+        tty: "/dev/ttys001",
+        hasUnreadActivity: true
       ),
       snapshot(
         windowID: 20,
         windowIndex: 2,
         title: "life-ops",
-        tty: "/dev/ttys002"
+        tty: "/dev/ttys002",
+        hasUnreadActivity: true
       ),
     ]
   }
@@ -244,7 +250,8 @@ final class MacTerminalTabTests: XCTestCase {
     windowID: Int,
     windowIndex: Int,
     title: String,
-    tty: String
+    tty: String,
+    hasUnreadActivity: Bool = false
   ) -> MacTerminalTabSnapshot {
     MacTerminalTabSnapshot(
       windowID: windowID,
@@ -253,7 +260,8 @@ final class MacTerminalTabTests: XCTestCase {
       customTitle: title,
       tty: tty,
       isBusy: true,
-      isSelectedInWindow: true
+      isSelectedInWindow: true,
+      hasUnreadActivity: hasUnreadActivity
     )
   }
 
@@ -313,7 +321,8 @@ private final class StubTerminalAutomation: MacTerminalAutomating {
         customTitle: snapshot.customTitle,
         tty: snapshot.tty,
         isBusy: snapshot.isBusy,
-        isSelectedInWindow: snapshot.isSelectedInWindow
+        isSelectedInWindow: snapshot.isSelectedInWindow,
+        hasUnreadActivity: snapshot.hasUnreadActivity
       )
     }
     snapshots.insert(MacTerminalTabSnapshot(
@@ -323,7 +332,8 @@ private final class StubTerminalAutomation: MacTerminalAutomating {
       customTitle: target.customTitle,
       tty: target.tty,
       isBusy: target.isBusy,
-      isSelectedInWindow: true
+      isSelectedInWindow: true,
+      hasUnreadActivity: target.hasUnreadActivity
     ), at: 0)
   }
 }
