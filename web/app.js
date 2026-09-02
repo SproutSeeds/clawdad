@@ -608,8 +608,10 @@ const nativeBridge = (() => {
     chooseFolder(params = {}) {
       return bridge.call("chooseFolder", params);
     },
-    getSystemReadiness() {
-      return bridge.call("getSystemReadiness");
+    getSystemReadiness({ forceCodexUpdateCheck = false } = {}) {
+      return bridge.call("getSystemReadiness", {
+        forceCodexUpdateCheck: Boolean(forceCodexUpdateCheck),
+      });
     },
     setComputerRole(role) {
       return bridge.call("setComputerRole", { role: String(role || "") });
@@ -11386,7 +11388,7 @@ function scheduleSystemSetupPolling() {
   }, 1200);
 }
 
-async function refreshSystemReadiness({ quiet = false } = {}) {
+async function refreshSystemReadiness({ quiet = false, forceCodexUpdateCheck = false } = {}) {
   if (!nativeBridge.isAvailable() || state.systemSetupPending === "status") {
     return;
   }
@@ -11396,7 +11398,7 @@ async function refreshSystemReadiness({ quiet = false } = {}) {
     renderAll();
   }
   try {
-    applySystemReadiness(await nativeBridge.getSystemReadiness());
+    applySystemReadiness(await nativeBridge.getSystemReadiness({ forceCodexUpdateCheck }));
     state.systemSetupStatus = "";
   } catch (error) {
     state.systemSetupStatus = String(
@@ -11500,12 +11502,17 @@ async function startSystemSetupCodexInstall() {
   if (!nativeBridge.isAvailable() || state.systemSetupPending) {
     return;
   }
+  const isUpdate = state.systemReadiness?.codex?.installed === true;
   state.systemSetupPending = "install";
-  state.systemSetupStatus = "Starting the official Codex installer…";
+  state.systemSetupStatus = isUpdate
+    ? "Starting the official Codex updater…"
+    : "Starting the official Codex installer…";
   renderAll();
   try {
     await nativeBridge.installCodex();
-    state.systemSetupStatus = "Codex is installing. ClawDad will refresh automatically.";
+    state.systemSetupStatus = isUpdate
+      ? "Codex is updating. ClawDad will refresh automatically."
+      : "Codex is installing. ClawDad will refresh automatically.";
     await refreshSystemReadiness({ quiet: true });
   } catch (error) {
     state.systemSetupStatus = String(error?.message || "Codex installation could not start.");
@@ -11668,6 +11675,7 @@ function renderSystemSetupAssistant() {
   const node = readiness.node || {};
   const orp = readiness.orp || {};
   const codex = readiness.codex || {};
+  const codexUpdate = codex.update || {};
   const install = readiness.install || {};
   const steps = [
     elements.systemSetupRoleStep,
@@ -11721,28 +11729,61 @@ function renderSystemSetupAssistant() {
   if (elements.systemSetupCodexActions) {
     elements.systemSetupCodexActions.hidden = !needsCodex;
   }
-  const codexReady = codex.installed === true && codex.loggedIn === true;
+  const codexUsable = codex.installed === true && codex.loggedIn === true;
+  const codexUpdateAvailable = codexUpdate.state === "available" && codexUpdate.available === true;
+  const codexUpdateCurrent = codexUpdate.state === "current";
+  const codexVersion = codex.installedVersion || codex.version || "Codex";
+  let codexDetail = "Install the official standalone Codex CLI into ~/.local/bin.";
+  if (codex.installed) {
+    const detailParts = [codexVersion];
+    detailParts.push(codex.loggedIn ? "signed in" : "sign in with ChatGPT");
+    if (codexUpdateAvailable) {
+      detailParts.push(`${codexUpdate.latestVersion || "new release"} available`);
+    } else if (codexUpdateCurrent) {
+      detailParts.push("current release");
+    } else {
+      detailParts.push("update status unavailable");
+    }
+    if (codex.loggedIn) {
+      detailParts.push(`shared ${codex.home || "~/.codex"}`);
+    }
+    codexDetail = detailParts.join(" • ");
+  }
   setText(
     elements.systemSetupCodexDetail,
-    codexReady
-      ? `${codex.version || "Codex"} • signed in • shared ${codex.home || "~/.codex"}`
-      : codex.installed
-        ? `${codex.version || "Codex installed"} • sign in with ChatGPT`
-        : "Install the official standalone Codex CLI into ~/.local/bin.",
+    codexDetail,
     { empty: false },
   );
+  let codexStateLabel = "Install";
+  let codexStateReady = false;
+  if (codex.installed && !codex.loggedIn) {
+    codexStateLabel = "Sign in";
+  } else if (codexUsable && codexUpdateAvailable) {
+    codexStateLabel = "Update available";
+  } else if (codexUsable && codexUpdateCurrent) {
+    codexStateLabel = "Up to date";
+    codexStateReady = true;
+  } else if (codexUsable) {
+    codexStateLabel = "Installed & signed in";
+    codexStateReady = true;
+  }
   setSystemReadinessState(
     elements.systemSetupCodexState,
-    codexReady ? "Ready" : codex.installed ? "Sign in" : "Install",
-    { ready: codexReady, error: false },
+    codexStateLabel,
+    { ready: codexStateReady, error: false },
   );
   if (elements.systemSetupInstallCodexButton) {
+    const updaterDisabled = codex.installed === true && codexUpdateCurrent;
     elements.systemSetupInstallCodexButton.disabled =
-      Boolean(state.systemSetupPending) || codex.installed === true || install.state === "installing";
+      Boolean(state.systemSetupPending) || updaterDisabled || install.state === "installing";
     elements.systemSetupInstallCodexButton.textContent = install.state === "installing"
-      ? "Installing Codex…"
+      ? codex.installed ? "Updating Codex…" : "Installing Codex…"
       : codex.installed
-        ? "Codex installed"
+        ? codexUpdateAvailable
+          ? `Update to ${codexUpdate.latestVersion || "latest"}`
+          : codexUpdateCurrent
+            ? "Codex is current"
+            : "Run official updater"
         : "Install official Codex";
   }
   if (elements.systemSetupLoginCodexButton) {
@@ -11754,10 +11795,13 @@ function renderSystemSetupAssistant() {
   }
   if (elements.systemSetupRefreshButton) {
     elements.systemSetupRefreshButton.disabled = Boolean(state.systemSetupPending);
+    elements.systemSetupRefreshButton.textContent = codex.installed
+      ? "Check again"
+      : "Refresh";
   }
   setText(
     elements.systemSetupRuntimeStatus,
-    String(install.message || (needsCodex ? "ClawDad checks login status without reading your credentials." : "Local Codex is optional for a controller-only Mac.")),
+    String(install.message || codexUpdate.message || (needsCodex ? "ClawDad checks login status without reading your credentials." : "Local Codex is optional for a controller-only Mac.")),
     { empty: false },
   );
 
@@ -17704,7 +17748,7 @@ function bindEvents() {
     void openSystemSetupCodexLogin();
   });
   elements.systemSetupRefreshButton?.addEventListener("click", () => {
-    void refreshSystemReadiness();
+    void refreshSystemReadiness({ forceCodexUpdateCheck: true });
   });
   elements.systemSetupWorkspaceInput?.addEventListener("input", (event) => {
     state.systemSetupWorkspaceDraft = String(event.target.value || "");

@@ -976,7 +976,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         resolveNativeMessage(id: id, error: "System readiness is unavailable.")
         return
       }
-      systemReadiness.status { [weak self] status in
+      systemReadiness.status(
+        forceCodexUpdateCheck: params["forceCodexUpdateCheck"] as? Bool ?? false
+      ) { [weak self] status in
         self?.resolveNativeMessage(id: id, result: status)
       }
     case "setComputerRole":

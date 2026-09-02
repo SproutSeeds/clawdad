@@ -64,4 +64,53 @@ final class MacSystemReadinessTests: XCTestCase {
     XCTAssertEqual(candidates.first, "/Users/example/.local/bin/codex")
     XCTAssertFalse(candidates.contains("codex"))
   }
+
+  func testCodexVersionNormalizationHandlesCLIOutputAndReleaseTags() {
+    XCTAssertEqual(macCodexNormalizedVersion("codex-cli 0.125.0"), "0.125.0")
+    XCTAssertEqual(macCodexNormalizedVersion("rust-v0.152.1"), "0.152.1")
+    XCTAssertEqual(
+      macCodexNormalizedVersion("codex-cli 0.153.0-beta.2"),
+      "0.153.0-beta.2"
+    )
+    XCTAssertNil(macCodexNormalizedVersion("codex-cli unknown"))
+  }
+
+  func testCodexUpdateComparisonDistinguishesAvailableAndCurrent() {
+    XCTAssertEqual(
+      macCodexUpdateAvailable(
+        installedVersion: "codex-cli 0.125.0",
+        latestReleaseTag: "rust-v0.152.1"
+      ),
+      true
+    )
+    XCTAssertEqual(
+      macCodexUpdateAvailable(
+        installedVersion: "codex-cli 0.152.1",
+        latestReleaseTag: "rust-v0.152.1"
+      ),
+      false
+    )
+    XCTAssertEqual(
+      macCodexUpdateAvailable(
+        installedVersion: "codex-cli 0.153.0-beta.1",
+        latestReleaseTag: "rust-v0.153.0"
+      ),
+      true
+    )
+    XCTAssertNil(
+      macCodexUpdateAvailable(
+        installedVersion: "unknown",
+        latestReleaseTag: "rust-v0.152.1"
+      )
+    )
+  }
+
+  func testCodexLatestReleaseMetadataUsesOfficialReleaseTag() throws {
+    let data = try XCTUnwrap(
+      #"{"tag_name":"rust-v0.152.1","assets":[]}"#.data(using: .utf8)
+    )
+
+    XCTAssertEqual(macCodexLatestVersion(from: data), "0.152.1")
+    XCTAssertNil(macCodexLatestVersion(from: Data("{}".utf8)))
+  }
 }

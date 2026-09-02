@@ -51,10 +51,109 @@ func macCodexCandidatePaths(
   return values.filter { seen.insert($0).inserted }
 }
 
+struct MacCodexSemanticVersion: Equatable, Comparable {
+  let major: Int
+  let minor: Int
+  let patch: Int
+  let prerelease: [String]
+
+  init?(extracting value: String) {
+    let pattern = #"(?<![0-9])([0-9]+)\.([0-9]+)\.([0-9]+)(?:-([0-9A-Za-z.-]+))?"#
+    guard let expression = try? NSRegularExpression(pattern: pattern),
+          let match = expression.firstMatch(
+            in: value,
+            range: NSRange(value.startIndex..., in: value)
+          ),
+          let majorRange = Range(match.range(at: 1), in: value),
+          let minorRange = Range(match.range(at: 2), in: value),
+          let patchRange = Range(match.range(at: 3), in: value),
+          let major = Int(value[majorRange]),
+          let minor = Int(value[minorRange]),
+          let patch = Int(value[patchRange]) else {
+      return nil
+    }
+
+    self.major = major
+    self.minor = minor
+    self.patch = patch
+    if match.range(at: 4).location != NSNotFound,
+       let prereleaseRange = Range(match.range(at: 4), in: value) {
+      self.prerelease = value[prereleaseRange].split(separator: ".").map(String.init)
+    } else {
+      self.prerelease = []
+    }
+  }
+
+  var normalized: String {
+    let release = "\(major).\(minor).\(patch)"
+    return prerelease.isEmpty ? release : "\(release)-\(prerelease.joined(separator: "."))"
+  }
+
+  static func < (lhs: Self, rhs: Self) -> Bool {
+    let lhsCore = [lhs.major, lhs.minor, lhs.patch]
+    let rhsCore = [rhs.major, rhs.minor, rhs.patch]
+    if lhsCore != rhsCore {
+      return lhsCore.lexicographicallyPrecedes(rhsCore)
+    }
+    if lhs.prerelease.isEmpty {
+      return false
+    }
+    if rhs.prerelease.isEmpty {
+      return true
+    }
+
+    for (left, right) in zip(lhs.prerelease, rhs.prerelease) where left != right {
+      let leftNumber = Int(left)
+      let rightNumber = Int(right)
+      switch (leftNumber, rightNumber) {
+      case let (.some(leftValue), .some(rightValue)):
+        return leftValue < rightValue
+      case (.some, .none):
+        return true
+      case (.none, .some):
+        return false
+      case (.none, .none):
+        return left < right
+      }
+    }
+    return lhs.prerelease.count < rhs.prerelease.count
+  }
+}
+
+func macCodexNormalizedVersion(_ value: String) -> String? {
+  MacCodexSemanticVersion(extracting: value)?.normalized
+}
+
+func macCodexUpdateAvailable(
+  installedVersion: String,
+  latestReleaseTag: String
+) -> Bool? {
+  guard let installed = MacCodexSemanticVersion(extracting: installedVersion),
+        let latest = MacCodexSemanticVersion(extracting: latestReleaseTag) else {
+    return nil
+  }
+  return installed < latest
+}
+
+func macCodexLatestVersion(from releaseData: Data) -> String? {
+  guard let value = try? JSONSerialization.jsonObject(with: releaseData),
+        let object = value as? [String: Any],
+        let tag = object["tag_name"] as? String else {
+    return nil
+  }
+  return macCodexNormalizedVersion(tag)
+}
+
 private struct MacCapturedCommand {
   var status: Int32
   var output: String
   var timedOut: Bool
+}
+
+private struct MacCodexLatestReleaseSnapshot {
+  let version: String?
+  let checkedAt: Date
+  let errorMessage: String?
 }
 
 final class MacSystemReadiness {
@@ -66,6 +165,10 @@ final class MacSystemReadiness {
   private static let officialCodexInstaller = URL(
     string: "https://chatgpt.com/codex/install.sh"
   )!
+  private static let officialCodexLatestRelease = URL(
+    string: "https://releases.openai.com/codex/channels/latest"
+  )!
+  private static let latestReleaseCacheLifetime: TimeInterval = 10 * 60
 
   private let repoRoot: URL
   private let supportDir: URL
@@ -77,6 +180,7 @@ final class MacSystemReadiness {
   private let stateLock = NSLock()
   private var installState = "idle"
   private var installMessage = ""
+  private var latestReleaseSnapshot: MacCodexLatestReleaseSnapshot?
 
   init(
     repoRoot: URL,
@@ -111,9 +215,14 @@ final class MacSystemReadiness {
     role = next
   }
 
-  func status(completion: @escaping ([String: Any]) -> Void) {
+  func status(
+    forceCodexUpdateCheck: Bool = false,
+    completion: @escaping ([String: Any]) -> Void
+  ) {
     queue.async {
-      let status = self.statusDictionary()
+      let status = self.statusDictionary(
+        forceCodexUpdateCheck: forceCodexUpdateCheck
+      )
       DispatchQueue.main.async {
         completion(status)
       }
@@ -151,14 +260,27 @@ final class MacSystemReadiness {
     guard installState != "installing" else {
       return
     }
+    let isUpdate = detectedCodexPath() != nil
     installState = "installing"
-    installMessage = "Downloading the official Codex installer from OpenAI..."
+    installMessage = isUpdate
+      ? "Downloading the official Codex update from OpenAI..."
+      : "Downloading the official Codex installer from OpenAI..."
     queue.async {
       do {
         try self.installCodex()
+        self.latestReleaseSnapshot = nil
+        let installedVersion = self.detectedCodexPath().flatMap {
+          macCodexNormalizedVersion(
+            self.capture($0, ["--version"], timeout: 8).output
+          )
+        }
         self.updateInstallState(
           state: "installed",
-          message: "Codex is installed in ~/.local/bin and available to Terminal and ClawDad."
+          message: isUpdate
+            ? "Codex \(installedVersion ?? "") was updated and is available to Terminal and ClawDad."
+              .replacingOccurrences(of: "  ", with: " ")
+            : "Codex \(installedVersion ?? "") is installed in ~/.local/bin and available to Terminal and ClawDad."
+              .replacingOccurrences(of: "  ", with: " ")
         )
       } catch {
         self.updateInstallState(
@@ -221,7 +343,9 @@ final class MacSystemReadiness {
     }
   }
 
-  private func statusDictionary() -> [String: Any] {
+  private func statusDictionary(
+    forceCodexUpdateCheck: Bool = false
+  ) -> [String: Any] {
     let currentRole = role
     let bundledNode = repoRoot.appendingPathComponent("bin/node")
     let bundledOrp = repoRoot.appendingPathComponent("node_modules/.bin/orp")
@@ -234,6 +358,12 @@ final class MacSystemReadiness {
     let codexVersion = codexPath.map {
       capture($0, ["--version"], timeout: 8).output
     } ?? ""
+    let codexUpdate = codexUpdateDictionary(
+      installedVersion: codexVersion,
+      installed: codexPath != nil,
+      shouldCheck: currentRole.needsLocalCodex,
+      forceRefresh: forceCodexUpdateCheck
+    )
     let login = codexPath.map {
       capture($0, ["login", "status"], timeout: 10)
     }
@@ -272,12 +402,15 @@ final class MacSystemReadiness {
         "installed": codexPath != nil,
         "path": codexPath ?? "",
         "version": codexVersion,
+        "installedVersion": macCodexNormalizedVersion(codexVersion) ?? "",
         "loggedIn": codexLoggedIn,
         "loginStatus": login?.output ?? "",
         "home": (codexHome?.isEmpty == false)
           ? codexHome!
           : home.appendingPathComponent(".codex", isDirectory: true).path,
-        "installerUrl": Self.officialCodexInstaller.absoluteString
+        "installerUrl": Self.officialCodexInstaller.absoluteString,
+        "latestReleaseUrl": Self.officialCodexLatestRelease.absoluteString,
+        "update": codexUpdate
       ],
       "install": [
         "state": state.state,
@@ -294,6 +427,139 @@ final class MacSystemReadiness {
       return candidate
     }
     return nil
+  }
+
+  private func codexUpdateDictionary(
+    installedVersion: String,
+    installed: Bool,
+    shouldCheck: Bool,
+    forceRefresh: Bool
+  ) -> [String: Any] {
+    guard shouldCheck else {
+      return [
+        "state": "not-required",
+        "available": false,
+        "latestVersion": "",
+        "checkedAt": "",
+        "message": "Local Codex is optional for a controller-only Mac."
+      ]
+    }
+    guard installed else {
+      return [
+        "state": "not-installed",
+        "available": false,
+        "latestVersion": "",
+        "checkedAt": "",
+        "message": "Install Codex before checking for updates."
+      ]
+    }
+    guard let normalizedInstalled = macCodexNormalizedVersion(installedVersion) else {
+      return [
+        "state": "unavailable",
+        "available": false,
+        "latestVersion": "",
+        "checkedAt": "",
+        "message": "ClawDad could not interpret the installed Codex version."
+      ]
+    }
+
+    let now = Date()
+    let cachedSnapshot = latestReleaseSnapshot
+    let cacheIsFresh = cachedSnapshot.map {
+      now.timeIntervalSince($0.checkedAt) < Self.latestReleaseCacheLifetime
+    } ?? false
+    let snapshot: MacCodexLatestReleaseSnapshot
+    if !forceRefresh, cacheIsFresh, let cachedSnapshot {
+      snapshot = cachedSnapshot
+    } else {
+      snapshot = fetchLatestCodexRelease()
+      latestReleaseSnapshot = snapshot
+    }
+    let checkedAt = ISO8601DateFormatter().string(from: snapshot.checkedAt)
+    guard let latestVersion = snapshot.version else {
+      return [
+        "state": "unavailable",
+        "available": false,
+        "latestVersion": "",
+        "checkedAt": checkedAt,
+        "message": snapshot.errorMessage
+          ?? "Codex update status is unavailable right now."
+      ]
+    }
+    guard let updateAvailable = macCodexUpdateAvailable(
+      installedVersion: normalizedInstalled,
+      latestReleaseTag: latestVersion
+    ) else {
+      return [
+        "state": "unavailable",
+        "available": false,
+        "latestVersion": latestVersion,
+        "checkedAt": checkedAt,
+        "message": "ClawDad could not compare the installed and current Codex versions."
+      ]
+    }
+
+    if updateAvailable {
+      return [
+        "state": "available",
+        "available": true,
+        "latestVersion": latestVersion,
+        "checkedAt": checkedAt,
+        "message": "Codex \(latestVersion) is available."
+      ]
+    }
+    return [
+      "state": "current",
+      "available": false,
+      "latestVersion": latestVersion,
+      "checkedAt": checkedAt,
+      "message": normalizedInstalled == latestVersion
+        ? "Codex \(normalizedInstalled) is the current release."
+        : "This Codex build is newer than the current public release."
+    ]
+  }
+
+  private func fetchLatestCodexRelease() -> MacCodexLatestReleaseSnapshot {
+    let checkedAt = Date()
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.timeoutIntervalForRequest = 5
+    configuration.timeoutIntervalForResource = 6
+    let session = URLSession(configuration: configuration)
+    var request = URLRequest(url: Self.officialCodexLatestRelease)
+    request.cachePolicy = .reloadIgnoringLocalCacheData
+    request.setValue("application/json", forHTTPHeaderField: "Accept")
+    let semaphore = DispatchSemaphore(value: 0)
+    var releaseVersion: String?
+    var releaseError: String?
+    session.dataTask(with: request) { data, response, error in
+      defer { semaphore.signal() }
+      if error != nil {
+        releaseError = "Codex update status is unavailable right now. You can try again."
+        return
+      }
+      guard let http = response as? HTTPURLResponse,
+            http.statusCode == 200,
+            let data,
+            let version = macCodexLatestVersion(from: data) else {
+        releaseError = "OpenAI's current Codex release could not be verified. You can try again."
+        return
+      }
+      releaseVersion = version
+    }.resume()
+    guard semaphore.wait(timeout: .now() + 7) == .success else {
+      session.invalidateAndCancel()
+      return MacCodexLatestReleaseSnapshot(
+        version: nil,
+        checkedAt: checkedAt,
+        errorMessage: "The Codex update check timed out. You can try again."
+      )
+    }
+    session.finishTasksAndInvalidate()
+    return MacCodexLatestReleaseSnapshot(
+      version: releaseVersion,
+      checkedAt: checkedAt,
+      errorMessage: releaseError
+    )
   }
 
   private func installCodex() throws {
