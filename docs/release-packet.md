@@ -90,7 +90,16 @@ the binaries in the website deployment.
 - A stripped-environment smoke test starts the packaged server with the bundled
   Node and ORP runtime, without a system Node dependency.
 - TestFlight build 33 is `VALID`, export-compliance metadata is complete, and
-  the build is assigned only to `ClawDad Internal`.
+  the build is assigned only to `ClawDad Internal`. Its beta 13/build 35
+  multi-computer test instructions are current.
+- The production website identifies beta 13/build 35, links both architecture
+  downloads to the matching GitHub release assets, describes the external-drive
+  first-window repair, and serves the signed Intel build 35 update manifest.
+- The exact public Apple-silicon DMG is installed on the Mac Studio. Its signed
+  app passed Gatekeeper and stapling checks, loaded 249 projects and 20 recent
+  threads from `/Volumes/Code_2TB/code`, restarted on port 4487, kept both
+  managed Node services as direct app children, and re-established the paired
+  relay connection.
 - Apple accepted notarization submissions `e6ac46e7-c950-4c7f-929d-f26e9c3bd574`
   and `74899da5-b707-4f74-847b-6cc5b1d067e2` for the Apple-silicon ZIP and DMG,
   and `15c6c550-5ecd-4acc-be82-6087891cee5b` and
@@ -98,8 +107,6 @@ the binaries in the website deployment.
 
 ## Physical Device Gates
 
-- Open the installed Studio build 35 and complete the new setup assistant as a
-  combined controller and host.
 - Download the matching build 35 architecture from clawdad.earth on the Mac
   laptop, install it, and complete setup.
 - Pair laptop to Studio and Studio to laptop with separate fresh codes. Confirm

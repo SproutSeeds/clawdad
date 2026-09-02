@@ -52,7 +52,7 @@ recorded fresh-TestFlight-install observation.
 | Nonblocking startup | Pass | Integration coverage verifies the app control plane becomes healthy while a slow or unavailable Codex runtime initializes in the background |
 | Mac signed package | Pass | The local beta 13 DMG and ZIP checksums pass for Apple silicon and Intel |
 | Mac notarization and stapling | Pass | Both architecture-specific apps and DMGs are notarized, stapled, and accepted by Gatekeeper |
-| Website delivery | Pending live verification | clawdad.earth will link to the final GitHub release assets because the managed-runtime DMGs exceed the website host's per-file limit |
+| Website delivery | Pass | clawdad.earth serves beta 13/build 35 release notes and architecture-specific Apple-silicon and Intel download links; live asset lengths match the published GitHub release DMGs and the Intel update manifest names the signed build 35 ZIP |
 | Distribution boundary | Pass | Public GitHub assets and the clawdad.earth download page are authorized for this native release; npm, the primary Apple-silicon appcast, and external iPhone channels remain unchanged |
 | Mac project picker | Pass | Native inspection verified grouped search, selection, Add Existing, default-root quick create, name validation, Escape, and focus restoration |
 | Mac Threads panel | Pass | Native inspection verified persistent Project/All scope, recent cards, conversation selection, and responsive two-column/one-column layouts |
@@ -82,16 +82,16 @@ build 35 and iPhone build 33.
 | Check | State | Acceptance |
 | --- | --- | --- |
 | Native distribution mode | Pass | The signed Apple-silicon and Intel Mac installers are public on clawdad.earth while the iPhone remains confined to `ClawDad Internal` |
-| Mac artifact and installation | Pending final install | Beta 13 build 35 has separate arm64 and x86_64 artifacts with the required app, Node, Automation, and microphone entitlements, notarized, stapled, checksum-verified, and Gatekeeper-approved; final Studio installation is the remaining local artifact gate |
+| Mac artifact and installation | Pass | The exact public Apple-silicon beta 13/build 35 DMG was installed on the Studio after preserving the verification build; the installed app passed deep signature, Gatekeeper, stapling, version, runtime-marker, entitlement, and bundled Node 24.20.0 checks |
 | Internal TestFlight companion | Pass | Build 33 is `VALID` and assigned only to `ClawDad Internal` |
 | External TestFlight boundary | Pass | External build assignment and public link are false; Beta App Review is `NOT_SUBMITTED` |
-| Native service topology | Pass | App-managed native services use port 4487 only and legacy labels are disabled |
+| Native service topology | Pass | The installed app owns exactly one server and one relay child process, restarted on port 4487, established the relay connection, and left the legacy launchd labels absent |
 
 ## Physical iPhone And Mac
 
 | Check | State | Acceptance |
 | --- | --- | --- |
-| Native Mac workspace parity | Partial physical pass | A signed build 35 development package completed the setup assistant, selected `/Volumes/Code_2TB/code`, rendered the full workspace, returned 249 projects, and kept all libuv workers idle after loading; the final notarized artifact install remains |
+| Native Mac workspace parity | Pass | A signed build 35 package completed the setup assistant and selected `/Volumes/Code_2TB/code`; the exact public notarized artifact was then installed, rendered the saved workspace, returned 249 projects and 20 recent threads, and passed a quit/relaunch recovery check |
 | Mac laptop to Studio pairing | Pending | Install build 35 from clawdad.earth, pair with a fresh Studio code, and open the Studio in native Remote Assist |
 | Studio to Mac laptop pairing | Pending | Repeat with a fresh laptop code and confirm the Studio can open the laptop independently |
 | Fresh TestFlight install | Pending | Build 33 launches to the subscription or pairing surface without stale workspace flash |
