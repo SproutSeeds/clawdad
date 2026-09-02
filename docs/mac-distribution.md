@@ -17,15 +17,15 @@ rollout unless that public publication is explicitly requested.
 
 ## Private Native Install
 
-For the current native beta 15 candidate, use the locally retained DMG that
+For the current native beta 16 candidate, use the locally retained DMG that
 matches the Mac:
 
 1. Open the Apple-silicon artifact under
-   `native/macos/dist/releases/0.7.0-beta.15-macos-37/`, or the Intel artifact
-   under `native/macos/dist/releases/0.7.0-beta.15-macos-37-intel/`.
+   `native/macos/dist/releases/0.7.0-beta.16-macos-38/`, or the Intel artifact
+   under `native/macos/dist/releases/0.7.0-beta.16-macos-38-intel/`.
 2. Quit ClawDad, drag ClawDad into Applications, and replace the previous app.
-3. Open `/Applications/ClawDad.app` and verify version `0.7.0 (37)` with embedded
-   runtime `0.7.0-beta.15`.
+3. Open `/Applications/ClawDad.app` and verify version `0.7.0 (38)` with embedded
+   runtime `0.7.0-beta.16`.
 4. Confirm only the app-managed native services are active on port 4487 and the
    legacy service labels remain disabled.
 
@@ -97,9 +97,9 @@ Desktop Settings provides:
 For the current private native release, run:
 
 ```bash
-CLAWDAD_RELEASE_VERSION=0.7.0-beta.15 \
+CLAWDAD_RELEASE_VERSION=0.7.0-beta.16 \
 CLAWDAD_APP_VERSION=0.7.0 \
-CLAWDAD_APP_BUILD=37 \
+CLAWDAD_APP_BUILD=38 \
 CLAWDAD_MAC_ARCH=arm64 \
 CLAWDAD_NOTARIZE=1 \
 CLAWDAD_PUBLISH_APPCAST=0 \
@@ -110,14 +110,14 @@ Build the matching Intel artifact with a separate release directory and
 filename suffix:
 
 ```bash
-CLAWDAD_RELEASE_VERSION=0.7.0-beta.15 \
+CLAWDAD_RELEASE_VERSION=0.7.0-beta.16 \
 CLAWDAD_APP_VERSION=0.7.0 \
-CLAWDAD_APP_BUILD=37 \
+CLAWDAD_APP_BUILD=38 \
 CLAWDAD_MAC_ARCH=x86_64 \
 CLAWDAD_RELEASE_ARTIFACT_SUFFIX=intel \
-CLAWDAD_RELEASE_DIR="$PWD/native/macos/dist/releases/0.7.0-beta.15-macos-37-intel" \
+CLAWDAD_RELEASE_DIR="$PWD/native/macos/dist/releases/0.7.0-beta.16-macos-38-intel" \
 CLAWDAD_SPARKLE_FEED_URL=https://clawdad.earth/downloads/appcast-intel.xml \
-CLAWDAD_RELEASE_DOWNLOAD_URL_PREFIX=https://github.com/SproutSeeds/clawdad/releases/download/v0.7.0-beta.15/ \
+CLAWDAD_RELEASE_DOWNLOAD_URL_PREFIX=https://github.com/SproutSeeds/clawdad/releases/download/v0.7.0-beta.16/ \
 CLAWDAD_NOTARIZE=1 \
 CLAWDAD_PUBLISH_APPCAST=0 \
   npm run native:release

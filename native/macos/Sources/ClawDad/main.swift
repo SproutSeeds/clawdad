@@ -93,6 +93,7 @@ final class ClawDadService {
 
   init() throws {
     let supportDir = try Self.applicationSupportDir()
+    try NativeRuntimeOrphanReaper.reap(supportDir: supportDir)
     guard let discoveredRoot = Self.findRepoRoot() else {
       throw NSError(
         domain: "ClawDad",
@@ -159,8 +160,8 @@ final class ClawDadService {
     managedCloudHostProcess = nil
     managedServerProcess = nil
     processLock.unlock()
-    for process in processes where process.isRunning {
-      process.terminate()
+    for process in processes {
+      NativeManagedProcessTerminator.stop(process)
     }
     Self.removeManagedService(label: Self.managedCloudServiceLabel)
     Self.removeManagedService(label: Self.managedServiceLabel)
