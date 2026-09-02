@@ -39,20 +39,21 @@ provenance instead requires the exact installed version/build, the same exact
 build in App Store Connect with `VALID` processing state, and a separately
 recorded fresh-TestFlight-install observation.
 
-## Native Beta 13, Mac Build 35, And iPhone Build 33 Automation
+## Native Beta 14, Mac Build 36, And iPhone Build 33 Automation
 
 | Check | State | Evidence |
 | --- | --- | --- |
-| Node integration suite | Pass | 462 tests passed from the clean release checkpoint; the process-exit regression passed ten additional consecutive runs |
+| Node integration suite | Pass | 463 tests passed from the clean beta 14 release checkout |
 | iPhone Swift unit suite | Pass | `swift test --package-path apps/ios/ClawDadMobile`: 46 tests passed |
 | Remote Assist protocol suite | Pass | `swift test --package-path native/ClawDadRemoteAssistProtocol`: 28 tests passed |
-| Mac Swift unit suite | Pass | `swift test --package-path native/macos`: 63 tests passed |
-| Native runtime bundle and ownership | Pass | Release coverage verifies the Mac app embeds runtime `0.7.0-beta.13`, checksum-verified Node 24.20.0, and ORP; physical process inspection proves both managed services remain children of the signed app |
-| Mac system readiness | Pass | Swift and source coverage verify role selection, managed-runtime checks, consent-driven official Codex installation, shared `~/.codex` authentication, and controller-only completion without local Codex |
+| Mac Swift unit suite | Pass | `swift test --package-path native/macos`: 66 tests passed |
+| Native runtime bundle and ownership | Pass | Release coverage verifies the Mac app embeds runtime `0.7.0-beta.14`, checksum-verified Node 24.20.0, and ORP; installed-process inspection proves both managed services remain direct children of the signed app |
+| Mac system readiness | Pass | Swift and source coverage verify role selection, managed-runtime checks, separate Codex version/sign-in/release facts, explicit install and update actions, offline fallback, shared `~/.codex` authentication, and controller-only completion without a Codex release request |
+| Codex release awareness | Pass | Packaged arm64 and Intel binaries contain OpenAI's official Codex release-channel URL; semantic-version, update-available, current, unavailable, cache, refresh, and controller-only paths are covered by the 66-test Mac suite |
 | Nonblocking startup | Pass | Integration coverage verifies the app control plane becomes healthy while a slow or unavailable Codex runtime initializes in the background |
-| Mac signed package | Pass | The local beta 13 DMG and ZIP checksums pass for Apple silicon and Intel |
+| Mac signed package | Pass | The local beta 14 DMG and ZIP checksums pass for Apple silicon and Intel; GitHub asset digests match all four local SHA-256 values |
 | Mac notarization and stapling | Pass | Both architecture-specific apps and DMGs are notarized, stapled, and accepted by Gatekeeper |
-| Website delivery | Pass | clawdad.earth serves beta 13/build 35 release notes and architecture-specific Apple-silicon and Intel download links; live asset lengths match the published GitHub release DMGs and the Intel update manifest names the signed build 35 ZIP |
+| Website delivery | Pass | Sites production version 15 and clawdad.earth serve beta 14/build 36 release notes and architecture-specific Apple-silicon and Intel download links; live asset lengths match the GitHub DMGs and the signed Intel update manifest names build 36 |
 | Distribution boundary | Pass | Public GitHub assets and the clawdad.earth download page are authorized for this native release; npm, the primary Apple-silicon appcast, and external iPhone channels remain unchanged |
 | Mac project picker | Pass | Native inspection verified grouped search, selection, Add Existing, default-root quick create, name validation, Escape, and focus restoration |
 | Mac Threads panel | Pass | Native inspection verified persistent Project/All scope, recent cards, conversation selection, and responsive two-column/one-column layouts |
@@ -61,7 +62,7 @@ recorded fresh-TestFlight-install observation.
 | Paired-Mac-first Read Aloud | Pass | Tests prove sent and received speech requests carry Mac-first policy and avoid Umbra when fallback is disabled |
 | iPhone Read Aloud playback session | Pass | Source and regression coverage activate `.playback` with `.spokenAudio` and exclude incompatible explicit AirPlay or Bluetooth options; system routing remains automatic |
 | Connection recovery states | Pass | Source and behavior tests cover automatic reconnect wording, host-offline distinction, and bounded Remote Assist timeout |
-| Candidate readiness identity | Pass | Snapshot logic requires runtime beta 13, TestFlight build 33, installed iPhone build 33, and installed Mac build 35 before physical certification can become ready |
+| Candidate readiness identity | Pass | Snapshot logic requires runtime beta 14, TestFlight build 33, installed iPhone build 33, and installed Mac build 36 before physical certification can become ready |
 | Multi-computer routing | Pass | iPhone tests prove each paired host retains its own project and thread selection; all signed requests and Remote Assist use the selected host identity |
 | Mac-to-Mac controller | Pass | Swift and source-contract tests cover separate controller identity, pinned host verification, Keychain relay credentials, paired-computer persistence, native Remote Assist, clipboard, commands, and display selection |
 | Compact Remote Assist controls | Pass | Source and Swift coverage place a 36-point visual launcher inside a 44-point target at the lower-right viewport edge, constrain the main and shortcut panels to 168 and 216 points including padding, preserve a visible submenu back path, and collapse after each action |
@@ -72,27 +73,30 @@ recorded fresh-TestFlight-install observation.
 
 ## Release Surfaces
 
-Native beta 13 combines the managed Node and ORP runtime, guided system setup,
+Native beta 14 combines the managed Node and ORP runtime, guided system setup,
 shared Codex authentication, computer-scoped project and thread selection,
 multi-display Remote Assist, Terminal tab switching, Command-T, composer Cut,
 Read Aloud, and Mac-to-Mac pairing. Physical certification remains separate
 from artifact and channel verification and must be recorded against exact Mac
-build 35 and iPhone build 33.
+build 36 and iPhone build 33.
 
 | Check | State | Acceptance |
 | --- | --- | --- |
 | Native distribution mode | Pass | The signed Apple-silicon and Intel Mac installers are public on clawdad.earth while the iPhone remains confined to `ClawDad Internal` |
-| Mac artifact and installation | Pass | The exact public Apple-silicon beta 13/build 35 DMG was installed on the Studio after preserving the verification build; the installed app passed deep signature, Gatekeeper, stapling, version, runtime-marker, entitlement, and bundled Node 24.20.0 checks |
+| Mac artifact and installation | Pass | The exact public Apple-silicon beta 14/build 36 app was installed on the Studio with beta 13/build 35 preserved as a backup; the installed app passed deep signature, Gatekeeper, stapling, version, runtime-marker, architecture, and bundled Node checks |
 | Internal TestFlight companion | Pass | Build 33 is `VALID` and assigned only to `ClawDad Internal` |
 | External TestFlight boundary | Pass | External build assignment and public link are false; Beta App Review is `NOT_SUBMITTED` |
-| Native service topology | Pass | The installed app owns exactly one server and one relay child process, restarted on port 4487, established the relay connection, and left the legacy launchd labels absent |
+| Native service topology | Pass | The installed app owns exactly one server and one relay child process, restarted on port 4487, reports runtime beta 14 and a ready shared Codex app-server, and holds an established relay connection |
 
 ## Physical iPhone And Mac
 
 | Check | State | Acceptance |
 | --- | --- | --- |
-| Native Mac workspace parity | Pass | A signed build 35 package completed the setup assistant and selected `/Volumes/Code_2TB/code`; the exact public notarized artifact was then installed, rendered the saved workspace, returned 249 projects and 20 recent threads, and passed a quit/relaunch recovery check |
-| Mac laptop to Studio pairing | Pending | Install build 35 from clawdad.earth, pair with a fresh Studio code, and open the Studio in native Remote Assist |
+| Native Mac workspace parity | Pass | The exact public notarized build 36 package was installed on the Studio, restored the saved `/Volumes/Code_2TB/code` project home, returned a healthy authenticated control plane on port 4487, and re-established its relay process after relaunch |
+| Codex update prompt | Pending | On the Intel laptop with an older Codex, confirm the wizard shows the installed and current versions separately, reports **Update available**, completes the approved update, and reports **Up to date** after **Check again** |
+| Codex offline fallback | Pending | Disconnect the laptop temporarily and confirm installed authenticated Codex remains usable while the release status is clearly unavailable |
+| Controller-only readiness | Pending | Choose controller-only on a Mac without local Codex and confirm setup completes without an install or release request |
+| Mac laptop to Studio pairing | Pending | Install build 36 from clawdad.earth, pair with a fresh Studio code, and open the Studio in native Remote Assist |
 | Studio to Mac laptop pairing | Pending | Repeat with a fresh laptop code and confirm the Studio can open the laptop independently |
 | Fresh TestFlight install | Pending | Build 33 launches to the subscription or pairing surface without stale workspace flash |
 | Purchase monthly | Pending | Sandbox purchase grants iPhone access and syncs verified access to Mac |
@@ -120,9 +124,9 @@ build 35 and iPhone build 33.
 ## Certification Rule
 
 The native artifact boundary is complete when the exact local and public Mac
-artifacts match, installed build 35 passes, and TestFlight build 33 remains
+artifacts match, installed build 36 passes, and TestFlight build 33 remains
 `VALID` in `ClawDad Internal`. Physical certification is complete only after the
 pending two-Mac, iPhone, and Remote Assist rows pass against installed Mac build
-35 and TestFlight build 33. External TestFlight, Beta App Review, and App Store submission require
+36 and TestFlight build 33. External TestFlight, Beta App Review, and App Store submission require
 separate release authorization and the human gates in
 `docs/app-store/review-handoff.md`.
