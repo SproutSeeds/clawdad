@@ -560,7 +560,7 @@ test("pair.request accepts and repairs build-3 CryptoKit raw P-256 public keys",
   assert.equal(diskConfig.trustedDeviceNames["ios-phone"], "Build 3 iPhone");
 });
 
-test("trusted catalog.request synchronizes the selected project before returning threads", async (t) => {
+test("trusted catalog.request returns the warm catalog before refreshing the selected project", async (t) => {
   const deviceKeys = generateP256KeyPair();
   const config = hostConfig({
     trustedDevicePublicKeys: {
@@ -612,16 +612,27 @@ test("trusted catalog.request synchronizes the selected project before returning
   });
 
   assert.equal(result.ok, true);
-  assert.equal(requests.length, 1);
-  const requestUrl = new URL(requests[0].url);
-  assert.equal(requestUrl.pathname, "/v1/projects");
-  assert.equal(requestUrl.searchParams.get("lean"), "1");
-  assert.equal(requestUrl.searchParams.get("syncProject"), "/Volumes/Code_2TB/code/Worldwrought");
+  assert.equal(requests.length, 2);
+  const initialRequestUrl = new URL(requests[0].url);
+  assert.equal(initialRequestUrl.pathname, "/v1/projects");
+  assert.equal(initialRequestUrl.searchParams.get("lean"), "1");
+  assert.equal(initialRequestUrl.searchParams.get("syncProject"), null);
   assert.equal(requests[0].options.headers.authorization, "Bearer local-token");
-  assert.equal(sent.length, 1);
+  const refreshRequestUrl = new URL(requests[1].url);
+  assert.equal(refreshRequestUrl.pathname, "/v1/projects");
+  assert.equal(refreshRequestUrl.searchParams.get("lean"), "1");
+  assert.equal(
+    refreshRequestUrl.searchParams.get("syncProject"),
+    "/Volumes/Code_2TB/code/Worldwrought",
+  );
+  assert.equal(requests[1].options.headers.authorization, "Bearer local-token");
+  assert.equal(sent.length, 2);
   assert.equal(sent[0].type, "catalog.snapshot");
   assert.equal(sent[0].body.projects[0].sessions[0].sessionId, "019f5900-42ce-7e23-8680-855bdbfcddd3");
   assert.equal(sent[0].body.recentThreads[0].projectName, "Worldwrought");
+  assert.equal(sent[0].body.catalogRefreshPending, true);
+  assert.equal(sent[1].type, "catalog.snapshot");
+  assert.equal(sent[1].body.catalogRefreshPending, false);
 });
 
 test("trusted message.send envelope is dispatched through the local app server", async (t) => {

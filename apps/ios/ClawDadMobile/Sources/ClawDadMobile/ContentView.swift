@@ -19,7 +19,6 @@ struct ContentView: View {
   @State private var showingProjectPicker = false
   @State private var showingNewThreadPrompt = false
   @State private var newThreadName = ""
-  @State private var projectPickerSnapshot: [ProjectSummary] = []
   @State private var dispatchMode = ClawDadDispatchMode.direct
   @State private var accessMode = ClawDadAccessMode.repo
   @State private var scannerError = ""
@@ -194,7 +193,6 @@ struct ContentView: View {
       }
       .sheet(isPresented: $showingProjectPicker) {
         ProjectPickerSheet(
-          projects: projectPickerSnapshot,
           selectedPath: session.selectedProjectPath,
           onSelect: { project in
             session.selectProject(project)
@@ -645,8 +643,10 @@ struct ContentView: View {
   private var projectSelector: some View {
     Button {
       dismissKeyboard()
-      projectPickerSnapshot = session.workspace.projects
       showingProjectPicker = true
+      if session.workspace.projects.isEmpty {
+        session.requestCatalog()
+      }
     } label: {
       SelectorRow(
         icon: "folder.fill",
@@ -1628,7 +1628,7 @@ struct ThreadDetailSheet: View {
           .accessibilityLabel("Close thread")
         }
 
-        if !statusText.isEmpty {
+        if !statusText.isEmpty && !displayedItems.isEmpty {
           Text(statusText)
             .font(.caption.monospaced().weight(.semibold))
             .foregroundStyle(ClawDadTheme.gold.opacity(0.86))
@@ -2490,11 +2490,14 @@ private struct ProjectPickerGroup: Identifiable {
 struct ProjectPickerSheet: View {
   @Environment(\.dismiss) private var dismiss
   @EnvironmentObject private var session: CloudSession
-  var projects: [ProjectSummary]
   var selectedPath: String
   var onSelect: (ProjectSummary) -> Void
   @State private var searchText = ""
   @State private var showingProjectCreator = false
+
+  private var projects: [ProjectSummary] {
+    session.workspace.projects
+  }
 
   private var matchingProjects: [ProjectSummary] {
     let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2535,9 +2538,18 @@ struct ProjectPickerSheet: View {
             Text("Projects")
               .font(.title2.weight(.heavy))
               .foregroundStyle(ClawDadTheme.cream)
-            Text("\(matchingProjects.count) available")
-              .font(.caption.monospaced())
-              .foregroundStyle(ClawDadTheme.peach.opacity(0.74))
+            HStack(spacing: 7) {
+              if session.catalogLoading {
+                ProgressView()
+                  .controlSize(.small)
+                  .tint(ClawDadTheme.gold)
+              }
+              Text(session.catalogLoading
+                ? "Loading projects..."
+                : "\(matchingProjects.count) available")
+                .font(.caption.monospaced())
+                .foregroundStyle(ClawDadTheme.peach.opacity(0.74))
+            }
           }
           Spacer()
           Button {
@@ -2598,7 +2610,17 @@ struct ProjectPickerSheet: View {
         ScrollViewReader { proxy in
           ScrollView {
             LazyVStack(alignment: .leading, spacing: 16, pinnedViews: [.sectionHeaders]) {
-              if groups.isEmpty {
+              if groups.isEmpty && session.catalogLoading {
+                HStack(spacing: 10) {
+                  ProgressView()
+                    .tint(ClawDadTheme.gold)
+                  Text("Loading projects...")
+                }
+                  .font(.subheadline)
+                  .foregroundStyle(ClawDadTheme.peach.opacity(0.72))
+                  .frame(maxWidth: .infinity, alignment: .leading)
+                  .padding(.vertical, 18)
+              } else if groups.isEmpty {
                 Text("No matching projects")
                   .font(.subheadline)
                   .foregroundStyle(ClawDadTheme.peach.opacity(0.72))

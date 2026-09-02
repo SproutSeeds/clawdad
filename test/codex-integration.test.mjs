@@ -236,8 +236,13 @@ test("server Codex integration endpoints install and report the pack", async () 
       cwd: repoRoot,
       env: {
         ...process.env,
+        HOME: root,
+        CODEX_HOME: codexHome,
+        CLAWDAD_HOME: path.join(root, "clawdad-home"),
         CLAWDAD_ROOT: repoRoot,
         CLAWDAD_CODEX_HOME: codexHome,
+        CLAWDAD_DISABLE_DELEGATE_SUPERVISOR_RESUME: "1",
+        CLAWDAD_DISABLE_QUEUED_DISPATCH_RESUME: "1",
         CLAWDAD_SERVER_TOKEN: "test-token",
       },
       stdio: ["ignore", "pipe", "pipe"],

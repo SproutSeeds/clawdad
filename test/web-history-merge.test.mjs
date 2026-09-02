@@ -1002,7 +1002,9 @@ test("Remote Assist exposes acknowledged input and bidirectional clipboard contr
   ]);
 
   assert.match(remoteAssistSource, /controller\.pressEnter\(\)/u);
-  assert.match(remoteAssistSource, /PasteButton\(payloadType: String\.self\)/u);
+  assert.doesNotMatch(remoteAssistSource, /PasteButton\(payloadType: String\.self\)/u);
+  assert.match(remoteAssistSource, /controller\.pastePhoneClipboardToMac\(\)/u);
+  assert.match(remoteAssistSource, /UIPasteboard\.general\.string/u);
   assert.match(remoteAssistSource, /controller\.copyMacSelectionToPhone\(\)/u);
   assert.match(remoteAssistSource, /focusRequest: controller\.keyboardFocusRequest/u);
   assert.match(remoteAssistSource, /self\.requestKeyboardFocus\(\)/u);
@@ -1141,6 +1143,10 @@ test("iPhone cold launch hides the fallback workspace until saved selection hydr
   );
   assert.match(
     cloudSource,
+    /@Published private\(set\) var catalogLoading = false/u,
+  );
+  assert.match(
+    cloudSource,
     /self\.startupWorkspaceReady = !self\.paired/u,
   );
   assert.match(
@@ -1154,6 +1160,7 @@ test("iPhone cold launch hides the fallback workspace until saved selection hydr
   const catalogSource = cloudSource.slice(catalogStart, catalogEnd);
   assert.match(catalogSource, /selectedProjectPath = first\.path/u);
   assert.match(catalogSource, /startupWorkspaceReady = true/u);
+  assert.match(catalogSource, /catalogLoading = catalogRefreshPending/u);
   assert.ok(
     catalogSource.indexOf("startupWorkspaceReady = true") >
       catalogSource.indexOf("selectedProjectPath = first.path"),
@@ -1177,6 +1184,8 @@ test("iPhone cold launch hides the fallback workspace until saved selection hydr
   );
   assert.match(contentSource, /accessibilityIdentifier\("clawdad\.startup\.loading"\)/u);
   assert.match(contentSource, /accessibilityIdentifier\("clawdad\.workspace\.ready"\)/u);
+  assert.match(contentSource, /session\.catalogLoading[\s\S]*Loading projects\.\.\./u);
+  assert.doesNotMatch(contentSource, /projectPickerSnapshot/u);
   assert.match(contentSource, /private var settingsOverlay: some View/u);
 });
 

@@ -458,6 +458,7 @@ final class CloudSession: ObservableObject {
     }
   }
   @Published private(set) var startupWorkspaceReady = false
+  @Published private(set) var catalogLoading = false
   @Published private(set) var reconnecting = false
 
   private var task: URLSessionWebSocketTask?
@@ -722,6 +723,7 @@ final class CloudSession: ObservableObject {
     reconnectTask = nil
     resetSocket()
     state = .disconnected
+    catalogLoading = false
     reconnecting = false
   }
 
@@ -784,6 +786,7 @@ final class CloudSession: ObservableObject {
     historyStatus = ""
     pendingApprovals = []
     startupWorkspaceReady = true
+    catalogLoading = false
     workspace = MobileWorkspace(
       id: workspaceId,
       title: "Scratchpad",
@@ -865,6 +868,7 @@ final class CloudSession: ObservableObject {
     pendingPairingEnvelopeId = ""
     pairingReturnComputerId = ""
     startupWorkspaceReady = false
+    catalogLoading = shouldConnect
     workspace = MobileWorkspace(
       id: workspaceId,
       title: "Scratchpad",
@@ -953,6 +957,7 @@ final class CloudSession: ObservableObject {
       connectIfPaired()
       return
     }
+    catalogLoading = true
     Task {
       do {
         var body: [String: JSONValue] = [:]
@@ -962,6 +967,7 @@ final class CloudSession: ObservableObject {
         }
         try await sendEnvelope(type: "catalog.request", body: body)
       } catch {
+        catalogLoading = false
         state = .failed(describe(error))
       }
     }
@@ -1486,6 +1492,7 @@ final class CloudSession: ObservableObject {
     pendingApprovals = []
     modelOptions = []
     startupWorkspaceReady = false
+    catalogLoading = true
     workspace = MobileWorkspace(
       id: payload.workspaceId,
       title: "Scratchpad",
@@ -1658,6 +1665,7 @@ final class CloudSession: ObservableObject {
     guard connectionRequested, paired else {
       resetSocket()
       state = .disconnected
+      catalogLoading = false
       reconnecting = false
       return
     }
@@ -1734,6 +1742,7 @@ final class CloudSession: ObservableObject {
   private func apply(_ envelope: CloudEnvelope) {
     switch envelope.type {
     case "catalog.snapshot":
+      let catalogRefreshPending = envelope.body["catalogRefreshPending"]?.boolValue ?? false
       let projects = parseProjects(envelope.body["projects"])
       let parsedRecentThreads = parseRecentThreadSummaries(
         envelope.body["recentThreads"],
@@ -1769,6 +1778,7 @@ final class CloudSession: ObservableObject {
         selectedSessionId = first.activeSessionId
       }
       startupWorkspaceReady = true
+      catalogLoading = catalogRefreshPending
       persistActiveComputerSnapshot()
       if catalogChanged {
         events.insert("Updated project catalog", at: 0)
@@ -1840,7 +1850,7 @@ final class CloudSession: ObservableObject {
       }
       persistActiveComputerSnapshot()
       historyItems = parseHistoryItems(envelope.body["items"])
-      historyStatus = historyItems.isEmpty ? "No mirrored messages yet." : "Thread loaded"
+      historyStatus = historyItems.isEmpty ? "No messages in this thread yet." : "Thread loaded"
     case "status.snapshot":
       applyStatusSnapshot(envelope)
     case "host.ready", "host.heartbeat":

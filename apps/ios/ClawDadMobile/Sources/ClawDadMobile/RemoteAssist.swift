@@ -836,6 +836,22 @@ final class RemoteAssistController: NSObject, ObservableObject {
     )
   }
 
+  func pastePhoneClipboardToMac() {
+    guard !clipboardBusy, !displaySelection.inputSuppressed else {
+      return
+    }
+    guard let text = UIPasteboard.general.string, !text.isEmpty else {
+      showClipboardNotice(
+        "Nothing pasteable is available on this iPhone yet.",
+        isError: true
+      )
+      UINotificationFeedbackGenerator().notificationOccurred(.warning)
+      restoreKeyboardFocusAfterControl()
+      return
+    }
+    pastePhoneClipboardToMac([text])
+  }
+
   func copyMacSelectionToPhone() {
     guard !clipboardBusy, !displaySelection.inputSuppressed else {
       return
@@ -2370,13 +2386,14 @@ struct RemoteAssistView: View {
         )
         .accessibilityLabel("Press Enter on \(controller.remoteComputerName)")
 
-        PasteButton(payloadType: String.self) { values in
+        Button {
           collapseControls()
-          controller.pastePhoneClipboardToMac(values)
+          controller.pastePhoneClipboardToMac()
+        } label: {
+          Image(systemName: "doc.on.clipboard")
+            .font(.system(size: 18, weight: .bold))
+            .frame(width: 44, height: 44)
         }
-        .labelStyle(.iconOnly)
-        .font(.system(size: 18, weight: .bold))
-        .frame(width: 44, height: 44)
         .buttonStyle(RemoteAssistOverlayButtonStyle())
         .disabled(
           controller.phase != .connected ||

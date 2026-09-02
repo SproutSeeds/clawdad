@@ -83,3 +83,35 @@ test("recent threads deduplicate provisional aliases and obey the requested limi
   assert.equal(recent[0].title, "Launch plan 2");
   assert.equal(recent[0].active, true);
 });
+
+test("recent threads ignore selection timestamps when ranking conversation activity", () => {
+  const projects = [
+    {
+      displayName: "Messages",
+      path: "/workspace/messages",
+      activeSessionId: "selected-session",
+      sessions: [
+        {
+          slug: "Selected without a new message",
+          sessionId: "selected-session",
+          providerSessionTimestamp: "2026-07-20T00:00:00.000Z",
+          lastSelectedAt: "2026-07-28T05:00:00.000Z",
+        },
+        {
+          slug: "Actually answered most recently",
+          sessionId: "answered-session",
+          lastResponse: "2026-07-27T03:10:00.000Z",
+        },
+      ],
+    },
+  ];
+
+  const recent = recentThreadSummariesForProjects(projects);
+
+  assert.deepEqual(recent.map((thread) => thread.sessionId), [
+    "answered-session",
+    "selected-session",
+  ]);
+  assert.equal(recent[0].lastActivityAt, "2026-07-27T03:10:00.000Z");
+  assert.equal(recent[1].lastActivityAt, "2026-07-20T00:00:00.000Z");
+});

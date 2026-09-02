@@ -3470,6 +3470,133 @@ test("sessions-doctor quarantines Codex sessions that do not belong to the proje
   }
 });
 
+test("sessions-doctor restores a falsely quarantined Codex transcript and retires its empty replacement", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-false-quarantine-doctor-"));
+  const home = path.join(root, "home");
+  const codexHome = path.join(root, "codex-home");
+  const projectPath = path.join(root, "clawdad");
+  const realSessionId = "019fbe49-4c8c-78a3-abe7-ef6a6845b92e";
+  const replacementSessionId = "9768f5bf-0000-4000-8000-00000000f475";
+  const legacySelector = "legacy-thread-selector";
+
+  await mkdir(path.join(projectPath, ".clawdad", "mailbox"), { recursive: true });
+  await mkdir(home, { recursive: true });
+  const transcriptPath = await writeCodexSession(
+    codexHome,
+    projectPath,
+    realSessionId,
+    { source: "vscode" },
+  );
+  await writeFile(
+    path.join(home, "state.json"),
+    JSON.stringify(
+      {
+        version: 3,
+        projects: {
+          [projectPath]: {
+            status: "idle",
+            active_session_id: replacementSessionId,
+            session_aliases: {
+              [realSessionId]: replacementSessionId,
+              [legacySelector]: replacementSessionId,
+            },
+            sessions: {
+              [realSessionId]: {
+                slug: "Real transcript",
+                provider: "codex",
+                provider_session_seeded: "true",
+                status: "failed",
+                quarantined: "true",
+                quarantine_reason: "codex_session_not_found_for_project",
+              },
+              [replacementSessionId]: {
+                slug: "Empty replacement",
+                provider: "codex",
+                provider_session_seeded: "false",
+                status: "idle",
+                dispatch_count: 0,
+              },
+            },
+            quarantined_sessions: {
+              [realSessionId]: {
+                slug: "Real transcript",
+                provider: "codex",
+                reason: "codex_session_not_found_for_project",
+                detail: "Transcript was missing from a temporary test Codex home.",
+                quarantined_at: "2026-09-02T08:19:35.000Z",
+              },
+            },
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  try {
+    const audit = await runServerCli(["sessions-doctor", projectPath, "--json"], {
+      env: {
+        CLAWDAD_HOME: home,
+        CLAWDAD_CODEX_HOME: codexHome,
+      },
+    });
+    assert.equal(audit.exitCode, 1, audit.stderr);
+    const auditPayload = JSON.parse(audit.stdout);
+    const falseQuarantineIssue = auditPayload.projects[0].issues.find(
+      (issue) => issue.type === "codex_session_false_quarantine",
+    );
+    assert.equal(falseQuarantineIssue?.sessionId, realSessionId);
+    assert.equal(falseQuarantineIssue?.replacementSessionId, replacementSessionId);
+    assert.equal(falseQuarantineIssue?.activeBlocker, true);
+
+    const repair = await runServerCli(
+      ["sessions-doctor", projectPath, "--repair", "--json"],
+      {
+        env: {
+          CLAWDAD_HOME: home,
+          CLAWDAD_CODEX_HOME: codexHome,
+        },
+      },
+    );
+    assert.equal(repair.exitCode, 0, repair.stderr);
+    const repairPayload = JSON.parse(repair.stdout);
+    assert.equal(repairPayload.ok, true);
+    assert.ok(repairPayload.projects[0].repairs.some(
+      (entry) => entry.type === "codex_session_false_quarantine_restored",
+    ));
+
+    const state = JSON.parse(await readFile(path.join(home, "state.json"), "utf8"));
+    const projectState = state.projects[projectPath];
+    assert.equal(projectState.active_session_id, realSessionId);
+    assert.equal(projectState.sessions[realSessionId].quarantined, undefined);
+    assert.equal(projectState.sessions[realSessionId].status, "idle");
+    assert.equal(projectState.sessions[realSessionId].provider_transcript_path, transcriptPath);
+    assert.equal(projectState.quarantined_sessions[realSessionId], undefined);
+    assert.equal(
+      projectState.quarantined_sessions[replacementSessionId].reason,
+      "false_quarantine_placeholder",
+    );
+    assert.equal(projectState.session_aliases[realSessionId], undefined);
+    assert.equal(projectState.session_aliases[replacementSessionId], realSessionId);
+    assert.equal(projectState.session_aliases[legacySelector], realSessionId);
+
+    const clean = await runServerCli(["sessions-doctor", projectPath, "--json"], {
+      env: {
+        CLAWDAD_HOME: home,
+        CLAWDAD_CODEX_HOME: codexHome,
+      },
+    });
+    assert.equal(clean.exitCode, 0, clean.stderr);
+    const cleanPayload = JSON.parse(clean.stdout);
+    assert.equal(cleanPayload.ok, true);
+    assert.equal(cleanPayload.issueCount, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("sessions-doctor classifies inactive stale bindings as historical repairable issues", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-historical-doctor-"));
   const home = path.join(root, "home");
