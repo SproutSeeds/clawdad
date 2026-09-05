@@ -24,6 +24,7 @@ public struct RemoteClipboardMessage: Codable, Equatable, Sendable {
   public let ok: Bool?
   public let error: String?
   public var disposition: RemoteDictationDisposition? = nil
+  public var foregroundOnly: Bool? = nil
 
   public static func dictationRequest(text: String, requestId: String) -> RemoteClipboardMessage {
     RemoteClipboardMessage(
@@ -46,14 +47,15 @@ public struct RemoteClipboardMessage: Codable, Equatable, Sendable {
     )
   }
 
-  public static func copyRequest(requestId: String) -> RemoteClipboardMessage {
+  public static func copyRequest(requestId: String, foregroundOnly: Bool = false) -> RemoteClipboardMessage {
     RemoteClipboardMessage(
       type: commandType,
       action: .copy,
       requestId: requestId,
       text: nil,
       ok: nil,
-      error: nil
+      error: nil,
+      foregroundOnly: foregroundOnly ? true : nil
     )
   }
 
@@ -90,6 +92,9 @@ public struct RemoteClipboardMessage: Codable, Equatable, Sendable {
   }
 
   fileprivate func validate() throws {
+    if foregroundOnly != nil, (type != Self.commandType || action != .copy) {
+      throw RemoteClipboardProtocolError.invalidCommand
+    }
     guard type == Self.commandType || type == Self.resultType else {
       throw RemoteClipboardProtocolError.invalidType
     }

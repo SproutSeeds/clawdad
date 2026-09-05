@@ -372,6 +372,7 @@ enum ClawDadAppStorePreviewScenario: String, Equatable {
   case workspace
   case conversation
   case dictation
+  case terminalReader = "terminal-reader"
 
   static func parse(arguments: [String]) -> Self? {
     guard

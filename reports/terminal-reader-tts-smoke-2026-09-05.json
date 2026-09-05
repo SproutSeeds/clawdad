@@ -1,0 +1,10 @@
+{
+  "checkedAt": "2026-09-05T08:03:18.952Z",
+  "ttsStatus": 200,
+  "provider": "doc-reader",
+  "text": "ClawDad is reading the latest response from the selected Terminal tab.",
+  "audioBytes": 224444,
+  "audioSha256": "51be7d60ed857b19829722b878de9dce00d61c2d162361b9e81d3bea32e40c23",
+  "transcriptionStatus": 200,
+  "recognizedText": "Claude Ad is reading the latest response from the selected Terminal tab."
+}

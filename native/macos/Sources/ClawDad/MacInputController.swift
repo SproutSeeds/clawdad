@@ -340,7 +340,9 @@ final class MacInputController {
       ))
       return
     }
-    guard let targetPID = activeTargetPID() else {
+    let copyTarget = message.foregroundOnly == true
+      ? NSWorkspace.shared.frontmostApplication?.processIdentifier : activeTargetPID()
+    guard let targetPID = copyTarget else {
       respond(.failure(
         action: .copy,
         requestId: message.requestId,
@@ -378,6 +380,11 @@ final class MacInputController {
         didChange = pasteboard.changeCount != previousChangeCount
       }
 
+      guard message.foregroundOnly != true || NSWorkspace.shared.frontmostApplication?.processIdentifier == targetPID else {
+        respond(.failure(action: .copy, requestId: message.requestId,
+                         error: "The focused Mac app changed. Select the text and try again."))
+        return
+      }
       guard didChange,
             let text = pasteboard.string(forType: .string),
             !text.isEmpty else {

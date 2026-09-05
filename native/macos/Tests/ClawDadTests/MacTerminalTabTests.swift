@@ -112,6 +112,36 @@ final class MacTerminalTabTests: XCTestCase {
     XCTAssertTrue(state.tabs.isEmpty)
   }
 
+  func testResponseRequiresTheCurrentlySelectedTab() async throws {
+    let automation = StubTerminalAutomation(snapshots: initialSnapshots)
+    let controller = MacTerminalTabController(automation: automation, readResponse: { _ in
+      XCTFail("An unselected tab must not be read")
+      throw MacTerminalResponseFailure(message: "Unexpected read")
+    })
+    let state = try await controller.catalog()
+    let request = RemoteTerminalResponseMessage.request(requestId: "read", tabId: state.tabs[1].id, expectedRevision: state.revision)
+    do {
+      _ = try await controller.latestResponse(request)
+      XCTFail("An unselected tab was accepted")
+    } catch { XCTAssertTrue(error.localizedDescription.contains("selected Terminal tab changed")) }
+  }
+
+  func testResponseIsDiscardedIfTabChangesDuringRead() async throws {
+    let automation = StubTerminalAutomation(snapshots: initialSnapshots)
+    let controller = MacTerminalTabController(automation: automation, readResponse: { tty in
+      XCTAssertEqual(tty, "/dev/ttys001")
+      try await automation.focusTab(windowID: 20, tabIndex: 1)
+      return RemoteTerminalResponse(sessionId: "session", turnId: "turn", text: "Now stale",
+                                    completedAt: "2026-09-05T08:00:00Z", inProgress: false)
+    })
+    let state = try await controller.catalog()
+    let request = RemoteTerminalResponseMessage.request(requestId: "read", tabId: state.tabs[0].id, expectedRevision: state.revision)
+    do {
+      _ = try await controller.latestResponse(request)
+      XCTFail("A response from the old tab escaped")
+    } catch { XCTAssertTrue(error.localizedDescription.contains("changed while reading")) }
+  }
+
   func testAutomationDenialOpensExactPrivacyPaneForCatalog() async {
     let automation = StubTerminalAutomation(
       snapshots: initialSnapshots,

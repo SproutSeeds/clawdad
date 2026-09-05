@@ -106,6 +106,7 @@ final class MacRemotePeer: NSObject {
   private var displayRefreshTask: Task<Void, Never>?
   private var displayAdvertisementTask: Task<Void, Never>?
   private var terminalOperationTask: Task<Void, Never>?
+  private var terminalResponseTask: Task<Void, Never>?
   private var displayAdvertisementGate = RemoteDisplayAdvertisementGate()
   private var displayOperationInProgress = false
   private var displayRefreshPending = false
@@ -262,6 +263,8 @@ final class MacRemotePeer: NSObject {
     cancelDisplayAdvertisement()
     terminalOperationTask?.cancel()
     terminalOperationTask = nil
+    terminalResponseTask?.cancel()
+    terminalResponseTask = nil
     displaySelectionTask?.cancel()
     displaySelectionTask = nil
     displayRefreshTask?.cancel()
@@ -367,7 +370,7 @@ final class MacRemotePeer: NSObject {
       return
     }
     lastPublishedScreenLocked = screenLocked
-    sendControl(.state(screenLocked: screenLocked, supportsDictation: true))
+    sendControl(.state(screenLocked: screenLocked, supportsDictation: true, supportsTerminalReadAloud: true))
   }
 
   private func publishDisplayState() {
@@ -571,6 +574,38 @@ final class MacRemotePeer: NSObject {
           error: error.localizedDescription,
           state: nil
         )
+      }
+    }
+  }
+
+  private func handleTerminalResponseRequest(_ request: RemoteTerminalResponseMessage) {
+    func send(_ message: RemoteTerminalResponseMessage) {
+      guard let data = (try? RemoteTerminalResponseCodec.encode(message)) ??
+        (try? RemoteTerminalResponseCodec.encode(request.failure("This response could not be transferred. Select a smaller portion of text to read."))) else { return }
+      controlChannel?.sendData(RTCDataBuffer(data: data, isBinary: false))
+    }
+    guard !MacConsoleSessionState.isLocked() else {
+      send(request.failure("Unlock the Mac before reading Terminal text."))
+      return
+    }
+    guard terminalOperationTask == nil, terminalResponseTask == nil else {
+      send(request.failure("Terminal is updating. Tap Read latest response again in a moment."))
+      return
+    }
+    terminalResponseTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer { self.terminalResponseTask = nil }
+      do {
+        let response = try await self.terminalTabController.latestResponse(request)
+        guard !Task.isCancelled else { return }
+        guard !MacConsoleSessionState.isLocked() else {
+          send(request.failure("Unlock the Mac before reading Terminal text."))
+          return
+        }
+        send(response)
+      } catch {
+        guard !Task.isCancelled else { return }
+        send(request.failure(error.localizedDescription))
       }
     }
   }
@@ -810,6 +845,11 @@ extension MacRemotePeer: RTCDataChannelDelegate {
          terminalMessage.type == RemoteTerminalTabMessage.listType ||
            terminalMessage.type == RemoteTerminalTabMessage.focusType {
         self.handleTerminalRequest(terminalMessage)
+        return
+      }
+      if let request = try? RemoteTerminalResponseCodec.decode(data),
+         request.type == RemoteTerminalResponseMessage.requestType {
+        self.handleTerminalResponseRequest(request)
         return
       }
       self.inputController.handle(

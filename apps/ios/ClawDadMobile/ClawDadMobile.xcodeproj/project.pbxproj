@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		06B2C2DD71D81211B3A38163 /* RemoteTerminalReaderPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82C51AB1C038540074E8D3C9 /* RemoteTerminalReaderPanel.swift */; };
+		08A2F61153C0221F74B49988 /* RemoteTerminalReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B67F2E9259E05DBACEB7F04 /* RemoteTerminalReader.swift */; };
 		1A308337EBE5F90AF0C5DD19 /* WebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = EC6B0B1F96EDC323DAEF47E1 /* WebRTC */; };
 		275FAABA58CF0436EC6D32FB /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 471CC1C676A805963BAF2F99 /* Assets.xcassets */; };
 		31C04D8C4F1285714ADA2271 /* RemoteDictationPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68D79DA6979160249DD07A02 /* RemoteDictationPanel.swift */; };
@@ -48,7 +50,9 @@
 		3B8CED3140E0C0FA87EA0782 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		471CC1C676A805963BAF2F99 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		47DAEBD8C630AA5DA4CC104A /* WebRTCPackage */ = {isa = PBXFileReference; lastKnownFileType = folder; name = WebRTCPackage; path = ../../../vendor/WebRTCPackage; sourceTree = SOURCE_ROOT; };
+		4B67F2E9259E05DBACEB7F04 /* RemoteTerminalReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTerminalReader.swift; sourceTree = "<group>"; };
 		68D79DA6979160249DD07A02 /* RemoteDictationPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteDictationPanel.swift; sourceTree = "<group>"; };
+		82C51AB1C038540074E8D3C9 /* RemoteTerminalReaderPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTerminalReaderPanel.swift; sourceTree = "<group>"; };
 		8960C1531C592BD814505199 /* SubscriptionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionManager.swift; sourceTree = "<group>"; };
 		8F34770E78861322677F1C3C /* VoiceRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceRecorder.swift; sourceTree = "<group>"; };
 		930A750132AFE74E66A35E11 /* PasskeyRequests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PasskeyRequests.swift; sourceTree = "<group>"; };
@@ -100,6 +104,8 @@
 				AA4FB03C06FF3E3F780BF6B2 /* RemoteAssist.swift */,
 				35C55DF601F5D3D9ABD04556 /* RemoteDictationDraft.swift */,
 				68D79DA6979160249DD07A02 /* RemoteDictationPanel.swift */,
+				4B67F2E9259E05DBACEB7F04 /* RemoteTerminalReader.swift */,
+				82C51AB1C038540074E8D3C9 /* RemoteTerminalReaderPanel.swift */,
 				8960C1531C592BD814505199 /* SubscriptionManager.swift */,
 				8F34770E78861322677F1C3C /* VoiceRecorder.swift */,
 			);
@@ -263,6 +269,8 @@
 				9FAEDA464727521A0D77839C /* RemoteAssist.swift in Sources */,
 				F07EBA06FDF3D4509727718D /* RemoteDictationDraft.swift in Sources */,
 				31C04D8C4F1285714ADA2271 /* RemoteDictationPanel.swift in Sources */,
+				08A2F61153C0221F74B49988 /* RemoteTerminalReader.swift in Sources */,
+				06B2C2DD71D81211B3A38163 /* RemoteTerminalReaderPanel.swift in Sources */,
 				4D1C0FA879A0AA478DD90B11 /* SubscriptionManager.swift in Sources */,
 				7751604101BB979587499134 /* VoiceRecorder.swift in Sources */,
 			);
@@ -370,7 +378,7 @@
 				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 37;
+				CURRENT_PROJECT_VERSION = 38;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_NS_ASSERTIONS = NO;
@@ -449,7 +457,7 @@
 				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 37;
+				CURRENT_PROJECT_VERSION = 38;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -558,7 +566,7 @@
 				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 37;
+				CURRENT_PROJECT_VERSION = 38;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_NS_ASSERTIONS = NO;

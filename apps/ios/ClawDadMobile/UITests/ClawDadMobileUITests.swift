@@ -6,6 +6,33 @@ final class ClawDadMobileUITests: XCTestCase {
     continueAfterFailure = false
   }
 
+  func testRemoteTerminalReaderSourceCopyAndBack() {
+    let app = XCUIApplication()
+    app.launchArguments += ["--clawdad-app-store-preview", "terminal-reader"]
+    app.launch()
+    let source = app.staticTexts["clawdad.remote.reader.source"]
+    XCTAssertTrue(source.waitForExistence(timeout: 20))
+    XCTAssertEqual(source.label, "ClawDad")
+    let text = app.staticTexts["clawdad.remote.reader.text"]
+    let expected = text.label
+    XCTAssertTrue(expected.contains("selected Terminal tab"))
+    let screenshot = XCTAttachment(screenshot: app.screenshot())
+    screenshot.name = "Remote Assist latest response player"
+    screenshot.lifetime = .keepAlways
+    add(screenshot)
+    let copy = app.buttons["clawdad.remote.reader.copy"]
+    if !copy.isHittable { app.swipeUp() }
+    copy.tap()
+    XCTAssertTrue(copy.label.contains("Copied to iPhone"))
+    app.buttons["clawdad.remote.reader.back"].tap()
+    let speaker = app.buttons["clawdad.remote.reader"]
+    XCTAssertTrue(speaker.waitForExistence(timeout: 3))
+    speaker.tap()
+    XCTAssertTrue(text.waitForExistence(timeout: 3))
+    XCTAssertEqual(text.label, expected)
+    XCTAssertTrue(app.buttons["clawdad.remote.reader.stop"].exists)
+  }
+
   func testRemoteDictationReviewCopyAndBackPreserveDraft() {
     let app = XCUIApplication()
     app.launchArguments += ["--clawdad-app-store-preview", "dictation"]

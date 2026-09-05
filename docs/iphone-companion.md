@@ -187,6 +187,17 @@ and paired-computer speech service as the main composer, with separate draft
 ownership. Older hosts continue to support transcription and copying to iPhone;
 host insertion requires the dictation-capable Mac update.
 
+The Remote Assist speaker reads the selected Terminal tab's latest completed
+Codex response directly from its conversation. It shows the source tab and
+completion time, with Pause, Resume, Stop, and Copy text to iPhone. Back returns
+to the remote screen while a compact player remains available. A new turn in
+progress is labeled; the previous completed answer requires an explicit Play
+action. Switching tabs cancels pending reading and stops the previous tab's
+audio. **Read selected text** supports other agents and text selected in the
+current Mac app. This feature requires Mac build 46 and iPhone build 38 or later;
+it reuses the Read Aloud service and fallback preference described below.
+See `docs/remote-assist-read-aloud.md` for its behavior and verification plan.
+
 The claw menu also includes **Images**. Select up to four photos; ClawDad resizes
 each one to a maximum 2048-pixel edge, shows removable previews above the send
 bar, and sends the images to the selected Codex thread with or without message

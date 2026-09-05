@@ -95,17 +95,40 @@ final class MacTerminalAutomationPermissionRouter:
 final class MacTerminalTabController {
   private let automation: MacTerminalAutomating
   private let permissionRouter: MacTerminalAutomationPermissionRouting
+  private let readResponse: @MainActor (String) async throws -> RemoteTerminalResponse
   private var revision = 1
   private var hasCatalog = false
   private var topology: [MacTerminalTabTopologyEntry] = []
   private var identifiers: [MacTerminalTabIdentity: String] = [:]
   private var snapshotsByIdentifier: [String: MacTerminalTabSnapshot] = [:]
 
+  func latestResponse(_ request: RemoteTerminalResponseMessage) async throws -> RemoteTerminalResponseMessage {
+    let state = try await catalog()
+    guard state.revision == request.expectedRevision,
+          state.selectedTabId == request.tabId,
+          let target = snapshotsByIdentifier[request.tabId] else {
+      throw MacTerminalResponseFailure(message: "The selected Terminal tab changed. Tap Read latest response again.")
+    }
+    let response = try await readResponse(target.tty)
+    try Task.checkCancellation()
+    let refreshed = try await catalog()
+    guard refreshed.revision == request.expectedRevision,
+          refreshed.selectedTabId == request.tabId,
+          snapshotsByIdentifier[request.tabId]?.tty == target.tty else {
+      throw MacTerminalResponseFailure(message: "The selected Terminal tab changed while reading. Try again.")
+    }
+    return request.success(tabTitle: macTerminalTabTitle(target.customTitle), response: response)
+  }
+
   init(
     automation: MacTerminalAutomating = MacTerminalAutomation(),
-    permissionRouter: MacTerminalAutomationPermissionRouting? = nil
+    permissionRouter: MacTerminalAutomationPermissionRouting? = nil,
+    readResponse: @escaping @MainActor (String) async throws -> RemoteTerminalResponse = { tty in
+      try await Task.detached(priority: .userInitiated) { try MacTerminalResponseReader().read(tty: tty) }.value
+    }
   ) {
     self.automation = automation
+    self.readResponse = readResponse
     self.permissionRouter = permissionRouter ??
       MacTerminalAutomationPermissionRouter()
   }

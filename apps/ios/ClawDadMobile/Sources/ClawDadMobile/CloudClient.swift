@@ -1399,6 +1399,20 @@ final class CloudSession: ObservableObject {
   ) {
     let spokenText = text.trimmingCharacters(in: .whitespacesAndNewlines)
     let key = mobileReadAloudKey(item: item, kind: kind, text: spokenText)
+    toggleSpeech(key: key, text: spokenText, projectPath: projectPath, sessionId: sessionId,
+                 historyRequestId: item.requestId, kind: kind)
+  }
+
+  func toggleRemoteReadAloud(key: String, text: String) {
+    toggleSpeech(key: key, text: text, projectPath: "", sessionId: "",
+                 historyRequestId: "", kind: .response, remoteAssist: true)
+  }
+
+  private func toggleSpeech(
+    key: String, text: String, projectPath: String, sessionId: String,
+    historyRequestId: String, kind: MobileReadAloudKind, remoteAssist: Bool = false
+  ) {
+    let spokenText = text.trimmingCharacters(in: .whitespacesAndNewlines)
     switch readAloud.phase(for: key) {
     case .playing:
       readAloud.pause()
@@ -1426,8 +1440,11 @@ final class CloudSession: ObservableObject {
 
     let audioRequestId = UUID().uuidString.lowercased()
     let envelopeId = UUID().uuidString.lowercased()
+    let speechScope = "\(accountId)/\(workspaceId)/\(hostId)"
     readAloud.begin(key: key, requestId: audioRequestId, envelopeId: envelopeId)
     Task {
+      guard readAloud.activeKey == key,
+            speechScope == "\(accountId)/\(workspaceId)/\(hostId)" else { return }
       do {
         try await sendEnvelope(
           type: "speech.synthesize.request",
@@ -1435,9 +1452,10 @@ final class CloudSession: ObservableObject {
             "requestId": .string(audioRequestId),
             "project": .string(projectPath),
             "sessionId": .string(sessionId),
-            "historyRequestId": .string(item.requestId),
+            "historyRequestId": .string(historyRequestId),
             "kind": .string(kind.rawValue),
             "text": .string(spokenText),
+            "source": .string(remoteAssist ? "remote-assist" : "history"),
             "executionPreference": .string("paired-mac-first"),
             "allowRemoteFallback": .bool(allowUmbraReadAloudFallback)
           ],

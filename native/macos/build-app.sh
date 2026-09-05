@@ -179,6 +179,7 @@ runtime_version=$(
     "$runtime_dir/bin/node" \
     "$runtime_dir/node_modules/open-research-protocol/package.json" \
     "$runtime_dir/lib/server.mjs" \
+    "$runtime_dir/lib/cloud-host-connector.mjs" \
     "$runtime_dir/web/index.html" \
     "$runtime_dir/web/app.css" \
     "$runtime_dir/web/app.js" \

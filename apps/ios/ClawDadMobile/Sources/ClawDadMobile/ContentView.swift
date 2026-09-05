@@ -298,6 +298,13 @@ struct ContentView: View {
 
   private func presentAppStorePreviewIfNeeded() {
 #if DEBUG
+    if ClawDadAppStorePreviewScenario.current == .terminalReader {
+      #if os(iOS)
+      remoteAssist.prepareTerminalReaderPreview()
+      showingRemoteAssist = true
+      #endif
+      return
+    }
     if ClawDadAppStorePreviewScenario.current == .dictation {
       #if os(iOS)
       remoteAssist.prepareDictationPreview()

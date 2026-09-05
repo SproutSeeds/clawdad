@@ -18,6 +18,7 @@ test("native Mac build stages the shared Codex writer runtime and WebSocket depe
   assert.match(buildScript, /ditto "\$repo_root\/lib" "\$runtime_dir\/lib"/u);
   assert.match(buildScript, /ditto "\$repo_root\/node_modules" "\$runtime_dir\/node_modules"/u);
   assert.match(buildScript, /"\$runtime_dir\/lib\/server\.mjs"/u);
+  assert.match(buildScript, /runtime_version=\$\([\s\S]*"\$runtime_dir\/lib\/cloud-host-connector\.mjs"[\s\S]*\.bundle-version/u);
   assert.match(sharedRuntime, /ensureCodexSharedRuntime/u);
   assert.match(deliveryClaim, /acquireCodexDeliveryClaim/u);
 });

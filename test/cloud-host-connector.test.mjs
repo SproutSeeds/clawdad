@@ -996,6 +996,39 @@ test("trusted Read Aloud requests generate on the Mac and stream signed audio ch
   assert.equal(sent.every((entry) => verifyCloudEnvelopeSignature(entry, config.hostPublicKeyPem)), true);
 });
 
+test("Remote Assist Read Aloud uses the host default without a mirrored project or turn", async (t) => {
+  const deviceKeys = generateP256KeyPair();
+  const config = hostConfig({ trustedDevicePublicKeys: { "ios-phone": deviceKeys.publicKey } });
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const requests = [];
+  globalThis.fetch = async (url, options = {}) => {
+    const path = new URL(String(url)).pathname;
+    if (path === "/v1/tts/message") {
+      requests.push(JSON.parse(options.body));
+      return Response.json({ ok: true, audio: { state: "ready", parts: [
+        { fileName: "part.wav", url: "/v1/tts/audio?part=part.wav" },
+      ] } });
+    }
+    return new Response(Buffer.from("audio-data"), { headers: { "content-type": "audio/wav" } });
+  };
+  const envelope = signCloudEnvelope(normalizeCloudEnvelope({
+    type: "speech.synthesize.request", accountId: "acct-1", workspaceId: "scratchpad",
+    sourceDeviceId: "ios-phone", targetHostId: "mac-host",
+    body: { requestId: "remote-audio", source: "remote-assist", project: "", kind: "response",
+      text: "The latest terminal answer.", executionPreference: "paired-mac-first", allowRemoteFallback: false },
+  }), deviceKeys.privateKey, { keyId: cloudPublicKeyFingerprint(deviceKeys.publicKey) });
+  const sent = [];
+  const result = await handleCloudEnvelope(envelope, config, async (message) => { sent.push(message); });
+  assert.equal(result.ok, true);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].project, "");
+  assert.equal(requests[0].historyRequestId, "");
+  assert.equal(requests[0].text, "The latest terminal answer.");
+  assert.equal(sent.at(-1).type, "speech.synthesis.complete");
+  assert.equal(sent.every((message) => verifyCloudEnvelopeSignature(message, config.hostPublicKeyPem)), true);
+});
+
 test("trusted phones create projects only in the Mac configured default root", async (t) => {
   const deviceKeys = generateP256KeyPair();
   const config = hostConfig({
