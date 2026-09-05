@@ -1,0 +1,128 @@
+# Remote Assist reliability and local Files
+
+Status: audited implementation plan; product repairs and Files implementation pending.
+Audit date: 2026-09-05. Baseline commit: `b2cc1e0`.
+
+## Product decisions
+
+- The paired Mac owns execution, speech processing, and the canonical Files library.
+- Files use local Mac storage. The phone fetches files on demand and can retain downloads or export them to Apple Files/share destinations.
+- Cloud infrastructure supplies the existing pairing, signaling, and necessary transient relay functions. This plan adds no cloud file store, automatic cloud backups, or cloud document processing.
+- Prefer direct device transfer. Any relay fallback must obey usage controls; local storage alone does not eliminate relay bandwidth.
+- With the Mac asleep/offline, previously downloaded phone files remain accessible. Other entries show that the Mac must reconnect before downloading.
+- The default library contains intentional deliverables. Ordinary code changes, intermediate output, logs, and build files remain in their projects. A requested script or source bundle can be an intentional deliverable.
+- Repair the reported Remote Assist regressions before expanding the product with Files.
+
+## Current evidence
+
+Read-only checks confirmed the installed Mac is build 46 and the connected physical iPhone has build 38. The native service on port 4487 reports healthy with the shared Codex service ready. Authenticated `/v1/tts/status` returned HTTP 200 with `doc-reader` enabled and available. This confirms service availability, not successful response retrieval, audio transfer, or audible playback on the phone.
+
+The earlier release reports explicitly left physical phone playback and dictation insertion unverified. The new user reports make those acceptance cases open defects. Existing passing unit tests and preview UI tests do not close them.
+
+| Area | Audit finding | Confidence and remaining evidence |
+| --- | --- | --- |
+| Terminal taps | A catalog refresh and a focus request share one pending-request slot. The iPhone disables every unselected tab while a refresh is pending. Silent polling runs every two seconds. | Confirmed code behavior that can discard the user's tap during a refresh. Physical timings and the full reported repeated-tap sequence still need measurement. |
+| Terminal latency | A focus operation reads the complete catalog before focusing and again afterward. Each catalog executes Terminal automation and an Accessibility traversal for unread indicators on one serial queue. | Confirmed extra work on the switch path; its wall-clock contribution has not been benchmarked in this audit. |
+| Terminal reader | Reading first refreshes the catalog, then the Mac's reader reads it before and after resolving the response. A reader request is rejected if a Terminal operation is already pending. The mini player also polls the catalog every two seconds while it retains a source. | Confirmed contention and repeated catalog work. The reader's selected-tab safeguards must survive any optimization. |
+| Acknowledgements | Mac control replies discard the Boolean result from the WebRTC data-channel send. The response reader also ignores that result. The iPhone times out clipboard delivery after five seconds and tab requests after eight seconds. | Confirmed reliability/diagnostic gap. A failed send can leave the phone waiting; no captured failed user request yet proves this is the sole cause. |
+| Read Aloud | Text retrieval uses Remote Assist's data channel. Speech preparation/audio delivery uses the separate cloud-envelope connection. Playback waits for all audio parts and has a three-minute preparation timeout. | Confirmed independent failure stages. A healthy remote video session does not establish that the speech connection or phone audio output is healthy. |
+| Relay recovery | Current native connector logs show socket errors with reconnect waits of 3, 6, 12, and 24 seconds. The failure counter resets after a clean connection return, rather than when a new connection becomes healthy. | Confirmed source/log evidence for recovery delay growth. Correlation with the reported speech attempts is pending. |
+| Use on Mac | Delivery copies text to the Mac clipboard and attempts insertion into the current eligible foreground target. Several phone readiness guards return silently. The shortcut fallback reports insertion when it posts a paste shortcut, without observing the resulting text. | Confirmed implementation limitations. Need to distinguish a disabled button, failed request, missing receipt, clipboard-only success, and failed insertion on the actual phone. |
+| Recording appearance | The mic styles use circles; recording replaces the mic glyph with `stop.fill` and adds a pulse/glow. The prior screenshot shows a transcript preview rather than recording. | The reported surrounding square has not been visually reproduced. Inspect actual recording/pressed/focus states before identifying the cause. |
+| Files | The desktop has a basic aggregate Files view backed by per-project `.clawdad/artifacts` directories. The cloud connector handles artifact listing, while the iPhone has no complete Files/download experience. | Confirmed code foundation; it is not yet a shared, durable deliverables library. |
+
+No product source, running app, permissions, cloud configuration, or release channel was changed during this audit. No remote input or clipboard write was issued to the user's Mac.
+
+## 1. Make Terminal actions reliable
+
+- [ ] Record one request ID through tap, accepted intent, Mac receipt, catalog/focus execution, reply send, and phone application. Keep diagnostic timing and error codes local and bounded; omit terminal contents and dictated text.
+- [ ] Separate background catalog refresh from foreground selection state. Accept a tap immediately even when a refresh is running, display the requested destination, and execute it as soon as the current safe operation finishes.
+- [ ] Coalesce repeated taps to the same destination. If the user chooses another destination while waiting, retain the newest explicit choice with a sequence number and reject stale acknowledgements.
+- [ ] Keep the current selection marked as confirmed until the Mac acknowledges the new selection. A background response at the same topology revision must not overwrite a newer focus result.
+- [ ] Consolidate polling, coalesce overlapping refreshes, and pause/defer low-priority refresh work around explicit actions. Read cached tab identity and validate the target without rescanning unrelated unread indicators for every switch.
+- [ ] Preserve stable tab identity, topology checks, moved/closed-tab handling, and exact post-focus confirmation. Avoid retaining mutable tab indexes as the authority.
+- [ ] Handle send failures and transport congestion explicitly. Add bounded reply retry/status reconciliation without replaying input or making unbounded queues.
+
+Exit evidence: timed phone-to-Mac switching across multiple live tabs, including taps during refresh, repeated taps, rapid changes of destination, long-running sessions, closed/reordered tabs, and reconnect. A single accepted tap must reach the intended tab without repeat tapping. Immediate local feedback should be visible within 100 ms; record median and p95 completion times, targeting p95 under two seconds on a healthy connection after catalog warmup.
+
+## 2. Restore Read Aloud end to end
+
+- [ ] Reproduce both latest-response and selected-text reading on the actual iPhone. Also check the main conversation speaker to distinguish a shared speech failure from the new Terminal reader.
+- [ ] Expose distinct stages: finding response, preparing audio on Mac, receiving audio, and playing. Every failure stage needs a specific recovery action and preserved source text.
+- [ ] Serialize or coalesce catalog/reader work so a normal refresh does not make an explicit read fail with a busy response. Avoid redundant catalog scans while retaining selected-tab/turn ownership validation.
+- [ ] Verify host binding, request IDs, signed envelopes, readiness transitions, chunk limits/order, complete receipts, and cancellation when switching tabs/computers or disconnecting.
+- [ ] Handle failed/oversized response sends and use bounded chunks where needed. Never truncate an answer silently or substitute another tab's response.
+- [ ] Audit the separate speech connection and reset reconnect backoff after an established healthy connection. Report loss of that connection while remote video remains available.
+- [ ] Verify the iPhone audio session after microphone use, interruption, background/foreground transitions, and changes between speaker and headphones. Coordinate recorder/playback ownership if a conflict is reproduced.
+- [ ] Once reliability is established, allow playback from complete early audio parts when feasible and reuse local cached audio. Maintain local speech processing as the default.
+
+Exit evidence: physically hear the correct completed answer from two distinct tabs, including one with a long thread; verify selected-text fallback, previous-completed-turn labeling, pause/resume/stop, and reading immediately after dictation. Record request stage timings and test interruption/reconnect. Synthetic audio generation and simulator previews are supporting checks only.
+
+## 3. Repair Use on Mac and the recording control
+
+- [ ] Make unavailable delivery explain itself: connection, host capability, display transition, another clipboard action, or a draft belonging to another computer. Keep the draft editable/recoverable after errors.
+- [ ] Trace the exact delivery request and receipt over the data channel. Reconcile an ambiguous timeout before offering a retry that could duplicate text; retain deduplication across the supported retry lifecycle.
+- [ ] Write and verify the Mac clipboard before attempting insertion. At delivery time, use the currently focused eligible input; with no eligible input, report clipboard-only success clearly.
+- [ ] Verify the real paste outcome where the target exposes it. Where verification is unavailable, use an accurate delivery status rather than treating posted keystrokes as proof of inserted text.
+- [ ] Keep Copy to iPhone available independently. Preserve the user's transcript and never press Enter/submit a terminal command automatically.
+- [ ] Reproduce the square around the recording icon in idle, recording, pressed, permission, and transcription states on the actual iOS build. Check both the Remote Assist mic and the main composer control.
+- [ ] Correct the specific background, clipping, focus, or animation defect after reproduction. Retain a recognizable Stop control, recording feedback, adequate tap target, and accessibility behavior.
+- [ ] Ensure Back/Cancel return to Remote Assist without discarding the reviewed transcript unexpectedly or leaving microphone capture running.
+
+Exit evidence: one-tap delivery into Terminal and a normal Mac text field; clipboard-only delivery with no eligible field; Copy to iPhone; retry after interruption without duplicate insertion; Unicode and multiline text; visual review of each recording state and larger text settings. These cases must exercise real delivery rather than DEBUG preview fixtures.
+
+## 4. Build the local Files library
+
+### Canonical records and storage
+
+- [ ] Create one local library catalog under the Mac's ClawDad application-support directory, with stable deliverable IDs, display names, project/source-conversation references, versions, format variants, sizes, hashes, and completion state.
+- [ ] Keep original project files at their existing canonical paths. Store a completed local snapshot for each delivered version so later project edits/moves do not break a previously delivered download. Both apps address the same deliverable/version IDs.
+- [ ] Register completed deliverables through an explicit agent handoff action plus a manual Add to Files action. Support terminal-driven agent sessions through that same handoff mechanism; merely observing a changed file is insufficient.
+- [ ] Validate file existence/completion and publish atomically. Deduplicate identical delivered versions; group revisions and related formats under the same item.
+- [ ] Treat existing `.clawdad/artifacts` contents as import candidates with a controlled import preview. Avoid auto-importing every historical report or changing external sharing behavior as a side effect.
+
+### Discovery and phone use
+
+- [ ] Evolve the desktop Files space and add matching iPhone access, including a Files shortcut from Remote Assist.
+- [ ] Default to recent deliverables across projects. Add search by title/filename/project, simple type/project filters, pinning, and archive. Show source context and the latest delivered version; keep earlier versions one level deeper.
+- [ ] Add preview, download/keep on phone, export to Apple Files/share, and desktop open/reveal actions. Use visible Back behavior and restore the previous context.
+- [ ] Fetch only requested files/previews. Cache metadata and explicitly retained downloads locally with clear availability and storage-use controls.
+- [ ] Removing a phone download only removes that local copy. Removing/archiving a library item preserves original project files; deletion of managed versions must have an explicit scope.
+
+### Paired transfer and resource limits
+
+- [ ] Add a file-only paired connection usable from the ordinary Files screen without starting screen capture or remote-control mode. Reuse existing device authentication, revocation, and host selection.
+- [ ] Prefer direct authenticated device transfer. Keep bulk transfer separate from interactive control messages and prioritize Terminal/clipboard actions over downloads.
+- [ ] Download by authorized deliverable/version ID. Revalidate ownership and file identity; do not expose a general arbitrary-path download endpoint.
+- [ ] Use bounded chunks, backpressure, progress, cancellation, resumable offsets, and final hash verification. Publish the completed phone file only after verification.
+- [ ] Keep file bytes and library payloads out of durable cloud storage. Use existing cloud infrastructure for signaling and only necessary transient relay traffic.
+- [ ] Apply existing TURN controls to any relayed file connection, add transfer-level accounting/limits, and show when a transfer is paused by budget. Reconcile analytics delay and active credential lifetime when assessing enforcement; do not promise a zero-cloud-cost path on every network.
+- [ ] Avoid background mirroring, automatic full-library downloads, unnecessary full-catalog scans, and cloud indexing/AI processing. Generate thumbnails/search indexes locally and lazily.
+
+Exit evidence: an agent delivers a file from a normal conversation and a Terminal session; it appears once in both apps; the phone previews/exports identical bytes; a new version stays grouped; ordinary source edits add no library entries; an interrupted download resumes correctly; a retained phone copy opens with both devices offline. Verify relay usage/accounting on a controlled connection before enabling bulk fallback.
+
+## Execution and release checkpoints
+
+1. Capture failing phone attempts with the installed build pair and add the local request diagnostics needed to identify the speech/delivery failure stages.
+2. Repair Terminal scheduling and acknowledgement handling; verify physical switching and retain the timing evidence.
+3. Complete Read Aloud, Use on Mac, and recording-state acceptance. Run focused behavioral tests for the reproduced failures and affected regressions, including existing All Projects refresh, remote input, pairing, and reconnect.
+4. Ship the verified native reliability release through the current installed Mac/internal TestFlight channel. Keep release identity and remaining hands-on checks explicit.
+5. Implement the local Files catalog, deliberate handoff, desktop/mobile views, and on-demand transfer as the next bounded change. Share the proven transport reliability work without making the speech repair wait for Files.
+6. Verify the full file delivery/download flow, resource use, and repository hygiene before its native release.
+
+This request authorizes the audit and consolidated plan. Implementation/release tasks above are the next work; none are claimed complete by this document.
+
+## Implementation references
+
+- Terminal state, polling, UI gating, reader requests, and clipboard lifecycle: `apps/ios/ClawDadMobile/Sources/ClawDadMobile/RemoteAssist.swift` (selection state around 199; delivery/reader around 866; refresh/focus around 1045; clipboard around 1704; polling around 2639; row gating around 3187).
+- Mac catalog/focus and serial automation: `native/macos/Sources/ClawDad/MacTerminalTabs.swift` (focus around 160; automation around 325).
+- Mac sends and operation ownership: `native/macos/Sources/ClawDad/MacRemotePeer.swift` (reply sending around 297; Terminal work around 493; reader around 578).
+- Speech transport/playback: `lib/cloud-host-connector.mjs` (preparation/transfer around 955; reconnect around 1607), `apps/ios/ClawDadMobile/Sources/ClawDadMobile/CloudClient.swift`, and `RemoteTerminalReader.swift` / `RemoteTerminalReaderPanel.swift` in that same iPhone source directory.
+- Dictation delivery: `native/macos/Sources/ClawDad/MacInputController.swift` (around 182), `MacDictationDelivery.swift`, and `MacEditableTargetPolicy.swift`; iPhone `RemoteDictationDraft.swift` / `RemoteDictationPanel.swift`.
+- Recording style/audio lifecycle: iPhone `ContentView.swift` (around 3547), `VoiceRecorder.swift`, and `RemoteAssist.swift` (around 3220).
+- Existing Files surface: `web/app.js` (around 12873), `lib/server.mjs` (artifact catalog around 16279/16638), and `lib/cloud-host-connector.mjs` (artifact listing around 1366).
+- Resource policy and release evidence: `docs/turn-budget-runbook.md`, `cloud/wrangler.toml`, `reports/terminal-reader-release-2026-09-05.md`, and `reports/remote-assist-dictation-2026-09-05.md`.
+
+## Workspace checkpoint
+
+Only this plan belongs to the current change. Five pre-existing dirty groups were preserved: `.agents/skills/clawdad-release/SKILL.md`; `plugins/clawdad-codex-integration/.codex-plugin/plugin.json`; `plugins/clawdad-codex-integration/skills/clawdad-release/SKILL.md`; `assets/wordmark-explorations/`; and `marketing-site/`. Their next action is separate owner review/checkpoint. Initial ORP hygiene reported all five classified and safe to expand. Temporary phone inventory was kept outside the repository under `/tmp` and contains no credential material.
