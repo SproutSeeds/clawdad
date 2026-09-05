@@ -12,6 +12,7 @@ Audit date: 2026-09-05. Baseline commit: `b2cc1e0`.
 - With the Mac asleep/offline, previously downloaded phone files remain accessible. Other entries show that the Mac must reconnect before downloading.
 - The default library contains intentional deliverables. Ordinary code changes, intermediate output, logs, and build files remain in their projects. A requested script or source bundle can be an intentional deliverable.
 - Repair the reported Remote Assist regressions before expanding the product with Files.
+- The Terminal picker mirrors the real visible tab order. Selecting a tab changes its highlight, while actual tab moves on the Mac change the picker order. A picker drag is a request to move that same live tab in Terminal.
 
 ## Current evidence
 
@@ -23,6 +24,7 @@ The earlier release reports explicitly left physical phone playback and dictatio
 | --- | --- | --- |
 | Terminal taps | A catalog refresh and a focus request share one pending-request slot. The iPhone disables every unselected tab while a refresh is pending. Silent polling runs every two seconds. | Confirmed code behavior that can discard the user's tap during a refresh. Physical timings and the full reported repeated-tap sequence still need measurement. |
 | Terminal latency | A focus operation reads the complete catalog before focusing and again afterward. Each catalog executes Terminal automation and an Accessibility traversal for unread indicators on one serial queue. | Confirmed extra work on the switch path; its wall-clock contribution has not been benchmarked in this audit. |
+| Terminal order | The Mac enumerates windows by their front-to-back index, then tabs by index inside each window. Focusing explicitly puts the target window at index 1. The iPhone renders that returned sequence unchanged. | Confirmed mechanism for focus-driven group reshuffling. Compare the visible tab bar with scripting and native window-tab groups before treating window order as tab-strip order. There is no separate recent-use sort in the inspected picker code. |
 | Terminal reader | Reading first refreshes the catalog, then the Mac's reader reads it before and after resolving the response. A reader request is rejected if a Terminal operation is already pending. The mini player also polls the catalog every two seconds while it retains a source. | Confirmed contention and repeated catalog work. The reader's selected-tab safeguards must survive any optimization. |
 | Acknowledgements | Mac control replies discard the Boolean result from the WebRTC data-channel send. The response reader also ignores that result. The iPhone times out clipboard delivery after five seconds and tab requests after eight seconds. | Confirmed reliability/diagnostic gap. A failed send can leave the phone waiting; no captured failed user request yet proves this is the sole cause. |
 | Read Aloud | Text retrieval uses Remote Assist's data channel. Speech preparation/audio delivery uses the separate cloud-envelope connection. Playback waits for all audio parts and has a three-minute preparation timeout. | Confirmed independent failure stages. A healthy remote video session does not establish that the speech connection or phone audio output is healthy. |
@@ -44,6 +46,33 @@ No product source, running app, permissions, cloud configuration, or release cha
 - [ ] Handle send failures and transport congestion explicitly. Add bounded reply retry/status reconciliation without replaying input or making unbounded queues.
 
 Exit evidence: timed phone-to-Mac switching across multiple live tabs, including taps during refresh, repeated taps, rapid changes of destination, long-running sessions, closed/reordered tabs, and reconnect. A single accepted tap must reach the intended tab without repeat tapping. Immediate local feedback should be visible within 100 ms; record median and p95 completion times, targeting p95 under two seconds on a healthy connection after catalog warmup.
+
+### 1A. Mirror Terminal order and reorder real tabs
+
+User-facing behavior:
+
+- [ ] Show each visible Terminal tab strip in its real left-to-right order. Selecting a tab, receiving new output, reading an answer, and refreshing leave that order intact.
+- [ ] Reconcile the Mac's scripting catalog with the actual visible tab bar, including native grouped windows where applicable. Keep selection/frontmost state separate from order so an ordinary focus change does not change the order revision.
+- [ ] For multiple independent windows, use stable window groups with the native tab order inside each group. Keep group placement stable when another window comes forward; avoid treating desktop stacking order as a shared tab order. Window grouping can remain unobtrusive for a single window.
+- [ ] Add a clearly visible drag handle on the trailing side of each picker row. Tapping the row focuses its tab; holding and dragging the handle lifts the row with haptic feedback, an insertion marker, and edge auto-scroll. Keep normal list scrolling easy.
+- [ ] Send one reorder request on drop. Preview the destination immediately, then adopt the order confirmed by Terminal. After a timeout or rejection, read back the actual order before resolving the pending UI; do not blindly repeat a move or apply an undo against potentially newer Mac changes.
+- [ ] Preserve the active tab/conversation when reorganizing another tab, and retain input/speech ownership by stable tab identity rather than row position. A position-only change should not select another conversation or restart a terminal process.
+- [ ] Reflect a drag performed directly on the Mac in the iPhone picker. Opening/closing tabs updates their actual positions; titles and unread markers do not sort the list.
+- [ ] Provide accessible Move up/Move down actions in addition to the drag gesture, with the same confirmed Mac operation. Preserve Back/Escape behavior and focus when exiting the picker.
+
+Mac capability and protocol work:
+
+- [ ] Prove a reliable move of an existing Terminal tab in a controlled test session before enabling the drag control. The installed `Terminal.sdef` describes window `index` as front-to-back order; its tab collection is read-only and exposes no tab-position setter. A generic `move` command exists in the dictionary, but its presence does not establish that moving live tabs is supported. Validate the actual command or supported native UI operation and read back the result.
+- [ ] Keep running shells/agents intact throughout the move. The implementation must move the existing tab and preserve its identity/session contents.
+- [ ] Add structured window/group identity and native tab position to the protocol; the current human-readable `detail` label is insufficient as a machine identity. Advertise verified reorder capability and handle older hosts explicitly.
+- [ ] Address moves by stable source-tab ID, destination neighbor ID, group ID, expected order revision, and request ID. Validate the source/target again when executing. If either changed or closed, reconcile and report the result without moving an unintended row.
+- [ ] Run focus and reorder operations through the same bounded foreground scheduler, with catalog/unread polling deferred during drag/commit. Keep stale acknowledgements and same-revision older snapshots from overwriting a newer confirmed order.
+
+Scope recommendation pending the user's window preference: first support reordering within each real window/tab group. Moving a tab between independent windows would change its membership and needs separate identity, focus, empty-window, and rollback/reconciliation acceptance. The optional question about that scope has been presented; no answer is assumed.
+
+Exit evidence: after repeated selection of different tabs/windows, the row order stays fixed; moving a real Mac tab changes the picker to match; dragging first/middle/last rows on the phone produces the same actual Terminal order; opening/closing/reordering during a drag and disconnecting during commit never moves the wrong tab. Verify duplicate titles, many tabs/auto-scroll, preserved active input/TTS target, accessibility actions, and increased text size. Compare the visible Mac tab strip and phone together. The existing live agent sessions must remain running and unchanged.
+
+This proposal follows the [macOS convention of dragging tabs to reorder them](https://support.apple.com/guide/mac-help/use-tabs-in-windows-mchla4695cce/mac). That user-facing convention does not itself prove programmatic Terminal support. Fixed ordering and the urgent speech/delivery repairs can ship independently if reliable native reordering needs additional work.
 
 ## 2. Restore Read Aloud end to end
 
@@ -104,7 +133,7 @@ Exit evidence: an agent delivers a file from a normal conversation and a Termina
 ## Execution and release checkpoints
 
 1. Capture failing phone attempts with the installed build pair and add the local request diagnostics needed to identify the speech/delivery failure stages.
-2. Repair Terminal scheduling and acknowledgement handling; verify physical switching and retain the timing evidence.
+2. Repair Terminal scheduling, acknowledgement handling, and focus-driven ordering; verify physical switching and retain the timing evidence. Prove and add real-tab reordering with the same scheduler without delaying urgent reliability fixes on an unverified move capability.
 3. Complete Read Aloud, Use on Mac, and recording-state acceptance. Run focused behavioral tests for the reproduced failures and affected regressions, including existing All Projects refresh, remote input, pairing, and reconnect.
 4. Ship the verified native reliability release through the current installed Mac/internal TestFlight channel. Keep release identity and remaining hands-on checks explicit.
 5. Implement the local Files catalog, deliberate handoff, desktop/mobile views, and on-demand transfer as the next bounded change. Share the proven transport reliability work without making the speech repair wait for Files.
@@ -116,6 +145,7 @@ This request authorizes the audit and consolidated plan. Implementation/release 
 
 - Terminal state, polling, UI gating, reader requests, and clipboard lifecycle: `apps/ios/ClawDadMobile/Sources/ClawDadMobile/RemoteAssist.swift` (selection state around 199; delivery/reader around 866; refresh/focus around 1045; clipboard around 1704; polling around 2639; row gating around 3187).
 - Mac catalog/focus and serial automation: `native/macos/Sources/ClawDad/MacTerminalTabs.swift` (focus around 160; automation around 325).
+- Terminal ordering/capability evidence: `MacTerminalTabs.swift` (catalog around 374; focus sets frontmost/window index around 408), `native/ClawDadRemoteAssistProtocol/Sources/ClawDadRemoteAssistProtocol/RemoteTerminalTabProtocol.swift`, and the installed `/System/Applications/Utilities/Terminal.app/Contents/Resources/Terminal.sdef` (window order around 216, read-only tab collection around 255, tab class around 413).
 - Mac sends and operation ownership: `native/macos/Sources/ClawDad/MacRemotePeer.swift` (reply sending around 297; Terminal work around 493; reader around 578).
 - Speech transport/playback: `lib/cloud-host-connector.mjs` (preparation/transfer around 955; reconnect around 1607), `apps/ios/ClawDadMobile/Sources/ClawDadMobile/CloudClient.swift`, and `RemoteTerminalReader.swift` / `RemoteTerminalReaderPanel.swift` in that same iPhone source directory.
 - Dictation delivery: `native/macos/Sources/ClawDad/MacInputController.swift` (around 182), `MacDictationDelivery.swift`, and `MacEditableTargetPolicy.swift`; iPhone `RemoteDictationDraft.swift` / `RemoteDictationPanel.swift`.
