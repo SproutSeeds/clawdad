@@ -6,7 +6,7 @@ import Foundation
 @MainActor
 final class MacDictationDelivery {
   static let shared = MacDictationDelivery()
-  private var receipts: [String: (text: String, response: RemoteClipboardMessage)] = [:]
+  private var receipts: [String: (request: RemoteClipboardMessage, response: RemoteClipboardMessage)] = [:]
   private var receiptOrder: [String] = []
 
   func deliver(
@@ -30,7 +30,7 @@ final class MacDictationDelivery {
                       error: "The dictation request is invalid.")
     }
     if let receipt = receipts[message.requestId] {
-      guard receipt.text == text else {
+      guard receipt.request == message else {
         return .failure(action: .dictation, requestId: message.requestId,
                         error: "This dictation request was already used for different text.")
       }
@@ -42,9 +42,9 @@ final class MacDictationDelivery {
     }
     let response = RemoteClipboardMessage.success(
       action: .dictation, requestId: message.requestId,
-      disposition: insertWithReceipt(text)
+      disposition: message.copyOnly == true ? .copied : insertWithReceipt(text)
     )
-    receipts[message.requestId] = (text, response)
+    receipts[message.requestId] = (message, response)
     receiptOrder.append(message.requestId)
     if receiptOrder.count > 32 {
       receipts.removeValue(forKey: receiptOrder.removeFirst())

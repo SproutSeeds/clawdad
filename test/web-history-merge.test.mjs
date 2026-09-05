@@ -818,7 +818,7 @@ test("iPhone Remote Assist keeps one keyboard-safe launcher in the corner and ne
   );
   assert.match(
     remoteAssistSource,
-    /if controlsExpanded \{\s*collapseControls\(\)\s*\} else \{\s*controller\.dismissKeyboard\(\)\s*controlPage = \.primary\s*controlsExpanded = true/u,
+    /if controlsExpanded \{\s*collapseControls\(\)\s*\} else \{\s*controller\.rememberDictationTarget\(\)\s*controller\.dismissKeyboard\(\)\s*controlPage = \.primary\s*controlsExpanded = true/u,
   );
   assert.match(remoteAssistSource, /"Open Remote Assist controls"/u);
   assert.match(remoteAssistSource, /Image\(systemName: "keyboard\.badge\.ellipsis"\)/u);
@@ -1021,9 +1021,9 @@ test("Remote Assist exposes acknowledged input and bidirectional clipboard contr
   assert.match(remoteAssistSource, /controller\.sendPointerDown\(x: point\.x, y: point\.y\)/u);
   assert.match(remoteAssistSource, /controller\.sendPointerDrag\(x: point\.x, y: point\.y\)/u);
   assert.match(remoteAssistSource, /controller\.sendPointerUp\(x: point\.x, y: point\.y\)/u);
-  assert.match(remoteAssistSource, /if self\.handleInputResponse\(data\)/u);
-  assert.match(remoteAssistSource, /if self\.handleSessionState\(data\)/u);
-  assert.match(remoteAssistSource, /self\.handleClipboardResponse\(data\)/u);
+  assert.match(remoteAssistSource, /if handleInputResponse\(data\)/u);
+  assert.match(remoteAssistSource, /if handleSessionState\(data\)/u);
+  assert.match(remoteAssistSource, /handleClipboardResponse\(data\)/u);
   assert.match(remoteAssistSource, /remoteScreenLocked/u);
   assert.ok(
     remoteAssistSource.includes(

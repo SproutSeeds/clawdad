@@ -4,6 +4,28 @@ import XCTest
 
 @MainActor
 final class MacDictationDeliveryTests: XCTestCase {
+  func testUnreadableCopyCannotTriggerTerminalSpeechOrReuseOldClipboardText() {
+    let request = RemoteSpeechContextMessage.request(.selection, requestId: "read")
+    XCTAssertEqual(MacInputController.copiedSpeechSelection(request, clipboardChanged: false, text: "Previous clipboard").ok, false)
+    XCTAssertEqual(MacInputController.copiedSpeechSelection(request, clipboardChanged: true, text: nil).ok, false)
+    XCTAssertEqual(MacInputController.copiedSpeechSelection(request, clipboardChanged: true, text: "").ok, false)
+    XCTAssertEqual(MacInputController.copiedSpeechSelection(request, clipboardChanged: true, text: "Selected text").text, "Selected text")
+  }
+
+  func testMissingCaptureNeverUsesTheFieldThatHappenedToGainFocusLater() {
+    let delivery = MacDictationDelivery()
+    let request = RemoteClipboardMessage.dictationRequest(text: "For my clipboard", requestId: "capture-failed", copyOnly: true)
+    var copies = 0
+    for _ in 0..<2 {
+      let result = delivery.deliver(request, copy: { _ in copies += 1; return true },
+        insert: { _ in XCTFail("A missing capture must never use the current field"); return true })
+      XCTAssertEqual(result.disposition, .copied)
+    }
+    XCTAssertEqual(copies, 1)
+    let changedTarget = RemoteClipboardMessage.dictationRequest(text: request.text!, requestId: request.requestId, targetToken: "different-field")
+    XCTAssertEqual(delivery.deliver(changedTarget, copy: { _ in XCTFail(); return true }, insert: { _ in XCTFail(); return true }).ok, false)
+  }
+
   func testNoFocusedInputCopiesWithoutInsertingAndRetainsFullText() {
     let delivery = MacDictationDelivery()
     var clipboard = "previous"

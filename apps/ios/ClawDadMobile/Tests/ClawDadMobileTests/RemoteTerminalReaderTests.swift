@@ -51,7 +51,7 @@ final class RemoteTerminalReaderTests: XCTestCase {
     XCTAssertEqual(sent.count, 1)
   }
 
-  func testWorkingTurnRequiresExplicitPlaybackOfPreviousAnswer() async {
+  func testWorkingTurnAutomaticallyReadsOnlyItsLastCompletedAnswer() async {
     let (session, reader) = setupReader()
     defer { session.readAloud.stop() }
     reader.beginLookup()
@@ -59,9 +59,6 @@ final class RemoteTerminalReaderTests: XCTestCase {
     XCTAssertTrue(reader.receive(result(inProgress: true), selectedTabId: "selected-tab"))
     await drain()
     XCTAssertTrue(reader.inProgress)
-    XCTAssertTrue(sent.isEmpty)
-    reader.togglePlayback()
-    await drain()
     XCTAssertEqual(sent.count, 1)
   }
 

@@ -11,6 +11,8 @@ final class RemoteDictationDraft: ObservableObject {
   @Published private(set) var notice = ""
   @Published private(set) var hasRecording = false
   @Published private(set) var computerName = "your computer"
+  var onTranscript: (() -> Void)?
+  var onTranscriptionFailure: (() -> Void)?
 
   private weak var session: CloudSession?
   private var computerScope = ""
@@ -59,6 +61,7 @@ final class RemoteDictationDraft: ObservableObject {
     guard !transcribing, let recording, let session else { return }
     guard belongsToActiveComputer else {
       error = "Return to \(computerName) to transcribe this recording."
+      onTranscriptionFailure?()
       return
     }
     let generation = UUID()
@@ -78,14 +81,17 @@ final class RemoteDictationDraft: ObservableObject {
       case .success(let transcript):
         guard self.belongsToActiveComputer else {
           self.error = "Return to \(self.computerName) to finish this draft."
+          self.onTranscriptionFailure?()
           return
         }
         self.text = self.recordingBase.isEmpty
           ? transcript : self.recordingBase + "\n\n" + transcript
         self.recording = nil
         self.hasRecording = false
+        self.onTranscript?()
       case .failure(let error):
         self.error = error.localizedDescription
+        self.onTranscriptionFailure?()
       }
     }
   }

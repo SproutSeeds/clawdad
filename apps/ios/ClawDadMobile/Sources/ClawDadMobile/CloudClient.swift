@@ -1427,6 +1427,16 @@ final class CloudSession: ObservableObject {
 
     Task {
       guard pendingVoiceRequestId == requestId else { return }
+#if DEBUG
+      if appStorePreviewMode, ProcessInfo.processInfo.arguments.contains("--clawdad-inline-speech-test") {
+        // UI tests record through AVAudioRecorder, then use a deterministic STT
+        // reply. This exercises automatic delivery without contacting a real host.
+        apply(CloudEnvelope(type: "speech.transcription", accountId: accountId,
+          workspaceId: workspaceId, sourceDeviceId: hostId, targetHostId: hostId,
+          body: ["requestId": .string(requestId), "text": .string("Check one check two.")]))
+        return
+      }
+#endif
       do {
         try await sendEnvelope(
           type: "speech.transcribe.request",

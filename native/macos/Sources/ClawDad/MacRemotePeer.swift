@@ -111,6 +111,8 @@ final class MacRemotePeer: NSObject {
   private var controlOutbox: [Data] = []
   private var controlSendTask: Task<Void, Never>?
   private var terminalResponseTask: Task<Void, Never>?
+  private var speechOperationTask: Task<Void, Never>?
+  private var pendingDictationRequest: RemoteClipboardMessage?
   private var displayAdvertisementGate = RemoteDisplayAdvertisementGate()
   private var displayOperationInProgress = false
   private var displayRefreshPending = false
@@ -263,6 +265,9 @@ final class MacRemotePeer: NSObject {
   }
 
   func stop() {
+    pendingDictationRequest = nil
+    speechOperationTask?.cancel()
+    speechOperationTask = nil
     answerApplicationGate.invalidate()
     cancelDisplayAdvertisement()
     terminalOperationTask?.cancel()
@@ -372,6 +377,8 @@ final class MacRemotePeer: NSObject {
 
   private func controlChannelStateChanged() {
     guard controlChannel?.readyState == .open else {
+      speechOperationTask?.cancel()
+      speechOperationTask = nil
       inputController.cancelPendingOperations()
       cancelDisplayAdvertisement()
       sessionStateTask?.cancel()
@@ -397,13 +404,18 @@ final class MacRemotePeer: NSObject {
     }
   }
 
-  private func publishSessionState(force: Bool) {
+  private func publishSessionState(force: Bool, requestId: String? = nil) {
     let screenLocked = MacConsoleSessionState.isLocked()
     guard force || screenLocked != lastPublishedScreenLocked else {
       return
     }
     lastPublishedScreenLocked = screenLocked
-    sendControl(.state(screenLocked: screenLocked, supportsDictation: true, supportsTerminalReadAloud: true))
+    sendControl(Self.sessionState(screenLocked: screenLocked, requestId: requestId))
+  }
+
+  static func sessionState(screenLocked: Bool, requestId: String? = nil) -> RemoteSessionStateMessage {
+    .state(screenLocked: screenLocked, supportsDictation: true, supportsTerminalReadAloud: true,
+           supportsInlineSpeech: true, requestId: requestId)
   }
 
   private func publishDisplayState() {
@@ -532,6 +544,7 @@ final class MacRemotePeer: NSObject {
             message.type == RemoteTerminalTabMessage.moveType else {
       return
     }
+    if message.type != RemoteTerminalTabMessage.listType { inputController.invalidateDictationTarget() }
     guard !MacConsoleSessionState.isLocked() else {
       sendTerminalFailure(
         for: message,
@@ -660,6 +673,56 @@ final class MacRemotePeer: NSObject {
         guard !Task.isCancelled else { return }
         send(request.failure(error.localizedDescription))
       }
+    }
+  }
+
+  private func speechTerminalIdentity() async throws -> String? {
+    while let operation = terminalOperationTask {
+      await operation.value
+      try Task.checkCancellation()
+    }
+    return try await terminalTabController.catalog().selectedTabId
+  }
+
+  private func handleSpeechContext(_ request: RemoteSpeechContextMessage) {
+    func send(_ response: RemoteSpeechContextMessage) {
+      if let data = (try? response.encode()) ?? (try? request.failure("This text could not be transferred. Select a smaller portion to read.").encode()) {
+        sendControlData(data)
+      }
+    }
+    guard speechOperationTask == nil else {
+      send(request.failure("Wait for the current speech operation to finish."))
+      return
+    }
+    speechOperationTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer { self.speechOperationTask = nil }
+      let response: RemoteSpeechContextMessage
+      switch request.action {
+      case .captureTarget:
+        response = await self.inputController.captureDictationTarget(request) { try await self.speechTerminalIdentity() }
+      case .selection:
+        response = await self.inputController.readSpeechSelection(request)
+      }
+      if !Task.isCancelled { send(response) }
+    }
+  }
+
+  private func handleTargetedDictation(_ request: RemoteClipboardMessage) {
+    guard speechOperationTask == nil else {
+      // The phone retries the same request while an exact-tab validation is
+      // pending. Let the original operation supply its single receipt.
+      if pendingDictationRequest == request { return }
+      sendControl(.failure(action: .dictation, requestId: request.requestId,
+                           error: "Wait for the current speech operation, then retry your saved transcript."))
+      return
+    }
+    pendingDictationRequest = request
+    speechOperationTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer { self.speechOperationTask = nil; self.pendingDictationRequest = nil }
+      let response = await self.inputController.deliverTargetedDictation(request) { try await self.speechTerminalIdentity() }
+      if !Task.isCancelled { self.sendControl(response) }
     }
   }
 
@@ -889,6 +952,20 @@ extension MacRemotePeer: RTCDataChannelDelegate {
     let data = buffer.data
     Task { @MainActor [weak self] in
       guard let self else {
+        return
+      }
+      guard self.controlChannel === dataChannel else { return }
+      if let request = try? RemoteSessionStateRequest.decode(data) {
+        self.publishSessionState(force: true, requestId: request.requestId)
+        return
+      }
+      if let request = try? RemoteSpeechContextMessage.decode(data), request.type == "speech.context" {
+        self.handleSpeechContext(request)
+        return
+      }
+      if let request = try? RemoteClipboardCodec.decode(data), request.type == RemoteClipboardMessage.commandType,
+         request.action == .dictation, request.targetToken != nil || request.copyOnly == true {
+        self.handleTargetedDictation(request)
         return
       }
       if let displayMessage = try? RemoteDisplayCodec.decode(data),

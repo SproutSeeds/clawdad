@@ -26,11 +26,13 @@ public struct RemoteClipboardMessage: Codable, Equatable, Sendable {
   public let error: String?
   public var disposition: RemoteDictationDisposition? = nil
   public var foregroundOnly: Bool? = nil
+  public var targetToken: String? = nil
+  public var copyOnly: Bool? = nil
 
-  public static func dictationRequest(text: String, requestId: String) -> RemoteClipboardMessage {
+  public static func dictationRequest(text: String, requestId: String, targetToken: String? = nil, copyOnly: Bool = false) -> RemoteClipboardMessage {
     RemoteClipboardMessage(
       type: commandType, action: .dictation, requestId: requestId,
-      text: text, ok: nil, error: nil
+      text: text, ok: nil, error: nil, targetToken: targetToken, copyOnly: copyOnly ? true : nil
     )
   }
 
@@ -93,6 +95,12 @@ public struct RemoteClipboardMessage: Codable, Equatable, Sendable {
   }
 
   fileprivate func validate() throws {
+    if targetToken != nil || copyOnly != nil {
+      guard type == Self.commandType, action == .dictation else { throw RemoteClipboardProtocolError.invalidCommand }
+      if let targetToken, targetToken.isEmpty || targetToken.utf8.count > 128 {
+        throw RemoteClipboardProtocolError.invalidCommand
+      }
+    }
     if foregroundOnly != nil, (type != Self.commandType || action != .copy) {
       throw RemoteClipboardProtocolError.invalidCommand
     }

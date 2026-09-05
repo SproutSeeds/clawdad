@@ -24,61 +24,113 @@ final class ClawDadMobileUITests: XCTestCase {
     XCTAssertTrue(files.isHittable)
   }
 
-  func testRemoteTerminalReaderSourceCopyAndBack() {
+  func testOneSpeakerTapWaitsForDelayedCapabilitiesAndTargetCapture() {
+    let app = XCUIApplication()
+    app.launchArguments += ["--clawdad-app-store-preview", "terminal-reader", "--clawdad-preview-slow-context"]
+    app.launch()
+    let speaker = app.buttons["clawdad.remote.reader"]
+    XCTAssertTrue(speaker.waitForExistence(timeout: 20))
+    speaker.tap()
+    XCTAssertTrue(app.staticTexts["Reading: Selected Mac text"].waitForExistence(timeout: 12))
+    XCTAssertFalse(app.staticTexts["Selection collided with target capture."].exists)
+    speaker.tap()
+  }
+
+  func testInlineSpeakerPrioritizesSelectionWithoutOpeningASheet() {
     let app = XCUIApplication()
     app.launchArguments += ["--clawdad-app-store-preview", "terminal-reader"]
     app.launch()
-    let source = app.staticTexts["clawdad.remote.reader.source"]
-    XCTAssertTrue(source.waitForExistence(timeout: 20))
-    XCTAssertEqual(source.label, "ClawDad")
-    let text = app.staticTexts["clawdad.remote.reader.text"]
-    let expected = text.label
-    XCTAssertTrue(expected.contains("selected Terminal tab"))
+    let speaker = app.buttons["clawdad.remote.reader"]
+    XCTAssertTrue(speaker.waitForExistence(timeout: 20))
+    XCTAssertTrue(waitUntil(timeout: 5) { !app.staticTexts["Checking speech connection…"].exists })
+    speaker.tap()
+    XCTAssertTrue(waitUntil(timeout: 8) { speaker.label == "Stop Read Aloud" && app.staticTexts["Reading: Selected Mac text"].exists })
+    XCTAssertFalse(app.buttons["clawdad.remote.reader.back"].exists)
     let screenshot = XCTAttachment(screenshot: app.screenshot())
-    screenshot.name = "Remote Assist latest response player"
+    screenshot.name = "Inline selected text playback"
     screenshot.lifetime = .keepAlways
     add(screenshot)
-    let copy = app.buttons["clawdad.remote.reader.copy"]
-    if !copy.isHittable { app.swipeUp() }
-    copy.tap()
-    XCTAssertTrue(copy.label.contains("Copied to iPhone"))
-    app.buttons["clawdad.remote.reader.back"].tap()
-    let speaker = app.buttons["clawdad.remote.reader"]
-    XCTAssertTrue(speaker.waitForExistence(timeout: 3))
     speaker.tap()
-    XCTAssertTrue(text.waitForExistence(timeout: 3))
-    XCTAssertEqual(text.label, expected)
-    XCTAssertTrue(app.buttons["clawdad.remote.reader.stop"].exists)
+    XCTAssertTrue(waitUntil(timeout: 3) { speaker.label == "Read selected text or latest Terminal response" })
   }
 
-  func testRemoteDictationReviewCopyAndBackPreserveDraft() {
+  func testInlineSpeakerFallsBackOnlyAfterConfirmedEmptySelection() {
     let app = XCUIApplication()
-    app.launchArguments += ["--clawdad-app-store-preview", "dictation"]
+    app.launchArguments += ["--clawdad-app-store-preview", "terminal-reader", "--clawdad-preview-no-selection"]
     app.launch()
-    let transcript = app.textViews["clawdad.remote.dictation.transcript"]
-    XCTAssertTrue(transcript.waitForExistence(timeout: 20))
-    let preview = XCTAttachment(screenshot: app.screenshot())
-    preview.name = "Remote Assist dictation review"
-    preview.lifetime = .keepAlways
-    add(preview)
-    transcript.tap()
-    transcript.typeText(" Added detail.")
-    let editedText = transcript.value as? String
-    XCTAssertTrue(editedText?.contains("Added detail.") == true)
-    let copy = app.buttons["clawdad.remote.dictation.copy"]
-    copy.tap()
-    XCTAssertTrue(app.staticTexts["Copied to iPhone clipboard."].waitForExistence(timeout: 3))
-    app.buttons["clawdad.remote.dictation.back"].tap()
-    let microphone = app.buttons["clawdad.remote.dictation"]
-    XCTAssertTrue(microphone.waitForExistence(timeout: 3))
-    microphone.tap()
-    XCTAssertTrue(transcript.waitForExistence(timeout: 3))
-    XCTAssertEqual(transcript.value as? String, editedText)
-    app.buttons["clawdad.remote.dictation.back"].tap()
-    app.buttons["clawdad.remote.files"].tap()
-    XCTAssertTrue(app.navigationBars["Files"].waitForExistence(timeout: 5))
-    app.navigationBars["Files"].buttons["Back"].tap()
-    XCTAssertTrue(microphone.waitForExistence(timeout: 3))
+    let speaker = app.buttons["clawdad.remote.reader"]
+    XCTAssertTrue(speaker.waitForExistence(timeout: 20))
+    XCTAssertTrue(waitUntil(timeout: 5) { !app.staticTexts["Checking speech connection…"].exists })
+    speaker.tap()
+    XCTAssertTrue(app.staticTexts["Reading: Preview Terminal"].waitForExistence(timeout: 8))
+    speaker.tap()
+  }
+
+  func testSelectionFailureDoesNotReadAnUnrelatedTerminalAnswer() {
+    let app = XCUIApplication()
+    app.launchArguments += ["--clawdad-app-store-preview", "terminal-reader", "--clawdad-preview-selection-error"]
+    app.launch()
+    let speaker = app.buttons["clawdad.remote.reader"]
+    XCTAssertTrue(speaker.waitForExistence(timeout: 20))
+    XCTAssertTrue(waitUntil(timeout: 5) { !app.staticTexts["Checking speech connection…"].exists })
+    speaker.tap()
+    XCTAssertTrue(app.staticTexts["Selection unavailable. Tap the speaker to retry."].waitForExistence(timeout: 5))
+    XCTAssertEqual(speaker.label, "Read selected text or latest Terminal response")
+    XCTAssertFalse(app.staticTexts["Reading: Preview Terminal"].exists)
+  }
+
+  func testInlineDictationStopsAndAutomaticallyInserts() { exerciseInlineDictation(clipboardOnly: false) }
+  func testInlineDictationCopiesAndPasteUsesTheNewTranscript() { exerciseInlineDictation(clipboardOnly: true) }
+
+  func testLeavingRemoteAssistStopsPendingOrActiveMicrophoneCapture() {
+    let app = XCUIApplication()
+    app.launchArguments += ["--clawdad-app-store-preview", "dictation", "--clawdad-inline-speech-test", "--clawdad-preview-slow-context"]
+    app.launch()
+    let mic = app.buttons["clawdad.remote.dictation"]
+    XCTAssertTrue(mic.waitForExistence(timeout: 20))
+    mic.tap()
+    XCUIDevice.shared.press(.home)
+    app.activate()
+    XCTAssertTrue(mic.waitForExistence(timeout: 5))
+    XCTAssertTrue(waitUntil(timeout: 5) { !["Stop recording and insert text", "Cancel dictation"].contains(mic.label) })
+    XCTAssertFalse(app.staticTexts["Recording 0:01"].exists)
+  }
+
+  private func exerciseInlineDictation(clipboardOnly: Bool) {
+    let app = XCUIApplication()
+    app.launchArguments += ["--clawdad-app-store-preview", "dictation", "--clawdad-inline-speech-test"]
+    if clipboardOnly { app.launchArguments += ["--clawdad-preview-clipboard-only"] }
+    app.launch()
+    let mic = app.buttons["clawdad.remote.dictation"]
+    XCTAssertTrue(mic.waitForExistence(timeout: 20))
+    XCTAssertTrue(waitUntil(timeout: 5) { !app.staticTexts["Checking speech connection…"].exists })
+    mic.tap()
+    XCTAssertTrue(waitUntil(timeout: 5) { mic.label == "Stop recording and insert text" })
+    XCTAssertTrue(app.staticTexts["Recording 0:01"].waitForExistence(timeout: 4))
+    XCTAssertFalse(app.textViews["clawdad.remote.dictation.transcript"].exists)
+    XCTAssertFalse(app.buttons["clawdad.remote.dictation.use"].exists)
+    let screenshot = XCTAttachment(screenshot: app.screenshot())
+    screenshot.name = "Inline recording Stop control"
+    screenshot.lifetime = .keepAlways
+    add(screenshot)
+    mic.tap()
+    let notice = clipboardOnly ? "Copied to Preview Mac clipboard" : "Inserted on Preview Mac"
+    XCTAssertTrue(app.staticTexts[notice].waitForExistence(timeout: 8))
+    XCTAssertEqual(mic.label, "Dictate text")
+    if clipboardOnly {
+      app.buttons["clawdad.remote.paste"].tap()
+      XCTAssertTrue(app.staticTexts["Pasted to Preview Mac"].waitForExistence(timeout: 4))
+    } else {
+      // The same menu remains open, but the next recording must capture a new caret.
+      mic.tap()
+      XCTAssertTrue(app.staticTexts["Recording 0:01"].waitForExistence(timeout: 4))
+      mic.tap()
+      XCTAssertTrue(app.staticTexts["Inserted on Preview Mac"].waitForExistence(timeout: 8))
+      app.buttons["clawdad.remote.files"].tap()
+      XCTAssertTrue(app.navigationBars["Files"].waitForExistence(timeout: 5))
+      app.navigationBars["Files"].buttons["Back"].tap()
+      XCTAssertTrue(mic.waitForExistence(timeout: 3))
+    }
   }
 
   func testCutDraftClearsAndKeepsEditorFocused() throws {

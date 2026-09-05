@@ -1,5 +1,28 @@
 # Remote Assist reliability and local Files
 
+## September 5 inline speech follow-up
+
+The follow-up replaces the speech review sheets and manual Use on Mac action with
+the approved inline menu behavior. The implementation and release evidence are in
+`reports/remote-assist-inline-speech-release-2026-09-05.md` (Mac 50 / iPhone 42).
+
+- [x] Request capabilities after installing the phone receiver; retry missing
+  announcements and preserve capabilities through lock-only state updates.
+- [x] Capture the original Mac input/window/caret and native Terminal tab on menu
+  entry. Stop recording automatically transcribes and delivers once to that valid
+  target, with a fresh capture for each subsequent recording.
+- [x] Copy when no original target is available, and keep the toolbar Paste action
+  aligned with the new transcript on both device clipboards.
+- [x] Read highlighted Mac text first, falling back only after an explicit empty
+  selection to the focused Terminal tab's latest completed answer. Keep playback,
+  Stop, progress and errors in the menu; preserve clipboard contents when reading.
+- [x] Wait through capability/target-capture startup with one tap, retain failed
+  dictation for retry, and stop recording when Remote Assist backgrounds or closes.
+- [x] Exercise wire-message loss/retry, stale targets, no-input fallback, repeated
+  dictation, selection precedence, startup overlap and microphone lifecycle.
+- [ ] Complete physical iPhone/Mac typing, selection and audible playback acceptance
+  on the released pair. Simulator fixtures and data-channel tests are not that proof.
+
 Status: implementation delivered in Mac 48 / iPhone 40; physical acceptance remains open.
 Release evidence: `reports/files-reliability-release-2026-09-05.md`.
 Unchecked acceptance items below remain explicit; the earlier audit describes build 46 / 38.

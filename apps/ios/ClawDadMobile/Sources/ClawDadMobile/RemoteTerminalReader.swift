@@ -65,7 +65,8 @@ final class RemoteTerminalReader: ObservableObject {
     completedAt = response.completedAt
     inProgress = response.inProgress
     playbackKey = "remote-terminal:\(scope):\(sourceTabId):\(response.sessionId):\(response.turnId):\(fingerprint(text))"
-    if !inProgress { togglePlayback() }
+    // The lookup returns only a completed answer, including when a later turn is running.
+    togglePlayback()
     return true
   }
 

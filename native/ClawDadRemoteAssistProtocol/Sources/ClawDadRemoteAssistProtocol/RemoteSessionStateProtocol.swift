@@ -8,13 +8,17 @@ public struct RemoteSessionStateMessage: Codable, Equatable, Sendable {
   public let screenLocked: Bool
   public var supportsDictation: Bool? = nil
   public var supportsTerminalReadAloud: Bool? = nil
+  public var supportsInlineSpeech: Bool? = nil
+  public var requestId: String? = nil
 
-  public static func state(screenLocked: Bool, supportsDictation: Bool? = nil, supportsTerminalReadAloud: Bool? = nil) -> RemoteSessionStateMessage {
+  public static func state(screenLocked: Bool, supportsDictation: Bool? = nil, supportsTerminalReadAloud: Bool? = nil, supportsInlineSpeech: Bool? = nil, requestId: String? = nil) -> RemoteSessionStateMessage {
     RemoteSessionStateMessage(
       type: messageType,
       screenLocked: screenLocked,
       supportsDictation: supportsDictation,
-      supportsTerminalReadAloud: supportsTerminalReadAloud
+      supportsTerminalReadAloud: supportsTerminalReadAloud,
+      supportsInlineSpeech: supportsInlineSpeech,
+      requestId: requestId
     )
   }
 
@@ -22,6 +26,67 @@ public struct RemoteSessionStateMessage: Codable, Equatable, Sendable {
     guard type == Self.messageType else {
       throw RemoteSessionStateProtocolError.invalidType
     }
+    if let requestId, requestId.isEmpty || requestId.utf8.count > 128 {
+      throw RemoteSessionStateProtocolError.invalidType
+    }
+  }
+}
+
+/// The receiver requests state only after installing its data-channel delegate.
+/// Retrying the same request is read-only and repairs a lost initial advertisement.
+public struct RemoteSessionStateRequest: Codable, Equatable, Sendable {
+  public let type: String
+  public let requestId: String
+
+  public init(requestId: String) {
+    type = "session.state.request"
+    self.requestId = requestId
+  }
+
+  public func encode() throws -> Data {
+    guard type == "session.state.request", !requestId.isEmpty, requestId.utf8.count <= 128 else {
+      throw RemoteSessionStateProtocolError.invalidType
+    }
+    return try JSONEncoder().encode(self)
+  }
+
+  public static func decode(_ data: Data) throws -> Self {
+    guard data.count <= 1024 else { throw RemoteSessionStateProtocolError.envelopeTooLarge }
+    let request = try JSONDecoder().decode(Self.self, from: data)
+    _ = try request.encode()
+    return request
+  }
+}
+
+public struct RemoteSessionCapabilities: Equatable, Sendable {
+  public private(set) var requestId = ""
+  public private(set) var received = false
+  public private(set) var timedOut = false
+  public private(set) var dictation: Bool?
+  public private(set) var terminalReadAloud: Bool?
+  public private(set) var inlineSpeech: Bool?
+
+  public init() {}
+
+  public mutating func begin(requestId: String) {
+    self = Self()
+    self.requestId = requestId
+  }
+
+  @discardableResult
+  public mutating func receive(_ state: RemoteSessionStateMessage) -> Bool {
+    if let replyId = state.requestId, replyId != requestId { return false }
+    // A lock-only update is not a declaration that optional features disappeared.
+    if let value = state.supportsDictation { dictation = value }
+    if let value = state.supportsTerminalReadAloud { terminalReadAloud = value }
+    if let value = state.supportsInlineSpeech { inlineSpeech = value }
+    received = received || state.supportsDictation != nil || state.supportsTerminalReadAloud != nil || state.supportsInlineSpeech != nil
+    if received { timedOut = false }
+    return true
+  }
+
+  public mutating func expire(requestId: String) {
+    if self.requestId == requestId, !received { timedOut = true }
   }
 }
 

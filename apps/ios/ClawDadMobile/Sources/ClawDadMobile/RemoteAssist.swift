@@ -474,6 +474,24 @@ struct RemoteAssistNotice: Equatable, Identifiable {
 final class RemoteAssistController: NSObject, ObservableObject {
   let dictation = RemoteDictationDraft()
   let terminalReader = RemoteTerminalReader()
+  let remoteRecorder = VoiceRecorder()
+  @Published private(set) var inlineDictationActive = false
+  @Published private(set) var sessionCapabilities = RemoteSessionCapabilities()
+  @Published private(set) var dictationTargetName: String?
+  private var capabilityTask: Task<Void, Never>?
+  private var targetCaptureTask: Task<Void, Never>?
+  private var speechSelectionTask: Task<Void, Never>?
+  private var recordingTask: Task<Void, Never>?
+  private var recordingGeneration = UUID()
+  private var automaticDeliveryTask: Task<Void, Never>?
+  private var menuCaptureId: String?
+  private var menuCaptureSent = false
+  private var menuTargetToken: String?
+  private var dictationCaptureId: String?
+  private var dictationTargetToken: String?
+#if DEBUG
+  private var speechPreviewHost: RemoteSpeechPreviewHost?
+#endif
   @Published private(set) var phase: RemoteAssistPhase = .idle
   @Published private(set) var remoteVideoTrack: RTCVideoTrack?
   @Published private(set) var keyboardVisible = false
@@ -513,7 +531,6 @@ final class RemoteAssistController: NSObject, ObservableObject {
   private var silentTerminalTabRequestId: String?
   private var readAfterTerminalCatalog = false
   private var terminalResponseTimeoutTask: Task<Void, Never>?
-  private var pendingReadSelectionId: String?
   private var textFlushTask: Task<Void, Never>?
   private var bufferedText = ""
   private var textBufferStartedAt: Date?
@@ -568,6 +585,25 @@ final class RemoteAssistController: NSObject, ObservableObject {
     cloudSession = session
     dictation.bind(to: session)
     terminalReader.bind(to: session)
+    dictation.onTranscript = { [weak self] in
+      guard let self, self.inlineDictationActive else { return }
+      // The toolbar Paste action imports the phone clipboard. Keep it in step
+      // with the Mac clipboard so it always contains this new dictation.
+      UIPasteboard.general.string = self.dictation.text
+      self.automaticDeliveryTask?.cancel()
+      self.automaticDeliveryTask = Task { @MainActor [weak self] in
+        guard let self else { return }
+        let deadline = Date().addingTimeInterval(6)
+        while self.inlineDictationActive, Date() < deadline,
+              self.clipboardBusy || (self.dictationCaptureId != nil && self.dictationCaptureId == self.menuCaptureId && self.menuTargetToken == nil) {
+          try? await Task.sleep(nanoseconds: 40_000_000)
+          if Task.isCancelled { return }
+        }
+        guard self.inlineDictationActive, !Task.isCancelled else { return }
+        self.useDictationOnComputer()
+      }
+    }
+    dictation.onTranscriptionFailure = { [weak self] in self?.inlineDictationActive = false }
     session.setRemoteAssistEnvelopeHandler { [weak self] envelope in
       self?.handle(envelope)
     }
@@ -576,17 +612,19 @@ final class RemoteAssistController: NSObject, ObservableObject {
 #if DEBUG
   func prepareTerminalReaderPreview() {
     guard ClawDadAppStorePreviewScenario.current == .terminalReader else { return }
-    phase = .connected
-    supportsTerminalReadAloud = true
-    terminalReader.preparePreview()
+    prepareSpeechPreviewConnection()
   }
 
   func prepareDictationPreview() {
     guard ClawDadAppStorePreviewScenario.current == .dictation else { return }
+    prepareSpeechPreviewConnection()
+  }
+
+  private func prepareSpeechPreviewConnection() {
     phase = .connected
-    supportsRemoteDictation = true
-    dictation.beginRecording()
-    dictation.text = "Review this dictated prompt before using it on the Mac."
+    speechPreviewHost = RemoteSpeechPreviewHost { [weak self] data in self?.receiveControlData(data) }
+    rememberDictationTarget()
+    requestSessionCapabilities()
   }
 #endif
 
@@ -883,9 +921,14 @@ final class RemoteAssistController: NSObject, ObservableObject {
   func useDictationOnComputer() {
     guard phase == .connected, supportsRemoteDictation,
           !clipboardBusy, !remoteInputSuppressed,
-          let delivery = dictation.beginDelivery() else { return }
+          let delivery = dictation.beginDelivery() else {
+      inlineDictationActive = false
+      showClipboardNotice("Text saved. Reconnect and tap Retry to deliver it.", isError: true)
+      return
+    }
     sendClipboardRequest(
-      .dictationRequest(text: delivery.text, requestId: delivery.requestId),
+      .dictationRequest(text: delivery.text, requestId: delivery.requestId,
+                       targetToken: dictationTargetToken, copyOnly: dictationTargetToken == nil),
       pendingText: "Using dictation on \(remoteComputerName)..."
     )
   }
@@ -895,10 +938,227 @@ final class RemoteAssistController: NSObject, ObservableObject {
     cloudSession?.readAloud.stop()
   }
 
-  func requestLatestTerminalResponse() {
+  var inlineSpeechUnavailableReason: String? {
+    if phase != .connected { return "Reconnect to use speech controls." }
+    if remoteScreenLocked { return "Unlock the Mac to use speech controls." }
+    if remoteInputSuppressed { return "Finishing the display change…" }
+    if sessionCapabilities.inlineSpeech == true { return nil }
+    if sessionCapabilities.received { return "Update ClawDad on this Mac to use inline speech." }
+    return sessionCapabilities.timedOut ? "The Mac has not answered. Tap a speech control to retry." : "Checking speech connection…"
+  }
+
+  private func requestSessionCapabilities() {
+    var open = controlChannel?.readyState == .open
 #if DEBUG
-    if ClawDadAppStorePreviewScenario.current == .terminalReader { return }
+    open = open || speechPreviewHost != nil
 #endif
+    guard open else { return }
+    capabilityTask?.cancel()
+    let requestId = UUID().uuidString.lowercased()
+    sessionCapabilities.begin(requestId: requestId)
+    let request = RemoteSessionStateRequest(requestId: requestId)
+    guard let data = try? request.encode() else { return }
+    capabilityTask = Task { @MainActor [weak self] in
+      for delay: UInt64 in [0, 250_000_000, 750_000_000, 2_000_000_000, 4_000_000_000] {
+        if delay > 0 { try? await Task.sleep(nanoseconds: delay) }
+        guard let self, !Task.isCancelled, self.sessionCapabilities.requestId == requestId,
+              !self.sessionCapabilities.received else { return }
+        _ = self.sendControlData(data)
+      }
+      try? await Task.sleep(nanoseconds: 2_000_000_000)
+      guard let self, !Task.isCancelled else { return }
+      self.sessionCapabilities.expire(requestId: requestId)
+    }
+  }
+
+  private func waitForInlineSpeech() async -> Bool {
+    if !sessionCapabilities.received, capabilityTask == nil || sessionCapabilities.timedOut {
+      requestSessionCapabilities()
+    }
+    let deadline = Date().addingTimeInterval(10)
+    while phase == .connected, !sessionCapabilities.received, Date() < deadline {
+      try? await Task.sleep(nanoseconds: 40_000_000)
+      if Task.isCancelled { return false }
+    }
+    guard !Task.isCancelled else { return false }
+    if let reason = inlineSpeechUnavailableReason {
+      showClipboardNotice(reason, isError: true)
+      return false
+    }
+    return true
+  }
+
+  /// Capture before dismissing the phone keyboard or changing control pages.
+  func rememberDictationTarget() {
+    guard !inlineDictationActive, !dictation.sending else { return }
+    flushBufferedText()
+    targetCaptureTask?.cancel()
+    menuCaptureId = UUID().uuidString.lowercased()
+    menuCaptureSent = false
+    menuTargetToken = nil
+    dictationTargetName = nil
+    sendPendingTargetCapture()
+  }
+
+  private func sendPendingTargetCapture() {
+    guard sessionCapabilities.inlineSpeech == true,
+          let requestId = menuCaptureId, !menuCaptureSent else { return }
+    menuCaptureSent = true
+    guard let data = try? RemoteSpeechContextMessage.request(.captureTarget, requestId: requestId).encode(),
+          sendControlData(data) else { return }
+    targetCaptureTask = Task { @MainActor [weak self] in
+      try? await Task.sleep(nanoseconds: 6_000_000_000)
+      guard !Task.isCancelled, let self, self.menuCaptureId == requestId, self.menuTargetToken == nil else { return }
+      self.menuCaptureId = nil
+      self.showClipboardNotice("Input target unavailable. Dictation will be copied for pasting.", isError: false)
+    }
+  }
+
+  func toggleInlineDictation() {
+    if remoteRecorder.state == .recording {
+      do { dictation.transcribe(try remoteRecorder.stop()) }
+      catch { remoteRecorder.present(error); inlineDictationActive = false }
+      return
+    }
+    if inlineDictationActive || remoteRecorder.state == .requestingPermission {
+      pauseInlineDictation()
+      return
+    }
+    if phase != .connected || remoteScreenLocked || remoteInputSuppressed,
+       let reason = inlineSpeechUnavailableReason {
+      showClipboardNotice(reason, isError: true)
+      return
+    }
+    guard !dictation.sending, !clipboardBusy else { return }
+    if dictation.hasRecording || !dictation.error.isEmpty { retryInlineDictation(); return }
+    cancelTerminalLookup()
+    prepareForRemoteDictation()
+    clipboardNoticeTask?.cancel()
+    clipboardNotice = nil
+    dictation.clear()
+    dictation.beginRecording()
+    if menuCaptureId == nil { rememberDictationTarget() }
+    dictationCaptureId = menuCaptureId
+    dictationTargetToken = menuTargetToken
+    inlineDictationActive = true
+    let generation = UUID()
+    recordingGeneration = generation
+    recordingTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      let available = await self.waitForInlineSpeech()
+      guard self.recordingGeneration == generation else { return }
+      guard available, self.inlineDictationActive else {
+        self.inlineDictationActive = false
+        return
+      }
+      await self.remoteRecorder.start()
+      guard self.recordingGeneration == generation else { return }
+      if self.remoteRecorder.state == .idle { self.inlineDictationActive = false }
+    }
+  }
+
+  func retryInlineDictation() {
+    guard inlineSpeechUnavailableReason == nil, !dictation.sending else {
+      showClipboardNotice(inlineSpeechUnavailableReason ?? "Wait for delivery to finish.", isError: true)
+      requestSessionCapabilities()
+      return
+    }
+    inlineDictationActive = true
+    if dictation.hasRecording { dictation.retryTranscription() }
+    else { useDictationOnComputer() }
+  }
+
+  func pauseInlineDictation() {
+    inlineDictationActive = false
+    recordingGeneration = UUID()
+    automaticDeliveryTask?.cancel()
+    automaticDeliveryTask = nil
+    recordingTask?.cancel()
+    recordingTask = nil
+    if remoteRecorder.state == .recording {
+      do { dictation.retain(try remoteRecorder.stop()) }
+      catch { remoteRecorder.present(error) }
+    } else { remoteRecorder.cancel() }
+    dictation.cancelTranscription()
+  }
+
+  func discardInlineDictation() {
+    pauseInlineDictation()
+    dictation.clear()
+    dictationTargetToken = nil
+    dictationCaptureId = nil
+    menuCaptureId = nil
+    menuTargetToken = nil
+  }
+
+  func toggleInlineReadAloud() {
+    if terminalReader.loading || [.preparing, .playing, .paused].contains(cloudSession?.readAloud.phase(for: terminalReader.playbackKey) ?? .idle) {
+      cancelTerminalLookup()
+      terminalReader.stopPlayback()
+      return
+    }
+    guard !inlineDictationActive else { return }
+    if phase != .connected || remoteScreenLocked || remoteInputSuppressed,
+       let reason = inlineSpeechUnavailableReason {
+      showClipboardNotice(reason, isError: true)
+      return
+    }
+    let requestId = UUID().uuidString.lowercased()
+    terminalReader.beginSelection(requestId: requestId, tabId: "")
+    speechSelectionTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      guard await self.waitForInlineSpeech() else {
+        if !Task.isCancelled { self.terminalReader.cancelLookup() }
+        return
+      }
+      // Opening the menu captures the input on the same host worker. Finish that
+      // read before requesting selection; a single speaker tap owns both waits.
+      let captureDeadline = Date().addingTimeInterval(6)
+      while self.menuCaptureId != nil, self.menuTargetToken == nil, Date() < captureDeadline {
+        try? await Task.sleep(nanoseconds: 40_000_000)
+        if Task.isCancelled { return }
+      }
+      guard !Task.isCancelled, self.terminalReader.selectionRequestId == requestId else { return }
+      guard let data = try? RemoteSpeechContextMessage.request(.selection, requestId: requestId).encode(),
+            self.sendControlData(data) else {
+        self.terminalReader.fail("Remote Assist disconnected. Tap the speaker to retry.")
+        return
+      }
+      try? await Task.sleep(nanoseconds: 6_000_000_000)
+      guard !Task.isCancelled, self.terminalReader.selectionRequestId == requestId else { return }
+      self.terminalReader.fail("The Mac did not return selected text. Tap the speaker to retry.")
+    }
+  }
+
+  private func handleSpeechContext(_ data: Data) -> Bool {
+    guard let message = try? RemoteSpeechContextMessage.decode(data), message.type == "speech.context.result" else { return false }
+    switch message.action {
+    case .captureTarget:
+      guard message.requestId == menuCaptureId else { return true }
+      targetCaptureTask?.cancel()
+      if message.ok == true {
+        menuTargetToken = message.token
+        dictationTargetName = message.targetName
+        if dictationCaptureId == message.requestId { dictationTargetToken = message.token }
+      } else {
+        menuCaptureId = nil
+        showClipboardNotice("Input target unavailable. Dictation will be copied for pasting.", isError: false)
+      }
+    case .selection:
+      guard terminalReader.selectionRequestId == message.requestId else { return true }
+      speechSelectionTask?.cancel()
+      if message.ok != true {
+        terminalReader.fail(message.error ?? "Selected text could not be read. Tap the speaker to retry.")
+      } else if let text = message.text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        _ = terminalReader.receiveSelection(requestId: message.requestId, text: text)
+      } else {
+        requestLatestTerminalResponse()
+      }
+    }
+    return true
+  }
+
+  func requestLatestTerminalResponse() {
     guard phase == .connected, supportsTerminalReadAloud, !remoteScreenLocked else {
       terminalReader.fail("Connect to an updated, unlocked Mac to read Terminal responses.")
       return
@@ -932,18 +1192,9 @@ final class RemoteAssistController: NSObject, ObservableObject {
     }
   }
 
-  func readSelectedMacText() {
-    guard phase == .connected, supportsTerminalReadAloud, !remoteScreenLocked,
-          !clipboardBusy, !remoteInputSuppressed else { return }
-    cancelTerminalLookup()
-    let requestId = UUID().uuidString.lowercased()
-    terminalReader.beginSelection(requestId: requestId, tabId: selectedRemoteTerminalTabId)
-    pendingReadSelectionId = requestId
-    sendClipboardRequest(.copyRequest(requestId: requestId, foregroundOnly: true),
-                         pendingText: "Reading selected Mac text…")
-  }
-
   func cancelTerminalLookup() {
+    speechSelectionTask?.cancel()
+    speechSelectionTask = nil
     readAfterTerminalCatalog = false
     terminalResponseTimeoutTask?.cancel()
     terminalResponseTimeoutTask = nil
@@ -1455,6 +1706,9 @@ final class RemoteAssistController: NSObject, ObservableObject {
   }
 
   private func sendControlData(_ data: Data) -> Bool {
+#if DEBUG
+    if let speechPreviewHost { return speechPreviewHost.send(data) }
+#endif
     guard let controlChannel,
           controlChannel.readyState == .open else {
       return false
@@ -1540,10 +1794,12 @@ final class RemoteAssistController: NSObject, ObservableObject {
     guard let message = try? RemoteSessionStateCodec.decode(data) else {
       return false
     }
+    guard sessionCapabilities.receive(message) else { return true }
     let changed = remoteScreenLocked != message.screenLocked
     remoteScreenLocked = message.screenLocked
-    supportsRemoteDictation = message.supportsDictation == true
-    supportsTerminalReadAloud = message.supportsTerminalReadAloud == true
+    supportsRemoteDictation = sessionCapabilities.dictation == true
+    supportsTerminalReadAloud = sessionCapabilities.terminalReadAloud == true
+    sendPendingTargetCapture()
     if message.screenLocked {
       cancelTerminalLookup()
       terminalReader.invalidate("Unlock the Mac to read Terminal text.")
@@ -1557,6 +1813,17 @@ final class RemoteAssistController: NSObject, ObservableObject {
       )
     }
     return true
+  }
+
+  // One receive path is exercised by the native channel and encoded preview peers.
+  func receiveControlData(_ data: Data) {
+    if handleInputResponse(data) { return }
+    if handleSessionState(data) { return }
+    if handleSpeechContext(data) { return }
+    if handleDisplayMessage(data) { return }
+    if handleTerminalTabMessage(data) { return }
+    if handleTerminalResponse(data) { return }
+    handleClipboardResponse(data)
   }
 
   private func handleDisplayMessage(_ data: Data) -> Bool {
@@ -1868,11 +2135,6 @@ final class RemoteAssistController: NSObject, ObservableObject {
         )
         return
       }
-      if pendingReadSelectionId == message.requestId {
-        _ = terminalReader.receiveSelection(requestId: message.requestId, text: text)
-        finishClipboardRequest(notice: "Selected text received", isError: false)
-        return
-      }
       UIPasteboard.general.string = text
       finishClipboardRequest(
         notice: "Copied to iPhone",
@@ -1886,16 +2148,14 @@ final class RemoteAssistController: NSObject, ObservableObject {
     isError: Bool,
     dictationDisposition: RemoteDictationDisposition? = nil
   ) {
-    if pendingReadSelectionId == pendingClipboardRequest?.requestId {
-      if isError, terminalReader.selectionRequestId == pendingReadSelectionId {
-        terminalReader.fail(notice)
-      }
-      pendingReadSelectionId = nil
-    }
     if let pending = pendingClipboardRequest, pending.action == .dictation {
+      inlineDictationActive = false
       let result: Result<RemoteDictationDisposition, VoiceTranscriptionError>
       if !isError, let dictationDisposition {
         result = .success(dictationDisposition)
+        // A second recording in the still-open menu needs a fresh caret snapshot.
+        menuCaptureId = nil
+        menuTargetToken = nil
       } else {
         result = .failure(.failed(notice + " Your draft is saved. Check the Mac before trying again."))
       }
@@ -2025,10 +2285,17 @@ final class RemoteAssistController: NSObject, ObservableObject {
   }
 
   private func tearDownPeer() {
+    pauseInlineDictation()
+    capabilityTask?.cancel()
+    capabilityTask = nil
+    targetCaptureTask?.cancel()
+    targetCaptureTask = nil
+    sessionCapabilities = RemoteSessionCapabilities()
+    menuCaptureId = nil
+    menuTargetToken = nil
     cancelTerminalLookup()
     terminalReader.invalidate()
     supportsTerminalReadAloud = false
-    pendingReadSelectionId = nil
     if pendingClipboardRequest?.action == .dictation {
       finishClipboardRequest(notice: "Remote Assist disconnected.", isError: true)
     }
@@ -2208,6 +2475,7 @@ extension RemoteAssistController: RTCPeerConnectionDelegate {
       }
       self.controlChannel = dataChannel
       dataChannel.delegate = self
+      self.requestSessionCapabilities()
     }
   }
 
@@ -2226,6 +2494,7 @@ extension RemoteAssistController: RTCPeerConnectionDelegate {
         self.timeoutTask?.cancel()
         self.timeoutTask = nil
         self.phase = .connected
+        if !self.sessionCapabilities.received { self.requestSessionCapabilities() }
       case .disconnected:
         self.cancelTerminalLookup()
         self.terminalReader.invalidate("Remote Assist is reconnecting. Read the response again after reconnecting.")
@@ -2260,7 +2529,12 @@ extension RemoteAssistController: RTCPeerConnectionDelegate {
 }
 
 extension RemoteAssistController: RTCDataChannelDelegate {
-  nonisolated func dataChannelDidChangeState(_ dataChannel: RTCDataChannel) {}
+  nonisolated func dataChannelDidChangeState(_ dataChannel: RTCDataChannel) {
+    Task { @MainActor [weak self] in
+      guard let self, self.controlChannel === dataChannel else { return }
+      if dataChannel.readyState == .open { self.requestSessionCapabilities() }
+    }
+  }
 
   nonisolated func dataChannel(
     _ dataChannel: RTCDataChannel,
@@ -2274,22 +2548,7 @@ extension RemoteAssistController: RTCDataChannelDelegate {
       guard let self, self.controlChannel === dataChannel else {
         return
       }
-      if self.handleInputResponse(data) {
-        return
-      }
-      if self.handleSessionState(data) {
-        return
-      }
-      if self.handleDisplayMessage(data) {
-        return
-      }
-      if self.handleTerminalTabMessage(data) {
-        return
-      }
-      if self.handleTerminalResponse(data) {
-        return
-      }
-      self.handleClipboardResponse(data)
+      self.receiveControlData(data)
     }
   }
 }
@@ -2478,13 +2737,12 @@ private struct RemoteTerminalTabButton: View {
 struct RemoteAssistView: View {
   @ObservedObject var controller: RemoteAssistController
   @EnvironmentObject private var session: CloudSession
+  @Environment(\.scenePhase) private var scenePhase
   @StateObject private var files = MobileFilesController()
   var onClose: () -> Void
   @State private var viewportZoomed = false
   @State private var viewportResetToken = 0
   @State private var controlsExpanded = false
-  @State private var showingDictation = false
-  @State private var showingTerminalReader = false
   @State private var showingFiles = false
   @State private var controlPage: RemoteAssistControlPage = .primary
   @State private var terminalDropTarget: String?
@@ -2602,14 +2860,15 @@ struct RemoteAssistView: View {
             controlPanel
           }
 
-          RemoteTerminalMiniPlayer(controller: controller, reader: controller.terminalReader) {
-            showingTerminalReader = true
-          }
+          RemoteSpeechStatus(controller: controller, draft: controller.dictation,
+                             recorder: controller.remoteRecorder, reader: controller.terminalReader,
+                             controlsExpanded: controlsExpanded)
 
           Button {
             if controlsExpanded {
               collapseControls()
             } else {
+              controller.rememberDictationTarget()
               controller.dismissKeyboard()
               controlPage = .primary
               controlsExpanded = true
@@ -2660,9 +2919,13 @@ struct RemoteAssistView: View {
     .persistentSystemOverlays(.hidden)
     .onAppear {
       #if DEBUG
-      if ClawDadAppStorePreviewScenario.current == .dictation { showingDictation = true }
-      if ClawDadAppStorePreviewScenario.current == .terminalReader { showingTerminalReader = true }
+      if [.dictation, .terminalReader].contains(ClawDadAppStorePreviewScenario.current) {
+        controlsExpanded = true
+      }
       #endif
+    }
+    .onChange(of: scenePhase) { _, phase in
+      if phase == .background { controller.pauseInlineDictation() }
     }
     .sheet(isPresented: $showingFiles, onDismiss: {
       controlsExpanded = true
@@ -2670,33 +2933,6 @@ struct RemoteAssistView: View {
     }) {
       FilesLibraryView(controller: files) { showingFiles = false }
         .environmentObject(session)
-    }
-    .sheet(isPresented: $showingDictation, onDismiss: {
-      controlsExpanded = true
-      controlPage = .primary
-      accessibilityFocus = .dictation
-    }) {
-      RemoteDictationPanel(controller: controller, draft: controller.dictation) {
-        showingDictation = false
-      }
-      .presentationDetents([.medium, .large])
-      .presentationDragIndicator(.visible)
-      .presentationBackground(ClawDadTheme.background)
-      .preferredColorScheme(.dark)
-    }
-    .sheet(isPresented: $showingTerminalReader, onDismiss: {
-      controller.cancelTerminalLookup()
-      controlsExpanded = true
-      controlPage = .primary
-      accessibilityFocus = .terminalReader
-    }) {
-      RemoteTerminalReaderPanel(controller: controller, reader: controller.terminalReader) {
-        showingTerminalReader = false
-      }
-      .presentationDetents([.medium, .large])
-      .presentationDragIndicator(.visible)
-      .presentationBackground(ClawDadTheme.background)
-      .preferredColorScheme(.dark)
     }
     .onChange(of: controller.phase) { _, phase in
       guard phase != .connected else {
@@ -2848,6 +3084,7 @@ struct RemoteAssistView: View {
             .frame(width: 44, height: 44)
         }
         .buttonStyle(RemoteAssistOverlayButtonStyle())
+        .accessibilityIdentifier("clawdad.remote.paste")
         .disabled(
           controller.phase != .connected ||
             controller.clipboardBusy ||
@@ -2900,36 +3137,10 @@ struct RemoteAssistView: View {
           controller.keyboardVisible ? "Hide keyboard" : "Show keyboard"
         )
 
-        Button {
-          controller.dismissKeyboard()
-          controller.cancelTerminalLookup()
-          controller.terminalReader.stopPlayback()
-          collapseControls()
-          showingDictation = true
-        } label: {
-          Image(systemName: "mic.fill")
-            .font(.system(size: 18, weight: .bold))
-            .frame(width: 44, height: 44)
-        }
-        .buttonStyle(RemoteAssistOverlayButtonStyle())
-        .accessibilityLabel("Dictate text")
-        .accessibilityHint("Record, review, then insert text or copy it to the clipboard")
-        .accessibilityIdentifier("clawdad.remote.dictation")
+        RemoteDictationButton(controller: controller, draft: controller.dictation, recorder: controller.remoteRecorder)
         .accessibilityFocused($accessibilityFocus, equals: .dictation)
 
-        Button {
-          controller.dismissKeyboard()
-          collapseControls()
-          showingTerminalReader = true
-          controller.requestLatestTerminalResponse()
-        } label: {
-          Image(systemName: "speaker.wave.2.fill")
-            .font(.system(size: 18, weight: .bold))
-            .frame(width: 44, height: 44)
-        }
-        .buttonStyle(RemoteAssistOverlayButtonStyle())
-        .accessibilityLabel("Read latest Terminal response")
-        .accessibilityIdentifier("clawdad.remote.reader")
+        RemoteSpeakerButton(controller: controller, reader: controller.terminalReader)
         .accessibilityFocused($accessibilityFocus, equals: .terminalReader)
 
         Button {
@@ -3360,7 +3571,7 @@ struct RemoteAssistView: View {
   }
 }
 
-private struct RemoteAssistOverlayButtonStyle: ButtonStyle {
+struct RemoteAssistOverlayButtonStyle: ButtonStyle {
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
       .foregroundStyle(ClawDadTheme.cream)

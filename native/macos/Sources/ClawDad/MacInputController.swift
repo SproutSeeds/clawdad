@@ -78,6 +78,15 @@ final class MacInputController {
 
   private let source: CGEventSource
   private let dictationDelivery = MacDictationDelivery.shared
+  private struct DictationTarget {
+    let input: InputTarget
+    let window: CFTypeRef?
+    let selection: CFTypeRef?
+    let applicationLaunch: Date?
+  }
+  private var dictationTargets = MacDictationTargetRegistry<DictationTarget>()
+  private var inputGeneration: UInt64 = 0
+  private var speechSelectionInProgress = false
   private var clipboardCopyTask: Task<Void, Never>?
   private var inputProcessingTask: Task<Void, Never>?
   private var inputQueue: [PendingInput] = []
@@ -154,6 +163,7 @@ final class MacInputController {
   }
 
   func cancelPendingOperations() {
+    invalidateDictationTarget()
     clipboardCopyTask?.cancel()
     clipboardCopyTask = nil
     inputProcessingTask?.cancel()
@@ -163,6 +173,7 @@ final class MacInputController {
   }
 
   func prepareForDisplayTransition() {
+    invalidateDictationTarget()
     pointerInputEnabled = false
     lastTargetPID = nil
     releaseRemoteInputState()
@@ -179,21 +190,172 @@ final class MacInputController {
     pointerInputEnabled = true
   }
 
+  func invalidateDictationTarget() { inputGeneration &+= 1 }
+
+  func captureDictationTarget(
+    _ request: RemoteSpeechContextMessage,
+    terminalIdentity: @MainActor () async throws -> String?
+  ) async -> RemoteSpeechContextMessage {
+    // A retry returns the original capture, including a deliberate clipboard-only capture.
+    if let previous = dictationTargets.capture(for: request.requestId) {
+      return request.success(token: request.requestId, targetName: previous.value?.input.applicationName)
+    }
+    if let inputProcessingTask { await inputProcessingTask.value }
+    let input = eligibleDictationTarget()
+    let generation = inputGeneration
+    let capture = input.map { target in DictationTarget(
+      input: target, window: attribute(target.element, kAXWindowAttribute as CFString),
+      selection: attribute(target.element, kAXSelectedTextRangeAttribute as CFString),
+      applicationLaunch: NSRunningApplication(processIdentifier: target.pid)?.launchDate
+    ) }
+    var selectedTerminal: String?
+    if input?.bundleIdentifier == "com.apple.Terminal" {
+      selectedTerminal = try? await terminalIdentity()
+    }
+    dictationTargets.remember(.init(value: capture, generation: generation,
+      expiresAt: Date().addingTimeInterval(20 * 60), requiresTerminalIdentity: input?.bundleIdentifier == "com.apple.Terminal",
+      terminalIdentity: selectedTerminal), token: request.requestId)
+    return request.success(token: request.requestId, targetName: input?.applicationName)
+  }
+
+  func deliverTargetedDictation(
+    _ message: RemoteClipboardMessage,
+    terminalIdentity: @MainActor () async throws -> String?
+  ) async -> RemoteClipboardMessage {
+    let capture = message.targetToken.flatMap { dictationTargets.capture(for: $0) }
+    var selectedTerminal: String?
+    if message.copyOnly != true, capture?.requiresTerminalIdentity == true {
+      selectedTerminal = try? await terminalIdentity()
+    }
+    guard !Task.isCancelled else {
+      return .failure(action: .dictation, requestId: message.requestId, error: "Remote Assist disconnected. Your transcript is saved.")
+    }
+    return dictationDelivery.deliver(message, copy: copyDictation, insertWithReceipt: { [self] text in
+      guard let token = message.targetToken,
+            let target = dictationTargets.resolve(token: token, generation: inputGeneration,
+              terminalIdentity: selectedTerminal, isCurrent: targetIsCurrent) else { return .copied }
+      return insertDictation(text, into: target.input)
+    })
+  }
+
+  private func attribute(_ element: AXUIElement, _ name: CFString) -> CFTypeRef? {
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, name, &value) == .success else { return nil }
+    return value
+  }
+
+  private func targetIsCurrent(_ capture: DictationTarget) -> Bool {
+    let original = capture.input
+    guard let current = eligibleDictationTarget(),
+          original.pid == current.pid, CFEqual(original.element, current.element),
+          capture.applicationLaunch == NSRunningApplication(processIdentifier: current.pid)?.launchDate,
+          let originalWindow = capture.window,
+          let window = attribute(current.element, kAXWindowAttribute as CFString),
+          CFEqual(originalWindow, window) else { return false }
+    if original.bundleIdentifier == "com.apple.Terminal" {
+      return true // The registry also validates the exact selected native Terminal tab identity.
+    }
+    if let selection = capture.selection {
+      guard let currentSelection = attribute(current.element, kAXSelectedTextRangeAttribute as CFString),
+            CFEqual(selection, currentSelection) else { return false }
+    }
+    return true
+  }
+
+  /// Read AX selected text without touching either device's clipboard. Some apps
+  /// expose selection only through Copy; preserve the complete pasteboard there.
+  func readSpeechSelection(_ request: RemoteSpeechContextMessage) async -> RemoteSpeechContextMessage {
+    guard !speechSelectionInProgress else { return request.failure("Wait for the selected text to finish loading.") }
+    speechSelectionInProgress = true
+    defer { speechSelectionInProgress = false }
+    guard AXIsProcessTrusted(), !MacConsoleSessionState.isLocked(), pointerInputEnabled,
+          let app = NSWorkspace.shared.frontmostApplication else {
+      return request.failure("Unlock the Mac and allow ClawDad Accessibility access to read selected text.")
+    }
+    let generation = inputGeneration
+    let target = focusedTarget(for: app.processIdentifier, application: app, requireEditable: false, screenLocked: false)
+    if target?.subrole == (kAXSecureTextFieldSubrole as String) {
+      return request.failure("Choose text outside the password field to read.")
+    }
+    if let target {
+      var value: CFTypeRef?
+      let result = AXUIElementCopyAttributeValue(target.element, kAXSelectedTextAttribute as CFString, &value)
+      if result == .success, let text = value as? String {
+        return speechSelectionResult(request, text: text)
+      }
+      if let rangeValue = attribute(target.element, kAXSelectedTextRangeAttribute as CFString),
+         CFGetTypeID(rangeValue) == AXValueGetTypeID() {
+        var range = CFRange()
+        if AXValueGetValue(unsafeBitCast(rangeValue, to: AXValue.self), .cfRange, &range), range.length == 0 {
+          return request.success(text: "")
+        }
+      }
+      if result != .attributeUnsupported && result != .noValue && result != .success {
+        return request.failure("The Mac could not read the selection. Select the text again.")
+      }
+    }
+    guard clipboardCopyTask == nil else { return request.failure("Wait for the clipboard operation to finish.") }
+    let pasteboard = NSPasteboard.general
+    let previous = PasteboardSnapshot(pasteboard)
+    let before = pasteboard.changeCount
+    guard pressCommandShortcut(keyCode: 8, targetPID: app.processIdentifier) else {
+      return request.failure("The Mac could not read the selection. Select the text again.")
+    }
+    for _ in 0..<20 where pasteboard.changeCount == before {
+      try? await Task.sleep(nanoseconds: 50_000_000)
+      if Task.isCancelled { break }
+    }
+    let after = pasteboard.changeCount
+    let text = after == before ? nil : pasteboard.string(forType: .string)
+    // Never replace a later clipboard write with our saved snapshot.
+    if after != before, pasteboard.changeCount == after { previous.restore(to: pasteboard) }
+    guard !Task.isCancelled, inputGeneration == generation,
+          NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
+          !MacConsoleSessionState.isLocked() else {
+      return request.failure("The focused Mac app changed. Tap the speaker again.")
+    }
+    let result = Self.copiedSpeechSelection(request, clipboardChanged: after != before, text: text)
+    if let text = result.text { return speechSelectionResult(request, text: text) }
+    return result
+  }
+
+  static func copiedSpeechSelection(_ request: RemoteSpeechContextMessage, clipboardChanged: Bool, text: String?) -> RemoteSpeechContextMessage {
+    // A Copy timeout or non-text clipboard is not evidence of an empty selection.
+    // Only Accessibility's explicit empty selection may trigger Terminal fallback.
+    guard clipboardChanged, let text, !text.isEmpty else {
+      return request.failure("The Mac could not determine the selected text. Select text again and tap the speaker.")
+    }
+    return request.success(text: text)
+  }
+
+  private func speechSelectionResult(_ request: RemoteSpeechContextMessage, text: String) -> RemoteSpeechContextMessage {
+    guard text.utf8.count <= RemoteClipboardMessage.maximumTextBytes else {
+      return request.failure("Select a smaller portion of text to read (64 KB or less).")
+    }
+    return request.success(text: text)
+  }
+
+  private func copyDictation(_ text: String) -> Bool {
+    let pasteboard = NSPasteboard.general
+    let previous = PasteboardSnapshot(pasteboard)
+    pasteboard.clearContents()
+    guard pasteboard.setString(text, forType: .string), pasteboard.string(forType: .string) == text else {
+      previous.restore(to: pasteboard)
+      return false
+    }
+    return true
+  }
+
   private func handleClipboard(
     _ message: RemoteClipboardMessage,
     respond: @escaping (RemoteClipboardMessage) -> Void
   ) {
+    guard !speechSelectionInProgress else {
+      respond(.failure(action: message.action, requestId: message.requestId, error: "Wait for selected text to finish loading, then retry."))
+      return
+    }
     if message.action == .dictation {
-      respond(dictationDelivery.deliver(message, copy: { text in
-        let pasteboard = NSPasteboard.general
-        let previous = PasteboardSnapshot(pasteboard)
-        pasteboard.clearContents()
-        guard pasteboard.setString(text, forType: .string) else {
-          previous.restore(to: pasteboard)
-          return false
-        }
-        return pasteboard.string(forType: .string) == text
-      }, insertWithReceipt: { [self] text in
+      respond(dictationDelivery.deliver(message, copy: copyDictation, insertWithReceipt: { [self] text in
         insertDictationIfFocused(text)
       }))
       return
@@ -218,6 +380,11 @@ final class MacInputController {
   }
 
   private func insertDictationIfFocused(_ text: String) -> RemoteDictationDisposition {
+    guard let target = eligibleDictationTarget() else { return .copied }
+    return insertDictation(text, into: target)
+  }
+
+  private func eligibleDictationTarget() -> InputTarget? {
     // A previous pointer target must never bring an old app back into focus.
     guard pointerInputEnabled, AXIsProcessTrusted(),
           !MacConsoleSessionState.isLocked(),
@@ -233,7 +400,11 @@ final class MacInputController {
             enabled: boolAttribute(target.element, kAXEnabledAttribute as CFString),
             focused: boolAttribute(target.element, kAXFocusedAttribute as CFString),
             bundleIdentifier: target.bundleIdentifier
-          ) else { return .copied }
+          ) else { return nil }
+    return target
+  }
+
+  private func insertDictation(_ text: String, into target: InputTarget) -> RemoteDictationDisposition {
     if target.selectedTextSettable,
        AXUIElementSetAttributeValue(target.element, kAXSelectedTextAttribute as CFString,
                                     text as CFString) == .success {
@@ -427,6 +598,7 @@ final class MacInputController {
     let button: CGMouseButton = buttonName == "right" ? .right : .left
 
     if action == "down" || action == "click" {
+      invalidateDictationTarget()
       establishTarget(at: point)
     }
 
@@ -557,6 +729,7 @@ final class MacInputController {
     _ message: RemoteInputMessage,
     respond: ((RemoteInputMessage) -> Void)?
   ) {
+    invalidateDictationTarget()
     inputQueue.append(PendingInput(message: message, respond: respond))
     guard inputProcessingTask == nil else {
       return
