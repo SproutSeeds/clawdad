@@ -381,6 +381,18 @@ extension MobileReadAloudController: AVAudioPlayerDelegate {
 
 @MainActor
 final class CloudSession: ObservableObject {
+  typealias EnvelopeSender = @MainActor (String, [String: JSONValue], String) async throws -> Void
+
+  private struct CatalogRequest {
+    let id: String
+    let projectPath: String
+    let selectedSessionId: String
+    let startedAt: Date
+    let refreshRecent: Bool
+    let recentOnly: Bool
+    var refreshHistory: Bool
+  }
+
   let readAloud = MobileReadAloudController()
 
   @Published var cloudUrl: String {
@@ -470,7 +482,12 @@ final class CloudSession: ObservableObject {
   private var pendingVoiceRequestId = ""
   private var pendingVoiceEnvelopeId = ""
   private var pendingProjectCreateEnvelopeId = ""
-  private var pendingCatalogHistoryLimit: Int?
+  private var catalogRequest: CatalogRequest?
+  private var lastCatalogRequestedAt = Date.distantPast
+  private var historyLimit = 8
+  private var historyRequestId = ""
+  private let catalogRefreshInterval: TimeInterval = 15
+  private let catalogRequestTimeout: TimeInterval = 30
   private var pendingPairingHostPublicKeyPem = ""
   private var pendingPairingRelayToken = ""
   private var pendingPairingHostName = ""
@@ -486,10 +503,13 @@ final class CloudSession: ObservableObject {
   private var lastRelayPongAt = Date.distantPast
   private var lastHostSeenAt = Date.distantPast
   private var seq = 0
-  private let defaults = UserDefaults.standard
+  private let defaults: UserDefaults
+  private let envelopeSender: EnvelopeSender?
   private var appStorePreviewMode = false
 
-  init() {
+  init(defaults: UserDefaults = .standard, envelopeSender: EnvelopeSender? = nil) {
+    self.defaults = defaults
+    self.envelopeSender = envelopeSender
     let bundledCloudUrl = String(
       describing: Bundle.main.object(forInfoDictionaryKey: "ClawDadCloudURL") ?? ""
     ).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -570,6 +590,8 @@ final class CloudSession: ObservableObject {
 
 #if DEBUG
   init(appStorePreview fixture: ClawDadAppStorePreviewFixture) {
+    self.defaults = .standard
+    self.envelopeSender = nil
     self.cloudUrl = "https://clawdad-cloud.frg.earth"
     self.accountId = "preview-account"
     self.workspaceId = fixture.workspace.id
@@ -734,6 +756,10 @@ final class CloudSession: ObservableObject {
     receiveTask = nil
     task?.cancel(with: .normalClosure, reason: nil)
     task = nil
+    catalogRequest = nil
+    catalogLoading = false
+    lastCatalogRequestedAt = .distantPast
+    historyRequestId = ""
     voiceTranscriptionTimeoutTask?.cancel()
     voiceTranscriptionTimeoutTask = nil
     voiceTranscriptionPending = false
@@ -859,7 +885,7 @@ final class CloudSession: ObservableObject {
     pendingApprovals = []
     modelOptions = []
     pairingStatus = ""
-    pendingCatalogHistoryLimit = nil
+    historyLimit = 8
     pendingPairingHostPublicKeyPem = ""
     pendingPairingRelayToken = ""
     pendingPairingHostName = ""
@@ -915,6 +941,8 @@ final class CloudSession: ObservableObject {
   func selectProject(_ project: ProjectSummary) {
     selectedProjectPath = project.path
     selectedSessionId = project.activeSessionId
+    historyLimit = 8
+    historyRequestId = ""
     historyItems = []
     historyStatus = "Loading threads for \(project.name)..."
     persistActiveComputerSnapshot()
@@ -925,6 +953,8 @@ final class CloudSession: ObservableObject {
   func selectThread(_ thread: MobileThreadSummary, historyLimit: Int = 20) {
     selectedProjectPath = thread.projectPath
     selectedSessionId = thread.sessionId
+    self.historyLimit = historyLimit
+    historyRequestId = ""
     historyItems = []
     historyStatus = "Loading \(thread.title)..."
     persistActiveComputerSnapshot()
@@ -943,12 +973,18 @@ final class CloudSession: ObservableObject {
       requestHistory(limit: historyLimit)
       requestStatus()
     } else {
-      pendingCatalogHistoryLimit = historyLimit
       requestCatalog()
     }
   }
 
-  func requestCatalog() {
+  func requestCatalog(
+    refreshHistory: Bool = true,
+    syncSelectedProject: Bool = true,
+    refreshRecent: Bool = true,
+    recentOnly: Bool = false,
+    now: Date = Date()
+  ) {
+    guard !appStorePreviewMode else { return }
     guard paired else {
       pairingStatus = "Pair this iPhone before loading projects."
       return
@@ -957,20 +993,83 @@ final class CloudSession: ObservableObject {
       connectIfPaired()
       return
     }
+    let project = syncSelectedProject
+      ? selectedProjectPath.trimmingCharacters(in: .whitespacesAndNewlines)
+      : ""
+    if var pending = catalogRequest,
+       pending.projectPath == project,
+       pending.selectedSessionId == selectedSessionId,
+       pending.recentOnly == recentOnly,
+       (!refreshRecent || pending.refreshRecent),
+       now.timeIntervalSince(pending.startedAt) < catalogRequestTimeout {
+      pending.refreshHistory = pending.refreshHistory || refreshHistory
+      catalogRequest = pending
+      return
+    }
+    let request = CatalogRequest(
+      id: UUID().uuidString.lowercased(),
+      projectPath: project,
+      selectedSessionId: selectedSessionId,
+      startedAt: now,
+      refreshRecent: refreshRecent,
+      recentOnly: recentOnly,
+      refreshHistory: refreshHistory
+    )
+    catalogRequest = request
+    lastCatalogRequestedAt = now
     catalogLoading = true
     Task {
+      guard catalogRequest?.id == request.id else { return }
       do {
         var body: [String: JSONValue] = [:]
-        let project = selectedProjectPath.trimmingCharacters(in: .whitespacesAndNewlines)
         if !project.isEmpty {
           body["project"] = .string(project)
         }
-        try await sendEnvelope(type: "catalog.request", body: body)
+        body["refreshRecent"] = .bool(refreshRecent)
+        body["recentOnly"] = .bool(recentOnly)
+        try await sendEnvelope(type: "catalog.request", body: body, envelopeId: request.id)
       } catch {
+        guard catalogRequest?.id == request.id else { return }
+        catalogRequest = nil
         catalogLoading = false
-        state = .failed(describe(error))
+        handleConnectionLoss(error)
       }
     }
+  }
+
+  func refreshCatalogIfNeeded(now: Date = Date()) {
+    guard ready, !appStorePreviewMode else { return }
+    if let pending = catalogRequest {
+      guard now.timeIntervalSince(pending.startedAt) >= catalogRequestTimeout else { return }
+      catalogRequest = nil
+      catalogLoading = false
+      events.insert("Thread refresh timed out. Retrying automatically.", at: 0)
+      requestCatalog(
+        refreshHistory: pending.refreshHistory,
+        syncSelectedProject: !pending.projectPath.isEmpty,
+        refreshRecent: pending.refreshRecent,
+        recentOnly: pending.recentOnly,
+        now: now
+      )
+      return
+    }
+    guard now.timeIntervalSince(lastCatalogRequestedAt) >= catalogRefreshInterval else { return }
+    if !startupWorkspaceReady || workspace.projects.isEmpty {
+      requestCatalog(now: now)
+      return
+    }
+    requestCatalog(
+      refreshHistory: false, syncSelectedProject: false,
+      refreshRecent: false, recentOnly: true, now: now
+    )
+  }
+
+  private func selectedThreadActivity(in workspace: MobileWorkspace) -> TimeInterval {
+    let threads = workspace.recentThreads +
+      (workspace.projects.first { $0.path == selectedProjectPath }?.sessions ?? [])
+    return threads.filter {
+      $0.projectPath == selectedProjectPath && $0.sessionId == selectedSessionId
+    }.map(mobileThreadActivityMs).max() ?? 0
   }
 
   func requestModels() {
@@ -1079,7 +1178,7 @@ final class CloudSession: ObservableObject {
     lastCreatedProjectPath = ""
   }
 
-  func requestHistory(limit: Int = 8) {
+  func requestHistory(limit: Int? = nil) {
     guard paired else {
       historyItems = []
       historyStatus = "Pair this iPhone to load thread history."
@@ -1100,16 +1199,24 @@ final class CloudSession: ObservableObject {
       return
     }
 
+    if let limit { historyLimit = limit }
+    let requestedLimit = historyLimit
+    let projectPath = selectedProjectPath
+    let sessionId = selectedSessionId
+    let requestId = UUID().uuidString.lowercased()
+    historyRequestId = requestId
     historyStatus = "Loading thread..."
     Task {
+      guard historyRequestId == requestId else { return }
       do {
         try await sendEnvelope(type: "history.request", body: [
-          "project": .string(selectedProjectPath),
-          "sessionId": .string(selectedSessionId),
+          "project": .string(projectPath),
+          "sessionId": .string(sessionId),
           "cursor": .string("0"),
-          "limit": .string(String(limit))
-        ])
+          "limit": .string(String(requestedLimit))
+        ], envelopeId: requestId)
       } catch {
+        guard historyRequestId == requestId else { return }
         self.pendingPairingRelayToken = ""
         let message = describe(error)
         historyStatus = message
@@ -1620,7 +1727,7 @@ final class CloudSession: ObservableObject {
     monitorTask = Task { [weak self] in
       while !Task.isCancelled {
         try? await Task.sleep(nanoseconds: 5_000_000_000)
-        guard let self else {
+        guard !Task.isCancelled, let self else {
           return
         }
         guard self.connected else {
@@ -1640,6 +1747,7 @@ final class CloudSession: ObservableObject {
         self.pingHost()
         if self.ready {
           self.requestStatus()
+          self.refreshCatalogIfNeeded(now: now)
         }
       }
     }
@@ -1717,6 +1825,7 @@ final class CloudSession: ObservableObject {
   private func receiveLoop(_ socket: URLSessionWebSocketTask) async throws {
     while task === socket {
       let message = try await socket.receive()
+      guard task === socket, !Task.isCancelled else { return }
       switch message {
       case .string(let text):
         try handleIncomingText(text)
@@ -1739,11 +1848,23 @@ final class CloudSession: ObservableObject {
     events.insert(text, at: 0)
   }
 
-  private func apply(_ envelope: CloudEnvelope) {
+  func apply(_ envelope: CloudEnvelope) {
     switch envelope.type {
     case "catalog.snapshot":
+      guard let request = catalogRequest,
+            envelope.sourceDeviceId == hostId,
+            envelope.accountId == accountId,
+            envelope.workspaceId == workspaceId else { return }
+      let inReplyTo = envelope.body["inReplyTo"]?.stringValue ?? ""
+      // Older Mac builds do not echo request IDs. Keep their catalog usable
+      // while upgraded hosts let us reject delayed or superseded responses.
+      guard inReplyTo.isEmpty || inReplyTo == request.id else { return }
       let catalogRefreshPending = envelope.body["catalogRefreshPending"]?.boolValue ?? false
-      let projects = parseProjects(envelope.body["projects"])
+      let recentOnly = envelope.body["catalogRecentOnly"]?.boolValue ?? false
+      guard !recentOnly || request.recentOnly else { return }
+      let previousActivity = selectedThreadActivity(in: workspace)
+      let previousSelection = "\(selectedProjectPath)::\(selectedSessionId)"
+      let projects = recentOnly ? workspace.projects : parseProjects(envelope.body["projects"])
       let parsedRecentThreads = parseRecentThreadSummaries(
         envelope.body["recentThreads"],
         projects: projects
@@ -1767,13 +1888,14 @@ final class CloudSession: ObservableObject {
         selectedSessionId = first.activeSessionId
       } else if let selected = projects.first(where: { $0.path == selectedProjectPath }) {
         let resolvedSessionId = resolveMobileSessionAlias(selectedSessionId, in: selected)
-        let sessionStillAvailable = selected.sessions.contains { $0.sessionId == resolvedSessionId }
+        let sessionStillAvailable = selected.sessions.contains { $0.sessionId == resolvedSessionId } ||
+          recentThreads.contains { $0.projectPath == selected.path && $0.sessionId == resolvedSessionId }
         if sessionStillAvailable {
           selectedSessionId = resolvedSessionId
-        } else {
+        } else if !catalogRefreshPending && request.projectPath == selected.path {
           selectedSessionId = selected.activeSessionId
         }
-      } else if let first = projects.first {
+      } else if !catalogRefreshPending, request.refreshHistory, let first = projects.first {
         selectedProjectPath = first.path
         selectedSessionId = first.activeSessionId
       }
@@ -1783,11 +1905,15 @@ final class CloudSession: ObservableObject {
       if catalogChanged {
         events.insert("Updated project catalog", at: 0)
       }
-      let historyLimit = pendingCatalogHistoryLimit ?? 8
-      pendingCatalogHistoryLimit = nil
-      requestHistory(limit: historyLimit)
-      requestStatus()
-      requestModels()
+      if !catalogRefreshPending {
+        catalogRequest = nil
+        let selectionChanged = previousSelection != "\(selectedProjectPath)::\(selectedSessionId)"
+        if request.refreshHistory || selectionChanged || selectedThreadActivity(in: workspace) > previousActivity {
+          requestHistory()
+          requestStatus()
+        }
+        if request.refreshHistory || selectionChanged { requestModels() }
+      }
     case "models.snapshot":
       applyModelsSnapshot(envelope)
     case "project.created":
@@ -1836,6 +1962,8 @@ final class CloudSession: ObservableObject {
       events.insert("Started new thread ...\(sessionId.suffix(5))", at: 0)
       requestCatalog()
     case "history.page":
+      let inReplyTo = envelope.body["inReplyTo"]?.stringValue ?? ""
+      guard inReplyTo.isEmpty || inReplyTo == historyRequestId else { return }
       let pageSessionId = envelope.body["sessionId"]?.stringValue ?? ""
       let requestedSessionId = envelope.body["requestedSessionId"]?.stringValue ?? ""
       let matchesSelection = selectedSessionId.isEmpty ||
@@ -2039,6 +2167,11 @@ final class CloudSession: ObservableObject {
       let message = envelope.body["error"]?.stringValue ?? "Cloud error"
       let inReplyTo = envelope.body["inReplyTo"]?.stringValue ?? ""
       let code = envelope.body["code"]?.stringValue ?? ""
+      if !inReplyTo.isEmpty, inReplyTo == catalogRequest?.id {
+        catalogRequest = nil
+        catalogLoading = false
+        events.insert("Thread refresh failed: \(message)", at: 0)
+      }
       if !pendingPairingEnvelopeId.isEmpty,
          inReplyTo == pendingPairingEnvelopeId {
         restoreComputerAfterPairingFailureIfNeeded()
@@ -2555,6 +2688,10 @@ final class CloudSession: ObservableObject {
     body: [String: JSONValue],
     envelopeId: String = ""
   ) async throws {
+    if let envelopeSender {
+      try await envelopeSender(type, body, envelopeId)
+      return
+    }
     guard let socket = task else {
       throw URLError(.notConnectedToInternet)
     }

@@ -165,6 +165,17 @@ directory against the Mac's native Codex transcripts before the catalog is
 returned. ClawDad preserves each Codex session ID, so a thread continued from the
 iPhone can later be resumed in the desktop terminal with the same history.
 
+While the phone is connected and active, the activity monitor refreshes the
+latest 20 threads across all projects every 15 seconds. Routine refreshes send
+only recent thread summaries over the relay. Opening **All** or tapping its
+refresh button also requests fresh activity, bypassing the Mac's recent-thread
+cache. Project synchronization preserves the selected thread through the initial
+cached response and loads its requested history after synchronization finishes.
+Request IDs prevent delayed catalog and history responses from replacing newer
+results; refreshes that receive no final response retry after 30 seconds. The
+phone remains compatible with older Mac hosts, which return full catalogs and
+do not provide the same response-order protection until upgraded.
+
 The claw menu also includes **Images**. Select up to four photos; ClawDad resizes
 each one to a maximum 2048-pixel edge, shows removable previews above the send
 bar, and sends the images to the selected Codex thread with or without message

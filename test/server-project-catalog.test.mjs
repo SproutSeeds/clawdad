@@ -1858,6 +1858,79 @@ test("projects endpoint orders sessions by latest provider activity while preser
   }
 });
 
+test("manual recent-thread refresh discovers new activity before the catalog cache expires", async () => {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "clawdad-recent-refresh-")));
+  const home = path.join(root, "home");
+  const codexHome = path.join(root, "codex-home");
+  const projectsRoot = path.join(root, "projects");
+  const alpha = path.join(projectsRoot, "alpha");
+  const beta = path.join(projectsRoot, "beta");
+  const configPath = path.join(root, "server.json");
+  const sessionsDirectory = path.join(codexHome, "sessions", "2026", "09", "04");
+  await Promise.all([home, alpha, beta, sessionsDirectory].map((directory) => mkdir(directory, { recursive: true })));
+  await writeFile(path.join(home, "state.json"), JSON.stringify({
+    version: 3,
+    projects: {
+      [alpha]: {
+        status: "idle",
+        active_session_id: "older",
+        sessions: { older: {
+          slug: "Existing thread", provider: "codex", provider_session_seeded: "true",
+          status: "idle", provider_last_activity: "2026-09-04T12:00:00.000Z",
+        } },
+      },
+      [beta]: { status: "idle", sessions: {} },
+    },
+  }));
+  const port = await freePort();
+  await writeFile(configPath, JSON.stringify({
+    host: "127.0.0.1", port, defaultProject: alpha,
+    primaryProjectRoot: projectsRoot, projectRoots: [projectsRoot],
+    authMode: "tailscale", allowedUsers: ["tester@example.com"],
+  }));
+  const child = spawn(process.execPath, [serverScript, "serve", "--config", configPath], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      CLAWDAD_HOME: home, CLAWDAD_CODEX_HOME: codexHome,
+      CLAWDAD_TTS_ENABLED: "false",
+      CLAWDAD_PROJECT_SESSION_AUTO_IMPORT_CATALOG_MAX_PROJECTS: "0",
+      CLAWDAD_WORKSPACE_RECENT_CODEX_CACHE_TTL_MS: "600000",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  try {
+    const baseUrl = `http://127.0.0.1:${port}`;
+    await waitForHealth(baseUrl, child);
+    const headers = { "tailscale-user-login": "tester@example.com" };
+    const catalog = async (query = "") => {
+      const response = await fetch(`${baseUrl}/v1/projects?lean=1${query}`, { headers });
+      assert.equal(response.status, 200);
+      return response.json();
+    };
+    const initial = await catalog();
+    assert.equal(initial.recentThreads[0].sessionId, "older");
+    const transcriptPath = path.join(sessionsDirectory, "rollout-new.jsonl");
+    await writeFile(transcriptPath, [
+      { type: "session_meta", payload: { id: "new-beta", cwd: beta, source: "vscode", timestamp: "2026-09-04T13:00:00Z" } },
+      { type: "event_msg", payload: { type: "user_message", message: "New work from the desktop" } },
+    ].map((row) => JSON.stringify(row)).join("\n") + "\n");
+    await utimes(transcriptPath, new Date("2026-09-04T13:00:00Z"), new Date("2026-09-04T13:00:00Z"));
+    assert.equal((await catalog()).recentThreads[0].sessionId, "older", "The ordinary request should still exercise the warm cache.");
+    const refreshed = await catalog("&refreshRecent=1");
+    assert.equal(refreshed.recentThreads[0].sessionId, "new-beta", JSON.stringify({
+      workspace: refreshed.workspace,
+      projects: refreshed.projects.map((project) => project.path),
+      recent: refreshed.recentThreads,
+    }));
+    assert.equal(refreshed.recentThreads[0].projectPath, beta);
+    assert.equal(refreshed.projects.find((project) => project.path === alpha).activeSessionId, "older");
+  } finally {
+    await stopServer(child);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("projects endpoint does not let import tracking time outrank real session activity", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-session-tracked-at-"));
   const home = path.join(root, "home");

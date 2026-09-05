@@ -271,6 +271,12 @@ struct ContentView: View {
       .onChange(of: session.activeComputerId) { _, _ in
         selectedThreadSelection = nil
       }
+      .onChange(of: threadScopeRaw) { _, _ in
+        session.requestCatalog(
+          refreshHistory: threadScope == .project,
+          syncSelectedProject: threadScope == .project
+        )
+      }
       .onChange(of: voiceRecorder.state) { _, nextState in
         voicePulse = false
         if nextState == .recording {
@@ -941,18 +947,24 @@ struct ContentView: View {
           Spacer()
           Button {
             dismissKeyboard()
-            session.requestCatalog()
-            if threadScope == .project {
-              session.requestHistory()
-            }
+            session.requestCatalog(
+              refreshHistory: threadScope == .project,
+              syncSelectedProject: threadScope == .project
+            )
           } label: {
-            Image(systemName: "arrow.clockwise")
-              .font(.system(size: 13, weight: .black))
-              .frame(width: 34, height: 34)
+            Group {
+              if session.catalogLoading {
+                ProgressView().tint(ClawDadTheme.gold)
+              } else {
+                Image(systemName: "arrow.clockwise")
+                  .font(.system(size: 13, weight: .black))
+              }
+            }
+            .frame(width: 34, height: 34)
           }
           .buttonStyle(ClawDadIconButtonStyle())
           .disabled(
-            !session.ready ||
+            !session.ready || session.catalogLoading ||
               (threadScope == .project && session.selectedSessionId.isEmpty)
           )
           .accessibilityLabel(threadScope == .all ? "Refresh all threads" : "Refresh project threads")

@@ -601,6 +601,7 @@ test("trusted catalog.request returns the warm catalog before refreshing the sel
     targetHostId: "mac-host",
     body: {
       project: "/Volumes/Code_2TB/code/Worldwrought",
+      refreshRecent: true,
     },
   }), deviceKeys.privateKey, {
     keyId: cloudPublicKeyFingerprint(deviceKeys.publicKey),
@@ -617,6 +618,7 @@ test("trusted catalog.request returns the warm catalog before refreshing the sel
   assert.equal(initialRequestUrl.pathname, "/v1/projects");
   assert.equal(initialRequestUrl.searchParams.get("lean"), "1");
   assert.equal(initialRequestUrl.searchParams.get("syncProject"), null);
+  assert.equal(initialRequestUrl.searchParams.get("refreshRecent"), "1");
   assert.equal(requests[0].options.headers.authorization, "Bearer local-token");
   const refreshRequestUrl = new URL(requests[1].url);
   assert.equal(refreshRequestUrl.pathname, "/v1/projects");
@@ -631,8 +633,37 @@ test("trusted catalog.request returns the warm catalog before refreshing the sel
   assert.equal(sent[0].body.projects[0].sessions[0].sessionId, "019f5900-42ce-7e23-8680-855bdbfcddd3");
   assert.equal(sent[0].body.recentThreads[0].projectName, "Worldwrought");
   assert.equal(sent[0].body.catalogRefreshPending, true);
+  assert.equal(sent[0].body.inReplyTo, envelope.id);
   assert.equal(sent[1].type, "catalog.snapshot");
   assert.equal(sent[1].body.catalogRefreshPending, false);
+  assert.equal(sent[1].body.inReplyTo, envelope.id);
+});
+
+test("routine catalog refresh sends only recent summaries over the phone relay", async (t) => {
+  const deviceKeys = generateP256KeyPair();
+  const config = hostConfig({ trustedDevicePublicKeys: { "ios-phone": deviceKeys.publicKey } });
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const requested = [];
+  const recentThreads = [{ projectPath: "/workspace/alpha", sessionId: "latest" }];
+  globalThis.fetch = async (url) => {
+    requested.push(new URL(url));
+    return Response.json({ ok: true, projects: [{ path: "/workspace/alpha", sessions: [] }], recentThreads });
+  };
+  const envelope = signCloudEnvelope(normalizeCloudEnvelope({
+    type: "catalog.request", accountId: "acct-1", workspaceId: "scratchpad",
+    sourceDeviceId: "ios-phone", targetHostId: "mac-host",
+    body: { recentOnly: true },
+  }), deviceKeys.privateKey, { keyId: cloudPublicKeyFingerprint(deviceKeys.publicKey) });
+  const sent = [];
+  const result = await handleCloudEnvelope(envelope, config, async (payload) => { sent.push(payload); });
+  assert.equal(result.ok, true);
+  assert.equal(requested.length, 1);
+  assert.equal(requested[0].searchParams.get("syncProject"), null);
+  assert.equal(sent.length, 1);
+  assert.deepEqual(sent[0].body, {
+    recentThreads, catalogRecentOnly: true, catalogRefreshPending: false, inReplyTo: envelope.id,
+  });
 });
 
 test("trusted message.send envelope is dispatched through the local app server", async (t) => {
