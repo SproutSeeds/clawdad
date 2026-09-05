@@ -9,6 +9,7 @@ public enum RemoteClipboardAction: String, Codable, Equatable, Sendable {
 public enum RemoteDictationDisposition: String, Codable, Equatable, Sendable {
   case inserted
   case copied
+  case pasteRequested
 }
 
 public struct RemoteClipboardMessage: Codable, Equatable, Sendable {

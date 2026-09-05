@@ -11,6 +11,8 @@ configs:
   Release: release
 
 packages:
+  ClawDadFileTransport:
+    path: ../../../native/ClawDadFileTransport
   ClawDadRemoteAssistProtocol:
     path: ../../../native/ClawDadRemoteAssistProtocol
   WebRTC:
@@ -22,7 +24,7 @@ settings:
     CODE_SIGN_STYLE: Automatic
     DEVELOPMENT_TEAM: 4QV4WR9G32
     MARKETING_VERSION: "0.7.0"
-    CURRENT_PROJECT_VERSION: "38"
+    CURRENT_PROJECT_VERSION: "40"
     CLAWDAD_FOUNDING_BETA_ACCESS: "NO"
 
 targets:
@@ -34,6 +36,7 @@ targets:
       - path: Sources/ClawDadMobile
       - path: Resources
     dependencies:
+      - package: ClawDadFileTransport
       - package: ClawDadRemoteAssistProtocol
       - package: WebRTC
     settings:

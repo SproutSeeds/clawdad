@@ -11,6 +11,9 @@ public struct RemoteTerminalTabDescriptor: Codable, Equatable, Sendable {
   public let isSelected: Bool
   public let isBusy: Bool
   public let hasUnreadActivity: Bool
+  public let windowGroupId: String?
+  public let tabPosition: Int?
+  public let canReorder: Bool
 
   public init(
     id: String,
@@ -18,7 +21,10 @@ public struct RemoteTerminalTabDescriptor: Codable, Equatable, Sendable {
     detail: String,
     isSelected: Bool,
     isBusy: Bool,
-    hasUnreadActivity: Bool = false
+    hasUnreadActivity: Bool = false,
+    windowGroupId: String? = nil,
+    tabPosition: Int? = nil,
+    canReorder: Bool = false
   ) {
     self.id = id
     self.title = title
@@ -26,6 +32,9 @@ public struct RemoteTerminalTabDescriptor: Codable, Equatable, Sendable {
     self.isSelected = isSelected
     self.isBusy = isBusy
     self.hasUnreadActivity = hasUnreadActivity
+    self.windowGroupId = windowGroupId
+    self.tabPosition = tabPosition
+    self.canReorder = canReorder
   }
 
   private enum CodingKeys: String, CodingKey {
@@ -35,6 +44,7 @@ public struct RemoteTerminalTabDescriptor: Codable, Equatable, Sendable {
     case isSelected
     case isBusy
     case hasUnreadActivity
+    case windowGroupId, tabPosition, canReorder
   }
 
   public init(from decoder: Decoder) throws {
@@ -48,9 +58,19 @@ public struct RemoteTerminalTabDescriptor: Codable, Equatable, Sendable {
       Bool.self,
       forKey: .hasUnreadActivity
     ) ?? false
+    windowGroupId = try container.decodeIfPresent(String.self, forKey: .windowGroupId)
+    tabPosition = try container.decodeIfPresent(Int.self, forKey: .tabPosition)
+    canReorder = try container.decodeIfPresent(Bool.self, forKey: .canReorder) ?? false
   }
 
   fileprivate func validate() throws {
+    if let windowGroupId, windowGroupId.isEmpty || windowGroupId.utf8.count > Self.maximumIDBytes {
+      throw RemoteTerminalTabProtocolError.invalidTab
+    }
+    if let tabPosition, tabPosition < 1 || tabPosition > RemoteTerminalTabState.maximumTabs {
+      throw RemoteTerminalTabProtocolError.invalidTab
+    }
+    if canReorder && (windowGroupId == nil || tabPosition == nil) { throw RemoteTerminalTabProtocolError.invalidTab }
     guard !id.isEmpty,
           id.utf8.count <= Self.maximumIDBytes,
           !title.isEmpty,
@@ -107,6 +127,8 @@ public struct RemoteTerminalTabMessage: Codable, Equatable, Sendable {
   public static let listResultType = "terminal.tabs.result"
   public static let focusType = "terminal.tab.focus"
   public static let focusResultType = "terminal.tab.focus.result"
+  public static let moveType = "terminal.tab.move"
+  public static let moveResultType = "terminal.tab.move.result"
   public static let maximumEnvelopeBytes = 64 * 1024
   public static let maximumRequestIDBytes = 128
   public static let maximumErrorCodeBytes = 64
@@ -120,6 +142,21 @@ public struct RemoteTerminalTabMessage: Codable, Equatable, Sendable {
   public let errorCode: String?
   public let error: String?
   public let state: RemoteTerminalTabState?
+  public var neighborTabId: String? = nil
+  public var placeBefore: Bool? = nil
+
+  public static func moveRequest(tabId: String, neighborTabId: String, placeBefore: Bool,
+                                 expectedRevision: Int, requestId: String) -> Self {
+    Self(type: moveType, requestId: requestId, tabId: tabId, expectedRevision: expectedRevision,
+         ok: nil, errorCode: nil, error: nil, state: nil,
+         neighborTabId: neighborTabId, placeBefore: placeBefore)
+  }
+
+  public static func moveResult(requestId: String, state: RemoteTerminalTabState?,
+                                errorCode: String? = nil, error: String? = nil) -> Self {
+    result(type: moveResultType, requestId: requestId, ok: error == nil,
+           errorCode: errorCode, error: error, state: state)
+  }
 
   public static func listRequest(
     requestId: String
@@ -234,6 +271,11 @@ public struct RemoteTerminalTabMessage: Codable, Equatable, Sendable {
   }
 
   fileprivate func validate() throws {
+    if type == Self.moveType {
+      guard let neighborTabId, neighborTabId != tabId, !neighborTabId.isEmpty,
+            neighborTabId.utf8.count <= RemoteTerminalTabDescriptor.maximumIDBytes,
+            placeBefore != nil else { throw RemoteTerminalTabProtocolError.invalidMessage }
+    } else if neighborTabId != nil || placeBefore != nil { throw RemoteTerminalTabProtocolError.invalidMessage }
     guard !requestId.isEmpty,
           requestId.utf8.count <= Self.maximumRequestIDBytes else {
       throw RemoteTerminalTabProtocolError.invalidMessage
@@ -249,7 +291,7 @@ public struct RemoteTerminalTabMessage: Codable, Equatable, Sendable {
             state == nil else {
         throw RemoteTerminalTabProtocolError.invalidMessage
       }
-    case Self.focusType:
+    case Self.focusType, Self.moveType:
       guard let tabId,
             !tabId.isEmpty,
             tabId.utf8.count <= RemoteTerminalTabDescriptor.maximumIDBytes,
@@ -261,7 +303,7 @@ public struct RemoteTerminalTabMessage: Codable, Equatable, Sendable {
             state == nil else {
         throw RemoteTerminalTabProtocolError.invalidMessage
       }
-    case Self.listResultType, Self.focusResultType:
+    case Self.listResultType, Self.focusResultType, Self.moveResultType:
       guard tabId == nil,
             expectedRevision == nil,
             let ok else {

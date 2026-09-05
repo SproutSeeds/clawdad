@@ -11,6 +11,7 @@ let package = Package(
     .executable(name: "ClawDad", targets: ["ClawDad"])
   ],
   dependencies: [
+    .package(path: "../ClawDadFileTransport"),
     .package(path: "../ClawDadRemoteAssistProtocol"),
     .package(path: "../../vendor/WebRTCPackage"),
     .package(
@@ -22,6 +23,7 @@ let package = Package(
     .executableTarget(
       name: "ClawDad",
       dependencies: [
+        .product(name: "ClawDadFileTransport", package: "ClawDadFileTransport"),
         .product(
           name: "ClawDadRemoteAssistProtocol",
           package: "ClawDadRemoteAssistProtocol"

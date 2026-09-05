@@ -3,6 +3,7 @@ import Darwin
 import Foundation
 import Security
 import WebKit
+import ClawDadRemoteAssistProtocol
 
 private let appName = "ClawDad"
 private let localHost = "127.0.0.1"
@@ -922,6 +923,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
   }
 
   private func loadApp(baseURL: URL, service: ClawDadService) {
+    remoteAssistHost?.filesRuntime = MacFilesRuntime(baseURL: baseURL, token: service.token)
     updateStatus("Opening ClawDad...")
     let configuration = WKWebViewConfiguration()
     configuration.applicationNameForUserAgent = "ClawDadNative/0.1"
@@ -1043,6 +1045,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
       }
     case "chooseFolder":
       chooseFolder(id: id, params: params)
+    case "chooseLibraryFiles":
+      let panel = NSOpenPanel()
+      panel.title = "Add finished files to ClawDad Files"
+      panel.prompt = "Add to Files"
+      panel.canChooseFiles = true
+      panel.canChooseDirectories = false
+      panel.allowsMultipleSelection = true
+      panel.beginSheetModal(for: window) { response in
+        self.resolveNativeMessage(id: id, result: ["paths": response == .OK ? panel.urls.map(\.path) : []])
+      }
+    case "revealLibraryFile":
+      guard let itemId = params["id"] as? String, UUID(uuidString: itemId) != nil,
+            let versionId = params["versionId"] as? String, UUID(uuidString: versionId) != nil,
+            let fileName = params["fileName"] as? String, !fileName.isEmpty, fileName.utf8.count <= 1024,
+            URL(fileURLWithPath: fileName).lastPathComponent == fileName, ![".", ".."].contains(fileName),
+            let baseURL = webView?.url, let service else {
+        resolveNativeMessage(id: id, error: "Choose a saved file version first.")
+        return
+      }
+      Task { @MainActor in
+        do {
+          var url = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
+          url.path = "/v1/files/download"
+          url.queryItems = [URLQueryItem(name: "id", value: itemId), URLQueryItem(name: "versionId", value: versionId)]
+          var request = service.authenticatedRequest(for: url.url!)
+          request.timeoutInterval = 60
+          let (temporary, response) = try await URLSession.shared.download(for: request)
+          defer { try? FileManager.default.removeItem(at: temporary) }
+          guard (response as? HTTPURLResponse)?.statusCode == 200,
+                let size = try temporary.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+                size <= 100 * 1024 * 1024 else { throw RemoteFileError.invalidMessage }
+          let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ClawDad File Exports", isDirectory: true)
+            .appendingPathComponent(versionId, isDirectory: true).appendingPathComponent(UUID().uuidString, isDirectory: true)
+          try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+          let destination = directory.appendingPathComponent(fileName)
+          try FileManager.default.moveItem(at: temporary, to: destination)
+          NSWorkspace.shared.activateFileViewerSelecting([destination])
+          resolveNativeMessage(id: id, result: ["ok": true])
+        } catch { resolveNativeMessage(id: id, error: error.localizedDescription) }
+      }
     case "getRemoteAssistStatus":
       resolveNativeMessage(
         id: id,

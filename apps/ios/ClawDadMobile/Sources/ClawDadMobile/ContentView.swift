@@ -15,6 +15,7 @@ struct ContentView: View {
   @State private var showingSettings = false
   @State private var showingScanner = false
   @State private var showingRemoteAssist = false
+  @State private var showingFiles = false
   @State private var showingTools = false
   @State private var showingProjectPicker = false
   @State private var showingNewThreadPrompt = false
@@ -32,6 +33,7 @@ struct ContentView: View {
   @State private var selectedThreadSelection: MobileThreadSelection?
   @StateObject private var voiceRecorder = VoiceRecorder()
   @StateObject private var remoteAssist = RemoteAssistController()
+  @StateObject private var files = MobileFilesController()
   @AppStorage("clawdad.threadScope") private var threadScopeRaw = MobileThreadScope.project.rawValue
   @FocusState private var messageEditorFocused: Bool
 
@@ -191,6 +193,12 @@ struct ContentView: View {
         .environmentObject(session)
         .presentationDetents([.large])
       }
+#if os(iOS)
+      .sheet(isPresented: $showingFiles) {
+        FilesLibraryView(controller: files) { showingFiles = false }
+          .environmentObject(session)
+      }
+#endif
       .sheet(isPresented: $showingProjectPicker) {
         ProjectPickerSheet(
           selectedPath: session.selectedProjectPath,
@@ -523,6 +531,19 @@ struct ContentView: View {
             : "Update the ClawDad companion on this computer to enable Remote Assist"
         )
 
+#if os(iOS)
+        Button {
+          dismissKeyboard()
+          showingFiles = true
+        } label: {
+          Image(systemName: "folder")
+            .font(.system(size: 18, weight: .bold))
+            .frame(width: 44, height: 44)
+        }
+        .buttonStyle(ClawDadGhostButtonStyle())
+        .accessibilityLabel("Open Files")
+        .accessibilityIdentifier("clawdad.files.open")
+#endif
         Spacer()
         Button {
           dismissKeyboard()

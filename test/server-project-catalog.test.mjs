@@ -4203,7 +4203,7 @@ process.exit(0);
   }
 });
 
-test("requested artifacts sync into a stable Dumpy project party", async () => {
+test("requested artifacts and browsing legacy deliverables never upload to cloud storage", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-server-dumpy-artifacts-"));
   const home = path.join(root, "home");
   const projectPath = path.join(root, "dockside");
@@ -4332,21 +4332,17 @@ process.exit(0);
     assert.equal(artifactsResponse.status, 200);
     const payload = await artifactsResponse.json();
     assert.equal(payload.ok, true);
-    assert.equal(payload.dumpy.partyId, "party-1");
-    assert.equal(payload.dumpy.partyName, "dockside");
-    assert.equal(payload.dumpy.partyUrl, "https://dumpy.example.test/?party=party-1");
-    assert.equal(payload.dumpy.zipUrl, "https://dumpy.example.test/api/parties/party-1/download");
-    assert.equal(fakeDumpy.parties.length, 1);
-    assert.equal(fakeDumpy.items.length, 1);
-    assert.equal(fakeDumpy.items[0].name, "deck-note.md");
-    assert.equal(fakeDumpy.items[0].relativePath, "deck-note.md");
+    assert.equal(payload.artifacts.length, 1);
+    assert.equal(payload.dumpy.partyId, "");
+    assert.equal(fakeDumpy.parties.length, 0);
+    assert.equal(fakeDumpy.items.length, 0);
 
     const secondResponse = await fetch(`${baseUrl}/v1/artifacts?project=${encodeURIComponent(projectPath)}`, {
       headers,
     });
     assert.equal(secondResponse.status, 200);
-    assert.equal(fakeDumpy.parties.length, 1);
-    assert.equal(fakeDumpy.items.length, 1);
+    assert.equal(fakeDumpy.parties.length, 0);
+    assert.equal(fakeDumpy.items.length, 0);
   } finally {
     await stopServer(child);
     await fakeDumpy.close();

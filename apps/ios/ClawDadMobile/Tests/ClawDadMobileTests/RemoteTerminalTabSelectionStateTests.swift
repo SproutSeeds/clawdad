@@ -102,6 +102,7 @@ final class RemoteTerminalTabSelectionStateTests: XCTestCase {
       .listSuccess(requestId: "bootstrap", state: state())
     )
 
+    _ = selection.beginCatalog(requestId: "poll")
     let application = selection.applyResult(
       .listSuccess(
         requestId: "poll",
@@ -111,6 +112,29 @@ final class RemoteTerminalTabSelectionStateTests: XCTestCase {
 
     XCTAssertEqual(application?.acceptedState, true)
     XCTAssertEqual(selection.tabs[1].hasUnreadActivity, true)
+  }
+
+  func testTapSupersedesPollAndLateSameRevisionStateCannotUndoFocus() {
+    var selection = RemoteTerminalTabSelectionState()
+    _ = selection.beginCatalog(requestId: "initial")
+    _ = selection.applyResult(.listSuccess(requestId: "initial", state: state()))
+    _ = selection.beginCatalog(requestId: "poll")
+    XCTAssertNotNil(selection.beginFocus(tabId: "tab-two", requestId: "tap"))
+    _ = selection.applyResult(.focusSuccess(requestId: "tap", state: state(selectedTabId: "tab-two")))
+    let late = selection.applyResult(.listSuccess(requestId: "poll", state: state()))
+    XCTAssertEqual(late?.acceptedState, false)
+    XCTAssertEqual(selection.selectedTabId, "tab-two")
+  }
+
+  func testRapidChoicesRetainLatestIntentAndCoalesceRepeatedTap() {
+    var selection = RemoteTerminalTabSelectionState()
+    _ = selection.applyResult(.listSuccess(requestId: "initial", state: state()))
+    XCTAssertNotNil(selection.beginFocus(tabId: "tab-two", requestId: "first"))
+    XCTAssertNil(selection.beginFocus(tabId: "tab-two", requestId: "duplicate"))
+    XCTAssertNotNil(selection.beginFocus(tabId: "tab-one", requestId: "latest"))
+    _ = selection.applyResult(.focusSuccess(requestId: "first", state: state(selectedTabId: "tab-two")))
+    XCTAssertEqual(selection.pendingAttempt?.requestId, "latest")
+    XCTAssertEqual(selection.selectedTabId, "tab-one")
   }
 
   private func state(

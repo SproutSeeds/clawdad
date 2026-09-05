@@ -6,6 +6,24 @@ final class ClawDadMobileUITests: XCTestCase {
     continueAfterFailure = false
   }
 
+  func testFilesOpensAndReturnsToWorkspace() {
+    let app = XCUIApplication()
+    app.launchArguments += ["--clawdad-app-store-preview", "workspace"]
+    app.launch()
+    let files = app.buttons["clawdad.files.open"]
+    XCTAssertTrue(files.waitForExistence(timeout: 20))
+    files.tap()
+    XCTAssertTrue(app.navigationBars["Files"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.switches["Downloaded on this iPhone"].exists)
+    let screenshot = XCTAttachment(screenshot: app.screenshot())
+    screenshot.name = "Local Files library on iPhone"
+    screenshot.lifetime = .keepAlways
+    add(screenshot)
+    app.navigationBars["Files"].buttons["Back"].tap()
+    XCTAssertTrue(files.waitForExistence(timeout: 3))
+    XCTAssertTrue(files.isHittable)
+  }
+
   func testRemoteTerminalReaderSourceCopyAndBack() {
     let app = XCUIApplication()
     app.launchArguments += ["--clawdad-app-store-preview", "terminal-reader"]
@@ -56,6 +74,11 @@ final class ClawDadMobileUITests: XCTestCase {
     microphone.tap()
     XCTAssertTrue(transcript.waitForExistence(timeout: 3))
     XCTAssertEqual(transcript.value as? String, editedText)
+    app.buttons["clawdad.remote.dictation.back"].tap()
+    app.buttons["clawdad.remote.files"].tap()
+    XCTAssertTrue(app.navigationBars["Files"].waitForExistence(timeout: 5))
+    app.navigationBars["Files"].buttons["Back"].tap()
+    XCTAssertTrue(microphone.waitForExistence(timeout: 3))
   }
 
   func testCutDraftClearsAndKeepsEditorFocused() throws {

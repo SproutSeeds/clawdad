@@ -120,9 +120,11 @@ final class RemoteDictationDraft: ObservableObject {
     sending = false
     switch result {
     case .success(let disposition):
-      notice = disposition == .inserted
-        ? "Inserted on \(computerName). Also copied to its clipboard."
-        : "Copied to \(computerName) clipboard. Paste whenever you are ready."
+      switch disposition {
+      case .inserted: notice = "Inserted on \(computerName). Also copied to its clipboard."
+      case .copied: notice = "Copied to \(computerName) clipboard. Paste whenever you are ready."
+      case .pasteRequested: notice = "Copied to \(computerName) and sent Paste to the focused app. If it did not appear, paste from the clipboard."
+      }
       deliveryRequestId = ""
     case .failure(let error):
       self.error = error.localizedDescription

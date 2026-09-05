@@ -1,0 +1,16 @@
+ClawDad Files
+
+Open the folder button in ClawDad on your Mac or iPhone. Files collects the finished documents you choose to save. Each document can have several formats and earlier versions. Pin frequently used documents, search by name, filter by project or type, and archive documents when you are done with them.
+
+On Mac, choose Add files to save a finished document. ClawDad keeps a separate snapshot in its local library, so editing the original does not change a saved version. Adding the same filename again groups its revisions; exports with the same base filename group their formats. Import older deliverables lets you choose which existing project exports to include.
+
+When asking an agent for a deliverable through ClawDad, ask it to save the finished file to ClawDad Files. For a Terminal conversation, use Copy agent instructions in the Mac Files view and paste those instructions into that conversation. The agent receives the exact local command for registering its result. Routine code changes and temporary files stay in their projects.
+
+On iPhone, open a document and choose Download to iPhone. You can pause and resume an interrupted download. ClawDad checks the finished download against the Mac's saved file before making it available. Open Preview to read it, or use Share and Save to Files to keep a copy in the location you choose. Downloaded copies open while your Mac is offline.
+
+Remove from iPhone clears ClawDad's retained copy on the phone. Your Mac library and copies you exported through Share stay available. Archive hides a document from the normal list and preserves all its versions.
+
+The canonical library lives on this Mac at:
+~/Library/Application Support/ClawDad/Files
+
+Files connects directly between your paired devices. The Mac must be awake and ClawDad running for new downloads. Some networks block a direct connection; try the same Wi-Fi or an existing private network if that happens. This release leaves paid file relays disabled. File storage and document processing remain local. Each file can be up to 100 MB; the Mac library currently allows 10 GB.

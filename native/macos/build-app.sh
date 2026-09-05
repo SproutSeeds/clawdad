@@ -174,17 +174,7 @@ for header_asset in "$repo_root"/assets/clawdad-header-*.jpg; do
   cp "$header_asset" "$runtime_dir/assets/${header_asset:t}"
 done
 runtime_version=$(
-  shasum -a 256 \
-    "$runtime_dir/package.json" \
-    "$runtime_dir/bin/node" \
-    "$runtime_dir/node_modules/open-research-protocol/package.json" \
-    "$runtime_dir/lib/server.mjs" \
-    "$runtime_dir/lib/cloud-host-connector.mjs" \
-    "$runtime_dir/web/index.html" \
-    "$runtime_dir/web/app.css" \
-    "$runtime_dir/web/app.js" \
-    | shasum -a 256 \
-    | awk '{print $1}'
+  "$runtime_dir/bin/node" "$script_dir/runtime-fingerprint.mjs" "$runtime_dir"
 )
 printf '%s\n' "$runtime_version" > "$runtime_dir/.bundle-version"
 

@@ -1,11 +1,13 @@
 # Remote Assist reliability and local Files
 
-Status: audited implementation plan; product repairs and Files implementation pending.
+Status: implementation delivered in Mac 48 / iPhone 40; physical acceptance remains open.
+Release evidence: `reports/files-reliability-release-2026-09-05.md`.
+Unchecked acceptance items below remain explicit; the earlier audit describes build 46 / 38.
 Audit date: 2026-09-05. Baseline commit: `b2cc1e0`.
 
 ## Product decisions
 
-- The paired Mac owns execution, speech processing, and the canonical Files library.
+- The paired Mac owns agent execution, dictation processing, and the canonical Files library. Remote Assist Read Aloud now uses the iPhone's native speech engine, with no additional cloud audio connection.
 - Files use local Mac storage. The phone fetches files on demand and can retain downloads or export them to Apple Files/share destinations.
 - Cloud infrastructure supplies the existing pairing, signaling, and necessary transient relay functions. This plan adds no cloud file store, automatic cloud backups, or cloud document processing.
 - Prefer direct device transfer. Any relay fallback must obey usage controls; local storage alone does not eliminate relay bandwidth.
@@ -14,7 +16,7 @@ Audit date: 2026-09-05. Baseline commit: `b2cc1e0`.
 - Repair the reported Remote Assist regressions before expanding the product with Files.
 - The Terminal picker mirrors the real visible tab order. Selecting a tab changes its highlight, while actual tab moves on the Mac change the picker order. A picker drag is a request to move that same live tab in Terminal.
 
-## Current evidence
+## Baseline audit evidence
 
 Read-only checks confirmed the installed Mac is build 46 and the connected physical iPhone has build 38. The native service on port 4487 reports healthy with the shared Codex service ready. Authenticated `/v1/tts/status` returned HTTP 200 with `doc-reader` enabled and available. This confirms service availability, not successful response retrieval, audio transfer, or audible playback on the phone.
 
@@ -38,12 +40,12 @@ No product source, running app, permissions, cloud configuration, or release cha
 ## 1. Make Terminal actions reliable
 
 - [ ] Record one request ID through tap, accepted intent, Mac receipt, catalog/focus execution, reply send, and phone application. Keep diagnostic timing and error codes local and bounded; omit terminal contents and dictated text.
-- [ ] Separate background catalog refresh from foreground selection state. Accept a tap immediately even when a refresh is running, display the requested destination, and execute it as soon as the current safe operation finishes.
-- [ ] Coalesce repeated taps to the same destination. If the user chooses another destination while waiting, retain the newest explicit choice with a sequence number and reject stale acknowledgements.
-- [ ] Keep the current selection marked as confirmed until the Mac acknowledges the new selection. A background response at the same topology revision must not overwrite a newer focus result.
-- [ ] Consolidate polling, coalesce overlapping refreshes, and pause/defer low-priority refresh work around explicit actions. Read cached tab identity and validate the target without rescanning unrelated unread indicators for every switch.
-- [ ] Preserve stable tab identity, topology checks, moved/closed-tab handling, and exact post-focus confirmation. Avoid retaining mutable tab indexes as the authority.
-- [ ] Handle send failures and transport congestion explicitly. Add bounded reply retry/status reconciliation without replaying input or making unbounded queues.
+- [x] Separate background catalog refresh from foreground selection state. Accept a tap immediately even when a refresh is running, display the requested destination, and execute it as soon as the current safe operation finishes.
+- [x] Coalesce repeated taps to the same destination. If the user chooses another destination while waiting, retain the newest explicit choice with a sequence number and reject stale acknowledgements.
+- [x] Keep the current selection marked as confirmed until the Mac acknowledges the new selection. A background response at the same topology revision must not overwrite a newer focus result.
+- [x] Consolidate polling, coalesce overlapping refreshes, and pause/defer low-priority refresh work around explicit actions. Read cached tab identity and validate the target without rescanning unrelated unread indicators for every switch.
+- [x] Preserve stable tab identity, topology checks, moved/closed-tab handling, and exact post-focus confirmation. Avoid retaining mutable tab indexes as the authority.
+- [x] Handle send failures and transport congestion explicitly. Add bounded reply retry/status reconciliation without replaying input or making unbounded queues.
 
 Exit evidence: timed phone-to-Mac switching across multiple live tabs, including taps during refresh, repeated taps, rapid changes of destination, long-running sessions, closed/reordered tabs, and reconnect. A single accepted tap must reach the intended tab without repeat tapping. Immediate local feedback should be visible within 100 ms; record median and p95 completion times, targeting p95 under two seconds on a healthy connection after catalog warmup.
 
@@ -52,23 +54,23 @@ Exit evidence: timed phone-to-Mac switching across multiple live tabs, including
 User-facing behavior:
 
 - [ ] Show each visible Terminal tab strip in its real left-to-right order. Selecting a tab, receiving new output, reading an answer, and refreshing leave that order intact.
-- [ ] Reconcile the Mac's scripting catalog with the actual visible tab bar, including native grouped windows where applicable. Keep selection/frontmost state separate from order so an ordinary focus change does not change the order revision.
-- [ ] For multiple independent windows, use stable window groups with the native tab order inside each group. Keep group placement stable when another window comes forward; avoid treating desktop stacking order as a shared tab order. Window grouping can remain unobtrusive for a single window.
+- [x] Reconcile the Mac's scripting catalog with the actual visible tab bar, including native grouped windows where applicable. Keep selection/frontmost state separate from order so an ordinary focus change does not change the order revision.
+- [x] For multiple independent windows, use stable window groups with the native tab order inside each group. Keep group placement stable when another window comes forward; avoid treating desktop stacking order as a shared tab order. Window grouping can remain unobtrusive for a single window.
 - [ ] Add a clearly visible drag handle on the trailing side of each picker row. Tapping the row focuses its tab; holding and dragging the handle lifts the row with haptic feedback, an insertion marker, and edge auto-scroll. Keep normal list scrolling easy.
-- [ ] Send one reorder request on drop. Preview the destination immediately, then adopt the order confirmed by Terminal. After a timeout or rejection, read back the actual order before resolving the pending UI; do not blindly repeat a move or apply an undo against potentially newer Mac changes.
-- [ ] Preserve the active tab/conversation when reorganizing another tab, and retain input/speech ownership by stable tab identity rather than row position. A position-only change should not select another conversation or restart a terminal process.
+- [x] Send one reorder request on drop. Preview the destination immediately, then adopt the order confirmed by Terminal. After a timeout or rejection, read back the actual order before resolving the pending UI; do not blindly repeat a move or apply an undo against potentially newer Mac changes.
+- [x] Preserve the active tab/conversation when reorganizing another tab, and retain input/speech ownership by stable tab identity rather than row position. A position-only change should not select another conversation or restart a terminal process.
 - [ ] Reflect a drag performed directly on the Mac in the iPhone picker. Opening/closing tabs updates their actual positions; titles and unread markers do not sort the list.
-- [ ] Provide accessible Move up/Move down actions in addition to the drag gesture, with the same confirmed Mac operation. Preserve Back/Escape behavior and focus when exiting the picker.
+- [x] Provide accessible Move up/Move down actions in addition to the drag gesture, with the same confirmed Mac operation. Preserve Back/Escape behavior and focus when exiting the picker.
 
 Mac capability and protocol work:
 
 - [ ] Prove a reliable move of an existing Terminal tab in a controlled test session before enabling the drag control. The installed `Terminal.sdef` describes window `index` as front-to-back order; its tab collection is read-only and exposes no tab-position setter. A generic `move` command exists in the dictionary, but its presence does not establish that moving live tabs is supported. Validate the actual command or supported native UI operation and read back the result.
-- [ ] Keep running shells/agents intact throughout the move. The implementation must move the existing tab and preserve its identity/session contents.
-- [ ] Add structured window/group identity and native tab position to the protocol; the current human-readable `detail` label is insufficient as a machine identity. Advertise verified reorder capability and handle older hosts explicitly.
-- [ ] Address moves by stable source-tab ID, destination neighbor ID, group ID, expected order revision, and request ID. Validate the source/target again when executing. If either changed or closed, reconcile and report the result without moving an unintended row.
-- [ ] Run focus and reorder operations through the same bounded foreground scheduler, with catalog/unread polling deferred during drag/commit. Keep stale acknowledgements and same-revision older snapshots from overwriting a newer confirmed order.
+- [x] Keep running shells/agents intact throughout the move. The implementation must move the existing tab and preserve its identity/session contents.
+- [x] Add structured window/group identity and native tab position to the protocol; the current human-readable `detail` label is insufficient as a machine identity. Advertise verified reorder capability and handle older hosts explicitly.
+- [x] Address moves by stable source-tab ID, destination neighbor ID, group ID, expected order revision, and request ID. Validate the source/target again when executing. If either changed or closed, reconcile and report the result without moving an unintended row.
+- [x] Run focus and reorder operations through the same bounded foreground scheduler, with catalog/unread polling deferred during drag/commit. Keep stale acknowledgements and same-revision older snapshots from overwriting a newer confirmed order.
 
-Scope recommendation pending the user's window preference: first support reordering within each real window/tab group. Moving a tab between independent windows would change its membership and needs separate identity, focus, empty-window, and rollback/reconciliation acceptance. The optional question about that scope has been presented; no answer is assumed.
+Implemented scope: reordering within each real window/tab group. Moving a tab between independent windows would change its membership and needs separate identity, focus, empty-window, and rollback/reconciliation acceptance. Cross-window moves remain outside this release.
 
 Exit evidence: after repeated selection of different tabs/windows, the row order stays fixed; moving a real Mac tab changes the picker to match; dragging first/middle/last rows on the phone produces the same actual Terminal order; opening/closing/reordering during a drag and disconnecting during commit never moves the wrong tab. Verify duplicate titles, many tabs/auto-scroll, preserved active input/TTS target, accessibility actions, and increased text size. Compare the visible Mac tab strip and phone together. The existing live agent sessions must remain running and unchanged.
 
@@ -77,26 +79,26 @@ This proposal follows the [macOS convention of dragging tabs to reorder them](ht
 ## 2. Restore Read Aloud end to end
 
 - [ ] Reproduce both latest-response and selected-text reading on the actual iPhone. Also check the main conversation speaker to distinguish a shared speech failure from the new Terminal reader.
-- [ ] Expose distinct stages: finding response, preparing audio on Mac, receiving audio, and playing. Every failure stage needs a specific recovery action and preserved source text.
-- [ ] Serialize or coalesce catalog/reader work so a normal refresh does not make an explicit read fail with a busy response. Avoid redundant catalog scans while retaining selected-tab/turn ownership validation.
+- [x] Expose response lookup, local speech startup, playing, paused, stopped, and failure states while preserving the source text. Native iPhone speech replaces the separate Mac audio transfer for Remote Assist.
+- [x] Serialize or coalesce catalog/reader work so a normal refresh does not make an explicit read fail with a busy response. Avoid redundant catalog scans while retaining selected-tab/turn ownership validation.
 - [ ] Verify host binding, request IDs, signed envelopes, readiness transitions, chunk limits/order, complete receipts, and cancellation when switching tabs/computers or disconnecting.
-- [ ] Handle failed/oversized response sends and use bounded chunks where needed. Never truncate an answer silently or substitute another tab's response.
-- [ ] Audit the separate speech connection and reset reconnect backoff after an established healthy connection. Report loss of that connection while remote video remains available.
+- [x] Handle failed/oversized response sends and use bounded chunks where needed. Never truncate an answer silently or substitute another tab's response.
+- [x] Audit the separate speech connection and reset reconnect backoff after an established healthy connection. Report loss of that connection while remote video remains available.
 - [ ] Verify the iPhone audio session after microphone use, interruption, background/foreground transitions, and changes between speaker and headphones. Coordinate recorder/playback ownership if a conflict is reproduced.
-- [ ] Once reliability is established, allow playback from complete early audio parts when feasible and reuse local cached audio. Maintain local speech processing as the default.
+- [x] Start Remote Assist speech locally on iPhone once its complete, verified response text arrives. This removes cloud audio preparation and chunk assembly from this path.
 
 Exit evidence: physically hear the correct completed answer from two distinct tabs, including one with a long thread; verify selected-text fallback, previous-completed-turn labeling, pause/resume/stop, and reading immediately after dictation. Record request stage timings and test interruption/reconnect. Synthetic audio generation and simulator previews are supporting checks only.
 
 ## 3. Repair Use on Mac and the recording control
 
-- [ ] Make unavailable delivery explain itself: connection, host capability, display transition, another clipboard action, or a draft belonging to another computer. Keep the draft editable/recoverable after errors.
-- [ ] Trace the exact delivery request and receipt over the data channel. Reconcile an ambiguous timeout before offering a retry that could duplicate text; retain deduplication across the supported retry lifecycle.
-- [ ] Write and verify the Mac clipboard before attempting insertion. At delivery time, use the currently focused eligible input; with no eligible input, report clipboard-only success clearly.
-- [ ] Verify the real paste outcome where the target exposes it. Where verification is unavailable, use an accurate delivery status rather than treating posted keystrokes as proof of inserted text.
-- [ ] Keep Copy to iPhone available independently. Preserve the user's transcript and never press Enter/submit a terminal command automatically.
+- [x] Make unavailable delivery explain itself: connection, host capability, display transition, another clipboard action, or a draft belonging to another computer. Keep the draft editable/recoverable after errors.
+- [x] Match the exact delivery request and receipt over the data channel. Reconcile an ambiguous timeout before offering a retry that could duplicate text; retain deduplication across the supported retry lifecycle.
+- [x] Write and verify the Mac clipboard before attempting insertion. At delivery time, use the currently focused eligible input; with no eligible input, report clipboard-only success clearly.
+- [x] Verify the real paste outcome where the target exposes it. Where verification is unavailable, use an accurate delivery status rather than treating posted keystrokes as proof of inserted text.
+- [x] Keep Copy to iPhone available independently. Preserve the user's transcript and never press Enter/submit a terminal command automatically.
 - [ ] Reproduce the square around the recording icon in idle, recording, pressed, permission, and transcription states on the actual iOS build. Check both the Remote Assist mic and the main composer control.
 - [ ] Correct the specific background, clipping, focus, or animation defect after reproduction. Retain a recognizable Stop control, recording feedback, adequate tap target, and accessibility behavior.
-- [ ] Ensure Back/Cancel return to Remote Assist without discarding the reviewed transcript unexpectedly or leaving microphone capture running.
+- [x] Ensure Back/Cancel return to Remote Assist without discarding the reviewed transcript unexpectedly or leaving microphone capture running.
 
 Exit evidence: one-tap delivery into Terminal and a normal Mac text field; clipboard-only delivery with no eligible field; Copy to iPhone; retry after interruption without duplicate insertion; Unicode and multiline text; visual review of each recording state and larger text settings. These cases must exercise real delivery rather than DEBUG preview fixtures.
 
@@ -104,29 +106,29 @@ Exit evidence: one-tap delivery into Terminal and a normal Mac text field; clipb
 
 ### Canonical records and storage
 
-- [ ] Create one local library catalog under the Mac's ClawDad application-support directory, with stable deliverable IDs, display names, project/source-conversation references, versions, format variants, sizes, hashes, and completion state.
-- [ ] Keep original project files at their existing canonical paths. Store a completed local snapshot for each delivered version so later project edits/moves do not break a previously delivered download. Both apps address the same deliverable/version IDs.
-- [ ] Register completed deliverables through an explicit agent handoff action plus a manual Add to Files action. Support terminal-driven agent sessions through that same handoff mechanism; merely observing a changed file is insufficient.
-- [ ] Validate file existence/completion and publish atomically. Deduplicate identical delivered versions; group revisions and related formats under the same item.
-- [ ] Treat existing `.clawdad/artifacts` contents as import candidates with a controlled import preview. Avoid auto-importing every historical report or changing external sharing behavior as a side effect.
+- [x] Create one local library catalog under the Mac's ClawDad application-support directory, with stable deliverable IDs, display names, project/source-conversation references, versions, format variants, sizes, hashes, and completion state.
+- [x] Keep original project files at their existing canonical paths. Store a completed local snapshot for each delivered version so later project edits/moves do not break a previously delivered download. Both apps address the same deliverable/version IDs.
+- [x] Register completed deliverables through an explicit agent handoff action plus a manual Add to Files action. Support terminal-driven agent sessions through that same handoff mechanism; merely observing a changed file is insufficient.
+- [x] Validate file existence/completion and publish atomically. Deduplicate identical delivered versions; group revisions and related formats under the same item.
+- [x] Treat existing `.clawdad/artifacts` contents as import candidates with a controlled import preview. Avoid auto-importing every historical report or changing external sharing behavior as a side effect.
 
 ### Discovery and phone use
 
-- [ ] Evolve the desktop Files space and add matching iPhone access, including a Files shortcut from Remote Assist.
-- [ ] Default to recent deliverables across projects. Add search by title/filename/project, simple type/project filters, pinning, and archive. Show source context and the latest delivered version; keep earlier versions one level deeper.
-- [ ] Add preview, download/keep on phone, export to Apple Files/share, and desktop open/reveal actions. Use visible Back behavior and restore the previous context.
-- [ ] Fetch only requested files/previews. Cache metadata and explicitly retained downloads locally with clear availability and storage-use controls.
-- [ ] Removing a phone download only removes that local copy. Removing/archiving a library item preserves original project files; deletion of managed versions must have an explicit scope.
+- [x] Evolve the desktop Files space and add matching iPhone access, including a Files shortcut from Remote Assist.
+- [x] Default to recent deliverables across projects. Add search by title/filename/project, simple type/project filters, pinning, and archive. Show source context and the latest delivered version; keep earlier versions one level deeper.
+- [x] Add preview, download/keep on phone, export to Apple Files/share, and desktop open/reveal actions. Use visible Back behavior and restore the previous context.
+- [x] Fetch only requested files/previews. Cache metadata and explicitly retained downloads locally with clear availability and storage-use controls.
+- [x] Removing a phone download only removes that local copy. Removing/archiving a library item preserves original project files; deletion of managed versions must have an explicit scope.
 
 ### Paired transfer and resource limits
 
-- [ ] Add a file-only paired connection usable from the ordinary Files screen without starting screen capture or remote-control mode. Reuse existing device authentication, revocation, and host selection.
-- [ ] Prefer direct authenticated device transfer. Keep bulk transfer separate from interactive control messages and prioritize Terminal/clipboard actions over downloads.
-- [ ] Download by authorized deliverable/version ID. Revalidate ownership and file identity; do not expose a general arbitrary-path download endpoint.
-- [ ] Use bounded chunks, backpressure, progress, cancellation, resumable offsets, and final hash verification. Publish the completed phone file only after verification.
-- [ ] Keep file bytes and library payloads out of durable cloud storage. Use existing cloud infrastructure for signaling and only necessary transient relay traffic.
+- [x] Add a file-only paired connection usable from the ordinary Files screen without starting screen capture or remote-control mode. Reuse existing device authentication, revocation, and host selection.
+- [x] Prefer direct authenticated device transfer. Keep bulk transfer separate from interactive control messages and prioritize Terminal/clipboard actions over downloads.
+- [x] Download by authorized deliverable/version ID. Revalidate ownership and file identity; do not expose a general arbitrary-path download endpoint.
+- [x] Use bounded chunks, backpressure, progress, cancellation, resumable offsets, and final hash verification. Publish the completed phone file only after verification.
+- [x] Keep file bytes and library payloads out of durable cloud storage. Use existing cloud infrastructure for signaling and only necessary transient relay traffic.
 - [ ] Apply existing TURN controls to any relayed file connection, add transfer-level accounting/limits, and show when a transfer is paused by budget. Reconcile analytics delay and active credential lifetime when assessing enforcement; do not promise a zero-cloud-cost path on every network.
-- [ ] Avoid background mirroring, automatic full-library downloads, unnecessary full-catalog scans, and cloud indexing/AI processing. Generate thumbnails/search indexes locally and lazily.
+- [x] Avoid background mirroring, automatic full-library downloads, unnecessary full-catalog scans, and cloud indexing/AI processing. Generate thumbnails/search indexes locally and lazily.
 
 Exit evidence: an agent delivers a file from a normal conversation and a Terminal session; it appears once in both apps; the phone previews/exports identical bytes; a new version stays grouped; ordinary source edits add no library entries; an interrupted download resumes correctly; a retained phone copy opens with both devices offline. Verify relay usage/accounting on a controlled connection before enabling bulk fallback.
 
@@ -139,7 +141,7 @@ Exit evidence: an agent delivers a file from a normal conversation and a Termina
 5. Implement the local Files catalog, deliberate handoff, desktop/mobile views, and on-demand transfer as the next bounded change. Share the proven transport reliability work without making the speech repair wait for Files.
 6. Verify the full file delivery/download flow, resource use, and repository hygiene before its native release.
 
-This request authorizes the audit and consolidated plan. Implementation/release tasks above are the next work; none are claimed complete by this document.
+The subsequent user instruction authorized implementation and production release through the installed Mac and Internal TestFlight channels. The release report separates automated evidence from physical acceptance. File relay fallback remains disabled pending controlled usage/accounting verification.
 
 ## Implementation references
 

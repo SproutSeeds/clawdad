@@ -26,6 +26,13 @@ final class MobileReadAloudController: NSObject, ObservableObject {
   private var receivedBytes = 0
   private var player: AVAudioPlayer?
   private var timeoutTask: Task<Void, Never>?
+  private let localSpeaker: any MobileSpeechEngine
+  private var localSpeechActive = false
+
+  init(localSpeaker: (any MobileSpeechEngine)? = nil) {
+    self.localSpeaker = localSpeaker ?? AppleMobileSpeechEngine()
+    super.init()
+  }
 
   private let maximumAudioBytes = 256 * 1024 * 1024
   private let maximumChunkBytes = 512 * 1024
@@ -64,6 +71,45 @@ final class MobileReadAloudController: NSObject, ObservableObject {
       return
     }
     statusMessage = "Preparing audio on your paired computer..."
+  }
+
+  /// Remote Assist already transferred the exact text over the paired channel.
+  /// Speak that text on this device without relaying generated audio.
+  func toggleLocalSpeech(key: String, text: String) {
+    if activeKey == key, phase == .playing { pause(); return }
+    if activeKey == key, phase == .paused { resume(); return }
+    if activeKey == key, phase == .preparing { return }
+    stop()
+    let spoken = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !spoken.isEmpty else {
+      showFailure(key: key, message: "There is no text available to read aloud.")
+      return
+    }
+    activeKey = key
+    do {
+      try activatePlaybackSession()
+      localSpeechActive = true
+      phase = .preparing
+      statusMessage = "Starting iPhone voice…"
+      try localSpeaker.start(text: spoken, onStart: { [weak self] in
+        guard let self, self.localSpeechActive, self.activeKey == key else { return }
+        self.timeoutTask?.cancel()
+        self.timeoutTask = nil
+        self.phase = .playing
+        self.statusMessage = "Reading on iPhone"
+      }, onFinish: { [weak self] successful in
+        guard let self, self.localSpeechActive, self.activeKey == key else { return }
+        if successful { self.finishPlayback() }
+        else { self.showFailure(key: key, message: "Speech was interrupted. Tap Play to restart.") }
+      })
+      timeoutTask = Task { @MainActor [weak self] in
+        try? await Task.sleep(nanoseconds: 10_000_000_000)
+        guard !Task.isCancelled, let self, self.phase == .preparing else { return }
+        self.showFailure(key: key, message: "The iPhone voice did not start. Tap Play to try again.")
+      }
+    } catch {
+      showFailure(key: key, message: "The iPhone could not start speech: \(error.localizedDescription)")
+    }
   }
 
   func receiveChunk(
@@ -154,6 +200,13 @@ final class MobileReadAloudController: NSObject, ObservableObject {
   }
 
   func pause() {
+    if phase == .playing, localSpeechActive {
+      if localSpeaker.pause() {
+        phase = .paused
+        statusMessage = "Audio paused"
+      }
+      return
+    }
     guard phase == .playing, let player else {
       return
     }
@@ -163,6 +216,15 @@ final class MobileReadAloudController: NSObject, ObservableObject {
   }
 
   func resume() {
+    if phase == .paused, localSpeechActive {
+      do {
+        try activatePlaybackSession()
+        guard localSpeaker.resume() else { throw URLError(.cannotOpenFile) }
+        phase = .playing
+        statusMessage = "Reading on iPhone"
+      } catch { showFailure(key: activeKey, message: "The iPhone could not resume speech. Tap Play to restart.") }
+      return
+    }
     guard phase == .paused, let player else {
       return
     }
@@ -332,6 +394,8 @@ final class MobileReadAloudController: NSObject, ObservableObject {
   private func resetPlayback() {
     timeoutTask?.cancel()
     timeoutTask = nil
+    localSpeechActive = false
+    localSpeaker.stop()
     player?.stop()
     player = nil
     requestId = ""
@@ -394,7 +458,7 @@ final class CloudSession: ObservableObject {
     var refreshHistory: Bool
   }
 
-  let readAloud = MobileReadAloudController()
+  let readAloud: MobileReadAloudController
 
   @Published var cloudUrl: String {
     didSet { defaults.set(cloudUrl, forKey: "clawdad.cloudUrl") }
@@ -500,6 +564,7 @@ final class CloudSession: ObservableObject {
   private var legacyRelayToken = ""
   private var lastEntitlementFingerprint = ""
   private var remoteAssistEnvelopeHandler: ((CloudEnvelope) -> Void)?
+  private var filesEnvelopeHandler: ((CloudEnvelope) -> Void)?
   private var connectionRequested = true
   private var reconnectAttempt = 0
   private var lastRelayPongAt = Date.distantPast
@@ -509,7 +574,8 @@ final class CloudSession: ObservableObject {
   private let envelopeSender: EnvelopeSender?
   private var appStorePreviewMode = false
 
-  init(defaults: UserDefaults = .standard, envelopeSender: EnvelopeSender? = nil) {
+  init(defaults: UserDefaults = .standard, readAloud: MobileReadAloudController? = nil, envelopeSender: EnvelopeSender? = nil) {
+    self.readAloud = readAloud ?? MobileReadAloudController()
     self.defaults = defaults
     self.envelopeSender = envelopeSender
     let bundledCloudUrl = String(
@@ -592,6 +658,7 @@ final class CloudSession: ObservableObject {
 
 #if DEBUG
   init(appStorePreview fixture: ClawDadAppStorePreviewFixture) {
+    self.readAloud = MobileReadAloudController()
     self.defaults = .standard
     self.envelopeSender = nil
     self.cloudUrl = "https://clawdad-cloud.frg.earth"
@@ -1404,8 +1471,7 @@ final class CloudSession: ObservableObject {
   }
 
   func toggleRemoteReadAloud(key: String, text: String) {
-    toggleSpeech(key: key, text: text, projectPath: "", sessionId: "",
-                 historyRequestId: "", kind: .response, remoteAssist: true)
+    readAloud.toggleLocalSpeech(key: key, text: text)
   }
 
   private func toggleSpeech(
@@ -1484,6 +1550,10 @@ final class CloudSession: ObservableObject {
 
   func setRemoteAssistEnvelopeHandler(_ handler: ((CloudEnvelope) -> Void)?) {
     remoteAssistEnvelopeHandler = handler
+  }
+
+  func setFilesEnvelopeHandler(_ handler: ((CloudEnvelope) -> Void)?) {
+    filesEnvelopeHandler = handler
   }
 
   func syncEntitlement(
@@ -2194,6 +2264,7 @@ final class CloudSession: ObservableObject {
         return
       }
       remoteAssistEnvelopeHandler?(envelope)
+      filesEnvelopeHandler?(envelope)
     case "error":
       sessionCreatePending = false
       let message = envelope.body["error"]?.stringValue ?? "Cloud error"

@@ -9,7 +9,6 @@ struct RemoteDictationPanel: View {
   @StateObject private var recorder = VoiceRecorder()
   @Environment(\.scenePhase) private var scenePhase
   @FocusState private var editorFocused: Bool
-  @State private var pulse = false
 
   private var recording: Bool { recorder.state == .recording }
   private var captureBusy: Bool { recorder.state != .idle || draft.transcribing }
@@ -49,18 +48,13 @@ struct RemoteDictationPanel: View {
 
           HStack(spacing: 14) {
             Button(action: toggleRecording) {
-              ZStack {
-                if recording {
-                  Circle().stroke(ClawDadTheme.peach.opacity(0.7), lineWidth: 2)
-                    .scaleEffect(pulse ? 1.25 : 0.9)
-                    .opacity(pulse ? 0 : 1)
-                }
-                Image(systemName: recording ? "stop.fill" : "mic.fill")
-                  .font(.title3.weight(.bold))
-              }
+              Image(systemName: recording ? "stop.fill" : "mic.fill")
+                .font(.title3.weight(.bold))
               .frame(width: 48, height: 48)
+              .contentShape(Circle())
             }
             .buttonStyle(ClawDadVoiceButtonStyle(recording: recording))
+            .clipShape(Circle())
             .disabled(draft.transcribing || draft.sending || recorder.state == .requestingPermission)
             .accessibilityLabel(recording ? "Stop recording and transcribe" : "Record dictation")
             .accessibilityIdentifier("clawdad.remote.dictation.record")
@@ -142,14 +136,9 @@ struct RemoteDictationPanel: View {
     .background(ClawDadTheme.background)
     .task {
       if !hasText, !draft.hasRecording, !draft.transcribing {
+        controller.prepareForRemoteDictation()
         draft.beginRecording()
         await recorder.start()
-      }
-    }
-    .onChange(of: recorder.state) { _, state in
-      pulse = false
-      if state == .recording {
-        withAnimation(.easeOut(duration: 1).repeatForever(autoreverses: false)) { pulse = true }
       }
     }
     .onChange(of: scenePhase) { _, phase in
@@ -176,6 +165,8 @@ struct RemoteDictationPanel: View {
     if !controller.supportsRemoteDictation {
       return "This computer needs a ClawDad update to receive dictation. You can copy the text to your iPhone."
     }
+    if controller.remoteInputSuppressed { return "Finishing the display change. Your draft is saved; Use on Mac will be available when it completes." }
+    if controller.clipboardBusy { return "Waiting for the previous clipboard request. Your draft is saved." }
     return "Inserts into the focused text field, or copies to the computer clipboard for later. Enter is a separate control."
   }
 
@@ -185,6 +176,7 @@ struct RemoteDictationPanel: View {
       do { draft.transcribe(try recorder.stop()) }
       catch { recorder.present(error) }
     } else {
+      controller.prepareForRemoteDictation()
       draft.beginRecording()
       Task { await recorder.start() }
     }

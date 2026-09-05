@@ -277,8 +277,9 @@ _artifact_augmented_message() {
     printf '%s\n' "$message"
     return 0
   fi
-  local artifact_dir="${CLAWDAD_ARTIFACTS_DIR:-$project_path/.clawdad/artifacts}"
-  printf '%s\n\n%s\n' "$message" "[Clawdad artifact handoff: If you create a deliverable file the user explicitly requested to download or share, save it under '$artifact_dir' using a clear filename. Create that folder if needed. Mention the saved filename in your final reply. Clawdad will send requested files from that folder to the project's Dumpy party.]"
+  local artifact_dir="$project_path/.clawdad/deliverables"
+  local files_cli="$CLAWDAD_ROOT/bin/clawdad"
+  printf '%s\n\n%s\n' "$message" "[Clawdad artifact handoff: Save final requested deliverables under ${(q)artifact_dir}. Register each final file in the local ClawDad Files library with ${(q)files_cli} files add /absolute/path/to/file --project ${(q)project_path}. Mention the saved filename in your final reply. Ordinary source edits and temporary files stay outside Files. The Mac keeps the canonical copy; paired phones download on demand.]"
 }
 
 _attachment_augmented_message() {

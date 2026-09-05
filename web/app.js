@@ -18477,4 +18477,6 @@ function showBootFailure(error) {
   document.body.replaceChildren(message);
 }
 
+import { installFilesLibrary } from "./files-library.js";
+installFilesLibrary({ request: fetchJson, native: nativeBridge, currentProject });
 boot().catch(showBootFailure);

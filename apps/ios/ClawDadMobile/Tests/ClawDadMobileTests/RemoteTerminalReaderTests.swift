@@ -4,14 +4,15 @@ import XCTest
 
 @MainActor
 final class RemoteTerminalReaderTests: XCTestCase {
-  private var sent: [[String: JSONValue]] = []
+  private var sent: [String] = []
 
   private func setupReader() -> (CloudSession, RemoteTerminalReader) {
     let domain = "RemoteTerminalReaderTests.\(UUID().uuidString)"
     let defaults = UserDefaults(suiteName: domain)!
     addTeardownBlock { UserDefaults.standard.removePersistentDomain(forName: domain) }
-    let session = CloudSession(defaults: defaults) { [weak self] type, body, _ in
-      if type == "speech.synthesize.request" { self?.sent.append(body) }
+    let speaker = ReaderTestSpeaker { [weak self] text in self?.sent.append(text) }
+    let session = CloudSession(defaults: defaults, readAloud: MobileReadAloudController(localSpeaker: speaker)) { type, _, _ in
+      XCTFail("Remote Assist speech must stay local, received cloud request: \(type)")
     }
     session.hostId = "test-mac"
     session.pairedHostId = "test-mac"
@@ -35,7 +36,7 @@ final class RemoteTerminalReaderTests: XCTestCase {
 
   private func drain() async { for _ in 0..<20 { await Task.yield() } }
 
-  func testLatestAnswerUsesExistingAudioWithoutComposerProjectOrHistory() async {
+  func testLatestAnswerSpeaksExactTextLocallyWithoutComposerOrCloud() async {
     let (session, reader) = setupReader()
     defer { session.readAloud.stop() }
     session.selectedProjectPath = "/unrelated-project"
@@ -44,10 +45,7 @@ final class RemoteTerminalReaderTests: XCTestCase {
     XCTAssertTrue(reader.receive(result(), selectedTabId: "selected-tab"))
     await drain()
     XCTAssertEqual(sent.count, 1)
-    XCTAssertEqual(sent[0]["text"]?.stringValue, "The exact latest answer 🦞.")
-    XCTAssertEqual(sent[0]["source"]?.stringValue, "remote-assist")
-    XCTAssertEqual(sent[0]["project"]?.stringValue, "")
-    XCTAssertEqual(sent[0]["historyRequestId"]?.stringValue, "")
+    XCTAssertEqual(sent.first, "The exact latest answer 🦞.")
     XCTAssertEqual(reader.title, "ClawDad")
     XCTAssertFalse(reader.receive(result(), selectedTabId: "selected-tab"))
     XCTAssertEqual(sent.count, 1)
@@ -99,7 +97,7 @@ final class RemoteTerminalReaderTests: XCTestCase {
     XCTAssertTrue(reader.receiveSelection(requestId: "new", text: "Selected exact text"))
     await drain()
     XCTAssertEqual(sent.count, 1)
-    XCTAssertEqual(sent[0]["text"]?.stringValue, "Selected exact text")
+    XCTAssertEqual(sent.first, "Selected exact text")
     XCTAssertEqual(reader.title, "Selected Mac text")
   }
 
@@ -116,4 +114,14 @@ final class RemoteTerminalReaderTests: XCTestCase {
     reader.invalidate()
     XCTAssertEqual(session.readAloud.activeKey, "composer")
   }
+}
+
+@MainActor
+private final class ReaderTestSpeaker: MobileSpeechEngine {
+  let received: (String) -> Void
+  init(_ received: @escaping (String) -> Void) { self.received = received }
+  func start(text: String, onStart: @escaping () -> Void, onFinish: @escaping (Bool) -> Void) throws { received(text); onStart() }
+  func pause() -> Bool { true }
+  func resume() -> Bool { true }
+  func stop() {}
 }

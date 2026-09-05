@@ -92,6 +92,8 @@ final class RemoteAssistHost: NSObject {
   static let enabledDefaultsKey = "clawdad.remoteAssist.enabled"
 
   var onStatusChange: ((RemoteAssistHostStatus) -> Void)?
+  var filesRuntime: MacFilesRuntime?
+  private var filesSession: MacFilesSession?
 
   private let factory: RTCPeerConnectionFactory
   private var socket: URLSessionWebSocketTask?
@@ -158,9 +160,6 @@ final class RemoteAssistHost: NSObject {
 
   func startIfEnabled() {
     publishStatus()
-    guard enabled else {
-      return
-    }
     connectIfNeeded()
   }
 
@@ -173,7 +172,6 @@ final class RemoteAssistHost: NSObject {
       connectIfNeeded()
     } else {
       stopActiveSession(reason: "Remote Assist was turned off on the Mac.")
-      disconnectRelay()
     }
     publishStatus()
   }
@@ -237,6 +235,8 @@ final class RemoteAssistHost: NSObject {
   }
 
   func stop() {
+    filesSession?.stop()
+    filesSession = nil
     stopActiveSession(
       reason: "ClawDad closed on the Mac.",
       notifyPhone: true
@@ -245,7 +245,7 @@ final class RemoteAssistHost: NSObject {
   }
 
   private func connectIfNeeded() {
-    guard enabled, socket == nil, reconnectTask == nil else {
+    guard socket == nil, reconnectTask == nil else {
       return
     }
 
@@ -335,6 +335,15 @@ final class RemoteAssistHost: NSObject {
     }
     rememberEnvelope(envelope.id)
 
+    if envelope.type == "remote.assist.request", envelope.body["purpose"]?.stringValue == "files" {
+      handleFilesRequest(envelope)
+      return
+    }
+    if envelope.body["sessionId"]?.stringValue == filesSession?.id {
+      filesSession?.handle(envelope)
+      return
+    }
+
     switch envelope.type {
     case "remote.assist.request":
       handleRequest(envelope, configuration: configuration)
@@ -353,6 +362,38 @@ final class RemoteAssistHost: NSObject {
       )
     default:
       break
+    }
+  }
+
+  private func handleFilesRequest(_ envelope: RemoteCloudEnvelope) {
+    guard let id = envelope.body["sessionId"]?.stringValue, UUID(uuidString: id) != nil else { return }
+    guard let runtime = filesRuntime else {
+      sendError("The Mac Files library is starting. Try again shortly.", code: "files_starting", sessionId: id, targetDeviceId: envelope.sourceDeviceId)
+      return
+    }
+    if filesSession?.id == id, filesSession?.deviceId == envelope.sourceDeviceId { return }
+    if let current = filesSession, current.deviceId != envelope.sourceDeviceId {
+      sendError("Another paired device is using Files. Try again shortly.", code: "files_busy", sessionId: id, targetDeviceId: envelope.sourceDeviceId)
+      return
+    }
+    filesSession?.stop()
+    let session = MacFilesSession(id: id, deviceId: envelope.sourceDeviceId, runtime: runtime) { [weak self] type, body in
+      guard let self, self.filesSession?.id == id else { throw RemoteAssistHostError.relayUnavailable }
+      try await self.sendRemoteEnvelope(type: type, body: body, targetDeviceId: envelope.sourceDeviceId)
+    }
+    filesSession = session
+    session.onStop = { [weak self, weak session] in
+      guard let self, let session, self.filesSession === session else { return }
+      session.stop(); self.filesSession = nil
+      Task { try? await self.sendRemoteEnvelope(type: "remote.assist.stop", body: ["sessionId": .string(id), "reason": .string("The file connection ended. Reconnect to resume.")], targetDeviceId: envelope.sourceDeviceId) }
+    }
+    Task {
+      do { try await session.start() }
+      catch {
+        guard filesSession === session else { return }
+        sendError(error.localizedDescription, code: "files_connection_failed", sessionId: id, targetDeviceId: envelope.sourceDeviceId)
+        session.stop(); filesSession = nil
+      }
     }
   }
 
@@ -817,7 +858,7 @@ final class RemoteAssistHost: NSObject {
   }
 
   private func scheduleReconnect() {
-    guard enabled, reconnectTask == nil else {
+    guard reconnectTask == nil else {
       return
     }
     reconnectAttempt += 1

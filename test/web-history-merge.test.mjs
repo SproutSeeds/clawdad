@@ -888,7 +888,7 @@ test("Remote Assist lists and focuses Terminal tabs without reading terminal con
   assert.match(terminalTabProtocolSource, /hasUnreadActivity/u);
   assert.match(macPeerSource, /MacTerminalTabController\(\)/u);
   assert.match(macTerminalTabsSource, /NSRunningApplication\.runningApplications/u);
-  assert.match(macTerminalTabsSource, /set selected tab of targetWindow to tab/u);
+  assert.match(macTerminalTabsSource, /set selected tab of targetWindow to targetTab/u);
   assert.match(macTerminalTabsSource, /set frontmost of targetWindow to true/u);
   assert.match(macTerminalTabsSource, /Privacy_Automation/u);
   assert.match(macTerminalTabsSource, /AEDeterminePermissionToAutomateTarget/u);

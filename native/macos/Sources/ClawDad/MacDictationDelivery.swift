@@ -5,6 +5,7 @@ import Foundation
 /// Receipts prevent a retried request from inserting the same text twice.
 @MainActor
 final class MacDictationDelivery {
+  static let shared = MacDictationDelivery()
   private var receipts: [String: (text: String, response: RemoteClipboardMessage)] = [:]
   private var receiptOrder: [String] = []
 
@@ -12,6 +13,14 @@ final class MacDictationDelivery {
     _ message: RemoteClipboardMessage,
     copy: (String) -> Bool,
     insert: (String) -> Bool
+  ) -> RemoteClipboardMessage {
+    deliver(message, copy: copy, insertWithReceipt: { insert($0) ? .inserted : .copied })
+  }
+
+  func deliver(
+    _ message: RemoteClipboardMessage,
+    copy: (String) -> Bool,
+    insertWithReceipt: (String) -> RemoteDictationDisposition
   ) -> RemoteClipboardMessage {
     guard message.action == .dictation,
           message.type == RemoteClipboardMessage.commandType,
@@ -33,7 +42,7 @@ final class MacDictationDelivery {
     }
     let response = RemoteClipboardMessage.success(
       action: .dictation, requestId: message.requestId,
-      disposition: insert(text) ? .inserted : .copied
+      disposition: insertWithReceipt(text)
     )
     receipts[message.requestId] = (text, response)
     receiptOrder.append(message.requestId)

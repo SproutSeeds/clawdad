@@ -15,7 +15,7 @@ test("delegate prompts only include artifact handoff for explicit file requests"
   const dispatchShellSource = await readFile(path.join(repoRoot, "lib", "dispatch.sh"), "utf8");
   assert.match(source, /function textRequestsArtifactHandoff\(\.\.\.values\)/u);
   assert.match(source, /function artifactHandoffPrompt\(project\)/u);
-  assert.match(source, /If the user explicitly requested a downloadable\/shareable file/u);
+  assert.match(source, /Save final requested deliverables/u);
   assert.match(source, /function markDumpyHandoffRequested\(projectPath/u);
   assert.match(source, /function syncProjectArtifactsToDumpy\(projectPath/u);
 
@@ -27,12 +27,12 @@ test("delegate prompts only include artifact handoff for explicit file requests"
   const promptBody = source.slice(promptStart, breakoutStart);
   assert.match(promptBody, /textRequestsArtifactHandoff\(brief\)/u);
   assert.doesNotMatch(promptBody, /textRequestsArtifactHandoff\(brief, status\?\.nextAction\)/u);
-  assert.match(source, /markDumpyHandoffRequested\(projectPath\)/u);
-  assert.match(source, /markDumpyHandoffRequested\(resolvedProjectPath\)/u);
+  assert.doesNotMatch(source, /await markDumpyHandoffRequested\(/u);
   assert.match(source, /agentMessage: artifactHandoffRequested/u);
   assert.match(codexAppServerSource, /item\.payload\.agentMessage \|\| item\.payload\.message/u);
   assert.match(dispatchShellSource, /_artifact_augmented_message/u);
-  assert.match(source, /Clawdad will send requested files from that folder to the project's Dumpy party/u);
+  assert.match(source, /Register each final file in the local ClawDad Files library/u);
+  assert.doesNotMatch(dispatchShellSource, /will send requested files.*Dumpy/u);
   assert.doesNotMatch(promptBody, /If you create a deliverable file the user may need to download or share/u);
 });
 

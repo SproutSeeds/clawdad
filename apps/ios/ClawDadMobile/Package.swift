@@ -12,6 +12,7 @@ let package = Package(
     .library(name: "ClawDadMobile", targets: ["ClawDadMobile"])
   ],
   dependencies: [
+    .package(path: "../../../native/ClawDadFileTransport"),
     .package(path: "../../../native/ClawDadRemoteAssistProtocol"),
     .package(path: "../../../vendor/WebRTCPackage")
   ],
@@ -19,6 +20,7 @@ let package = Package(
     .target(
       name: "ClawDadMobile",
       dependencies: [
+        .product(name: "ClawDadFileTransport", package: "ClawDadFileTransport"),
         .product(
           name: "ClawDadRemoteAssistProtocol",
           package: "ClawDadRemoteAssistProtocol"

@@ -77,7 +77,7 @@ test("Mac release pipeline signs, notarizes, staples, and publishes Sparkle arti
   assert.match(buildScript, /CLAWDAD_BUNDLED_NODE_VERSION:-24\.20\.0/u);
   assert.match(buildScript, /SHASUMS256/u);
   assert.match(buildScript, /runtime_dir\/bin\/node/u);
-  assert.match(buildScript, /node_modules\/open-research-protocol\/package\.json/u);
+  assert.match(buildScript, /runtime-fingerprint\.mjs/u);
   assert.match(buildScript, /ClawDadNode\.entitlements/u);
   assert.match(buildScript, /ClawDadNodeIntel\.entitlements/u);
   assert.match(buildScript, /https:\/\/clawdad\.earth\/downloads\/appcast-intel\.xml/u);

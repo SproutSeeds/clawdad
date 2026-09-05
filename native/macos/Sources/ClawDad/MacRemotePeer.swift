@@ -106,6 +106,10 @@ final class MacRemotePeer: NSObject {
   private var displayRefreshTask: Task<Void, Never>?
   private var displayAdvertisementTask: Task<Void, Never>?
   private var terminalOperationTask: Task<Void, Never>?
+  private var queuedTerminalRequest: RemoteTerminalTabMessage?
+  private var queuedTerminalMove: RemoteTerminalTabMessage?
+  private var controlOutbox: [Data] = []
+  private var controlSendTask: Task<Void, Never>?
   private var terminalResponseTask: Task<Void, Never>?
   private var displayAdvertisementGate = RemoteDisplayAdvertisementGate()
   private var displayOperationInProgress = false
@@ -263,6 +267,11 @@ final class MacRemotePeer: NSObject {
     cancelDisplayAdvertisement()
     terminalOperationTask?.cancel()
     terminalOperationTask = nil
+    queuedTerminalRequest = nil
+    queuedTerminalMove = nil
+    controlSendTask?.cancel()
+    controlSendTask = nil
+    controlOutbox.removeAll()
     terminalResponseTask?.cancel()
     terminalResponseTask = nil
     displaySelectionTask?.cancel()
@@ -334,7 +343,31 @@ final class MacRemotePeer: NSObject {
           controlChannel.readyState == .open else {
       return
     }
-    _ = controlChannel.sendData(RTCDataBuffer(data: data, isBinary: false))
+    if controlOutbox.isEmpty,
+       controlChannel.sendData(RTCDataBuffer(data: data, isBinary: false)) { return }
+    guard controlOutbox.reduce(0, { $0 + $1.count }) + data.count <= 2 * 1024 * 1024 else {
+      onFatalError?(RemoteAssistHostError.controlChannelUnavailable)
+      return
+    }
+    controlOutbox.append(data)
+    guard controlSendTask == nil else { return }
+    controlSendTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer { self.controlSendTask = nil }
+      let deadline = Date().addingTimeInterval(4)
+      while !Task.isCancelled, let next = self.controlOutbox.first {
+        guard self.controlChannel?.readyState == .open, Date() < deadline else {
+          self.controlOutbox.removeAll()
+          self.onFatalError?(RemoteAssistHostError.controlChannelUnavailable)
+          return
+        }
+        if self.controlChannel?.sendData(RTCDataBuffer(data: next, isBinary: false)) == true {
+          self.controlOutbox.removeFirst()
+        } else {
+          try? await Task.sleep(nanoseconds: 40_000_000)
+        }
+      }
+    }
   }
 
   private func controlChannelStateChanged() {
@@ -495,7 +528,8 @@ final class MacRemotePeer: NSObject {
 
   private func handleTerminalRequest(_ message: RemoteTerminalTabMessage) {
     guard message.type == RemoteTerminalTabMessage.listType ||
-            message.type == RemoteTerminalTabMessage.focusType else {
+            message.type == RemoteTerminalTabMessage.focusType ||
+            message.type == RemoteTerminalTabMessage.moveType else {
       return
     }
     guard !MacConsoleSessionState.isLocked() else {
@@ -508,12 +542,14 @@ final class MacRemotePeer: NSObject {
       return
     }
     guard terminalOperationTask == nil else {
-      sendTerminalFailure(
-        for: message,
-        code: "request_in_progress",
-        error: "ClawDad is already refreshing Terminal tabs.",
-        state: nil
-      )
+      // A tap wins over polling; several rapid taps collapse to the latest one.
+      // Preserve an accepted move separately: a later tap must not erase it.
+      if message.type == RemoteTerminalTabMessage.moveType {
+        if queuedTerminalMove == nil { queuedTerminalMove = message }
+        else { sendTerminalFailure(for: message, code: "request_in_progress", error: "Wait for the current tab move, then drag again.", state: nil) }
+      } else if message.type != RemoteTerminalTabMessage.listType || queuedTerminalRequest == nil {
+        queuedTerminalRequest = message
+      }
       return
     }
 
@@ -523,6 +559,13 @@ final class MacRemotePeer: NSObject {
       }
       defer {
         self.terminalOperationTask = nil
+        if let move = self.queuedTerminalMove {
+          self.queuedTerminalMove = nil
+          self.handleTerminalRequest(move)
+        } else if let next = self.queuedTerminalRequest {
+          self.queuedTerminalRequest = nil
+          self.handleTerminalRequest(next)
+        }
       }
       do {
         switch message.type {
@@ -551,6 +594,10 @@ final class MacRemotePeer: NSObject {
             requestId: message.requestId,
             state: state
           ))
+        case RemoteTerminalTabMessage.moveType:
+          let state = try await self.terminalTabController.move(message)
+          guard !Task.isCancelled else { return }
+          self.sendControl(.moveResult(requestId: message.requestId, state: state))
         default:
           return
         }
@@ -582,13 +629,13 @@ final class MacRemotePeer: NSObject {
     func send(_ message: RemoteTerminalResponseMessage) {
       guard let data = (try? RemoteTerminalResponseCodec.encode(message)) ??
         (try? RemoteTerminalResponseCodec.encode(request.failure("This response could not be transferred. Select a smaller portion of text to read."))) else { return }
-      controlChannel?.sendData(RTCDataBuffer(data: data, isBinary: false))
+      sendControlData(data)
     }
     guard !MacConsoleSessionState.isLocked() else {
       send(request.failure("Unlock the Mac before reading Terminal text."))
       return
     }
-    guard terminalOperationTask == nil, terminalResponseTask == nil else {
+    guard terminalResponseTask == nil else {
       send(request.failure("Terminal is updating. Tap Read latest response again in a moment."))
       return
     }
@@ -596,6 +643,12 @@ final class MacRemotePeer: NSObject {
       guard let self else { return }
       defer { self.terminalResponseTask = nil }
       do {
+        // The reader shares the catalog worker. Finish pending foreground work
+        // instead of failing a valid read just because a poll is in flight.
+        while let operation = self.terminalOperationTask {
+          await operation.value
+          try Task.checkCancellation()
+        }
         let response = try await self.terminalTabController.latestResponse(request)
         guard !Task.isCancelled else { return }
         guard !MacConsoleSessionState.isLocked() else {
@@ -616,7 +669,9 @@ final class MacRemotePeer: NSObject {
     error: String,
     state: RemoteTerminalTabState?
   ) {
-    if request.type == RemoteTerminalTabMessage.focusType {
+    if request.type == RemoteTerminalTabMessage.moveType {
+      sendControl(.moveResult(requestId: request.requestId, state: state, errorCode: code, error: error))
+    } else if request.type == RemoteTerminalTabMessage.focusType {
       sendControl(.focusFailure(
         requestId: request.requestId,
         errorCode: code,
@@ -843,7 +898,8 @@ extension MacRemotePeer: RTCDataChannelDelegate {
       }
       if let terminalMessage = try? RemoteTerminalTabCodec.decode(data),
          terminalMessage.type == RemoteTerminalTabMessage.listType ||
-           terminalMessage.type == RemoteTerminalTabMessage.focusType {
+           terminalMessage.type == RemoteTerminalTabMessage.focusType ||
+           terminalMessage.type == RemoteTerminalTabMessage.moveType {
         self.handleTerminalRequest(terminalMessage)
         return
       }

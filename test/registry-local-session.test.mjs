@@ -381,7 +381,7 @@ requested=$(_artifact_augmented_message "$PROJECT_PATH" "Create a downloadable P
     const result = JSON.parse(stdout);
     assert.equal(result.plain, "Fix the Quick Chat dropdown.");
     assert.match(result.requested, /Clawdad artifact handoff/u);
-    assert.match(result.requested, /\.clawdad\/artifacts/u);
+    assert.match(result.requested, /\.clawdad\/deliverables/u);
   });
 });
 

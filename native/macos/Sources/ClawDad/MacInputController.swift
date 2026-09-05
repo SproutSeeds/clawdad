@@ -77,7 +77,7 @@ final class MacInputController {
   }
 
   private let source: CGEventSource
-  private let dictationDelivery = MacDictationDelivery()
+  private let dictationDelivery = MacDictationDelivery.shared
   private var clipboardCopyTask: Task<Void, Never>?
   private var inputProcessingTask: Task<Void, Never>?
   private var inputQueue: [PendingInput] = []
@@ -192,8 +192,8 @@ final class MacInputController {
           previous.restore(to: pasteboard)
           return false
         }
-        return true
-      }, insert: { [self] text in
+        return pasteboard.string(forType: .string) == text
+      }, insertWithReceipt: { [self] text in
         insertDictationIfFocused(text)
       }))
       return
@@ -217,7 +217,7 @@ final class MacInputController {
     }
   }
 
-  private func insertDictationIfFocused(_ text: String) -> Bool {
+  private func insertDictationIfFocused(_ text: String) -> RemoteDictationDisposition {
     // A previous pointer target must never bring an old app back into focus.
     guard pointerInputEnabled, AXIsProcessTrusted(),
           !MacConsoleSessionState.isLocked(),
@@ -233,13 +233,15 @@ final class MacInputController {
             enabled: boolAttribute(target.element, kAXEnabledAttribute as CFString),
             focused: boolAttribute(target.element, kAXFocusedAttribute as CFString),
             bundleIdentifier: target.bundleIdentifier
-          ) else { return false }
+          ) else { return .copied }
     if target.selectedTextSettable,
        AXUIElementSetAttributeValue(target.element, kAXSelectedTextAttribute as CFString,
                                     text as CFString) == .success {
-      return true
+      return .inserted
     }
-    return pressCommandShortcut(keyCode: 9, targetPID: target.pid)
+    // Posting Cmd-V does not prove the target accepted the text. Keep the
+    // verified clipboard receipt and report the paste request accurately.
+    return pressCommandShortcut(keyCode: 9, targetPID: target.pid) ? .pasteRequested : .copied
   }
 
   private func pastePhoneClipboard(

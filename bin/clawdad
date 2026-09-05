@@ -61,6 +61,7 @@ Commands:
   secure-doctor [options]       Verify the secure self-hosted setup
   prod-doctor [options]         Verify the live Clawdad app runtime
   cloud-host [options]          Connect this desktop host to ClawDad Cloud
+  files <add|list> [options]    Save and find final deliverables in the local Files library
   chimera-doctor [options]      Verify the local Chimera/Ollama provider lane
   codex-hook                    Internal Codex hook entrypoint
   gen-token [options]           Generate a bearer token for the listener
@@ -1084,6 +1085,7 @@ main() {
     secure-doctor) cmd_secure_doctor "$@" ;;
     prod-doctor) cmd_prod_doctor "$@" ;;
     cloud-host) cmd_cloud_host "$@" ;;
+    files) run_server_helper files "$@" ;;
     chimera-doctor) cmd_chimera_doctor "$@" ;;
     gen-token)  cmd_gen_token "$@" ;;
     print-launch-agent) cmd_print_launch_agent "$@" ;;
