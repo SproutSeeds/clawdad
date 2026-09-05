@@ -3,6 +3,12 @@ import Foundation
 public enum RemoteClipboardAction: String, Codable, Equatable, Sendable {
   case copy
   case paste
+  case dictation
+}
+
+public enum RemoteDictationDisposition: String, Codable, Equatable, Sendable {
+  case inserted
+  case copied
 }
 
 public struct RemoteClipboardMessage: Codable, Equatable, Sendable {
@@ -17,6 +23,14 @@ public struct RemoteClipboardMessage: Codable, Equatable, Sendable {
   public let text: String?
   public let ok: Bool?
   public let error: String?
+  public var disposition: RemoteDictationDisposition? = nil
+
+  public static func dictationRequest(text: String, requestId: String) -> RemoteClipboardMessage {
+    RemoteClipboardMessage(
+      type: commandType, action: .dictation, requestId: requestId,
+      text: text, ok: nil, error: nil
+    )
+  }
 
   public static func pasteRequest(
     text: String,
@@ -46,7 +60,8 @@ public struct RemoteClipboardMessage: Codable, Equatable, Sendable {
   public static func success(
     action: RemoteClipboardAction,
     requestId: String,
-    text: String? = nil
+    text: String? = nil,
+    disposition: RemoteDictationDisposition? = nil
   ) -> RemoteClipboardMessage {
     RemoteClipboardMessage(
       type: resultType,
@@ -54,7 +69,8 @@ public struct RemoteClipboardMessage: Codable, Equatable, Sendable {
       requestId: requestId,
       text: text,
       ok: true,
-      error: nil
+      error: nil,
+      disposition: disposition
     )
   }
 
@@ -88,11 +104,11 @@ public struct RemoteClipboardMessage: Codable, Equatable, Sendable {
 
     switch type {
     case Self.commandType:
-      guard ok == nil, error == nil else {
+      guard ok == nil, error == nil, disposition == nil else {
         throw RemoteClipboardProtocolError.invalidCommand
       }
       switch action {
-      case .paste:
+      case .paste, .dictation:
         guard let text, !text.isEmpty else {
           throw RemoteClipboardProtocolError.emptyText
         }
@@ -114,8 +130,15 @@ public struct RemoteClipboardMessage: Codable, Equatable, Sendable {
             throw RemoteClipboardProtocolError.emptyText
           }
         }
+        if action == .dictation {
+          guard disposition != nil, text == nil else {
+            throw RemoteClipboardProtocolError.invalidResult
+          }
+        } else if disposition != nil {
+          throw RemoteClipboardProtocolError.invalidResult
+        }
       } else {
-        guard text == nil,
+        guard text == nil, disposition == nil,
               let error,
               !error.isEmpty else {
           throw RemoteClipboardProtocolError.invalidResult

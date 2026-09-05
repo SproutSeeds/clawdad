@@ -77,6 +77,7 @@ final class MacInputController {
   }
 
   private let source: CGEventSource
+  private let dictationDelivery = MacDictationDelivery()
   private var clipboardCopyTask: Task<Void, Never>?
   private var inputProcessingTask: Task<Void, Never>?
   private var inputQueue: [PendingInput] = []
@@ -182,6 +183,21 @@ final class MacInputController {
     _ message: RemoteClipboardMessage,
     respond: @escaping (RemoteClipboardMessage) -> Void
   ) {
+    if message.action == .dictation {
+      respond(dictationDelivery.deliver(message, copy: { text in
+        let pasteboard = NSPasteboard.general
+        let previous = PasteboardSnapshot(pasteboard)
+        pasteboard.clearContents()
+        guard pasteboard.setString(text, forType: .string) else {
+          previous.restore(to: pasteboard)
+          return false
+        }
+        return true
+      }, insert: { [self] text in
+        insertDictationIfFocused(text)
+      }))
+      return
+    }
     guard AXIsProcessTrusted() else {
       respond(.failure(
         action: message.action,
@@ -196,7 +212,34 @@ final class MacInputController {
       pastePhoneClipboard(message, respond: respond)
     case .copy:
       copyMacSelection(message, respond: respond)
+    case .dictation:
+      break // Handled above, including clipboard fallback without input access.
     }
+  }
+
+  private func insertDictationIfFocused(_ text: String) -> Bool {
+    // A previous pointer target must never bring an old app back into focus.
+    guard pointerInputEnabled, AXIsProcessTrusted(),
+          !MacConsoleSessionState.isLocked(),
+          let application = NSWorkspace.shared.frontmostApplication,
+          let target = focusedTarget(for: application.processIdentifier,
+                                     application: application, requireEditable: false,
+                                     screenLocked: false),
+          MacEditableTargetPolicy.acceptsDictation(
+            role: stringAttribute(target.element, kAXRoleAttribute as CFString) ?? "",
+            subrole: target.subrole,
+            explicitlyEditable: boolAttribute(target.element, kAXIsEditableAttribute as CFString),
+            selectedTextSettable: target.selectedTextSettable,
+            enabled: boolAttribute(target.element, kAXEnabledAttribute as CFString),
+            focused: boolAttribute(target.element, kAXFocusedAttribute as CFString),
+            bundleIdentifier: target.bundleIdentifier
+          ) else { return false }
+    if target.selectedTextSettable,
+       AXUIElementSetAttributeValue(target.element, kAXSelectedTextAttribute as CFString,
+                                    text as CFString) == .success {
+      return true
+    }
+    return pressCommandShortcut(keyCode: 9, targetPID: target.pid)
   }
 
   private func pastePhoneClipboard(

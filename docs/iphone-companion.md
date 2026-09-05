@@ -176,6 +176,17 @@ results; refreshes that receive no final response retry after 30 seconds. The
 phone remains compatible with older Mac hosts, which return full catalogs and
 do not provide the same response-order protection until upgraded.
 
+Remote Assist's **…** controls include a microphone beside the keyboard. Tap to
+record, stop to transcribe, then review and edit the text. **Use on Mac** saves the
+reviewed text to the Mac clipboard and inserts it if the currently focused field
+accepts text. Otherwise it confirms **Copied to Mac clipboard** for later pasting.
+Enter stays a separate control. **Copy to iPhone** makes the draft available to
+other phone apps. Back closes the panel and retains the draft; interrupted
+transcription retains the recording for retry. Dictation uses the same recording
+and paired-computer speech service as the main composer, with separate draft
+ownership. Older hosts continue to support transcription and copying to iPhone;
+host insertion requires the dictation-capable Mac update.
+
 The claw menu also includes **Images**. Select up to four photos; ClawDad resizes
 each one to a maximum 2048-pixel edge, shows removable previews above the send
 bar, and sends the images to the selected Codex thread with or without message

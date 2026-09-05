@@ -6,6 +6,31 @@ final class ClawDadMobileUITests: XCTestCase {
     continueAfterFailure = false
   }
 
+  func testRemoteDictationReviewCopyAndBackPreserveDraft() {
+    let app = XCUIApplication()
+    app.launchArguments += ["--clawdad-app-store-preview", "dictation"]
+    app.launch()
+    let transcript = app.textViews["clawdad.remote.dictation.transcript"]
+    XCTAssertTrue(transcript.waitForExistence(timeout: 20))
+    let preview = XCTAttachment(screenshot: app.screenshot())
+    preview.name = "Remote Assist dictation review"
+    preview.lifetime = .keepAlways
+    add(preview)
+    transcript.tap()
+    transcript.typeText(" Added detail.")
+    let editedText = transcript.value as? String
+    XCTAssertTrue(editedText?.contains("Added detail.") == true)
+    let copy = app.buttons["clawdad.remote.dictation.copy"]
+    copy.tap()
+    XCTAssertTrue(app.staticTexts["Copied to iPhone clipboard."].waitForExistence(timeout: 3))
+    app.buttons["clawdad.remote.dictation.back"].tap()
+    let microphone = app.buttons["clawdad.remote.dictation"]
+    XCTAssertTrue(microphone.waitForExistence(timeout: 3))
+    microphone.tap()
+    XCTAssertTrue(transcript.waitForExistence(timeout: 3))
+    XCTAssertEqual(transcript.value as? String, editedText)
+  }
+
   func testCutDraftClearsAndKeepsEditorFocused() throws {
     let app = XCUIApplication()
     app.launchArguments += ["--clawdad-app-store-preview", "workspace"]

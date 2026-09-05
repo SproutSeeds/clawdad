@@ -30,7 +30,7 @@ struct ContentView: View {
   @State private var consumedVoiceTranscriptionId = ""
   @State private var imageAttachments: [MobileImageAttachment] = []
   @State private var selectedThreadSelection: MobileThreadSelection?
-  @StateObject private var voiceRecorder = ComposerVoiceRecorder()
+  @StateObject private var voiceRecorder = VoiceRecorder()
   @StateObject private var remoteAssist = RemoteAssistController()
   @AppStorage("clawdad.threadScope") private var threadScopeRaw = MobileThreadScope.project.rawValue
   @FocusState private var messageEditorFocused: Bool
@@ -266,7 +266,12 @@ struct ContentView: View {
       .onChange(of: scenePhase) { _, phase in
         if phase == .active {
           session.connectIfPaired()
+        } else if phase == .background {
+          voiceRecorder.cancel()
         }
+      }
+      .onChange(of: showingRemoteAssist) { _, showing in
+        if showing { voiceRecorder.cancel() }
       }
       .onChange(of: session.activeComputerId) { _, _ in
         selectedThreadSelection = nil
@@ -293,6 +298,13 @@ struct ContentView: View {
 
   private func presentAppStorePreviewIfNeeded() {
 #if DEBUG
+    if ClawDadAppStorePreviewScenario.current == .dictation {
+      #if os(iOS)
+      remoteAssist.prepareDictationPreview()
+      showingRemoteAssist = true
+      #endif
+      return
+    }
     guard
       ClawDadAppStorePreviewScenario.current == .conversation,
       selectedThreadSelection == nil,
@@ -1220,176 +1232,6 @@ struct ContentView: View {
 
 }
 
-private struct ComposerVoiceRecording {
-  var data: Data
-  var fileName: String
-  var mimeType: String
-  var duration: TimeInterval
-}
-
-private enum ComposerVoiceRecorderState: Equatable {
-  case idle
-  case requestingPermission
-  case recording
-}
-
-@MainActor
-private final class ComposerVoiceRecorder: ObservableObject {
-  @Published private(set) var state = ComposerVoiceRecorderState.idle
-  @Published private(set) var duration: TimeInterval = 0
-  @Published private(set) var errorMessage = ""
-
-  private var recorder: AVAudioRecorder?
-  private var recordingURL: URL?
-  private var durationTask: Task<Void, Never>?
-
-  func start() async {
-    guard state == .idle else {
-      return
-    }
-    state = .requestingPermission
-    errorMessage = ""
-    guard await requestMicrophonePermission() else {
-      state = .idle
-      errorMessage = "Microphone access is off. Enable ClawDad in Settings > Privacy & Security > Microphone."
-      return
-    }
-
-    do {
-      #if os(iOS)
-      let audioSession = AVAudioSession.sharedInstance()
-      // spokenAudio is a playback mode and fails record-only sessions with OSStatus -50.
-      try audioSession.setCategory(
-        .record,
-        mode: .default
-      )
-      try audioSession.setActive(true)
-      #endif
-
-      let fileURL = FileManager.default.temporaryDirectory
-        .appendingPathComponent("clawdad-voice-\(UUID().uuidString.lowercased())")
-        .appendingPathExtension("m4a")
-      let settings: [String: Any] = [
-        AVFormatIDKey: kAudioFormatMPEG4AAC,
-        AVSampleRateKey: 44_100,
-        AVNumberOfChannelsKey: 1,
-        AVEncoderBitRateKey: 64_000,
-        AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
-      ]
-      let nextRecorder = try AVAudioRecorder(url: fileURL, settings: settings)
-      guard nextRecorder.prepareToRecord(), nextRecorder.record() else {
-        throw ComposerVoiceRecorderError.couldNotStart
-      }
-
-      recorder = nextRecorder
-      recordingURL = fileURL
-      duration = 0
-      state = .recording
-      startDurationUpdates()
-    } catch {
-      finishAudioSession()
-      present(error)
-    }
-  }
-
-  func stop() throws -> ComposerVoiceRecording {
-    guard state == .recording,
-          let recorder,
-          let recordingURL else {
-      throw ComposerVoiceRecorderError.noActiveRecording
-    }
-    let recordedDuration = recorder.currentTime
-    recorder.stop()
-    durationTask?.cancel()
-    durationTask = nil
-    self.recorder = nil
-    self.recordingURL = nil
-    duration = 0
-    state = .idle
-    finishAudioSession()
-
-    defer {
-      try? FileManager.default.removeItem(at: recordingURL)
-    }
-    guard recordedDuration >= 0.2 else {
-      throw ComposerVoiceRecorderError.tooShort
-    }
-    let data = try Data(contentsOf: recordingURL, options: .mappedIfSafe)
-    guard !data.isEmpty else {
-      throw ComposerVoiceRecorderError.noAudio
-    }
-    return ComposerVoiceRecording(
-      data: data,
-      fileName: "clawdad-voice.m4a",
-      mimeType: "audio/mp4",
-      duration: recordedDuration
-    )
-  }
-
-  func present(_ error: Error) {
-    state = .idle
-    errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-  }
-
-  private func requestMicrophonePermission() async -> Bool {
-    switch AVAudioApplication.shared.recordPermission {
-    case .granted:
-      return true
-    case .denied:
-      return false
-    case .undetermined:
-      return await withCheckedContinuation { continuation in
-        AVAudioApplication.requestRecordPermission { granted in
-          continuation.resume(returning: granted)
-        }
-      }
-    @unknown default:
-      return false
-    }
-  }
-
-  private func startDurationUpdates() {
-    durationTask?.cancel()
-    durationTask = Task { [weak self] in
-      while !Task.isCancelled {
-        try? await Task.sleep(nanoseconds: 200_000_000)
-        guard let self, self.state == .recording else {
-          return
-        }
-        self.duration = self.recorder?.currentTime ?? 0
-      }
-    }
-  }
-
-  private func finishAudioSession() {
-    #if os(iOS)
-    try? AVAudioSession.sharedInstance().setActive(
-      false,
-      options: [.notifyOthersOnDeactivation]
-    )
-    #endif
-  }
-}
-
-private enum ComposerVoiceRecorderError: LocalizedError {
-  case couldNotStart
-  case noActiveRecording
-  case tooShort
-  case noAudio
-
-  var errorDescription: String? {
-    switch self {
-    case .couldNotStart:
-      return "ClawDad could not start the microphone."
-    case .noActiveRecording:
-      return "There is no active voice recording."
-    case .tooShort:
-      return "That recording was too short. Hold for a moment and try again."
-    case .noAudio:
-      return "The recording did not contain any audio."
-    }
-  }
-}
 
 struct ThreadTurnRow: View {
   var item: MobileHistoryItem

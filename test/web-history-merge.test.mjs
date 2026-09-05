@@ -648,10 +648,11 @@ test("web Cut copies the exact draft and preserves it when clipboard writing fai
 });
 
 test("iPhone composer copies and cuts drafts, then records voice notes through paired ClawDad STT", async () => {
-  const [contentSource, cloudSource, infoPlist] = await Promise.all([
+  const [contentSource, cloudSource, infoPlist, recorderSource] = await Promise.all([
     readFile(iosContentPath, "utf8"),
     readFile(iosCloudClientPath, "utf8"),
     readFile(iosInfoPlistPath, "utf8"),
+    readFile(new URL("../apps/ios/ClawDadMobile/Sources/ClawDadMobile/VoiceRecorder.swift", import.meta.url), "utf8"),
   ]);
   const composerSource = contentSource.slice(
     contentSource.indexOf("private var composerPanel"),
@@ -670,10 +671,10 @@ test("iPhone composer copies and cuts drafts, then records voice notes through p
     contentSource,
     /private func cutComposerDraft\(\)[\s\S]*voiceDraftBase = ""[\s\S]*messageEditorFocused = true/u,
   );
-  assert.match(contentSource, /AVAudioRecorder/u);
-  assert.match(contentSource, /AVAudioApplication\.requestRecordPermission/u);
-  assert.match(contentSource, /\.record,\s*mode: \.default/u);
-  assert.doesNotMatch(contentSource, /mode: \.spokenAudio/u);
+  assert.match(recorderSource, /AVAudioRecorder/u);
+  assert.match(recorderSource, /AVAudioApplication\.requestRecordPermission/u);
+  assert.match(recorderSource, /\.record,\s*mode: \.default/u);
+  assert.doesNotMatch(recorderSource, /mode: \.spokenAudio/u);
   assert.match(contentSource, /voiceRecorder\.state == \.recording \? "stop\.fill" : "mic\.fill"/u);
   assert.match(contentSource, /session\.transcribeVoice\(/u);
   assert.match(contentSource, /voiceDraftBase = message\.trimmingCharacters/u);

@@ -2,6 +2,29 @@ import XCTest
 @testable import ClawDadRemoteAssistProtocol
 
 final class RemoteClipboardProtocolTests: XCTestCase {
+  func testDictationRoundTripsWithExplicitDeliveryOutcome() throws {
+    let request = RemoteClipboardMessage.dictationRequest(text: "Café\nSecond line", requestId: "voice-1")
+    XCTAssertEqual(try RemoteClipboardCodec.decode(RemoteClipboardCodec.encode(request)), request)
+    for disposition in [RemoteDictationDisposition.inserted, .copied] {
+      let response = RemoteClipboardMessage.success(action: .dictation, requestId: request.requestId,
+                                                    disposition: disposition)
+      XCTAssertEqual(try RemoteClipboardCodec.decode(RemoteClipboardCodec.encode(response)), response)
+    }
+  }
+
+  func testDictationCannotReportSuccessWithoutOutcome() {
+    XCTAssertThrowsError(try RemoteClipboardCodec.encode(
+      .success(action: .dictation, requestId: "unknown")
+    ))
+  }
+
+  func testOlderHostStateRemainsDecodableWithoutDictationCapability() throws {
+    let old = Data(#"{"type":"session.state","screenLocked":false}"#.utf8)
+    XCTAssertNil(try RemoteSessionStateCodec.decode(old).supportsDictation)
+    let current = RemoteSessionStateMessage.state(screenLocked: false, supportsDictation: true)
+    XCTAssertEqual(try RemoteSessionStateCodec.decode(RemoteSessionStateCodec.encode(current)), current)
+  }
+
   func testPasteRequestRoundTripsMultilineUnicode() throws {
     let message = RemoteClipboardMessage.pasteRequest(
       text: "first line\nsecond line with cafe\u{301}",

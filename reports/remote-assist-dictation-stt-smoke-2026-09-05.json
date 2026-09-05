@@ -1,0 +1,10 @@
+{
+  "generatedAt": "2026-09-05T06:13:07.782Z",
+  "input": "ClawDad dictation should copy this sentence to the clipboard.",
+  "syntheticAudio": true,
+  "status": 200,
+  "elapsedMs": 962,
+  "text": "Claw Dad dictation should copy the sentence to the clipboard.",
+  "provider": "doc-reader",
+  "model": "base"
+}

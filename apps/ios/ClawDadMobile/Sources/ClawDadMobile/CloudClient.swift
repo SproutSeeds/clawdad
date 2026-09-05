@@ -382,6 +382,7 @@ extension MobileReadAloudController: AVAudioPlayerDelegate {
 @MainActor
 final class CloudSession: ObservableObject {
   typealias EnvelopeSender = @MainActor (String, [String: JSONValue], String) async throws -> Void
+  typealias VoiceTranscriptionCompletion = @MainActor (Result<String, VoiceTranscriptionError>) -> Void
 
   private struct CatalogRequest {
     let id: String
@@ -481,6 +482,7 @@ final class CloudSession: ObservableObject {
   private var lastObservedTerminalRequest = ""
   private var pendingVoiceRequestId = ""
   private var pendingVoiceEnvelopeId = ""
+  private var pendingVoiceCompletion: VoiceTranscriptionCompletion?
   private var pendingProjectCreateEnvelopeId = ""
   private var catalogRequest: CatalogRequest?
   private var lastCatalogRequestedAt = Date.distantPast
@@ -760,12 +762,9 @@ final class CloudSession: ObservableObject {
     catalogLoading = false
     lastCatalogRequestedAt = .distantPast
     historyRequestId = ""
-    voiceTranscriptionTimeoutTask?.cancel()
-    voiceTranscriptionTimeoutTask = nil
-    voiceTranscriptionPending = false
-    voiceTranscriptionStatus = ""
-    pendingVoiceRequestId = ""
-    pendingVoiceEnvelopeId = ""
+    if voiceTranscriptionPending {
+      finishVoiceTranscription(error: "The connection was interrupted. Reconnect and retry the recording.")
+    }
     if projectCreatePending {
       projectCreatePending = false
       projectCreateStatus = ""
@@ -1320,32 +1319,39 @@ final class CloudSession: ObservableObject {
     }
   }
 
+  @discardableResult
   func transcribeVoice(
     _ data: Data,
     fileName: String = "clawdad-voice.m4a",
     mimeType: String = "audio/mp4",
-    duration: TimeInterval = 0
-  ) {
+    duration: TimeInterval = 0,
+    projectPath: String? = nil,
+    completion: VoiceTranscriptionCompletion? = nil
+  ) -> String? {
+    func reject(_ message: String) -> String? {
+      if let completion { completion(.failure(.failed(message))) }
+      else { voiceTranscriptionError = message }
+      return nil
+    }
     guard ready else {
-      voiceTranscriptionError = "ClawDad must be connected before voice transcription."
-      return
+      return reject("ClawDad must be connected before voice transcription.")
     }
     guard !voiceTranscriptionPending else {
-      return
+      return reject("Another recording is still being transcribed.")
     }
     guard !data.isEmpty else {
-      voiceTranscriptionError = "The recording did not contain any audio."
-      return
+      return reject("The recording did not contain any audio.")
     }
     guard data.count <= 12 * 1024 * 1024 else {
-      voiceTranscriptionError = "The recording is too large. Keep voice notes under 12 MB."
-      return
+      return reject("The recording is too large. Keep voice notes under 12 MB.")
     }
 
     let requestId = UUID().uuidString.lowercased()
     let envelopeId = UUID().uuidString.lowercased()
+    let transcriptionProject = projectPath ?? selectedProjectPath
     pendingVoiceRequestId = requestId
     pendingVoiceEnvelopeId = envelopeId
+    pendingVoiceCompletion = completion
     voiceTranscription = nil
     voiceTranscriptionError = ""
     voiceTranscriptionPending = true
@@ -1353,12 +1359,13 @@ final class CloudSession: ObservableObject {
     startVoiceTranscriptionTimeout(requestId: requestId, duration: duration)
 
     Task {
+      guard pendingVoiceRequestId == requestId else { return }
       do {
         try await sendEnvelope(
           type: "speech.transcribe.request",
           body: [
             "requestId": .string(requestId),
-            "project": .string(selectedProjectPath),
+            "project": .string(transcriptionProject),
             "fileName": .string(fileName),
             "mimeType": .string(mimeType),
             "size": .number(Double(data.count)),
@@ -1371,9 +1378,16 @@ final class CloudSession: ObservableObject {
         }
         events.insert("Voice note sent for transcription", at: 0)
       } catch {
+        guard pendingVoiceRequestId == requestId else { return }
         finishVoiceTranscription(error: describe(error))
       }
     }
+    return requestId
+  }
+
+  func cancelVoiceTranscription(requestId: String) {
+    guard !requestId.isEmpty, pendingVoiceRequestId == requestId else { return }
+    finishVoiceTranscription(error: "Transcription cancelled.")
   }
 
   func toggleReadAloud(
@@ -2194,6 +2208,9 @@ final class CloudSession: ObservableObject {
         return
       }
       if code == "host_unavailable" {
+        if voiceTranscriptionPending, inReplyTo == pendingVoiceEnvelopeId {
+          finishVoiceTranscription(error: message)
+        }
         hostOnline = false
         lastHostSeenAt = .distantPast
         historyStatus = "\(activeComputerName) is offline. ClawDad will reconnect automatically."
@@ -2262,7 +2279,10 @@ final class CloudSession: ObservableObject {
     pendingVoiceRequestId = ""
     pendingVoiceEnvelopeId = ""
     voiceTranscriptionError = ""
-    voiceTranscription = MobileVoiceTranscription(id: requestId, text: text)
+    let completion = pendingVoiceCompletion
+    pendingVoiceCompletion = nil
+    if let completion { completion(.success(text)) }
+    else { voiceTranscription = MobileVoiceTranscription(id: requestId, text: text) }
     events.insert("Voice transcription ready", at: 0)
   }
 
@@ -2284,7 +2304,10 @@ final class CloudSession: ObservableObject {
     voiceTranscriptionStatus = ""
     pendingVoiceRequestId = ""
     pendingVoiceEnvelopeId = ""
-    voiceTranscriptionError = error
+    let completion = pendingVoiceCompletion
+    pendingVoiceCompletion = nil
+    voiceTranscriptionError = completion == nil ? error : ""
+    completion?(.failure(.failed(error)))
     events.insert("Voice transcription failed: \(error)", at: 0)
   }
 

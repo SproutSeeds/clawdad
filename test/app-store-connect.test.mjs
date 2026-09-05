@@ -329,7 +329,7 @@ test("app release plan pins the ClawDad app, paid-beta build, and public URLs", 
     versionString: "1.0",
     internalBetaGroup: "ClawDad Internal",
     externalBetaGroup: "ClawDad Founding Customers",
-    betaBuild: "36",
+    betaBuild: "37",
     privacyPolicyUrl: "https://clawdad-cloud.frg.earth/privacy",
     supportUrl: "https://clawdad-cloud.frg.earth/support",
   });
@@ -388,7 +388,7 @@ class FakeReleaseClient {
         type: "builds",
         id: "build-19",
         attributes: {
-          version: "36",
+          version: "37",
           processingState: "VALID",
           usesNonExemptEncryption: null,
         },
@@ -669,11 +669,11 @@ test("app release configuration is complete, scoped, and idempotent", async () =
     "Updated en-US app name and privacy metadata.",
     "Updated en-US App Store version metadata.",
     "Created en-US TestFlight app details.",
-    "Recorded export-compliance exemption for build 36.",
+    "Recorded export-compliance exemption for build 37.",
     "Created private external TestFlight group ClawDad Founding Customers.",
     "Updated Beta App Review contact and reviewer instructions.",
-    "Assigned build 36 to ClawDad Internal.",
-    "Added TestFlight test instructions to build 36.",
+    "Assigned build 37 to ClawDad Internal.",
+    "Added TestFlight test instructions to build 37.",
   ]);
   assert.equal(
     client.calls.some(
@@ -782,8 +782,8 @@ test("external beta submission requires certification and is retry-safe", async 
     { physicalCertificationConfirmed: true },
   );
   assert.deepEqual(first.actions, [
-    "Assigned build 36 to ClawDad Founding Customers.",
-    "Submitted build 36 for Beta App Review.",
+    "Assigned build 37 to ClawDad Founding Customers.",
+    "Submitted build 37 for Beta App Review.",
   ]);
   assert.equal(first.status.beta.externalTesting.buildAssigned, true);
   assert.equal(

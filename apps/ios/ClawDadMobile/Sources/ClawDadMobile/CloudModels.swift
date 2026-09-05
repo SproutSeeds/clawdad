@@ -166,6 +166,15 @@ struct MobileVoiceTranscription: Identifiable, Equatable, Sendable {
   var text: String
 }
 
+enum VoiceTranscriptionError: LocalizedError {
+  case failed(String)
+
+  var errorDescription: String? {
+    if case .failed(let message) = self { return message }
+    return nil
+  }
+}
+
 struct MobileApprovalOption: Identifiable, Equatable {
   var id: String { label }
   var label: String
@@ -362,6 +371,7 @@ struct MobileThreadSelection: Identifiable, Equatable {
 enum ClawDadAppStorePreviewScenario: String, Equatable {
   case workspace
   case conversation
+  case dictation
 
   static func parse(arguments: [String]) -> Self? {
     guard

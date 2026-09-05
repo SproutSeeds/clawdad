@@ -367,7 +367,7 @@ final class MacRemotePeer: NSObject {
       return
     }
     lastPublishedScreenLocked = screenLocked
-    sendControl(.state(screenLocked: screenLocked))
+    sendControl(.state(screenLocked: screenLocked, supportsDictation: true))
   }
 
   private func publishDisplayState() {

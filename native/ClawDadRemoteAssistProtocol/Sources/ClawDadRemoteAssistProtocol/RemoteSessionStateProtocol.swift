@@ -6,11 +6,13 @@ public struct RemoteSessionStateMessage: Codable, Equatable, Sendable {
 
   public let type: String
   public let screenLocked: Bool
+  public var supportsDictation: Bool? = nil
 
-  public static func state(screenLocked: Bool) -> RemoteSessionStateMessage {
+  public static func state(screenLocked: Bool, supportsDictation: Bool? = nil) -> RemoteSessionStateMessage {
     RemoteSessionStateMessage(
       type: messageType,
-      screenLocked: screenLocked
+      screenLocked: screenLocked,
+      supportsDictation: supportsDictation
     )
   }
 

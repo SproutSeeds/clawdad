@@ -458,6 +458,7 @@ struct RemoteAssistNotice: Equatable, Identifiable {
 
 @MainActor
 final class RemoteAssistController: NSObject, ObservableObject {
+  let dictation = RemoteDictationDraft()
   @Published private(set) var phase: RemoteAssistPhase = .idle
   @Published private(set) var remoteVideoTrack: RTCVideoTrack?
   @Published private(set) var keyboardVisible = false
@@ -466,6 +467,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
   @Published private(set) var clipboardBusy = false
   @Published private(set) var clipboardNotice: RemoteAssistNotice?
   @Published private(set) var remoteScreenLocked = false
+  @Published private(set) var supportsRemoteDictation = false
   @Published private(set) var remoteDisplays: [RemoteDisplayDescriptor] = []
   @Published private(set) var selectedRemoteDisplayId = ""
   @Published private(set) var pendingRemoteDisplayId: String?
@@ -542,10 +544,21 @@ final class RemoteAssistController: NSObject, ObservableObject {
 
   func bind(to session: CloudSession) {
     cloudSession = session
+    dictation.bind(to: session)
     session.setRemoteAssistEnvelopeHandler { [weak self] envelope in
       self?.handle(envelope)
     }
   }
+
+#if DEBUG
+  func prepareDictationPreview() {
+    guard ClawDadAppStorePreviewScenario.current == .dictation else { return }
+    phase = .connected
+    supportsRemoteDictation = true
+    dictation.beginRecording()
+    dictation.text = "Review this dictated prompt before using it on the Mac."
+  }
+#endif
 
   func start() {
     guard let cloudSession else {
@@ -834,6 +847,16 @@ final class RemoteAssistController: NSObject, ObservableObject {
       pendingText: remoteScreenLocked
         ? "Typing securely on \(remoteComputerName)..."
         : "Pasting to \(remoteComputerName)..."
+    )
+  }
+
+  func useDictationOnComputer() {
+    guard phase == .connected, supportsRemoteDictation,
+          !clipboardBusy, !remoteInputSuppressed,
+          let delivery = dictation.beginDelivery() else { return }
+    sendClipboardRequest(
+      .dictationRequest(text: delivery.text, requestId: delivery.requestId),
+      pendingText: "Using dictation on \(remoteComputerName)..."
     )
   }
 
@@ -1388,6 +1411,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
     }
     let changed = remoteScreenLocked != message.screenLocked
     remoteScreenLocked = message.screenLocked
+    supportsRemoteDictation = message.supportsDictation == true
     if changed {
       showClipboardNotice(
         message.screenLocked
@@ -1593,6 +1617,10 @@ final class RemoteAssistController: NSObject, ObservableObject {
     do {
       data = try RemoteClipboardCodec.encode(message)
     } catch {
+      if message.action == .dictation {
+        dictation.completeDelivery(requestId: message.requestId,
+                                   result: .failure(.failed(error.localizedDescription)))
+      }
       showClipboardNotice(error.localizedDescription, isError: true)
       UINotificationFeedbackGenerator().notificationOccurred(.error)
       return
@@ -1650,6 +1678,13 @@ final class RemoteAssistController: NSObject, ObservableObject {
     }
 
     switch message.action {
+    case .dictation:
+      finishClipboardRequest(
+        notice: message.disposition == .inserted
+          ? "Inserted on \(remoteComputerName)"
+          : "Copied to \(remoteComputerName) clipboard",
+        isError: false, dictationDisposition: message.disposition
+      )
     case .paste:
       finishClipboardRequest(
         notice: remoteScreenLocked
@@ -1675,8 +1710,21 @@ final class RemoteAssistController: NSObject, ObservableObject {
 
   private func finishClipboardRequest(
     notice: String,
-    isError: Bool
+    isError: Bool,
+    dictationDisposition: RemoteDictationDisposition? = nil
   ) {
+    if let pending = pendingClipboardRequest, pending.action == .dictation {
+      let result: Result<RemoteDictationDisposition, VoiceTranscriptionError>
+      if !isError, let dictationDisposition {
+        result = .success(dictationDisposition)
+      } else {
+        result = .failure(.failed(notice + " Your draft is saved. Check the Mac before trying again."))
+      }
+      dictation.completeDelivery(
+        requestId: pending.requestId,
+        result: result
+      )
+    }
     clipboardTimeoutTask?.cancel()
     clipboardTimeoutTask = nil
     pendingClipboardRequest = nil
@@ -1798,6 +1846,10 @@ final class RemoteAssistController: NSObject, ObservableObject {
   }
 
   private func tearDownPeer() {
+    if pendingClipboardRequest?.action == .dictation {
+      finishClipboardRequest(notice: "Remote Assist disconnected.", isError: true)
+    }
+    supportsRemoteDictation = false
     offerTask?.cancel()
     offerTask = nil
     offerGate.reset()
@@ -2079,6 +2131,7 @@ private enum RemoteAssistControlPage: Equatable {
 }
 
 private enum RemoteAssistAccessibilityFocus: Hashable {
+  case dictation
   case screenChooser
   case screensHeading
   case terminalTabChooser
@@ -2236,6 +2289,7 @@ struct RemoteAssistView: View {
   @State private var viewportZoomed = false
   @State private var viewportResetToken = 0
   @State private var controlsExpanded = false
+  @State private var showingDictation = false
   @State private var controlPage: RemoteAssistControlPage = .primary
   @AccessibilityFocusState private var accessibilityFocus:
     RemoteAssistAccessibilityFocus?
@@ -2372,8 +2426,8 @@ struct RemoteAssistView: View {
           )
           .accessibilityHint(
             controller.hasMultipleRemoteDisplays
-              ? "Shows Exit, Enter, clipboard, keyboard, shortcuts, Terminal tabs, display, and zoom controls"
-              : "Shows Exit, Enter, clipboard, keyboard, shortcuts, Terminal tabs, and zoom controls"
+              ? "Shows Exit, Enter, clipboard, keyboard, dictation, shortcuts, Terminal tabs, display, and zoom controls"
+              : "Shows Exit, Enter, clipboard, keyboard, dictation, shortcuts, Terminal tabs, and zoom controls"
           )
         }
         .animation(
@@ -2403,6 +2457,24 @@ struct RemoteAssistView: View {
     }
     .statusBarHidden(true)
     .persistentSystemOverlays(.hidden)
+    .onAppear {
+      #if DEBUG
+      if ClawDadAppStorePreviewScenario.current == .dictation { showingDictation = true }
+      #endif
+    }
+    .sheet(isPresented: $showingDictation, onDismiss: {
+      controlsExpanded = true
+      controlPage = .primary
+      accessibilityFocus = .dictation
+    }) {
+      RemoteDictationPanel(controller: controller, draft: controller.dictation) {
+        showingDictation = false
+      }
+      .presentationDetents([.medium, .large])
+      .presentationDragIndicator(.visible)
+      .presentationBackground(ClawDadTheme.background)
+      .preferredColorScheme(.dark)
+    }
     .onChange(of: controller.phase) { _, phase in
       guard phase != .connected else {
         return
@@ -2604,6 +2676,21 @@ struct RemoteAssistView: View {
         .accessibilityLabel(
           controller.keyboardVisible ? "Hide keyboard" : "Show keyboard"
         )
+
+        Button {
+          controller.dismissKeyboard()
+          collapseControls()
+          showingDictation = true
+        } label: {
+          Image(systemName: "mic.fill")
+            .font(.system(size: 18, weight: .bold))
+            .frame(width: 44, height: 44)
+        }
+        .buttonStyle(RemoteAssistOverlayButtonStyle())
+        .accessibilityLabel("Dictate text")
+        .accessibilityHint("Record, review, then insert text or copy it to the clipboard")
+        .accessibilityIdentifier("clawdad.remote.dictation")
+        .accessibilityFocused($accessibilityFocus, equals: .dictation)
 
         Button {
           controlPage = .shortcuts
