@@ -132,4 +132,21 @@ final class RemoteTerminalReaderTests: XCTestCase {
     reader.invalidate()
     XCTAssertEqual(session.readAloud.activeKey, "composer")
   }
+
+  func testNavigationKeepsCapturedResponsePreparingAndStopRemainsAvailable() async {
+    let (session, reader) = setupReader()
+    defer { session.readAloud.stop() }
+    reader.beginLookup()
+    reader.expect(request)
+    XCTAssertTrue(reader.receive(result(), selectedTabId: "selected-tab"))
+    let key = reader.playbackKey
+    reader.invalidate("Selected tab changed")
+    await drain()
+    XCTAssertEqual(sent, ["The exact latest answer 🦞."])
+    XCTAssertEqual(session.readAloud.activeKey, key)
+    XCTAssertEqual(session.readAloud.phase, .preparing)
+    XCTAssertEqual(reader.playbackKey, key)
+    reader.stopPlayback()
+    XCTAssertEqual(session.readAloud.phase, .idle)
+  }
 }

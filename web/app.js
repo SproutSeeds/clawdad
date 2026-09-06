@@ -1,4 +1,10 @@
 const state = {
+  speechSettings: null,
+  speechDraft: null,
+  speechLanguage: "All",
+  speechGender: "All",
+  speechSettingsStatus: "",
+  speechSettingsPending: false,
   projects: [],
   recentThreads: [],
   projectRoots: [],
@@ -3113,6 +3119,7 @@ function normalizeHistoryAudioManifest(manifest) {
     state: state || (parts.length > 0 ? "ready" : "unknown"),
     provider: String(manifest.provider || "").trim(),
     voiceId: String(manifest.voiceId || "").trim(),
+    speed: Number(manifest.speed || 1),
     modelId: String(manifest.modelId || "").trim(),
     outputFormat: String(manifest.outputFormat || "").trim(),
     textHash: String(manifest.textHash || manifest.source?.textHash || "").trim() || null,
@@ -6429,8 +6436,11 @@ async function prepareAndPlayMessageAudio(audioKey, payload) {
     return existingPromise;
   }
   const promise = (async () => {
+    const playback = activeMessageAudio?.key === audioKey && !activeMessageAudio.stopped
+      ? activeMessageAudio : reserveMessageAudioPlayback(audioKey);
     showAudioStatus("Preparing audio");
     const parts = await prepareMessageAudioPartsForPlayback(audioKey, payload);
+    if (activeMessageAudio !== playback || playback.stopped) return false;
     if (parts.length > 0) {
       showAudioStatus("Starting audio");
       return startReadyMessageAudioPlayback(audioKey, parts);
@@ -6452,8 +6462,24 @@ async function prepareAndPlayMessageAudio(audioKey, payload) {
   return promise;
 }
 
-function playMessageAudio(audioKey, payload) {
+async function playMessageAudio(audioKey, payload) {
   const status = audioPlaybackStatus(audioKey);
+  if (!["playing", "paused"].includes(status)) {
+    const playback = reserveMessageAudioPlayback(audioKey);
+    try {
+      const settings = await fetchJson("/v1/tts/voices");
+      if (activeMessageAudio !== playback || playback.stopped) return false;
+      payload = {...payload, voiceSelection: settings.selection};
+      const cached = audioAvailability(audioKey).audio;
+      const selected = settings.selection;
+      if (cached && (cached.voiceId !== selected.voice || cached.modelId !== selected.modelId ||
+          Number(cached.speed || 1) !== Number(selected.speed || 1))) {
+        clearAudioPrepareTimer(audioKey);
+        state.audioAvailability[audioKey] = {};
+      }
+    } catch { /* Cached audio remains available if the computer is temporarily offline. */ }
+    if (activeMessageAudio !== playback || playback.stopped) return false;
+  }
   if (status === "loading") {
     stopActiveMessageAudio({ render: false });
     const parts = audioPartsFromAvailability(audioKey);
@@ -7736,7 +7762,7 @@ function messageAudioKey(entry, kind, text = "") {
   const sessionId = String(entry?.sessionId || "").trim();
   const requestId = String(entry?.requestId || entry?.id || entry?.sentAt || "").trim();
   const fingerprint = messageAudioTextFingerprint(text);
-  return `tts:${projectPath}:${sessionId}:${requestId}:${kind}:${fingerprint.colonKey}`;
+  return `tts:${projectPath}:${sessionId}:${requestId}:${kind}:${fingerprint.colonKey}${speechSelectionKey()}`;
 }
 
 function messageAudioPayload(entry, kind, text) {
@@ -7753,6 +7779,7 @@ function messageAudioPayload(entry, kind, text) {
     clientTextLength: fingerprint.length,
     clientTextHash: fingerprint.hash,
     clientTextKey: fingerprint.dashKey,
+    ...(state.speechSettings ? {voiceSelection: {...state.speechSettings.selection}} : {}),
   };
 }
 
@@ -7760,6 +7787,9 @@ function historyAudioManifestMatchesVisibleText(manifest, text = "") {
   if (!manifest || typeof manifest !== "object") {
     return false;
   }
+  const selected = state.speechSettings?.selection;
+  if (selected && (manifest.voiceId !== selected.voice || manifest.modelId !== selected.modelId ||
+      Number(manifest.speed || 1) !== Number(selected.speed || 1))) return false;
   const fingerprint = messageAudioTextFingerprint(text);
   if (!fingerprint.text) {
     return false;
@@ -11229,7 +11259,98 @@ async function refreshVoiceInputDevices({ requestPermission = false, quiet = fal
   }
 }
 
+function speechSelectionKey() {
+  const selection = state.speechSettings?.selection;
+  return selection ? `:voice:${selection.engine}:${selection.modelId}:${selection.voice}:${selection.speed}` : "";
+}
+
+async function loadSpeechSettings(selection = null) {
+  if (state.speechSettingsPending) return;
+  state.speechSettingsPending = true;
+  state.speechSettingsStatus = selection ? "Saving voice…" : "Loading local voices…";
+  renderSpeechSettings();
+  try {
+    const settings = await fetchJson("/v1/tts/voices", selection ? {
+      method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify({selection}),
+    } : {});
+    state.speechSettings = settings;
+    state.speechDraft = {...settings.selection};
+    state.speechLanguage = "All";
+    state.speechGender = "All";
+    state.speechSettingsStatus = selection ? "Voice saved for ClawDad and Remote Assist. Applies to your next reading." : "";
+    renderAll();
+  } catch (error) { state.speechSettingsStatus = error.message; }
+  finally { state.speechSettingsPending = false; renderSpeechSettings(); }
+}
+
+function speechFilteredVoices() {
+  const model = state.speechSettings?.models.find((entry) => entry.id === state.speechDraft?.engine);
+  return (model?.voices || []).filter((voice) =>
+    (state.speechLanguage === "All" || voice.language === state.speechLanguage) &&
+    (state.speechGender === "All" || voice.gender === state.speechGender));
+}
+
+function renderSpeechSettings() {
+  const modelSelect = document.querySelector("#speechModel");
+  if (!modelSelect) return;
+  const model = state.speechSettings?.models.find((entry) => entry.id === state.speechDraft?.engine);
+  const fill = (id, items, selected) => {
+    const select = document.querySelector(id);
+    const optionsKey = JSON.stringify(items);
+    if (select.dataset.voiceOptions !== optionsKey) {
+      select.replaceChildren(...items.map(([value, label]) => {
+        const option = document.createElement("option"); option.value = value; option.textContent = label; return option;
+      }));
+      select.dataset.voiceOptions = optionsKey;
+    }
+    if (select.value !== (selected || "")) select.value = selected || "";
+    select.disabled = state.speechSettingsPending || !items.length;
+  };
+  fill("#speechModel", (state.speechSettings?.models || []).map((m) => [m.id, m.name]), model?.id);
+  fill("#speechLanguage", [["All", "All languages"], ...[...new Set((model?.voices || []).map(v => v.language))].sort().map(v => [v,v])], state.speechLanguage);
+  fill("#speechGender", [["All", "All voice types"], ...[...new Set((model?.voices || []).map(v => v.gender))].sort().map(v => [v, v[0].toUpperCase()+v.slice(1)])], state.speechGender);
+  fill("#speechVoice", speechFilteredVoices().map(v => [v.id, [v.name,v.language,v.gender === "unspecified" ? "" : v.gender].filter(Boolean).join(" · ")]), state.speechDraft?.voice);
+  document.querySelector("#speechModelDetail").textContent = model ? `${model.voices.length} voices · ${model.sizeLabel}` : "";
+  const speed = document.querySelector("#speechSpeed");
+  speed.value = String(state.speechDraft?.speed || 1);
+  speed.disabled = !model?.supportsSpeed || state.speechSettingsPending;
+  document.querySelector("#speechSpeedLabel").textContent = model?.supportsSpeed ? `Speaking speed: ${Number(speed.value).toFixed(2)}×` : "This voice uses its natural speaking pace";
+  for (const id of ["#speechSave", "#speechPreview"]) document.querySelector(id).disabled = state.speechSettingsPending || !model?.installed || !model?.enabled || !speechFilteredVoices().length;
+  document.querySelector("#speechRefresh").disabled = state.speechSettingsPending;
+  document.querySelector("#speechSettingsStatus").textContent = state.speechSettingsStatus || (model && (!model.installed || !model.enabled) ? `Install ${model.name} in the local speech service on this Mac.` : "");
+}
+
+function bindSpeechSettings() {
+  document.querySelector("#speechModel")?.addEventListener("change", event => {
+    const engine = event.target.value;
+    const model = state.speechSettings.models.find(m => m.id === engine);
+    state.speechDraft = {...(state.speechSettings.voicesByModel[engine] || {engine, modelId:model.modelId, voice:model.defaultVoice, speed:1})};
+    state.speechLanguage = "All"; state.speechGender = "All"; renderSpeechSettings();
+  });
+  for (const [id, property] of [["#speechLanguage", "speechLanguage"], ["#speechGender", "speechGender"]]) {
+    document.querySelector(id)?.addEventListener("change", event => {
+      state[property] = event.target.value;
+      const voices = speechFilteredVoices();
+      if (!voices.some(v => v.id === state.speechDraft.voice)) state.speechDraft.voice = voices[0]?.id || "";
+      renderSpeechSettings();
+    });
+  }
+  document.querySelector("#speechVoice")?.addEventListener("change", event => { state.speechDraft.voice = event.target.value; });
+  document.querySelector("#speechSpeed")?.addEventListener("input", event => { state.speechDraft.speed = Number(event.target.value); renderSpeechSettings(); });
+  document.querySelector("#speechSave")?.addEventListener("click", () => { void loadSpeechSettings({...state.speechDraft}); });
+  document.querySelector("#speechRefresh")?.addEventListener("click", () => { void loadSpeechSettings(); });
+  document.querySelector("#speechStop")?.addEventListener("click", () => stopActiveMessageAudio());
+  document.querySelector("#speechPreview")?.addEventListener("click", () => {
+    const key = `voice-preview:${Date.now()}`;
+    const voice = speechFilteredVoices().find(v => v.id === state.speechDraft.voice);
+    const payload = {project: state.selectedProject || "", text: voice?.previewText || state.speechSettings.previewText, voiceSelection: {...state.speechDraft}, kind: "response"};
+    primeMessageAudioPlayback(key);
+    void prepareAndPlayMessageAudio(key, payload).catch(error => handleMessageAudioPlaybackError(key, error));
+  });
+}
+
 function renderVoiceSettings() {
+  renderSpeechSettings();
   const select = elements.settingsVoiceInputSelect;
   if (!select) {
     return;
@@ -16751,6 +16872,7 @@ function openSettingsModal() {
     });
   }
   void refreshVoiceInputDevices({ quiet: true });
+  void loadSpeechSettings();
   void refreshDesktopAppStatus();
   void refreshSubscriptionEntitlement();
   void refreshRemoteAssistStatus();
@@ -18060,6 +18182,7 @@ function bindEvents() {
   elements.projectModalBackdrop.addEventListener("click", closeProjectModal);
   elements.projectModalClose.addEventListener("click", closeProjectModal);
   elements.projectModalForm.addEventListener("submit", handleProjectCreate);
+  bindSpeechSettings();
   elements.settingsButton?.addEventListener("click", openSettingsModal);
   elements.settingsBackdrop?.addEventListener("click", () => closeSettingsModal());
   elements.settingsClose?.addEventListener("click", () => closeSettingsModal());

@@ -36,7 +36,7 @@ final class RemoteTerminalReader: ObservableObject {
 #endif
 
   func beginLookup() {
-    invalidate()
+    invalidate(stoppingPlayback: true)
     scope = activeScope
     loading = true
   }
@@ -90,7 +90,7 @@ final class RemoteTerminalReader: ObservableObject {
 
   func togglePlayback() {
     guard !text.isEmpty, !playbackKey.isEmpty, scope == activeScope else { return }
-    session?.toggleRemoteReadAloud(key: playbackKey, text: text)
+    session?.toggleRemoteReadAloud(key: playbackKey, text: text, title: title)
   }
 
   func stopPlayback() {
@@ -110,14 +110,15 @@ final class RemoteTerminalReader: ObservableObject {
     error = message
   }
 
-  func invalidate(_ message: String = "") {
-    stopPlayback()
+  func invalidate(_ message: String = "", stoppingPlayback: Bool = false) {
+    if stoppingPlayback { stopPlayback() }
+    let retainedPlayback = session?.readAloud.activeKey == playbackKey ? playbackKey : ""
     cancelLookup()
     title = "Terminal response"
     text = ""
     completedAt = ""
     inProgress = false
-    playbackKey = ""
+    playbackKey = retainedPlayback
     sourceTabId = ""
     error = message
   }

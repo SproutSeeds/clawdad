@@ -730,6 +730,30 @@
             </div>
           </section>
 
+          <section class="settings-section" aria-labelledby="settingsSpeechTitle">
+            <div id="settingsSpeechTitle" class="settings-section-title">Voice &amp; Playback</div>
+            <p class="settings-root-meta">Choose the voice used by ClawDad and Remote Assist. Speech is generated locally on this computer.</p>
+            <label class="settings-label" for="speechModel">Model</label>
+            <select id="speechModel" aria-label="Speech model"></select>
+            <div id="speechModelDetail" class="settings-root-meta"></div>
+            <label class="settings-label" for="speechLanguage">Language</label>
+            <select id="speechLanguage" aria-label="Voice language"></select>
+            <label class="settings-label" for="speechGender">Voice type</label>
+            <select id="speechGender" aria-label="Voice type"></select>
+            <label class="settings-label" for="speechVoice">Voice</label>
+            <select id="speechVoice" aria-label="Playback voice"></select>
+            <p class="settings-root-meta">Each voice has its own delivery and character. Preview voices to compare their style.</p>
+            <label id="speechSpeedLabel" class="settings-label" for="speechSpeed">Speaking speed</label>
+            <input id="speechSpeed" type="range" min="0.5" max="2" step="0.05" value="1">
+            <div class="settings-desktop-actions">
+              <button id="speechPreview" class="detail-action-button" type="button">Preview voice</button>
+              <button id="speechStop" class="detail-action-button" type="button">Stop reading</button>
+              <button id="speechSave" class="detail-action-button" type="button">Save voice</button>
+              <button id="speechRefresh" class="detail-action-button" type="button">Refresh voices</button>
+            </div>
+            <p class="settings-root-meta">Voice and language data downloads on first use and stays on this Mac.</p>
+            <div id="speechSettingsStatus" class="settings-root-meta" role="status" aria-live="polite"></div>
+          </section>
           <section class="settings-section settings-voice-section" aria-labelledby="settingsVoiceTitle">
             <div class="settings-section-head">
               <div id="settingsVoiceTitle" class="settings-section-title">Voice</div>

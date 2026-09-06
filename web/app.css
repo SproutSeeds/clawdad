@@ -3029,6 +3029,7 @@ button.detail-backdrop:focus-visible:not(:disabled) {
 
 .settings-form input,
 .settings-form select {
+  cursor: pointer;
   width: 100%;
   min-width: 0;
   min-height: 44px;
@@ -3041,6 +3042,10 @@ button.detail-backdrop:focus-visible:not(:disabled) {
   font-size: 0.9rem;
   outline: none;
 }
+
+.settings-form select:disabled,
+.settings-form input:disabled { cursor: default; }
+#speechSpeed:enabled { cursor: pointer; }
 
 .settings-form select {
   appearance: none;

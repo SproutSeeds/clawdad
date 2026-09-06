@@ -8,6 +8,7 @@ import UIKit
 
 @MainActor
 final class MobileReadAloudController: NSObject, ObservableObject {
+  @Published var sourceTitle = "Read Aloud"
   @Published private(set) var activeKey = ""
   @Published private(set) var phase = MobileReadAloudPhase.idle
   @Published private(set) var statusMessage = ""
@@ -23,6 +24,7 @@ final class MobileReadAloudController: NSObject, ObservableObject {
   private var audioFilesByPart: [Int: URL] = [:]
   private var playlist: [URL] = []
   private var playlistIndex = 0
+  private var transferComplete = false
   private var receivedBytes = 0
   private var player: AVAudioPlayer?
   private var timeoutTask: Task<Void, Never>?
@@ -80,7 +82,7 @@ final class MobileReadAloudController: NSObject, ObservableObject {
     declaredBytes: Int,
     dataBase64: String
   ) {
-    guard requestId == self.requestId, phase == .preparing else {
+    guard requestId == self.requestId, [.preparing, .playing, .paused].contains(phase) else {
       return
     }
     guard partCount > 0, partCount <= 200,
@@ -104,6 +106,7 @@ final class MobileReadAloudController: NSObject, ObservableObject {
       fail(requestId: requestId, message: "The paired computer returned inconsistent audio chunks.")
       return
     }
+    if audioFilesByPart[partIndex] != nil { return }
 
     expectedPartCount = partCount
     expectedChunkCounts[partIndex] = chunkCount
@@ -125,14 +128,14 @@ final class MobileReadAloudController: NSObject, ObservableObject {
       chunksByPart[partIndex] = partChunks
     }
 
-    statusMessage = "Receiving audio from your paired computer..."
+    if player == nil { statusMessage = "Receiving audio from your paired computer..." }
     if partChunks.count == chunkCount {
       persistAudioPart(partIndex: partIndex, chunkCount: chunkCount)
     }
   }
 
   func complete(requestId: String, partCount: Int) {
-    guard requestId == self.requestId, phase == .preparing else {
+    guard requestId == self.requestId, [.preparing, .playing, .paused].contains(phase) else {
       return
     }
     guard partCount > 0,
@@ -146,14 +149,9 @@ final class MobileReadAloudController: NSObject, ObservableObject {
 
     timeoutTask?.cancel()
     timeoutTask = nil
-    playlist = (0..<partCount).compactMap { audioFilesByPart[$0] }
-    playlistIndex = 0
-    do {
-      try activatePlaybackSession()
-      try playCurrentPart()
-    } catch {
-      fail(requestId: requestId, message: "ClawDad could not play this audio: \(error.localizedDescription)")
-    }
+    transferComplete = true
+    if playlistIndex >= partCount { finishPlayback() }
+    else { startAvailableAudio() }
   }
 
   func pause() {
@@ -206,7 +204,7 @@ final class MobileReadAloudController: NSObject, ObservableObject {
 
   @discardableResult
   func failIfMatchingEnvelope(_ candidateEnvelopeId: String, message: String) -> Bool {
-    guard phase == .preparing,
+    guard [.preparing, .playing, .paused].contains(phase),
           !candidateEnvelopeId.isEmpty,
           candidateEnvelopeId == envelopeId else {
       return false
@@ -241,6 +239,8 @@ final class MobileReadAloudController: NSObject, ObservableObject {
       try data.write(to: url, options: .atomic)
       audioFilesByPart[partIndex] = url
       chunksByPart.removeValue(forKey: partIndex)
+      while let file = audioFilesByPart[playlist.count] { playlist.append(file) }
+      startAvailableAudio()
     } catch {
       fail(requestId: requestId, message: "ClawDad could not save the audio on this iPhone.")
     }
@@ -270,6 +270,16 @@ final class MobileReadAloudController: NSObject, ObservableObject {
     )
     try audioSession.setActive(true)
 #endif
+  }
+
+  private func startAvailableAudio() {
+    guard player == nil, phase != .paused, playlist.indices.contains(playlistIndex) else { return }
+    do {
+      try activatePlaybackSession()
+      try playCurrentPart()
+    } catch {
+      fail(requestId: requestId, message: "ClawDad could not play this audio: \(error.localizedDescription)")
+    }
   }
 
   private func playCurrentPart() throws {
@@ -304,14 +314,18 @@ final class MobileReadAloudController: NSObject, ObservableObject {
       return
     }
     playlistIndex += 1
+    player = nil
     if playlist.indices.contains(playlistIndex) {
       do {
         try playCurrentPart()
       } catch {
         fail(requestId: requestId, message: "ClawDad could not play the next audio part.")
       }
-    } else {
+    } else if transferComplete {
       finishPlayback()
+    } else {
+      phase = .preparing
+      statusMessage = "Preparing the next part…"
     }
   }
 
@@ -346,6 +360,7 @@ final class MobileReadAloudController: NSObject, ObservableObject {
     mimeTypesByPart = [:]
     playlist = []
     playlistIndex = 0
+    transferComplete = false
     receivedBytes = 0
     removeAudioFiles()
 #if canImport(UIKit)
@@ -398,6 +413,13 @@ final class CloudSession: ObservableObject {
   }
 
   let readAloud: MobileReadAloudController
+  @Published var voiceSettings: MobileVoiceSettings?
+  @Published var voiceSettingsPending = false
+  @Published var voiceSettingsError = ""
+  @Published var voiceSettingsStatus = ""
+  private var savingVoiceSettings = false
+  private var voiceSettingsEnvelopeId = ""
+  private var voiceSettingsRequestId = ""
 
   @Published var cloudUrl: String {
     didSet { defaults.set(cloudUrl, forKey: "clawdad.cloudUrl") }
@@ -785,6 +807,8 @@ final class CloudSession: ObservableObject {
   }
 
   func forgetPairing() {
+    readAloud.stop()
+    voiceSettings = nil
     let forgottenComputerId = activeComputerId
     let forgottenComputerName = activeComputerName
     disconnect()
@@ -838,6 +862,10 @@ final class CloudSession: ObservableObject {
       return
     }
     persistActiveComputerSnapshot()
+    readAloud.stop()
+    voiceSettings = nil
+    voiceSettingsPending = false
+    voiceSettingsEnvelopeId = ""
     activateComputer(computer, shouldConnect: true)
     pairingStatus = "Switching to \(computer.displayName)..."
     events.insert("Switched to \(computer.displayName)", at: 0)
@@ -1419,14 +1447,48 @@ final class CloudSession: ObservableObject {
                  historyRequestId: item.requestId, kind: kind)
   }
 
-  func toggleRemoteReadAloud(key: String, text: String) {
+  func requestVoiceSettings(selection: MobileVoiceSelection? = nil) {
+    guard ready, !voiceSettingsPending else { return }
+    let request = UUID().uuidString.lowercased()
+    let envelope = UUID().uuidString.lowercased()
+    let scope = "\(accountId)/\(workspaceId)/\(hostId)"
+    voiceSettingsRequestId = request
+    voiceSettingsEnvelopeId = envelope
+    voiceSettingsPending = true
+    voiceSettingsError = ""
+    savingVoiceSettings = selection != nil
+    voiceSettingsStatus = savingVoiceSettings ? "Saving voice…" : ""
+    Task {
+      do {
+        var body: [String: JSONValue] = ["requestId": .string(request)]
+        if let selection { body["selection"] = selection.json }
+        try await sendEnvelope(type: selection == nil ? "speech.voices.request" : "speech.voices.update", body: body, envelopeId: envelope)
+        try await Task.sleep(nanoseconds: 15_000_000_000)
+        if voiceSettingsPending, voiceSettingsRequestId == request, scope == "\(accountId)/\(workspaceId)/\(hostId)" {
+          voiceSettingsPending = false
+          voiceSettingsError = "Reconnect or update ClawDad on your Mac to load voices."
+        }
+      } catch {
+        if voiceSettingsRequestId == request { voiceSettingsPending = false; voiceSettingsError = describe(error) }
+      }
+    }
+  }
+
+  func previewVoice(_ selection: MobileVoiceSelection, text: String) {
+    readAloud.stop()
+    toggleSpeech(key: "voice-preview:\(UUID().uuidString)", text: text, projectPath: "", sessionId: "",
+                 historyRequestId: "", kind: .response, remoteAssist: true, voiceSelection: selection, title: "Voice preview")
+  }
+
+  func toggleRemoteReadAloud(key: String, text: String, title: String = "Terminal response") {
     toggleSpeech(key: key, text: text, projectPath: "", sessionId: "",
-                 historyRequestId: "", kind: .response, remoteAssist: true)
+                 historyRequestId: "", kind: .response, remoteAssist: true, title: title)
   }
 
   private func toggleSpeech(
     key: String, text: String, projectPath: String, sessionId: String,
-    historyRequestId: String, kind: MobileReadAloudKind, remoteAssist: Bool = false
+    historyRequestId: String, kind: MobileReadAloudKind, remoteAssist: Bool = false,
+    voiceSelection: MobileVoiceSelection? = nil, title: String = "Response reading"
   ) {
     let spokenText = text.trimmingCharacters(in: .whitespacesAndNewlines)
     switch readAloud.phase(for: key) {
@@ -1458,6 +1520,7 @@ final class CloudSession: ObservableObject {
     let envelopeId = UUID().uuidString.lowercased()
     let speechScope = "\(accountId)/\(workspaceId)/\(hostId)"
     readAloud.begin(key: key, requestId: audioRequestId, envelopeId: envelopeId)
+    readAloud.sourceTitle = title
     Task {
       guard readAloud.activeKey == key,
             readAloud.isPreparing(requestId: audioRequestId, envelopeId: envelopeId),
@@ -1475,7 +1538,7 @@ final class CloudSession: ObservableObject {
             "source": .string(remoteAssist ? "remote-assist" : "history"),
             "executionPreference": .string("paired-mac-first"),
             "allowRemoteFallback": .bool(remoteAssist ? false : allowUmbraReadAloudFallback)
-          ],
+          ].merging(voiceSelection.map { ["voiceSelection": $0.json] } ?? [:]) { _, new in new },
           envelopeId: envelopeId
         )
         events.insert("Requested \(kind.accessibilitySubject) audio from \(activeComputerName)", at: 0)
@@ -2048,6 +2111,15 @@ final class CloudSession: ObservableObject {
       applyVoiceTranscriptionAccepted(envelope)
     case "speech.transcription":
       applyVoiceTranscription(envelope)
+    case "speech.voices":
+      guard verifyPairedHostEnvelope(envelope), voiceSettingsPending,
+            envelope.body["requestId"]?.stringValue == voiceSettingsRequestId else { return }
+      voiceSettingsPending = false
+      do {
+        voiceSettings = try JSONDecoder().decode(MobileVoiceSettings.self, from: JSONEncoder().encode(envelope.body))
+        voiceSettingsError = ""
+        voiceSettingsStatus = savingVoiceSettings ? "Voice saved. Applies to your next reading." : ""
+      } catch { voiceSettingsError = "The Mac returned an unreadable voice catalog. Update ClawDad and retry." }
     case "speech.synthesize.accepted":
       guard verifyPairedHostEnvelope(envelope) else {
         events.insert("Ignored an unauthenticated Read Aloud response", at: 0)
@@ -2241,6 +2313,11 @@ final class CloudSession: ObservableObject {
         projectCreateStatus = ""
         projectCreateError = message
         events.insert("Project creation failed: \(message)", at: 0)
+        return
+      }
+      if voiceSettingsPending, inReplyTo == voiceSettingsEnvelopeId {
+        voiceSettingsPending = false
+        voiceSettingsError = message
         return
       }
       if readAloud.failIfMatchingEnvelope(inReplyTo, message: message) {
@@ -2756,14 +2833,36 @@ final class CloudSession: ObservableObject {
       return
     }
 #if DEBUG && os(iOS)
+    if appStorePreviewMode, ["speech.voices.request", "speech.voices.update"].contains(type),
+       ProcessInfo.processInfo.arguments.contains("--clawdad-live-voices-test") {
+      var request = URLRequest(url: URL(string: "http://127.0.0.1:4490/v1/tts/voices")!)
+      request.setValue("Bearer local-voice-ui-test", forHTTPHeaderField: "Authorization")
+      if type == "speech.voices.update" {
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(["selection": body["selection"] ?? .null])
+      }
+      let (data, response) = try await URLSession.shared.data(for: request)
+      guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
+      voiceSettings = try JSONDecoder().decode(MobileVoiceSettings.self, from: data)
+      voiceSettingsPending = false
+      voiceSettingsStatus = type == "speech.voices.update" ? "Voice saved. Applies to your next reading." : ""
+      return
+    }
     if appStorePreviewMode, type == "speech.synthesize.request", let request = body["requestId"]?.stringValue {
       Task { @MainActor in
         readAloud.markAccepted(requestId: request)
         try? await Task.sleep(for: .seconds(ProcessInfo.processInfo.arguments.contains("--clawdad-preview-slow-voice") ? 8 : 1))
         let data = RemoteSpeechPreviewHost.audioFixture()
-        readAloud.receiveChunk(requestId: request, partIndex: 0, partCount: 1, chunkIndex: 0, chunkCount: 1,
+        let streaming = ProcessInfo.processInfo.arguments.contains("--clawdad-preview-streaming-voice")
+        readAloud.receiveChunk(requestId: request, partIndex: 0, partCount: streaming ? 2 : 1, chunkIndex: 0, chunkCount: 1,
           fileName: "preview.wav", mimeType: "audio/wav", declaredBytes: data.count, dataBase64: data.base64EncodedString())
-        readAloud.complete(requestId: request, partCount: 1)
+        if streaming {
+          try? await Task.sleep(for: .seconds(8))
+          readAloud.receiveChunk(requestId: request, partIndex: 1, partCount: 2, chunkIndex: 0, chunkCount: 1,
+            fileName: "preview-2.wav", mimeType: "audio/wav", declaredBytes: data.count, dataBase64: data.base64EncodedString())
+        }
+        readAloud.complete(requestId: request, partCount: streaming ? 2 : 1)
       }
       return
     }

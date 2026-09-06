@@ -176,6 +176,7 @@ struct ContentView: View {
       }
       .animation(reduceMotion ? nil : .easeInOut(duration: 0.38), value: session.startupLoading)
       .clawDadNavigationHidden()
+      .safeAreaInset(edge: .bottom, spacing: 0) { ReadAloudBar(reader: session.readAloud) }
       .sheet(isPresented: $showingSettings) {
         SettingsView(openScanner: {
           showingSettings = false
@@ -183,6 +184,7 @@ struct ContentView: View {
         })
         .environmentObject(session)
         .environmentObject(subscription)
+        .safeAreaInset(edge: .bottom, spacing: 0) { ReadAloudBar(reader: session.readAloud) }
       }
       .sheet(isPresented: $showingTools) {
         ClawToolsSheet(
@@ -192,11 +194,13 @@ struct ContentView: View {
         )
         .environmentObject(session)
         .presentationDetents([.large])
+        .safeAreaInset(edge: .bottom, spacing: 0) { ReadAloudBar(reader: session.readAloud) }
       }
 #if os(iOS)
       .sheet(isPresented: $showingFiles) {
         FilesLibraryView(controller: files) { showingFiles = false }
           .environmentObject(session)
+          .safeAreaInset(edge: .bottom, spacing: 0) { ReadAloudBar(reader: session.readAloud) }
       }
 #endif
       .sheet(isPresented: $showingProjectPicker) {
@@ -225,6 +229,7 @@ struct ContentView: View {
           }
         )
         .presentationDetents([.large])
+        .safeAreaInset(edge: .bottom, spacing: 0) { ReadAloudBar(reader: session.readAloud) }
       }
       .clawDadScannerCover(isPresented: $showingScanner) {
         ScannerScreen(
@@ -3175,6 +3180,7 @@ struct SettingsView: View {
 
         ScrollView {
           VStack(spacing: 14) {
+            VoiceSettingsPanel()
             ClawDadPanel {
               VStack(alignment: .leading, spacing: 12) {
                 HStack {

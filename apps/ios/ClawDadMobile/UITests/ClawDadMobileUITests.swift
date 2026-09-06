@@ -6,6 +6,69 @@ final class ClawDadMobileUITests: XCTestCase {
     continueAfterFailure = false
   }
 
+  func testVoiceSettingsShowsEveryModelAndPreservesChoicesAfterBack() {
+    let app = XCUIApplication()
+    app.launchArguments += ["--clawdad-app-store-preview", "workspace", "--clawdad-live-voices-test"]
+    app.launch()
+    let settings = app.buttons["Settings"]
+    XCTAssertTrue(settings.waitForExistence(timeout: 20))
+    settings.tap()
+    let model = app.buttons["voice.model"]
+    XCTAssertTrue(model.waitForExistence(timeout: 15))
+    model.tap()
+    app.buttons["Kitten TTS"].tap()
+    XCTAssertTrue(app.staticTexts["8 voices · 80 MB model"].waitForExistence(timeout: 4))
+    let voice = app.buttons["voice.voice"]
+    voice.tap()
+    app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Jasper")).firstMatch.tap()
+    app.buttons["voice.save"].tap()
+    XCTAssertTrue(waitUntil(timeout: 5) { app.buttons["voice.save"].isEnabled })
+    app.buttons["Done"].tap()
+    settings.tap()
+    XCTAssertTrue(voice.waitForExistence(timeout: 5))
+    XCTAssertTrue(waitUntil(timeout: 5) { voice.label.contains("Jasper") || (voice.value as? String)?.contains("Jasper") == true })
+    model.tap()
+    app.buttons["Pocket TTS"].tap()
+    XCTAssertTrue(app.staticTexts["Pocket uses the voice’s natural speaking pace."].waitForExistence(timeout: 5))
+    model.tap()
+    app.buttons["Kokoro"].tap()
+    XCTAssertTrue(app.staticTexts["54 voices · 82M parameters"].waitForExistence(timeout: 5))
+    let screenshot = XCTAttachment(screenshot: app.screenshot())
+    screenshot.name = "Voice and Playback Settings"; screenshot.lifetime = .keepAlways; add(screenshot)
+    app.buttons["Done"].tap()
+    XCTAssertTrue(settings.isHittable)
+  }
+
+  func testReadingSurvivesLeavingRemoteAssistAndStopsFromWorkspace() {
+    let app = XCUIApplication()
+    app.launchArguments += ["--clawdad-app-store-preview", "terminal-reader", "--clawdad-preview-slow-voice"]
+    app.launch()
+    let speaker = app.buttons["clawdad.remote.reader"]
+    XCTAssertTrue(speaker.waitForExistence(timeout: 20))
+    speaker.tap()
+    XCTAssertTrue(app.staticTexts["Preparing voice…"].waitForExistence(timeout: 8))
+    app.buttons["Close Remote Assist"].tap()
+    let stop = app.buttons["read-aloud.stop"]
+    XCTAssertTrue(stop.waitForExistence(timeout: 5))
+    XCTAssertTrue(app.staticTexts["Selected Mac text"].exists)
+    stop.tap()
+    XCTAssertFalse(stop.waitForExistence(timeout: 10))
+  }
+
+  func testFirstAudioPlaysBeforeLaterPartsAndStopRejectsTheRemainingTransfer() {
+    let app = XCUIApplication()
+    app.launchArguments += ["--clawdad-app-store-preview", "terminal-reader", "--clawdad-preview-streaming-voice"]
+    app.launch()
+    let speaker = app.buttons["clawdad.remote.reader"]
+    XCTAssertTrue(speaker.waitForExistence(timeout: 20))
+    speaker.tap()
+    let reading = app.staticTexts["Reading: Selected Mac text"]
+    XCTAssertTrue(reading.waitForExistence(timeout: 5), "First part should play before the eight-second delay for part two")
+    speaker.tap()
+    XCTAssertFalse(reading.waitForExistence(timeout: 10))
+    XCTAssertEqual(speaker.label, "Read selected text or latest Terminal response")
+  }
+
   func testTerminalCardsScrollFromLeftCenterAndRightWithoutSelectingOrMoving() {
     let app = XCUIApplication()
     app.launchArguments += ["--clawdad-app-store-preview", "terminal-reader", "--clawdad-preview-window-groups"]

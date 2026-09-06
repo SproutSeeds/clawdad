@@ -898,6 +898,9 @@ test("trusted Read Aloud requests generate on the Mac and stream signed audio ch
   });
   globalThis.fetch = async (url, options = {}) => {
     const requestUrl = new URL(String(url));
+    if (requestUrl.pathname === "/v1/tts/voices") {
+      return Response.json({selection: {engine: "pocket", voice: "alba", speed: 1}});
+    }
     requests.push({ url: requestUrl, options });
     if (requestUrl.pathname === "/v1/tts/message") {
       return new Response(JSON.stringify({
@@ -969,6 +972,7 @@ test("trusted Read Aloud requests generate on the Mac and stream signed audio ch
     allowRemoteFallback: false,
     prepare: true,
     poll: false,
+    voiceSelection: {engine: "pocket", voice: "alba", speed: 1},
   });
   assert.equal(sent[0].type, "speech.synthesize.accepted");
   const chunks = sent.filter((entry) => entry.type === "speech.synthesis.chunk");
@@ -994,6 +998,32 @@ test("trusted Read Aloud requests generate on the Mac and stream signed audio ch
   assert.equal(sent.at(-1).body.partCount, 2);
   assert.equal(sent.at(-1).body.totalBytes, firstPart.length + secondPart.length);
   assert.equal(sent.every((entry) => verifyCloudEnvelopeSignature(entry, config.hostPublicKeyPem)), true);
+});
+
+test("Read Aloud delivers the first part before generation completes and freezes the chosen voice", async t => {
+  const device = generateP256KeyPair();
+  const config = hostConfig({trustedDevicePublicKeys: {"ios-phone": device.publicKey}});
+  const original = globalThis.fetch;
+  t.after(() => { globalThis.fetch = original; });
+  let polls = 0;
+  const sent = [];
+  const parts = [0,1].map(i => ({fileName:`part-${i}.wav`,url:`/v1/tts/audio?part=${i}`}));
+  globalThis.fetch = async (url, options={}) => {
+    const route = new URL(url).pathname;
+    if (route === "/v1/tts/voices") return Response.json({selection:{engine:"kitten",voice:"Jasper",speed:1.2}});
+    if (route === "/v1/tts/message") {
+      polls++;
+      assert.deepEqual(JSON.parse(options.body).voiceSelection,{engine:"kitten",voice:"Jasper",speed:1.2});
+      if(polls === 2) assert.equal(sent.filter(e=>e.type === "speech.synthesis.chunk").length,1);
+      return Response.json({audio:{state:polls === 1 ? "generating":"ready",audioId:"same-job",chunkCount:2,parts:parts.slice(0,polls)}});
+    }
+    return new Response("wave-part",{headers:{"content-type":"audio/wav"}});
+  };
+  const envelope = signCloudEnvelope(normalizeCloudEnvelope({type:"speech.synthesize.request",accountId:"acct-1",workspaceId:"scratchpad",sourceDeviceId:"ios-phone",targetHostId:"mac-host",body:{requestId:"progressive",project:"/workspace/clawdad",text:"First sentence. Later sentences."}}),device.privateKey,{keyId:cloudPublicKeyFingerprint(device.publicKey)});
+  assert.equal((await handleCloudEnvelope(envelope,config,async e=>{sent.push(e);})).ok,true);
+  assert.equal(sent.filter(e=>e.type === "speech.synthesis.chunk").length,2);
+  assert.equal(sent.filter(e=>e.type === "speech.synthesis.complete").length,1);
+  assert.equal(sent.filter(e=>e.type === "speech.synthesis.chunk")[0].body.partCount,2);
 });
 
 test("Remote Assist Read Aloud uses the host default without a mirrored project or turn", async (t) => {
