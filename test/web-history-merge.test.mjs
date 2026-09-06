@@ -37,6 +37,7 @@ const iosCloudClientPath = path.join(
   "ClawDadMobile",
   "CloudClient.swift",
 );
+const iosAudioSessionPath = path.join(path.dirname(iosCloudClientPath), "MobileAudioSession.swift");
 const iosRemoteAssistPath = path.join(
   repoRoot,
   "apps",
@@ -673,8 +674,8 @@ test("iPhone composer copies and cuts drafts, then records voice notes through p
   );
   assert.match(recorderSource, /AVAudioRecorder/u);
   assert.match(recorderSource, /AVAudioApplication\.requestRecordPermission/u);
-  assert.match(recorderSource, /\.record,\s*mode: \.default/u);
-  assert.doesNotMatch(recorderSource, /mode: \.spokenAudio/u);
+  const audioSessionSource = await readFile(iosAudioSessionPath, "utf8");
+  assert.match(audioSessionSource, /case \.recording: try session\.setCategory\(\.record, mode: \.default\)/u);
   assert.match(contentSource, /voiceRecorder\.state == \.recording \? "stop\.fill" : "mic\.fill"/u);
   assert.match(contentSource, /session\.transcribeVoice\(/u);
   assert.match(contentSource, /voiceDraftBase = message\.trimmingCharacters/u);
@@ -710,11 +711,8 @@ test("iPhone thread cards read both sent messages and Codex responses aloud on d
   assert.match(cloudSource, /"allowRemoteFallback": \.bool\(remoteAssist \? false : allowUmbraReadAloudFallback\)/u);
   assert.match(cloudSource, /case "speech\.synthesis\.chunk":/u);
   assert.match(cloudSource, /case "speech\.synthesis\.complete":/u);
-  assert.match(cloudSource, /\.playback,\s*mode: \.spokenAudio\s*\)/u);
-  const playbackSessionSource = cloudSource.slice(
-    cloudSource.indexOf("private func activatePlaybackSession()"),
-    cloudSource.indexOf("private func playCurrentPart()"),
-  );
+  const playbackSessionSource = await readFile(iosAudioSessionPath, "utf8");
+  assert.match(playbackSessionSource, /case \.playback: try session\.setCategory\(\.playback, mode: \.spokenAudio\)/u);
   assert.doesNotMatch(playbackSessionSource, /allowAirPlay|allowBluetoothA2DP/u);
   assert.match(infoPlist, /<key>UIBackgroundModes<\/key>[\s\S]*<string>audio<\/string>/u);
   assert.ok(

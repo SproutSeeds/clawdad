@@ -105,6 +105,29 @@ final class ClawDadMobileUITests: XCTestCase {
     XCTAssertTrue(settings.isHittable)
   }
 
+  func testComposerDictationTakesOverPendingRemotePlayback() {
+    let app = XCUIApplication()
+    app.launchArguments += ["--clawdad-app-store-preview", "terminal-reader", "--clawdad-preview-slow-voice"]
+    app.launch()
+    let speaker = app.buttons["clawdad.remote.reader"]
+    XCTAssertTrue(speaker.waitForExistence(timeout: 20))
+    speaker.tap()
+    XCTAssertTrue(app.staticTexts["Preparing voice…"].waitForExistence(timeout: 8))
+    app.buttons["Close Remote Assist"].tap()
+    let mic = app.buttons["clawdad.composer.voice"]
+    XCTAssertTrue(mic.waitForExistence(timeout: 5))
+    mic.tap()
+    XCTAssertTrue(waitUntil(timeout: 5) { mic.label == "Stop recording and transcribe" })
+    let recordingStatus = app.descendants(matching: .any)
+      .matching(identifier: "clawdad.composer.voice-status").firstMatch
+    XCTAssertTrue(waitUntil(timeout: 14) {
+      recordingStatus.label.range(of: "Recording 0:1[0-9]", options: .regularExpression) != nil
+    }, "Capture must keep advancing after delayed playback. Status: \(recordingStatus.label)")
+    XCTAssertFalse(app.buttons["read-aloud.stop"].exists,
+                   "Starting dictation must cancel pending playback before it can take over the microphone.")
+    XCUIDevice.shared.press(.home)
+  }
+
   func testReadingSurvivesLeavingRemoteAssistAndStopsFromWorkspace() {
     let app = XCUIApplication()
     app.launchArguments += ["--clawdad-app-store-preview", "terminal-reader", "--clawdad-preview-slow-voice"]
@@ -358,6 +381,24 @@ final class ClawDadMobileUITests: XCTestCase {
 
   func testInlineDictationStopsAndAutomaticallyInserts() { exerciseInlineDictation(clipboardOnly: false) }
   func testInlineDictationCopiesAndPasteUsesTheNewTranscript() { exerciseInlineDictation(clipboardOnly: true) }
+
+  func testRemoteDictationTakesOverPlayingAudioAndIgnoresLaterParts() {
+    let app = XCUIApplication()
+    app.launchArguments += ["--clawdad-app-store-preview", "terminal-reader",
+                            "--clawdad-inline-speech-test", "--clawdad-preview-streaming-voice"]
+    app.launch()
+    let speaker = app.buttons["clawdad.remote.reader"]
+    XCTAssertTrue(speaker.waitForExistence(timeout: 20))
+    speaker.tap()
+    XCTAssertTrue(app.staticTexts["Reading: Selected Mac text"].waitForExistence(timeout: 8))
+    let mic = app.buttons["clawdad.remote.dictation"]
+    mic.tap()
+    XCTAssertTrue(app.staticTexts["Recording 0:10"].waitForExistence(timeout: 14))
+    XCTAssertEqual(speaker.label, "Read selected text or latest Terminal response")
+    mic.tap()
+    XCTAssertTrue(app.staticTexts["Inserted on Preview Mac"].waitForExistence(timeout: 8))
+    XCTAssertEqual(mic.label, "Dictate text")
+  }
 
   func testLeavingRemoteAssistStopsPendingOrActiveMicrophoneCapture() {
     let app = XCUIApplication()

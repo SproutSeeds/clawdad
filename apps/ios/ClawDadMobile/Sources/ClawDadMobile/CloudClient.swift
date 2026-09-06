@@ -27,10 +27,17 @@ final class MobileReadAloudController: NSObject, ObservableObject {
   private var transferComplete = false
   private var receivedBytes = 0
   private var player: AVAudioPlayer?
+  private let audioSession: MobileAudioSession
+  private var audioSessionID: UUID?
   private var timeoutTask: Task<Void, Never>?
   private let maximumAudioBytes = 256 * 1024 * 1024
   private let maximumChunkBytes = 512 * 1024
   private let prepareTimeoutNanoseconds: UInt64 = 6 * 60 * 1_000_000_000
+
+  init(audioSession: MobileAudioSession = .shared) {
+    self.audioSession = audioSession
+    super.init()
+  }
 
   func isPreparing(requestId: String, envelopeId: String) -> Bool {
     phase == .preparing && self.requestId == requestId && self.envelopeId == envelopeId
@@ -46,6 +53,12 @@ final class MobileReadAloudController: NSObject, ObservableObject {
 
   func begin(key: String, requestId: String, envelopeId: String) {
     resetPlayback()
+    do {
+      audioSessionID = try audioSession.reservePlayback { [weak self] in self?.stop() }
+    } catch {
+      showFailure(key: key, message: error.localizedDescription)
+      return
+    }
     self.activeKey = key
     self.requestId = requestId
     self.envelopeId = envelopeId
@@ -262,14 +275,8 @@ final class MobileReadAloudController: NSObject, ObservableObject {
   }
 
   private func activatePlaybackSession() throws {
-#if canImport(UIKit)
-    let audioSession = AVAudioSession.sharedInstance()
-    try audioSession.setCategory(
-      .playback,
-      mode: .spokenAudio
-    )
-    try audioSession.setActive(true)
-#endif
+    guard let audioSessionID else { throw MobileAudioSession.AudioError.expired }
+    try audioSession.activatePlayback(audioSessionID)
   }
 
   private func startAvailableAudio() {
@@ -349,6 +356,7 @@ final class MobileReadAloudController: NSObject, ObservableObject {
   private func resetPlayback() {
     timeoutTask?.cancel()
     timeoutTask = nil
+    player?.delegate = nil
     player?.stop()
     player = nil
     requestId = ""
@@ -363,9 +371,10 @@ final class MobileReadAloudController: NSObject, ObservableObject {
     transferComplete = false
     receivedBytes = 0
     removeAudioFiles()
-#if canImport(UIKit)
-    try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-#endif
+    if let audioSessionID {
+      self.audioSessionID = nil
+      audioSession.release(audioSessionID)
+    }
   }
 
   private func removeAudioFiles() {
@@ -378,14 +387,19 @@ final class MobileReadAloudController: NSObject, ObservableObject {
 
 extension MobileReadAloudController: AVAudioPlayerDelegate {
   nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+    let playerID = ObjectIdentifier(player)
     Task { @MainActor [weak self] in
-      self?.advancePlayback(successfully: flag)
+      guard let self, let currentPlayer = self.player,
+            ObjectIdentifier(currentPlayer) == playerID else { return }
+      self.advancePlayback(successfully: flag)
     }
   }
 
   nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+    let playerID = ObjectIdentifier(player)
     Task { @MainActor [weak self] in
-      guard let self else {
+      guard let self, let currentPlayer = self.player,
+            ObjectIdentifier(currentPlayer) == playerID else {
         return
       }
       self.fail(

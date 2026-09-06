@@ -25,7 +25,12 @@ final class VoiceRecorder: ObservableObject {
   private var recordingURL: URL?
   private var durationTask: Task<Void, Never>?
   private var attempt = UUID()
-  private var audioSessionActive = false
+  private let audioSession: MobileAudioSession
+  private var audioSessionID: UUID?
+
+  init(audioSession: MobileAudioSession = .shared) {
+    self.audioSession = audioSession
+  }
 
   func start() async {
     guard state == .idle else {
@@ -44,16 +49,7 @@ final class VoiceRecorder: ObservableObject {
     }
 
     do {
-      #if os(iOS)
-      let audioSession = AVAudioSession.sharedInstance()
-      // spokenAudio is a playback mode and fails record-only sessions with OSStatus -50.
-      try audioSession.setCategory(
-        .record,
-        mode: .default
-      )
-      try audioSession.setActive(true)
-      audioSessionActive = true
-      #endif
+      audioSessionID = try audioSession.beginRecording()
 
       let fileURL = FileManager.default.temporaryDirectory
         .appendingPathComponent("clawdad-voice-\(UUID().uuidString.lowercased())")
@@ -166,14 +162,9 @@ final class VoiceRecorder: ObservableObject {
   }
 
   private func finishAudioSession() {
-    #if os(iOS)
-    guard audioSessionActive else { return }
-    audioSessionActive = false
-    try? AVAudioSession.sharedInstance().setActive(
-      false,
-      options: [.notifyOthersOnDeactivation]
-    )
-    #endif
+    guard let audioSessionID else { return }
+    self.audioSessionID = nil
+    audioSession.release(audioSessionID)
   }
 }
 
