@@ -6,6 +6,37 @@ final class ClawDadMobileUITests: XCTestCase {
     continueAfterFailure = false
   }
 
+  func testTerminalCardsScrollFromLeftCenterAndRightWithoutSelectingOrMoving() {
+    let app = XCUIApplication()
+    app.launchArguments += ["--clawdad-app-store-preview", "terminal-reader", "--clawdad-preview-window-groups"]
+    for fraction in [0.15, 0.5, 0.85] {
+      app.launch()
+      let chooser = app.buttons["Choose Terminal tab"]
+      XCTAssertTrue(chooser.waitForExistence(timeout: 20))
+      chooser.tap()
+      let first = app.buttons["clawdad.remote.tab.window-1-tab-1"]
+      let fourth = app.buttons["clawdad.remote.tab.window-1-tab-4"]
+      XCTAssertTrue(fourth.waitForExistence(timeout: 8))
+      let start = fourth.coordinate(withNormalizedOffset: CGVector(dx: fraction, dy: 0.5))
+      let end = first.coordinate(withNormalizedOffset: CGVector(dx: fraction, dy: 0.2))
+      start.press(forDuration: fraction == 0.5 ? 0.6 : 0.05, thenDragTo: end, withVelocity: .fast, thenHoldForDuration: 0)
+      let tabs = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "clawdad.remote.tab.window-1-tab-"))
+      XCTAssertTrue(waitUntil(timeout: 5) {
+        tabs.allElementsBoundByIndex.contains { (Int($0.identifier.split(separator: "-").last ?? "") ?? 0) >= 7 && $0.isHittable }
+      }, "Card swipe at horizontal fraction \(fraction) must scroll")
+      XCTAssertFalse(first.exists && first.isHittable)
+      let list = app.collectionViews["clawdad.remote.terminal-list"]
+      for _ in 0..<6 {
+        if first.exists && first.isHittable { break }
+        list.swipeDown(velocity: .fast)
+      }
+      XCTAssertTrue(first.isHittable)
+      XCTAssertTrue(first.label.contains("selected"), "Scrolling must preserve the selected tab")
+      XCTAssertTrue(first.label.contains("Tab 1"), "Scrolling must preserve tab order")
+      app.terminate()
+    }
+  }
+
   func testGroupedWindowsKeepDuplicateTabsAndRememberExpandedGroups() {
     let app = XCUIApplication()
     app.launchArguments += ["--clawdad-app-store-preview", "terminal-reader", "--clawdad-preview-window-groups"]
@@ -29,15 +60,81 @@ final class ClawDadMobileUITests: XCTestCase {
     XCTAssertEqual(second.value as? String, "Expanded")
     let source = app.buttons["clawdad.remote.tab.window-2-tab-1"]
     let target = app.buttons["clawdad.remote.tab.window-2-tab-3"]
-    let handle = app.buttons.matching(identifier: "Reorder same-directory").element(boundBy: 0)
+    let handle = app.buttons["clawdad.remote.reorder.window-2-tab-1"]
+    XCTAssertGreaterThanOrEqual(handle.frame.width, 44)
+    XCTAssertGreaterThanOrEqual(handle.frame.minX - source.frame.maxX, 11)
     handle.press(forDuration: 0.7, thenDragTo: target)
     XCTAssertTrue(waitUntil(timeout: 6) { source.label.contains("Tab 3") })
+    XCTAssertTrue(waitUntil(timeout: 6) { !app.staticTexts["Terminal tab order updated"].exists })
+    XCTAssertTrue(app.buttons["Back to Remote Assist controls"].isHittable)
     let attachment = XCTAttachment(screenshot: app.screenshot())
     attachment.name = "Grouped physical Terminal windows"; attachment.lifetime = .keepAlways; add(attachment)
     app.buttons["Back to Remote Assist controls"].tap()
     chooser.tap()
     XCTAssertEqual(first.value as? String, "Collapsed")
     XCTAssertEqual(second.value as? String, "Expanded")
+  }
+
+  func testTerminalHandleCancellationAndNoOpPreserveSelectionAndAllowScrolling() {
+    let app = XCUIApplication()
+    app.launchArguments += ["--clawdad-app-store-preview", "terminal-reader", "--clawdad-preview-window-groups", "--clawdad-preview-terminal-poll-count"]
+    app.launch()
+    let chooser = app.buttons["Choose Terminal tab"]
+    XCTAssertTrue(chooser.waitForExistence(timeout: 20))
+    chooser.tap()
+    let list = app.collectionViews["clawdad.remote.terminal-list"]
+    let first = app.buttons["clawdad.remote.tab.window-1-tab-1"]
+    let second = app.buttons["clawdad.remote.tab.window-1-tab-2"]
+    XCTAssertTrue(second.waitForExistence(timeout: 8))
+    second.tap()
+    XCTAssertTrue(waitUntil(timeout: 5) { second.label.contains("selected") })
+    let handle = app.buttons["clawdad.remote.reorder.window-1-tab-1"]
+    handle.press(forDuration: 0.6)
+    XCTAssertNotEqual(list.value as? String, "Reordering")
+    let afterNoOp = second.label
+    XCTAssertTrue(waitUntil(timeout: 6) { second.label != afterNoOp }, "A no-op must resume background catalog updates")
+    let outside = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: -0.3))
+    handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.6, thenDragTo: outside)
+    XCTAssertNotEqual(list.value as? String, "Reordering")
+    XCTAssertTrue(first.label.contains("Tab 1"))
+    XCTAssertTrue(second.label.contains("selected"))
+    let afterCancel = second.label
+    XCTAssertTrue(waitUntil(timeout: 6) { second.label != afterCancel }, "Cancelling must resume background catalog updates")
+    let fourth = app.buttons["clawdad.remote.tab.window-1-tab-4"]
+    fourth.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+      .press(forDuration: 0.05, thenDragTo: first.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)),
+             withVelocity: .fast, thenHoldForDuration: 0)
+    XCTAssertFalse(first.exists && first.isHittable)
+    app.buttons["Back to Remote Assist controls"].tap()
+    chooser.tap()
+    let visible = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "clawdad.remote.tab.window-1-tab-"))
+      .allElementsBoundByIndex.first { $0.isHittable }
+    XCTAssertNotNil(visible)
+    visible?.tap()
+    XCTAssertTrue(waitUntil(timeout: 5) { visible?.label.contains("selected") == true })
+  }
+
+  func testTerminalHandleAutoScrollsAndReordersWithinItsWindow() {
+    let app = XCUIApplication()
+    app.launchArguments += ["--clawdad-app-store-preview", "terminal-reader", "--clawdad-preview-window-groups"]
+    app.launch()
+    let chooser = app.buttons["Choose Terminal tab"]
+    XCTAssertTrue(chooser.waitForExistence(timeout: 20))
+    chooser.tap()
+    let list = app.collectionViews["clawdad.remote.terminal-list"]
+    let handle = app.buttons["clawdad.remote.reorder.window-1-tab-1"]
+    XCTAssertTrue(handle.waitForExistence(timeout: 8))
+    let edge = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.96))
+    handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+      .press(forDuration: 0.6, thenDragTo: edge, withVelocity: .slow, thenHoldForDuration: 1.5)
+    let moved = app.buttons["clawdad.remote.tab.window-1-tab-1"]
+    XCTAssertTrue(waitUntil(timeout: 6) {
+      moved.exists && moved.isHittable && (6...20).contains { moved.label.contains("Tab \($0),") }
+    })
+    XCTAssertTrue(moved.label.contains("selected"))
+    XCTAssertNotEqual(list.value as? String, "Reordering")
+    let attachment = XCTAttachment(screenshot: app.screenshot())
+    attachment.name = "Terminal handle edge scrolling"; attachment.lifetime = .keepAlways; add(attachment)
   }
 
   func testSlowVoicePreparationStaysInlineAndStopRejectsLateAudio() {

@@ -876,7 +876,7 @@ test("Remote Assist lists and focuses Terminal tabs without reading terminal con
     remoteAssistSource,
     /accessibilityLabel\("Refresh \\\(controller\.remoteTerminalName\) tabs"\)/u,
   );
-  const windowPickerSource = await readFile(new URL("../apps/ios/ClawDadMobile/Sources/ClawDadMobile/RemoteTerminalWindowGroups.swift", import.meta.url), "utf8");
+  const windowPickerSource = await readFile(new URL("../apps/ios/ClawDadMobile/Sources/ClawDadMobile/RemoteTerminalTabList.swift", import.meta.url), "utf8");
   assert.match(windowPickerSource, /controller\.focusRemoteTerminalTab\(tab\.id\)/u);
   assert.match(remoteAssistSource, /func pollRemoteTerminalTabs\(\)/u);
   assert.match(remoteAssistSource, /Task\.sleep\(nanoseconds: 2_000_000_000\)/u);

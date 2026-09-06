@@ -8,9 +8,11 @@ import Foundation
 final class RemoteSpeechPreviewHost {
   private let receive: (Data) -> Void
   private var requests = 0
+  private var catalogRequests = 0
   private var tokens: Set<String> = []
   private var capturing = false
   private var selectedTab = "window-1-tab-1"
+  private var windowOneOrder = Array(1...20)
   private var windowTwoOrder = [1, 2, 3]
   private var revision = 1
   private let arguments = ProcessInfo.processInfo.arguments
@@ -71,16 +73,27 @@ final class RemoteSpeechPreviewHost {
         if let reply = try? RemoteClipboardCodec.encode(result) { receive(reply) }
       } else if let request = try? RemoteTerminalTabCodec.decode(data) {
         let grouped = arguments.contains("--clawdad-preview-window-groups")
+        if request.type == RemoteTerminalTabMessage.listType { catalogRequests += 1 }
         if request.type == RemoteTerminalTabMessage.focusType, let tab = request.tabId { selectedTab = tab }
         if request.type == RemoteTerminalTabMessage.moveType, let id = request.tabId, let neighborID = request.neighborTabId,
            let source = Int(id.split(separator: "-").last ?? ""), let neighbor = Int(neighborID.split(separator: "-").last ?? "") {
-          windowTwoOrder.removeAll { $0 == source }
-          if let index = windowTwoOrder.firstIndex(of: neighbor) { windowTwoOrder.insert(source, at: index + (request.placeBefore == true ? 0 : 1)); revision += 1 }
+          let firstWindow = id.hasPrefix("window-1-")
+          var order = firstWindow ? windowOneOrder : windowTwoOrder
+          if firstWindow == neighborID.hasPrefix("window-1-"), source != neighbor,
+             order.contains(source), order.contains(neighbor) {
+            order.removeAll { $0 == source }
+            if let index = order.firstIndex(of: neighbor) {
+              order.insert(source, at: index + (request.placeBefore == true ? 0 : 1))
+              if firstWindow { windowOneOrder = order } else { windowTwoOrder = order }
+              revision += 1
+            }
+          }
         }
         let tabs: [RemoteTerminalTabDescriptor] = grouped ? (1...23).map { index in
           let window = index <= 20 ? 1 : 2, position = index <= 20 ? index : index - 20
-          let id = "window-\(window)-tab-\(window == 2 ? windowTwoOrder[position - 1] : position)"
-          return .init(id: id, title: "same-directory", detail: "Tab \(position)", isSelected: id == selectedTab,
+          let id = "window-\(window)-tab-\(window == 2 ? windowTwoOrder[position - 1] : windowOneOrder[position - 1])"
+          let detail = "Tab \(position)" + (arguments.contains("--clawdad-preview-terminal-poll-count") ? " · Update \(catalogRequests)" : "")
+          return .init(id: id, title: "same-directory", detail: detail, isSelected: id == selectedTab,
             isBusy: false, windowTitle: "Terminal Window \(window)", windowGroupId: "window-\(window)",
             tabPosition: position, canReorder: true)
         } : [.init(id: "preview-tab", title: "Preview Terminal", detail: "Window 1", isSelected: true, isBusy: false)]

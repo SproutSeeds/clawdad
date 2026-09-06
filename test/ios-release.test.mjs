@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
+import { appReleaseCatalog } from "../lib/app-store-connect.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const projectSpecPath = path.join(
@@ -54,7 +55,7 @@ test("iPhone release keeps production signing and paid access configuration", as
     /PRODUCT_BUNDLE_IDENTIFIER: earth\.frg\.clawdad\.ios/u,
   );
   assert.match(projectSpec, /MARKETING_VERSION: "0\.7\.0"/u);
-  assert.match(projectSpec, /CURRENT_PROJECT_VERSION: "43"/u);
+  assert.equal(/CURRENT_PROJECT_VERSION: "(\d+)"/u.exec(projectSpec)?.[1], appReleaseCatalog.beta.buildNumber);
   assert.match(
     projectSpec,
     /Release:\n\s+CLAWDAD_CLOUD_URL: "https:\/\/clawdad-cloud\.frg\.earth"/u,

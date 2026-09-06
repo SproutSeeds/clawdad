@@ -1,5 +1,22 @@
 # Remote Assist reliability and local Files
 
+## September 6: Terminal picker scrolling
+
+Status: iPhone 45 is VALID and available in ClawDad Internal TestFlight.
+Simulator verification is complete. Compatible with the healthy installed Mac 52.
+Evidence: [Terminal picker scroll repair](../reports/terminal-picker-scroll-repair-2026-09-06.md).
+
+- [x] Swipe across tab cards to scroll immediately; tap a card to select its tab.
+- [x] Begin reordering only by holding the dedicated three-line handle. Keep the
+  native lift, haptic feedback and edge scrolling within the same window group.
+- [x] Give the handle a 44-point touch area and a 12-point gap from the card.
+- [x] Pause catalog updates only for actual reordering. Resume after a drop,
+  cancellation or a release in place; cancel when leaving the app or picker.
+- [x] Verify left/center/right swipes, a hold-and-swipe over a card, handle movement,
+  duplicate tabs, spacing, edge scrolling, cancellation, resumed background updates,
+  preserved selection, Back navigation and retained group expansion in the simulator.
+- [ ] Confirm thumb scrolling and haptic feel on the physical iPhone.
+
 ## Next patch: physical Terminal windows and shared speech
 
 Status: Mac 51 / iPhone 43 regressions repaired; Mac 52 is installed and healthy,
