@@ -2,26 +2,30 @@
 
 ## Next patch: physical Terminal windows and shared speech
 
-Status: implemented for Mac 51 / iPhone 43; release verification is recorded in
-`reports/remote-assist-window-groups-shared-voice-2026-09-05.md`. This section
-supersedes the earlier choice of iPhone-native Remote Assist speech.
+Status: released for Mac 51 / iPhone 43, with Terminal acceptance reopened after
+Cody's regression report. The audit reproduced window renumbering and failed
+selection after incomplete Accessibility reads; physical order remains unverified.
+Repair findings: `reports/terminal-switcher-audit-2026-09-05.md`.
+Release evidence: `reports/remote-assist-window-groups-shared-voice-2026-09-05.md`.
+This section supersedes the earlier choice of iPhone-native Remote Assist speech.
 The released behavior and earlier acceptance records remain documented below.
 
 ### Terminal window groups
 
-- [x] Show one expandable group per physical Terminal window, labeled with its
+- [ ] Show one expandable group per physical Terminal window, labeled with its
   stable window number and tab count. Expand the active window initially and
   remember the user's expanded groups. Preserve the switcher's Back control.
-- [x] List each window's tabs top to bottom in the real tab strip's left-to-right
+- [ ] List each window's tabs top to bottom in the real tab strip's left-to-right
   order, including tabs hidden by overflow. Selecting a tab changes its highlight
   without changing either tab order or window-group order.
-- [x] Keep every tab distinct, including multiple tabs with the same directory or
-  title. Show its position and title; directory/title strings are display metadata.
-- [x] Replace ambiguous title-based native grouping with verified physical-window
+- [ ] Keep every tab distinct, including multiple tabs with the same directory or
+  title. Use the directory name as the primary label, with its position and optional
+  parent-path detail; directory/title strings are display metadata.
+- [ ] Replace ambiguous title-based native grouping with verified physical-window
   and tab identity mapping. Validate the selected shell and native control identity
   while collecting the layout, including before and after selection. Keep the
   physical Terminal comparison in the acceptance checks below.
-- [x] Reconcile opened, closed, renamed and moved tabs with the live Mac. Preserve
+- [ ] Reconcile opened, closed, renamed and moved tabs with the live Mac. Preserve
   within-window drag handles and accessible move actions, and confirm the actual
   Terminal order after a move. Cross-window dragging remains outside this patch.
 
