@@ -16,6 +16,10 @@ struct MacTerminalTabSnapshot: Equatable, Sendable {
   let visibleGroupID: Int?
   let visibleTabIndex: Int?
   let reorderAvailable: Bool
+  // Display metadata may associate activity with an unvisited native card, but
+  // never authorizes focus, speech, input, or a persistent shell identity.
+  let activityWindowTitle: String?
+  let activityTTYs: Set<String>
   var groupID: Int { visibleGroupID ?? windowID }
   var position: Int { visibleTabIndex ?? tabIndex }
 
@@ -30,7 +34,9 @@ struct MacTerminalTabSnapshot: Equatable, Sendable {
     visibleGroupID: Int? = nil,
     visibleTabIndex: Int? = nil,
     nativeTabID: String? = nil,
-    reorderAvailable: Bool = true
+    reorderAvailable: Bool = true,
+    activityWindowTitle: String? = nil,
+    activityTTYs: Set<String>? = nil
   ) {
     self.windowID = windowID
     self.nativeTabID = nativeTabID
@@ -43,6 +49,8 @@ struct MacTerminalTabSnapshot: Equatable, Sendable {
     self.visibleGroupID = visibleGroupID
     self.visibleTabIndex = visibleTabIndex
     self.reorderAvailable = reorderAvailable
+    self.activityWindowTitle = activityWindowTitle
+    self.activityTTYs = activityTTYs ?? (tty.isEmpty ? [] : [tty])
   }
 }
 
@@ -196,6 +204,14 @@ final class MacTerminalTabController {
     return apply(snapshots)
   }
 
+  /// Begin the local sweep before the phone opens its picker. This warms activity
+  /// only; a later catalog still establishes the current selection and topology.
+  func prewarmActivity() async throws {
+    let snapshots = try await automation.readTabs()
+    try Task.checkCancellation()
+    _ = activity.busyTTYs(in: Set(snapshots.flatMap(\.activityTTYs)))
+  }
+
   func focus(
     tabID: String,
     expectedRevision: Int
@@ -336,7 +352,7 @@ final class MacTerminalTabController {
     snapshotsByIdentifier.removeAll(keepingCapacity: true)
 
     var selectedTabID: String?
-    let busyTTYs = activity.busyTTYs(in: Set(snapshots.map(\.tty)))
+    let busyTTYs = activity.busyTTYs(in: Set(snapshots.flatMap(\.activityTTYs)))
     let descriptors = snapshots.map { snapshot in
       let identity = identity(for: snapshot)
       let identifier = identifiers[identity] ?? UUID().uuidString.lowercased()
@@ -351,7 +367,7 @@ final class MacTerminalTabController {
         title: macTerminalTabTitle(snapshot.customTitle),
         detail: "Window \(windowNumbers[snapshot.groupID] ?? 1) • Tab \(snapshot.position)",
         isSelected: isSelected,
-        isBusy: busyTTYs.contains(snapshot.tty),
+        isBusy: !snapshot.activityTTYs.isEmpty && snapshot.activityTTYs.isSubset(of: busyTTYs),
         hasUnreadActivity: snapshot.hasUnreadActivity && !isSelected,
         windowTitle: "Terminal Window \(windowNumbers[snapshot.groupID] ?? 1)",
         windowGroupId: "terminal-window-\(snapshot.groupID)",
@@ -657,6 +673,7 @@ final class MacTerminalAutomation: MacTerminalAutomating, @unchecked Sendable {
     set tabRows to {}
     set windowIds to id of windows
     set titlesByWindow to custom title of tabs of windows
+    set windowTitles to name of windows
     set ttysByWindow to tty of tabs of windows
     set selectedByWindow to selected of tabs of windows
     if (id of windows) is not windowIds then error "Terminal window order changed during discovery" number -1712
@@ -668,7 +685,9 @@ final class MacTerminalAutomation: MacTerminalAutomating, @unchecked Sendable {
       repeat with tabIndex from 1 to count of tabTTYs
         set tabTitle to item tabIndex of tabTitles
         if tabTitle is missing value then set tabTitle to ""
-        set end of tabRows to {windowId as integer, windowIndex, tabIndex, tabTitle as text, item tabIndex of tabTTYs, item tabIndex of tabSelected}
+        set activityTitle to ""
+        if (count of tabTTYs) is 1 then set activityTitle to item windowIndex of windowTitles
+        set end of tabRows to {windowId as integer, windowIndex, tabIndex, tabTitle as text, item tabIndex of tabTTYs, item tabIndex of tabSelected, activityTitle as text}
       end repeat
     end repeat
     return tabRows
@@ -850,8 +869,9 @@ final class MacTerminalAutomation: MacTerminalAutomating, @unchecked Sendable {
     }
     for rowIndex in 1...rowCount {
       guard let row = descriptor.atIndex(rowIndex),
-            row.numberOfItems == 6,
+            row.numberOfItems == 7,
             let customTitle = row.atIndex(4)?.stringValue,
+            let activityWindowTitle = row.atIndex(7)?.stringValue,
             let tty = row.atIndex(5)?.stringValue,
             !tty.isEmpty else {
         throw MacTerminalTabFailure(
@@ -866,7 +886,8 @@ final class MacTerminalAutomation: MacTerminalAutomating, @unchecked Sendable {
         tabIndex: Int(row.atIndex(3)?.int32Value ?? 0),
         customTitle: customTitle,
         tty: tty,
-        isSelectedInWindow: row.atIndex(6)?.booleanValue ?? false
+        isSelectedInWindow: row.atIndex(6)?.booleanValue ?? false,
+        activityWindowTitle: activityWindowTitle.isEmpty ? nil : activityWindowTitle
       ))
     }
     guard snapshots.allSatisfy({

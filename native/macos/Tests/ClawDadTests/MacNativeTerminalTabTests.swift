@@ -4,6 +4,89 @@ import ApplicationServices
 import XCTest
 
 final class MacNativeTerminalTabTests: XCTestCase {
+  func testColdCatalogFindsActivityForUnvisitedTabsWithoutLearningInputIdentities() throws {
+    let graph = TerminalGraph()
+    graph.titles = ["/work/duplicate — codex --one", "/work/duplicate — codex --two", "/other/project — -zsh"]
+    graph.windowTitles = ["duplicate — codex --one — 180×49", "duplicate — codex --two — 180×49", "project — -zsh — 180×49"]
+    let reader = MacNativeTerminalTabs(readAttribute: graph.read)
+    let rows = try reader.snapshots(application: graph.app) { graph.shells }
+    XCTAssertEqual(rows.map(\.activityTTYs), [["/dev/ttys0"], ["/dev/ttys1"], ["/dev/ttys2"]])
+    XCTAssertEqual(rows.map(\.tty), ["", "/dev/ttys1", ""], "Passive activity metadata cannot authorize input or speech.")
+    XCTAssertEqual(graph.selected, 1)
+    let again = try reader.snapshots(application: graph.app) { graph.shells }
+    XCTAssertEqual(rows, again)
+  }
+
+  func testIdenticalTitlesRetainEveryCandidateAndRequireCompleteMetadata() throws {
+    let graph = TerminalGraph()
+    graph.titles = Array(repeating: "/work/duplicate — codex", count: 3)
+    graph.windowTitles = Array(repeating: "duplicate — codex — 180×49", count: 3)
+    let reader = MacNativeTerminalTabs(readAttribute: graph.read)
+    let rows = try reader.snapshots(application: graph.app) { graph.shells }
+    XCTAssertEqual(rows[0].activityTTYs, ["/dev/ttys0", "/dev/ttys1", "/dev/ttys2"])
+    XCTAssertEqual(rows[1].activityTTYs, ["/dev/ttys1"])
+    graph.windowTitles?[2] = "unrelated — codex — 180×49"
+    let incomplete = try reader.snapshots(application: graph.app) { graph.shells }
+    XCTAssertTrue(incomplete[0].activityTTYs.isEmpty)
+    XCTAssertTrue(incomplete[2].activityTTYs.isEmpty)
+  }
+
+  func testTitleChangesDuringDiscoveryCannotMisattributeAnUnvisitedTab() throws {
+    let graph = TerminalGraph()
+    graph.titles = ["/work/first — codex", "/work/second — codex", "/work/third — codex"]
+    graph.windowTitles = ["first — codex — 180×49", "second — codex — 180×49", "third — codex — 180×49"]
+    let reader = MacNativeTerminalTabs(readAttribute: graph.read)
+    let rows = try reader.snapshots(application: graph.app) {
+      let shells = graph.shells
+      graph.titles.swapAt(0, 2)
+      return shells
+    }
+    XCTAssertTrue(rows[0].activityTTYs.isEmpty)
+    XCTAssertTrue(rows[2].activityTTYs.isEmpty)
+    XCTAssertEqual(rows[1].activityTTYs, ["/dev/ttys1"])
+  }
+
+  func testSpinnerAnimationDoesNotLoseTheActivityMatchOrInventAnInputIdentity() throws {
+    let graph = TerminalGraph()
+    graph.titles = ["/work/first — ⠋ first — codex ▸ swift", "/work/second — second — codex", "/work/third — ⠸ third — codex"]
+    graph.windowTitles = ["first — ⠹ first — codex ▸ ps — 180×49", "second — second — codex — 180×49", "third — ⠹ third — codex — 180×49"]
+    let reader = MacNativeTerminalTabs(readAttribute: graph.read)
+    let rows = try reader.snapshots(application: graph.app) {
+      graph.titles[0] = "/work/first — ⠸ first — codex ▸ lsof"
+      return graph.shells
+    }
+    XCTAssertEqual(rows.map(\.activityTTYs), [["/dev/ttys0"], ["/dev/ttys1"], ["/dev/ttys2"]])
+    XCTAssertEqual(rows.map(\.tty), ["", "/dev/ttys1", ""])
+  }
+
+  @MainActor
+  func testLiveColdActivitySweepWithoutSelectingTabsWhenExplicitlyEnabled() async throws {
+    guard ProcessInfo.processInfo.environment["CLAWDAD_TERMINAL_READ_ONLY_CHECK"] == "1" else {
+      throw XCTSkip("Opt-in cold-start metadata/activity check; never selects or reads Terminal contents.")
+    }
+    let automation = MacTerminalAutomation()
+    let monitor = MacTerminalAgentActivityMonitor()
+    let controller = MacTerminalTabController(automation: automation, activity: monitor)
+    let start = ProcessInfo.processInfo.systemUptime
+    try await controller.prewarmActivity()
+    await monitor.refreshTask?.value
+    let initial = try await controller.catalog()
+    let rows = try await automation.readTabs()
+    let passive = rows.filter { $0.tty.isEmpty && !$0.activityTTYs.isEmpty }
+    XCTAssertFalse(passive.isEmpty, "The cold sweep must include tabs that were never selected.")
+    XCTAssertTrue(rows.allSatisfy { !$0.activityTTYs.isEmpty }, "Every tab on this Mac must be covered by its cold activity sweep.")
+    XCTAssertFalse(initial.tabs.isEmpty)
+    XCTAssertTrue(initial.tabs.contains(where: \.isBusy))
+    let selected = initial.selectedTabId
+    for _ in 0..<2 {
+      let next = try await controller.catalog()
+      XCTAssertEqual(next.tabs.map(\.id), initial.tabs.map(\.id))
+      XCTAssertEqual(next.selectedTabId, selected)
+      XCTAssertEqual(next.revision, initial.revision)
+    }
+    print("COLD_ACTIVITY_SWEEP tabs=\(rows.count) unvisited_mapped=\(passive.count) busy=\(initial.tabs.filter(\.isBusy).count) elapsed=\(ProcessInfo.processInfo.systemUptime - start)s; no focus or contents read")
+  }
+
   func testFailedReadAndRejectedAfterReadKeepAllIdentitiesAndWindowNumbers() throws {
     let graph = TerminalGraph()
     let reader = MacNativeTerminalTabs(readAttribute: graph.read)
@@ -213,12 +296,14 @@ private final class TerminalGraph {
   var enumeration = [0, 1, 2]
   var failWindows = false
   var hidden: Int?
+  var titles = Array(repeating: "/Volumes/Code/duplicate — agent", count: 3)
+  var windowTitles: [String]?
   var shells: [MacTerminalTabSnapshot] {
     // Native macOS tabs are three scripting windows with one shell each.
     ([selected] + (0..<3).filter { $0 != selected }).enumerated().map { offset, tab in
       MacTerminalTabSnapshot(windowID: 100 + tab, windowIndex: offset + 1,
         tabIndex: 1, customTitle: "duplicate", tty: "/dev/ttys\(tab)",
-        isSelectedInWindow: true)
+        isSelectedInWindow: true, activityWindowTitle: windowTitles?[tab])
     }
   }
 
@@ -239,7 +324,7 @@ private final class TerminalGraph {
     case kAXValueAttribute where isStrip: return controls[selected]
     case kAXValueAttribute where tab != nil:
       throw MacTerminalTabFailure(code: "layout_unavailable", message: "Terminal idle tab AXValue is unavailable", state: nil)
-    case kAXTitleAttribute: return "/Volumes/Code/duplicate — agent" as CFString
+    case kAXTitleAttribute: return titles[tab ?? selected] as CFString
     case kAXPositionAttribute:
       var point = CGPoint(x: tab.map { CGFloat($0 * 100) } ?? 0, y: 30)
       return AXValueCreate(.cgPoint, &point)

@@ -229,14 +229,18 @@ final class MacNativeTerminalTabs {
     guard Set(candidate.map(\.id)).count == candidate.count else { throw failure("Terminal's tab identities are changing. Try again.") }
     let liveShells = Dictionary(uniqueKeysWithValues: shells.map { ($0.tty, $0) })
     candidateShells = candidateShells.filter { _, shell in liveShells[shell.tty]?.windowID == shell.windowID }
+    let activity = MacTerminalActivityCandidates(nativeTitles: after.flatMap { $0.tabs.map(\.title) }, shells: shells)
+    let previousTabs = before.flatMap(\.tabs)
     let snapshots = candidate.map { tab in
       let shell = candidateShells[tab.id].flatMap { liveShells[$0.tty] }
+      let previousTitle = previousTabs.first { CFEqual($0.control, tab.control) }?.title ?? ""
+      let activityTTYs: Set<String> = shell.map { [$0.tty] } ?? activity.ttys(for: tab.title, previously: previousTitle)
       return MacTerminalTabSnapshot(windowID: shell?.windowID ?? 0,
         windowIndex: tab.focused ? 1 : tab.groupID + 1, tabIndex: shell?.tabIndex ?? tab.position,
         customTitle: tab.title, tty: shell?.tty ?? "",
         isSelectedInWindow: tab.selected, hasUnreadActivity: tab.unread,
         visibleGroupID: tab.groupID, visibleTabIndex: tab.position, nativeTabID: tab.id,
-        reorderAvailable: tab.canReorder)
+        reorderAvailable: tab.canReorder, activityTTYs: activityTTYs)
     }
     bindings = candidate
     groups = nextGroups.filter { usedGroups.contains($0.id) }

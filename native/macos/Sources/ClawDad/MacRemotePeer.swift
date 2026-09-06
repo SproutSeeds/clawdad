@@ -107,6 +107,7 @@ final class MacRemotePeer: NSObject {
   private var displayRefreshTask: Task<Void, Never>?
   private var displayAdvertisementTask: Task<Void, Never>?
   private var terminalOperationTask: Task<Void, Never>?
+  private var terminalActivityPrewarmTask: Task<Void, Never>?
   private var queuedTerminalRequest: RemoteTerminalTabMessage?
   private var queuedTerminalMove: RemoteTerminalTabMessage?
   private var controlOutbox: [Data] = []
@@ -266,6 +267,8 @@ final class MacRemotePeer: NSObject {
   }
 
   func stop() {
+    terminalActivityPrewarmTask?.cancel()
+    terminalActivityPrewarmTask = nil
     pendingDictationRequest = nil
     speechOperationTask?.cancel()
     speechOperationTask = nil
@@ -378,6 +381,8 @@ final class MacRemotePeer: NSObject {
 
   private func controlChannelStateChanged() {
     guard controlChannel?.readyState == .open else {
+      terminalActivityPrewarmTask?.cancel()
+      terminalActivityPrewarmTask = nil
       speechOperationTask?.cancel()
       speechOperationTask = nil
       inputController.cancelPendingOperations()
@@ -405,12 +410,28 @@ final class MacRemotePeer: NSObject {
     }
   }
 
+  private func prewarmTerminalActivity() {
+    guard terminalActivityPrewarmTask == nil, !MacConsoleSessionState.isLocked() else { return }
+    terminalActivityPrewarmTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      // Read-only and off the main actor. Picker requests remain authoritative
+      // and can retry when Terminal was closed or temporarily unavailable here.
+      try? await self.terminalTabController.prewarmActivity()
+    }
+  }
+
   private func publishSessionState(force: Bool, requestId: String? = nil) {
     let screenLocked = MacConsoleSessionState.isLocked()
     guard force || screenLocked != lastPublishedScreenLocked else {
       return
     }
     lastPublishedScreenLocked = screenLocked
+    if screenLocked {
+      terminalActivityPrewarmTask?.cancel()
+      terminalActivityPrewarmTask = nil
+    } else {
+      prewarmTerminalActivity()
+    }
     sendControl(Self.sessionState(screenLocked: screenLocked, requestId: requestId))
   }
 

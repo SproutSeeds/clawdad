@@ -1,5 +1,48 @@
 import Foundation
 
+/// A cold native tab has no proven TTY for input yet. Compare the complete native
+/// and scripting titles for this read only, retaining every possible owner when
+/// titles repeat. A badge is safe only if all candidates have an active request.
+/// Titles never become persistent identities or authorize input/focus/reading.
+struct MacTerminalActivityCandidates {
+  private let nativeCounts: [String: Int]
+  private let shellsByTitle: [String: [MacTerminalTabSnapshot]]
+
+  init(nativeTitles: [String], shells: [MacTerminalTabSnapshot]) {
+    nativeCounts = Dictionary(grouping: nativeTitles, by: Self.key).mapValues(\.count)
+    shellsByTitle = Dictionary(grouping: shells.filter { $0.activityWindowTitle != nil }) {
+      Self.key($0.activityWindowTitle!)
+    }
+  }
+
+  func ttys(for title: String, previously previousTitle: String) -> Set<String> {
+    let key = Self.key(title)
+    guard !key.isEmpty, key == Self.key(previousTitle),
+          let shells = shellsByTitle[key], nativeCounts[key] == shells.count else { return [] }
+    return Set(shells.map(\.tty))
+  }
+
+  private static func key(_ title: String) -> String {
+    var parts = title.components(separatedBy: " — ")
+    // Terminal's window title uses the directory basename and adds dimensions;
+    // its native tab tooltip uses the full directory and omits dimensions.
+    if parts.count > 1,
+       parts.last?.range(of: "^[0-9]+[×x][0-9]+$", options: .regularExpression) != nil { parts.removeLast() }
+    if let first = parts.first {
+      if first.hasPrefix("/") || first.hasPrefix("~/") { parts[0] = (first as NSString).lastPathComponent }
+      else if first.hasPrefix("file://"), let url = URL(string: first), url.isFileURL { parts[0] = url.lastPathComponent }
+    }
+    // The foreground child command changes as tools run (including this local
+    // probe). Keep the owning command and its arguments, not that transient tail.
+    if parts.count > 1 { parts[parts.count - 1] = parts.last!.components(separatedBy: " ▸ ").first! }
+    // A spinner can advance between two metadata reads. Preserve its presence
+    // while ignoring its animation frame; it never establishes Busy itself.
+    return parts.joined(separator: " — ").unicodeScalars.map {
+      (0x2800...0x28FF).contains($0.value) ? "⠿" : String($0)
+    }.joined().trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+}
+
 /// Only lifecycle events from the owning CLI request establish working state.
 /// Terminal focus, output, an open Codex process, and unread markers never do.
 struct MacCodexRequestActivityLog {

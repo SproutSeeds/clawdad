@@ -46,6 +46,44 @@ final class MacTerminalTabTests: XCTestCase {
     XCTAssertFalse(focused.tabs.contains(where: \.isBusy))
   }
 
+  func testUnvisitedDuplicateCardsNeverBorrowAnotherSessionsBusyBadge() async throws {
+    let automation = StubTerminalAutomation(snapshots: (0..<3).map { index in
+      MacTerminalTabSnapshot(windowID: 0, windowIndex: 1, tabIndex: index + 1,
+        customTitle: "duplicate", tty: "", isSelectedInWindow: index == 1,
+        nativeTabID: "native-\(index)", activityTTYs: ["/dev/ttys001", "/dev/ttys002", "/dev/ttys003"])
+    })
+    let activity = StubTerminalAgentActivity()
+    activity.working = ["/dev/ttys001"]
+    let controller = makeController(automation: automation, activity: activity)
+    let mixed = try await controller.catalog()
+    XCTAssertFalse(mixed.tabs.contains(where: \.isBusy))
+    activity.working = ["/dev/ttys001", "/dev/ttys002", "/dev/ttys003"]
+    let allWorking = try await controller.catalog()
+    XCTAssertTrue(allWorking.tabs.allSatisfy(\.isBusy))
+    XCTAssertEqual(allWorking.tabs.map(\.id), mixed.tabs.map(\.id))
+    XCTAssertEqual(allWorking.revision, mixed.revision)
+  }
+
+  func testPrewarmingChecksUnvisitedTabsBeforeTheFirstPickerCatalog() async throws {
+    let working: Set<String> = ["/dev/ttys001", "/dev/ttys003"]
+    let monitor = MacTerminalAgentActivityMonitor(sample: { ttys in
+      XCTAssertEqual(ttys, ["/dev/ttys001", "/dev/ttys002", "/dev/ttys003"])
+      return working.intersection(ttys)
+    })
+    let automation = StubTerminalAutomation(snapshots: (0..<3).map { index in
+      MacTerminalTabSnapshot(windowID: 0, windowIndex: 1, tabIndex: index + 1,
+        customTitle: "tab", tty: "", isSelectedInWindow: index == 1,
+        nativeTabID: "native-\(index)", activityTTYs: ["/dev/ttys00\(index + 1)"])
+    })
+    let controller = makeController(automation: automation, activity: monitor)
+    try await controller.prewarmActivity()
+    await monitor.refreshTask?.value
+    let first = try await controller.catalog()
+    XCTAssertEqual(first.tabs.map(\.isBusy), [true, false, true])
+    XCTAssertEqual(first.selectedTabId, first.tabs[1].id)
+    XCTAssertTrue(automation.focusCalls.isEmpty)
+  }
+
   func testDirectoryLabelsKeepSpacesAndDuplicateNamesWithoutPathsOrStatus() {
     XCTAssertEqual(macTerminalTabTitle("/Volumes/Code/My Project — ⠸ agent — codex"), "My Project")
     XCTAssertEqual(macTerminalTabTitle("~/work/duplicate — -zsh"), "duplicate")
@@ -65,7 +103,8 @@ final class MacTerminalTabTests: XCTestCase {
     let row = NSAppleEventDescriptor.list()
     let fields: [NSAppleEventDescriptor] = [
       .init(int32: 10), .init(int32: 1), .init(int32: 2),
-      .init(string: "same-directory"), .init(string: "/dev/ttys001"), .init(boolean: true)
+      .init(string: "same-directory"), .init(string: "/dev/ttys001"), .init(boolean: true),
+      .init(string: "same-directory — codex — 180×49")
     ]
     for (index, value) in fields.enumerated() { row.insert(value, at: index + 1) }
     catalog.insert(row, at: 1)
@@ -75,6 +114,7 @@ final class MacTerminalTabTests: XCTestCase {
     XCTAssertEqual(snapshots[0].tabIndex, 2)
     XCTAssertEqual(snapshots[0].tty, "/dev/ttys001")
     XCTAssertTrue(snapshots[0].isSelectedInWindow)
+    XCTAssertEqual(snapshots[0].activityWindowTitle, "same-directory — codex — 180×49")
   }
   func testCatalogUsesOpaqueStableIdentifiersAndOneGlobalSelection() async throws {
     let automation = StubTerminalAutomation(snapshots: initialSnapshots)
