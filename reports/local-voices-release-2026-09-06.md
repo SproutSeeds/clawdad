@@ -1,7 +1,12 @@
 # Local voice selection and continuous playback
 
-Released: Mac 0.7.0 build 54 is installed, notarized, and healthy. iPhone 0.7.0
-build 46 is VALID, assigned to ClawDad Internal, and IN_BETA_TESTING.
+Follow-up: [Mac build 55 fixes voice Settings over the cloud connection](voice-settings-envelope-repair-2026-09-06.md).
+The original local Settings checks below missed a shared-protocol allowlist
+omission. Build 55 adds the missing messages and verifies the relay/host path;
+iPhone build 46 remains current.
+
+Original release: Mac 0.7.0 build 54 was installed, notarized, and healthy.
+iPhone 0.7.0 build 46 is VALID, assigned to ClawDad Internal, and IN_BETA_TESTING.
 
 ## Result
 
