@@ -1,10 +1,10 @@
 # Terminal Busy status follows the agent request
 
-The repair is implemented and verified for the native Mac host. It works with
-the existing iPhone build 47. Final candidate: Mac 0.7.0 build 58, which also
-includes the pending desktop voice-picker stability repair. Installation needs
-Terminal's App Management permission, currently off in macOS Privacy & Security.
-The installed build 55 remains running while the update is prepared.
+Mac 0.7.0 build 58 is installed at /Applications/ClawDad.app, running, and healthy.
+The September 6 follow-up confirmed the reported false Busy badges still came
+from installed build 55. Finder completed replacement after the old app quit;
+no App Management or other security setting was changed. Build 58 also installs
+the desktop voice-picker stability repair and works with iPhone builds 47 and 48.
 
 ## Cause and behavior
 
@@ -56,7 +56,18 @@ This uses local Mac resources and adds no cloud compute or storage.
   sampler timings, not measurements of a physical iPhone's tap-to-switch latency.
 - The installed iPhone UI already displays this Boolean from the host, so this
   repair needs no new iPhone upload. Physical iPhone badge verification remains
-  pending installation of the new Mac build.
+  a hands-on check after reconnecting to the updated Mac.
+- The follow-up ran all ten request-activity tests, including the live sampler:
+  fourteen Terminal identities, three active requests, approximately 0.43 seconds
+  initially and 0.17 seconds for the next background sample. All tests passed.
+- The installed binary SHA-256 matches the notarized build 58 candidate:
+  d625e2ce32aa6401a8ae6ea798ec3e916aa1e27dfc49d6451427e01b43a113e2.
+  The installed signature, notarization ticket, and Gatekeeper assessment pass.
+- The running app uses local port 4487, reports healthy with the shared Codex app
+  server ready, and its managed cloud host has an established relay connection.
+  The installed native binary and bundled/managed protocol, host connector, and
+  web UI sources match the verified patch. A signed request through the installed
+  host returned the full voice catalog and preserved the saved voice settings.
 
 ## Release and installation handoff
 
@@ -71,16 +82,15 @@ It includes `baseline.log`, `targeted-tests.log`, `mac-tests.log`,
 `protocol-tests.log`, build logs, and notarization evidence.
 
 Build 57 was an intermediate notarized candidate. Build 58 includes the additional
-process-launch guard and is the candidate to install. The protected installed
-app has not been replaced in this task. macOS App Management was inspected through
-System Settings and Terminal's switch is off. The execution process ancestry
-also identifies Terminal as the responsible application.
+process-launch guard and is now installed. Earlier command-line replacement was
+blocked by macOS App Management. On the follow-up, Finder's normal Copy/Replace
+flow succeeded after quitting ClawDad. The verified source was selected directly
+from the ready folder. No security permission change was needed.
 
-The remaining installation step requires either a normal Finder replacement or
-approval to temporarily enable Terminal's App Management permission, install the
-signed build 58, and restore that permission to off. The Computer Use skill
-requires confirmation for security-sensitive OS setting changes. No such setting
-has been changed without approval.
+The installed-host probe passed at 2026-09-06T17:57:46Z. Its receipt is
+`installed-host-probe.json`; `release-verified.json` now records the completed
+installation. Fresh activity-test and hygiene evidence is under
+`native/macos/dist/candidates/terminal-busy-followup-*`.
 
 The signed build 55 rollback remains at
 `native/macos/dist/candidates/voice-picker-stability-2026-09-06/rollback/ClawDad-build55.app`.

@@ -1,5 +1,9 @@
 # Dictation after Read Aloud
 
+Later deployment: [Mac build 58 is now installed](terminal-request-activity-repair-2026-09-06.md),
+including the Terminal Busy and desktop voice-picker repairs. The original
+iPhone release verification below used Mac build 55.
+
 September 6, 2026. iPhone 0.7.0 build 48 is VALID and IN_BETA_TESTING in the
 existing ClawDad Internal group. The installed Mac remains build 55.
 
@@ -62,9 +66,9 @@ describes the recording category and recorder state used by this path.
 
 ## Release and workspace
 
-This is an iPhone repair compatible with installed Mac build 55. The separately
-prepared Mac build 58 remains ready for its pending installation; this change
-does not require the unresolved App Management permission change.
+This iPhone repair is compatible with Mac build 55. Mac build 58 was subsequently
+installed through Finder with no App Management permission change; see the
+linked Terminal Busy release record.
 
 Archive: apps/ios/ClawDadMobile/build/STT48.xcarchive.
 Automated evidence: native/macos/dist/candidates/stt-regression-*.
