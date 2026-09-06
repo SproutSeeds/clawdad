@@ -6,6 +6,57 @@ final class ClawDadMobileUITests: XCTestCase {
     continueAfterFailure = false
   }
 
+  func testGroupedWindowsKeepDuplicateTabsAndRememberExpandedGroups() {
+    let app = XCUIApplication()
+    app.launchArguments += ["--clawdad-app-store-preview", "terminal-reader", "--clawdad-preview-window-groups"]
+    app.launch()
+    let chooser = app.buttons["Choose Terminal tab"]
+    XCTAssertTrue(chooser.waitForExistence(timeout: 20))
+    chooser.tap()
+    let first = app.buttons["clawdad.remote.window.window-1"]
+    XCTAssertTrue(first.waitForExistence(timeout: 8))
+    XCTAssertEqual(first.value as? String, "Expanded")
+    XCTAssertTrue(app.staticTexts["20 tabs"].exists)
+    first.tap()
+    let second = app.buttons["clawdad.remote.window.window-2"]
+    XCTAssertTrue(second.waitForExistence(timeout: 5))
+    second.tap()
+    XCTAssertEqual(second.value as? String, "Expanded")
+    let rows = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "same-directory"))
+    XCTAssertEqual(rows.count, 3)
+    rows.element(boundBy: 1).tap()
+    XCTAssertEqual(first.value as? String, "Collapsed")
+    XCTAssertEqual(second.value as? String, "Expanded")
+    let source = app.buttons["clawdad.remote.tab.window-2-tab-1"]
+    let target = app.buttons["clawdad.remote.tab.window-2-tab-3"]
+    let handle = app.buttons.matching(identifier: "Reorder same-directory").element(boundBy: 0)
+    handle.press(forDuration: 0.7, thenDragTo: target)
+    XCTAssertTrue(waitUntil(timeout: 6) { source.label.contains("Tab 3") })
+    let attachment = XCTAttachment(screenshot: app.screenshot())
+    attachment.name = "Grouped physical Terminal windows"; attachment.lifetime = .keepAlways; add(attachment)
+    app.buttons["Back to Remote Assist controls"].tap()
+    chooser.tap()
+    XCTAssertEqual(first.value as? String, "Collapsed")
+    XCTAssertEqual(second.value as? String, "Expanded")
+  }
+
+  func testSlowVoicePreparationStaysInlineAndStopRejectsLateAudio() {
+    let app = XCUIApplication()
+    app.launchArguments += ["--clawdad-app-store-preview", "terminal-reader", "--clawdad-preview-slow-voice"]
+    app.launch()
+    let speaker = app.buttons["clawdad.remote.reader"]
+    XCTAssertTrue(speaker.waitForExistence(timeout: 20))
+    speaker.tap()
+    XCTAssertTrue(app.staticTexts["Preparing voice…"].waitForExistence(timeout: 8))
+    XCTAssertEqual(speaker.label, "Stop Read Aloud")
+    let attachment = XCTAttachment(screenshot: app.screenshot())
+    attachment.name = "Shared voice preparation inline"; attachment.lifetime = .keepAlways; add(attachment)
+    speaker.tap()
+    XCTAssertTrue(waitUntil(timeout: 3) { speaker.label == "Read selected text or latest Terminal response" })
+    let late = app.staticTexts["Reading: Selected Mac text"]
+    XCTAssertFalse(late.waitForExistence(timeout: 10))
+  }
+
   func testFilesOpensAndReturnsToWorkspace() {
     let app = XCUIApplication()
     app.launchArguments += ["--clawdad-app-store-preview", "workspace"]

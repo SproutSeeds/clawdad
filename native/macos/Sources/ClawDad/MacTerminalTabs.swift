@@ -6,6 +6,7 @@ import Foundation
 
 struct MacTerminalTabSnapshot: Equatable, Sendable {
   let windowID: Int
+  let nativeTabID: String?
   let windowIndex: Int
   let tabIndex: Int
   let customTitle: String
@@ -28,9 +29,11 @@ struct MacTerminalTabSnapshot: Equatable, Sendable {
     isSelectedInWindow: Bool,
     hasUnreadActivity: Bool = false,
     visibleGroupID: Int? = nil,
-    visibleTabIndex: Int? = nil
+    visibleTabIndex: Int? = nil,
+    nativeTabID: String? = nil
   ) {
     self.windowID = windowID
+    self.nativeTabID = nativeTabID
     self.windowIndex = windowIndex
     self.tabIndex = tabIndex
     self.customTitle = customTitle
@@ -43,12 +46,8 @@ struct MacTerminalTabSnapshot: Equatable, Sendable {
   }
 }
 
-private struct MacTerminalTabLocation: Hashable {
-  let windowIndex: Int
-  let tabIndex: Int
-}
-
 private struct MacTerminalTabIdentity: Hashable {
+  let nativeTabID: String?
   let windowID: Int
   let tty: String
 }
@@ -73,6 +72,8 @@ protocol MacTerminalAutomating: AnyObject {
   @MainActor var supportsReordering: Bool { get }
   @MainActor
   func readTabs() async throws -> [MacTerminalTabSnapshot]
+  @MainActor func focusTab(_ snapshot: MacTerminalTabSnapshot) async throws
+  @MainActor func moveTab(_ snapshot: MacTerminalTabSnapshot, toIndex: Int, group: [MacTerminalTabSnapshot]) async throws
   @MainActor
   func focusTab(windowID: Int, tabIndex: Int) async throws
   @MainActor
@@ -82,6 +83,12 @@ protocol MacTerminalAutomating: AnyObject {
 }
 
 extension MacTerminalAutomating {
+  @MainActor func focusTab(_ snapshot: MacTerminalTabSnapshot) async throws {
+    try await focusTab(windowID: snapshot.windowID, tabIndex: snapshot.tabIndex, tty: snapshot.tty)
+  }
+  @MainActor func moveTab(_ snapshot: MacTerminalTabSnapshot, toIndex: Int, group: [MacTerminalTabSnapshot]) async throws {
+    try await moveTab(windowID: snapshot.windowID, fromIndex: snapshot.position, toIndex: toIndex, expectedTTYs: group.map(\.tty))
+  }
   @MainActor var supportsReordering: Bool { false }
   @MainActor
   func moveTab(windowID: Int, fromIndex: Int, toIndex: Int, expectedTTYs: [String]) async throws {
@@ -127,6 +134,8 @@ final class MacTerminalTabController {
   private var identifiers: [MacTerminalTabIdentity: String] = [:]
   private var snapshotsByIdentifier: [String: MacTerminalTabSnapshot] = [:]
   private var windowOrder: [Int] = []
+  private var windowNumbers: [Int: Int] = [:]
+  private var nextWindowNumber = 1
   private var lastState: RemoteTerminalTabState?
 
   func latestResponse(_ request: RemoteTerminalResponseMessage) async throws -> RemoteTerminalResponseMessage {
@@ -207,11 +216,7 @@ final class MacTerminalTabController {
     }
 
     do {
-      try await automation.focusTab(
-        windowID: target.windowID,
-        tabIndex: target.tabIndex,
-        tty: target.tty
-      )
+      try await automation.focusTab(target)
     } catch let failure as MacTerminalTabFailure {
       throw routePermissionIfNeeded(failure)
     } catch {
@@ -265,16 +270,14 @@ final class MacTerminalTabController {
     if expectedIDs == group.map(\.id) { return state }
     let previousSelected = state.selectedTabId.flatMap { snapshotsByIdentifier[$0] }
     do {
-      try await automation.moveTab(windowID: source.windowID, fromIndex: source.position,
-                                   toIndex: (expectedIDs.firstIndex(of: sourceID) ?? 0) + 1,
-                                   expectedTTYs: group.compactMap { snapshotsByIdentifier[$0.id]?.tty })
+      try await automation.moveTab(source, toIndex: (expectedIDs.firstIndex(of: sourceID) ?? 0) + 1,
+                                   group: group.compactMap { snapshotsByIdentifier[$0.id] })
       if let previousSelected {
-        try await automation.focusTab(windowID: previousSelected.windowID,
-                                       tabIndex: previousSelected.tabIndex, tty: previousSelected.tty)
+        try await automation.focusTab(previousSelected)
       }
     } catch {
       if let previousSelected {
-        try? await automation.focusTab(windowID: previousSelected.windowID, tabIndex: previousSelected.tabIndex, tty: previousSelected.tty)
+        try? await automation.focusTab(previousSelected)
       }
       let refreshed = try? await catalog()
       throw MacTerminalTabFailure(code: "reorder_failed", message: error.localizedDescription, state: refreshed ?? state)
@@ -296,6 +299,7 @@ final class MacTerminalTabController {
     windowOrder.removeAll { !activeWindows.contains($0) }
     for snapshot in observed where !windowOrder.contains(snapshot.groupID) {
       windowOrder.append(snapshot.groupID)
+      if windowNumbers[snapshot.groupID] == nil { windowNumbers[snapshot.groupID] = nextWindowNumber; nextWindowNumber += 1 }
     }
     let snapshots = observed.sorted {
       let left = windowOrder.firstIndex(of: $0.groupID) ?? 0
@@ -332,10 +336,11 @@ final class MacTerminalTabController {
       return RemoteTerminalTabDescriptor(
         id: identifier,
         title: macTerminalTabTitle(snapshot.customTitle),
-        detail: "Window \((windowOrder.firstIndex(of: snapshot.groupID) ?? 0) + 1) • Tab \(snapshot.position)",
+        detail: "Window \(windowNumbers[snapshot.groupID] ?? 1) • Tab \(snapshot.position)",
         isSelected: isSelected,
         isBusy: snapshot.isBusy,
         hasUnreadActivity: snapshot.hasUnreadActivity && !isSelected,
+        windowTitle: "Terminal Window \(windowNumbers[snapshot.groupID] ?? 1)",
         windowGroupId: "terminal-window-\(snapshot.groupID)",
         tabPosition: snapshot.position,
         canReorder: automation.supportsReordering && snapshots.filter { $0.groupID == snapshot.groupID }.count > 1
@@ -354,8 +359,9 @@ final class MacTerminalTabController {
     for snapshot: MacTerminalTabSnapshot
   ) -> MacTerminalTabIdentity {
     MacTerminalTabIdentity(
-      windowID: snapshot.windowID,
-      tty: snapshot.tty
+      nativeTabID: snapshot.nativeTabID,
+      windowID: snapshot.nativeTabID == nil ? snapshot.windowID : 0,
+      tty: snapshot.nativeTabID == nil ? snapshot.tty : ""
     )
   }
 }
@@ -377,24 +383,6 @@ func macTerminalTabTitle(_ value: String) -> String {
     result = next
   }
   return result.isEmpty ? "Terminal Tab" : result
-}
-
-/// Native macOS tab groups can expose each visible tab as a separate scripted
-/// window. Bind only unambiguous tab labels; duplicate titles never get guessed.
-func macTerminalNativeGroupMembers(titles: [String], snapshots: [MacTerminalTabSnapshot]) -> [MacTerminalTabSnapshot]? {
-  guard titles.count > 1 else { return nil }
-  let windowCounts = Dictionary(grouping: snapshots, by: \.windowID).mapValues(\.count)
-  let candidates = snapshots.filter { windowCounts[$0.windowID] == 1 && !$0.customTitle.isEmpty }
-  var members: [MacTerminalTabSnapshot] = []
-  for title in titles {
-    let title = macTerminalTabTitle(title)
-    let exact = candidates.filter { macTerminalTabTitle($0.customTitle) == title }
-    let matches = exact.isEmpty ? candidates.filter { title.contains(macTerminalTabTitle($0.customTitle)) } : exact
-    guard matches.count == 1, let match = matches.first,
-          !members.contains(where: { $0.windowID == match.windowID }) else { return nil }
-    members.append(match)
-  }
-  return members
 }
 
 func macTerminalAutomationFailure(
@@ -429,8 +417,7 @@ final class MacTerminalAutomation: MacTerminalAutomating, @unchecked Sendable {
   @MainActor var supportsReordering: Bool { AXIsProcessTrusted() }
   // Accessed only on queue. Activity badges do not need a full AX tree walk
   // for every focus/read or every two-second catalog poll.
-  private var activityCheckedAt = Date.distantPast
-  private var unreadTTYs: Set<String> = []
+  private let nativeTabs = MacNativeTerminalTabs()
   private let queue = DispatchQueue(
     label: "earth.frg.ClawDad.remote-assist.terminal",
     qos: .userInitiated
@@ -447,20 +434,47 @@ final class MacTerminalAutomation: MacTerminalAutomating, @unchecked Sendable {
       queue.async {
         continuation.resume(with: Result {
           try Self.requestAutomationPermission()
-          let descriptor = try Self.execute(Self.catalogScript)
-          let snapshots = try Self.parseCatalog(descriptor)
-          if Date().timeIntervalSince(self.activityCheckedAt) >= 8 {
-            let locations = Self.unreadActivityLocations()
-            self.unreadTTYs = Set(snapshots.filter {
-              locations.contains(MacTerminalTabLocation(windowIndex: $0.windowIndex, tabIndex: $0.tabIndex))
-            }.map(\.tty))
-            self.activityCheckedAt = Date()
+          guard AXIsProcessTrusted(), let terminal = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Terminal").first else {
+            throw MacTerminalTabFailure(code: "accessibility_required", message: "Allow ClawDad in Mac Accessibility settings to read Terminal window groups.", state: nil)
           }
-          return Self.applyVisibleTabGroups(Self.applyUnreadActivity(Set(snapshots.filter { self.unreadTTYs.contains($0.tty) }.map {
-            MacTerminalTabLocation(windowIndex: $0.windowIndex, tabIndex: $0.tabIndex)
-          }), to: snapshots))
+          return try self.nativeTabs.snapshots(application: AXUIElementCreateApplication(terminal.processIdentifier)) {
+            try Self.parseCatalog(Self.execute(Self.catalogScript))
+          }
         })
       }
+    }
+  }
+
+  @MainActor
+  func focusTab(_ snapshot: MacTerminalTabSnapshot) async throws {
+    guard let nativeID = snapshot.nativeTabID else {
+      try await focusTab(windowID: snapshot.windowID, tabIndex: snapshot.tabIndex, tty: snapshot.tty); return
+    }
+    guard let terminal = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Terminal").first else { return }
+    terminal.activate(options: [.activateIgnoringOtherApps])
+    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+      queue.async { continuation.resume(with: Result {
+        try self.nativeTabs.focus(nativeID, application: AXUIElementCreateApplication(terminal.processIdentifier))
+      }) }
+    }
+  }
+
+  @MainActor
+  func moveTab(_ snapshot: MacTerminalTabSnapshot, toIndex: Int, group: [MacTerminalTabSnapshot]) async throws {
+    guard snapshot.nativeTabID != nil else {
+      try await moveTab(windowID: snapshot.windowID, fromIndex: snapshot.position, toIndex: toIndex, expectedTTYs: group.map(\.tty)); return
+    }
+    try await focusTab(snapshot)
+    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+      queue.async { continuation.resume(with: Result {
+        guard let terminal = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Terminal").first else { return }
+        let bindings = try self.nativeTabs.capture(application: AXUIElementCreateApplication(terminal.processIdentifier))
+        let actual = bindings.filter { $0.groupID == snapshot.groupID }
+        guard actual.map(\.id) == group.compactMap(\.nativeTabID) else {
+          throw MacTerminalTabFailure(code: "stale_catalog", message: "The Terminal tab order changed. Refresh and drag again.", state: nil)
+        }
+        try Self.dragTab(fromIndex: snapshot.position, toIndex: toIndex, group: group, nativeControls: actual.map(\.control))
+      }) }
     }
   }
 
@@ -504,7 +518,7 @@ final class MacTerminalAutomation: MacTerminalAutomating, @unchecked Sendable {
     try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
       queue.async {
         continuation.resume(with: Result {
-          let snapshots = try Self.applyVisibleTabGroups(Self.parseCatalog(Self.execute(Self.catalogScript)))
+          let snapshots = try Self.parseCatalog(Self.execute(Self.catalogScript))
           let groupID = snapshots.first { $0.windowID == windowID }?.groupID
           let group = snapshots.filter { $0.groupID == groupID }.sorted { $0.position < $1.position }
           guard group.map(\.tty) == expectedTTYs, group.contains(where: { $0.windowIndex == 1 }) else {
@@ -518,7 +532,7 @@ final class MacTerminalAutomation: MacTerminalAutomating, @unchecked Sendable {
 
   // Terminal exposes no writable tab position in its scripting dictionary.
   // Move the existing tab in its tab strip; never recreate a shell or a session.
-  private static func dragTab(fromIndex: Int, toIndex: Int, group: [MacTerminalTabSnapshot]) throws {
+  private static func dragTab(fromIndex: Int, toIndex: Int, group: [MacTerminalTabSnapshot], nativeControls: [AXUIElement]? = nil) throws {
     func unavailable() -> MacTerminalTabFailure {
       MacTerminalTabFailure(code: "reorder_unavailable", message: "ClawDad could not identify the visible Terminal tab handles. Show the tab bar on the Mac and try again.", state: nil)
     }
@@ -536,6 +550,9 @@ final class MacTerminalAutomation: MacTerminalAutomating, @unchecked Sendable {
       accessibilityString($0, attribute: kAXRoleAttribute as CFString) == kAXRadioButtonRole as String
     }
     guard tabs.count == group.count, tabs.indices.contains(fromIndex - 1), tabs.indices.contains(toIndex - 1) else { throw unavailable() }
+    if let nativeControls {
+      guard tabs.count == nativeControls.count, zip(tabs, nativeControls).allSatisfy({ CFEqual($0, $1) }) else { throw unavailable() }
+    }
     // Validate the labels as well as positions, so an unfamiliar AX tab group
     // cannot turn a reorder into a drag of unrelated controls.
     for (tab, snapshot) in zip(tabs, group) where !snapshot.customTitle.isEmpty {
@@ -681,115 +698,6 @@ final class MacTerminalAutomation: MacTerminalAutomating, @unchecked Sendable {
     )
     if let failure = macTerminalAutomationFailure(for: status) {
       throw failure
-    }
-  }
-
-  private static func unreadActivityLocations() -> Set<MacTerminalTabLocation> {
-    guard AXIsProcessTrusted(),
-          let terminal = NSRunningApplication.runningApplications(
-            withBundleIdentifier: "com.apple.Terminal"
-          ).first else {
-      return []
-    }
-
-    let application = AXUIElementCreateApplication(
-      terminal.processIdentifier
-    )
-    let terminalWindows = accessibilityElements(
-      application,
-      attribute: kAXWindowsAttribute as CFString
-    ).compactMap { window -> (AXUIElement, AXUIElement)? in
-      guard let tabGroup = firstAccessibilityElement(
-        withRole: kAXTabGroupRole as String,
-        in: window,
-        maximumDepth: 2
-      ) else {
-        return nil
-      }
-      return (window, tabGroup)
-    }
-
-    var locations: Set<MacTerminalTabLocation> = []
-    for (windowOffset, terminalWindow) in terminalWindows.enumerated() {
-      let tabGroup = terminalWindow.1
-      let tabButtons = accessibilityElements(
-        tabGroup,
-        attribute: kAXChildrenAttribute as CFString
-      ).filter {
-        accessibilityString(
-          $0,
-          attribute: kAXRoleAttribute as CFString
-        ) == kAXRadioButtonRole as String
-      }
-      for (tabOffset, tabButton) in tabButtons.enumerated() {
-        let hasTabAlert = accessibilityElements(
-          tabButton,
-          attribute: kAXChildrenAttribute as CFString
-        ).contains {
-          accessibilityString(
-            $0,
-            attribute: kAXDescriptionAttribute as CFString
-          ) == "TabAlert"
-        }
-        if hasTabAlert {
-          locations.insert(MacTerminalTabLocation(
-            windowIndex: windowOffset + 1,
-            tabIndex: tabOffset + 1
-          ))
-        }
-      }
-    }
-    return locations
-  }
-
-  private static func applyUnreadActivity(
-    _ locations: Set<MacTerminalTabLocation>,
-    to snapshots: [MacTerminalTabSnapshot]
-  ) -> [MacTerminalTabSnapshot] {
-    snapshots.map { snapshot in
-      MacTerminalTabSnapshot(
-        windowID: snapshot.windowID,
-        windowIndex: snapshot.windowIndex,
-        tabIndex: snapshot.tabIndex,
-        customTitle: snapshot.customTitle,
-        tty: snapshot.tty,
-        isBusy: snapshot.isBusy,
-        isSelectedInWindow: snapshot.isSelectedInWindow,
-        hasUnreadActivity: locations.contains(MacTerminalTabLocation(
-          windowIndex: snapshot.windowIndex,
-          tabIndex: snapshot.tabIndex
-        ))
-      )
-    }
-  }
-
-  private static func applyVisibleTabGroups(_ snapshots: [MacTerminalTabSnapshot]) -> [MacTerminalTabSnapshot] {
-    guard AXIsProcessTrusted(),
-          let terminal = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Terminal").first else { return snapshots }
-    let application = AXUIElementCreateApplication(terminal.processIdentifier)
-    AXUIElementSetMessagingTimeout(application, 0.25)
-    let windows = accessibilityElements(application, attribute: kAXWindowsAttribute as CFString)
-    var groups: [Int: (id: Int, position: Int)] = [:]
-    for window in windows {
-      guard let tabGroup = firstAccessibilityElement(withRole: kAXTabGroupRole as String, in: window, maximumDepth: 2) else { continue }
-      let tabs = accessibilityElements(tabGroup, attribute: kAXChildrenAttribute as CFString).filter {
-        accessibilityString($0, attribute: kAXRoleAttribute as CFString) == kAXRadioButtonRole as String
-      }
-      let titles = tabs.map { tab in
-        [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute].compactMap {
-          accessibilityString(tab, attribute: $0 as CFString)
-        }.first(where: { !$0.isEmpty }) ?? ""
-      }
-      guard let members = macTerminalNativeGroupMembers(titles: titles, snapshots: snapshots),
-            let groupID = members.map(\.windowID).min() else { continue }
-      for (position, member) in members.enumerated() { groups[member.windowID] = (groupID, position + 1) }
-    }
-    return snapshots.map { snapshot in
-      guard let group = groups[snapshot.windowID] else { return snapshot }
-      return MacTerminalTabSnapshot(windowID: snapshot.windowID, windowIndex: snapshot.windowIndex, tabIndex: snapshot.tabIndex,
-        customTitle: snapshot.customTitle, tty: snapshot.tty, isBusy: snapshot.isBusy,
-        isSelectedInWindow: snapshot.isSelectedInWindow, hasUnreadActivity: snapshot.hasUnreadActivity,
-        visibleGroupID: group.id, visibleTabIndex: group.position)
     }
   }
 

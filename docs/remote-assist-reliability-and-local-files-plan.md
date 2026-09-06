@@ -2,66 +2,75 @@
 
 ## Next patch: physical Terminal windows and shared speech
 
-Status: planned after Mac 50 / iPhone 42. This section captures the current product
-direction and supersedes the earlier choice of iPhone-native Remote Assist speech.
+Status: implemented for Mac 51 / iPhone 43; release verification is recorded in
+`reports/remote-assist-window-groups-shared-voice-2026-09-05.md`. This section
+supersedes the earlier choice of iPhone-native Remote Assist speech.
 The released behavior and earlier acceptance records remain documented below.
 
 ### Terminal window groups
 
-- [ ] Show one expandable group per physical Terminal window, labeled with its
+- [x] Show one expandable group per physical Terminal window, labeled with its
   stable window number and tab count. Expand the active window initially and
   remember the user's expanded groups. Preserve the switcher's Back control.
-- [ ] List each window's tabs top to bottom in the real tab strip's left-to-right
+- [x] List each window's tabs top to bottom in the real tab strip's left-to-right
   order, including tabs hidden by overflow. Selecting a tab changes its highlight
   without changing either tab order or window-group order.
-- [ ] Keep every tab distinct, including multiple tabs with the same directory or
+- [x] Keep every tab distinct, including multiple tabs with the same directory or
   title. Show its position and title; directory/title strings are display metadata.
-- [ ] Replace ambiguous title-based native grouping with verified physical-window
-  and tab identity mapping. Establish the mapping against real Terminal behavior
-  before relying on it for focus, reordering, dictation or speech ownership.
-- [ ] Reconcile opened, closed, renamed and moved tabs with the live Mac. Preserve
+- [x] Replace ambiguous title-based native grouping with verified physical-window
+  and tab identity mapping. Validate the selected shell and native control identity
+  while collecting the layout, including before and after selection. Keep the
+  physical Terminal comparison in the acceptance checks below.
+- [x] Reconcile opened, closed, renamed and moved tabs with the live Mac. Preserve
   within-window drag handles and accessible move actions, and confirm the actual
   Terminal order after a move. Cross-window dragging remains outside this patch.
 
-Current code evidence: `RemoteAssist.swift` renders a flat `remoteTerminalTabs`
-list; `MacTerminalTabs.swift` matches native group members by title and declines
+Pre-patch code evidence: `RemoteAssist.swift` rendered a flat `remoteTerminalTabs`
+list; `MacTerminalTabs.swift` matched native group members by title and declined
 ambiguous matches. Adding section headers alone would leave the grouping defect.
 
 ### Same speech model and voice as the main app
 
-- [ ] Route Remote Assist speech through the main app's shared synthesis pipeline,
+- [x] Route Remote Assist speech through the main app's shared synthesis pipeline,
   using its effective model, voice and playback settings. Reuse the canonical
   configuration so a voice/model change applies to both experiences.
-- [ ] Preserve the inline speaker action: highlighted Mac text takes priority;
+- [x] Preserve the inline speaker action: highlighted Mac text takes priority;
   a confirmed empty selection falls back to the focused Terminal tab's latest
   completed response. Retain the exact selected source while preparing audio.
-- [ ] Show compact inline "Preparing voice..." feedback, then play automatically
+- [x] Show compact inline "Preparing voice..." feedback, then play automatically
   when audio is ready. Cody explicitly accepts longer preparation for the same
   higher-quality voice. Allow preparation time appropriate to that pipeline while
   keeping connection failures distinguishable from ongoing synthesis.
-- [ ] Keep Stop/cancel available during lookup, preparation and playback. Cancelled
+- [x] Keep Stop/cancel available during lookup, preparation and playback. Cancelled
   requests, changed sources and reconnects must not start delayed or unrelated audio.
   Keep errors and Retry inline; preserve the shared voice choice when generation
   fails rather than silently substituting the iPhone system voice.
-- [ ] Reuse the existing paired-Mac synthesis, cache and authenticated audio-delivery
+- [x] Reuse the existing paired-Mac synthesis, cache and authenticated audio-delivery
   capabilities. Prefer direct Remote Assist delivery where supported; preserve local
   compute/storage preferences and existing relay usage controls. Add no cloud file
   store or new cloud compute resources for this change.
 
-Verified on September 5: the installed host's authenticated `/v1/tts/status`
+Pre-patch check on September 5: the installed host's authenticated `/v1/tts/status`
 reported `provider: doc-reader`, `engine: kokoro`, enabled and available. The main
 iPhone history path requests `speech.synthesize.request`, while
-`toggleRemoteReadAloud` currently calls `toggleLocalSpeech`. The status endpoint does
-not expose a voice identifier; implementation must resolve the actual shared voice
-configuration rather than assume a default. Health is not audible-playback proof.
+`toggleRemoteReadAloud` called `toggleLocalSpeech` before this patch. The status endpoint does
+not expose a voice identifier. The implementation resolves the shared voice from
+the synthesis result, as verified below. Health is not audible-playback proof.
+
+Implementation evidence: native AppKit fixtures exercise the production catalog
+reader with two windows and 20 duplicate-named tabs, including left-to-right frames
+and focus changes. The iPhone uses native list reordering. Shared synthesis produced
+valid 24 kHz WAV audio with Kokoro and `af_heart`; model and voice come from the
+main app's effective configuration. Expansion is retained while using the switcher
+within the Remote Assist session. No iPhone system-voice fallback remains.
 
 ### Acceptance for this patch
 
 - [ ] Compare the phone picker with two physical Terminal windows, including 20
   tabs, repeated titles/directories and overflowing tab bars. Verify Mac and phone
   reordering, open/close changes, stable selection, and preserved input/speech targets.
-- [ ] Verify both speech paths use the same effective model and voice configuration.
-  Listen to the same passage through the main app and Remote Assist on the physical
+- [x] Verify both speech paths use the same effective model and voice configuration.
+- [ ] Listen to the same passage through the main app and Remote Assist on the physical
   iPhone, including highlighted text and a latest completed Terminal response.
 - [ ] Exercise slow preparation, cancellation, retries, disconnect/reconnect and
   source changes. Confirm one tap eventually plays the intended audio, the screen
@@ -97,7 +106,7 @@ Audit date: 2026-09-05. Baseline commit: `b2cc1e0`.
 
 ## Product decisions
 
-- The paired Mac owns agent execution, dictation processing, and the canonical Files library. The next Remote Assist patch will share the main app's speech model and voice configuration; longer preparation is acceptable for that quality. Mac 50 / iPhone 42 currently use iPhone-native Remote Assist speech, as recorded in the release history below.
+- The paired Mac owns agent execution, dictation processing, and the canonical Files library. Mac 51 / iPhone 43 share the main app's speech model and voice configuration; longer preparation is acceptable for that quality. Mac 50 / iPhone 42 previously used iPhone-native Remote Assist speech, as recorded in the release history below.
 - Files use local Mac storage. The phone fetches files on demand and can retain downloads or export them to Apple Files/share destinations.
 - Cloud infrastructure supplies the existing pairing, signaling, and necessary transient relay functions. This plan adds no cloud file store, automatic cloud backups, or cloud document processing.
 - Prefer direct device transfer. Any relay fallback must obey usage controls; local storage alone does not eliminate relay bandwidth.

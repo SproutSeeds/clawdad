@@ -10,9 +10,13 @@ final class RemoteTerminalReaderTests: XCTestCase {
     let domain = "RemoteTerminalReaderTests.\(UUID().uuidString)"
     let defaults = UserDefaults(suiteName: domain)!
     addTeardownBlock { UserDefaults.standard.removePersistentDomain(forName: domain) }
-    let speaker = ReaderTestSpeaker { [weak self] text in self?.sent.append(text) }
-    let session = CloudSession(defaults: defaults, readAloud: MobileReadAloudController(localSpeaker: speaker)) { type, _, _ in
-      XCTFail("Remote Assist speech must stay local, received cloud request: \(type)")
+    let session = CloudSession(defaults: defaults, readAloud: MobileReadAloudController()) { [weak self] type, body, _ in
+      XCTAssertEqual(type, "speech.synthesize.request")
+      XCTAssertEqual(body["source"]?.stringValue, "remote-assist")
+      XCTAssertEqual(body["executionPreference"]?.stringValue, "paired-mac-first")
+      XCTAssertEqual(body["allowRemoteFallback"], .bool(false))
+      XCTAssertEqual(body["project"]?.stringValue, "")
+      self?.sent.append(body["text"]?.stringValue ?? "")
     }
     session.hostId = "test-mac"
     session.pairedHostId = "test-mac"
@@ -36,7 +40,7 @@ final class RemoteTerminalReaderTests: XCTestCase {
 
   private func drain() async { for _ in 0..<20 { await Task.yield() } }
 
-  func testLatestAnswerSpeaksExactTextLocallyWithoutComposerOrCloud() async {
+  func testLatestAnswerRequestsSharedSpeechWithExactTextWithoutComposerContext() async {
     let (session, reader) = setupReader()
     defer { session.readAloud.stop() }
     session.selectedProjectPath = "/unrelated-project"
@@ -98,6 +102,23 @@ final class RemoteTerminalReaderTests: XCTestCase {
     XCTAssertEqual(reader.title, "Selected Mac text")
   }
 
+  func testCancelAndImmediateRetryCannotSendTheEarlierAttemptWithTheSameKey() async {
+    let (session, _) = setupReader()
+    defer { session.readAloud.stop() }
+    session.toggleRemoteReadAloud(key: "same", text: "Older text")
+    session.readAloud.stop()
+    session.toggleRemoteReadAloud(key: "same", text: "Current text")
+    await drain()
+    XCTAssertEqual(sent, ["Current text"])
+    XCTAssertEqual(session.readAloud.phase, .preparing)
+    session.readAloud.stop()
+    session.readAloud.markAccepted(requestId: "stale")
+    session.readAloud.receiveChunk(requestId: "stale", partIndex: 0, partCount: 1,
+      chunkIndex: 0, chunkCount: 1, fileName: "stale.wav", mimeType: "audio/wav", declaredBytes: 3, dataBase64: "YWJj")
+    session.readAloud.complete(requestId: "stale", partCount: 1)
+    XCTAssertEqual(session.readAloud.phase, .idle)
+  }
+
   func testBackKeepsOwnedPlaybackAndStoppingReaderDoesNotStopComposerAudio() {
     let (session, reader) = setupReader()
     defer { session.readAloud.stop() }
@@ -111,14 +132,4 @@ final class RemoteTerminalReaderTests: XCTestCase {
     reader.invalidate()
     XCTAssertEqual(session.readAloud.activeKey, "composer")
   }
-}
-
-@MainActor
-private final class ReaderTestSpeaker: MobileSpeechEngine {
-  let received: (String) -> Void
-  init(_ received: @escaping (String) -> Void) { self.received = received }
-  func start(text: String, onStart: @escaping () -> Void, onFinish: @escaping (Bool) -> Void) throws { received(text); onStart() }
-  func pause() -> Bool { true }
-  func resume() -> Bool { true }
-  func stop() {}
 }

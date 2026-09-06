@@ -135,10 +135,23 @@ final class MacTerminalTabTests: XCTestCase {
     XCTAssertEqual(state.selectedTabId, state.tabs[1].id)
   }
 
-  func testNativeGroupBindingUsesDistinctTitlesAndRefusesAmbiguousTabs() {
-    XCTAssertEqual(macTerminalNativeGroupMembers(titles: ["life-ops", "clawdad"], snapshots: initialSnapshots)?.map(\.windowID), [20, 10])
-    XCTAssertNil(macTerminalNativeGroupMembers(titles: ["clawdad", "clawdad"], snapshots: initialSnapshots))
-    XCTAssertNil(macTerminalNativeGroupMembers(titles: ["missing", "clawdad"], snapshots: initialSnapshots))
+  func testNativeControlIdentitySurvivesRepeatedTitlesAndLateShellResolution() async throws {
+    func row(_ id: String, _ position: Int, tty: String = "", window: Int = 0) -> MacTerminalTabSnapshot {
+      MacTerminalTabSnapshot(windowID: window, windowIndex: 1, tabIndex: 1,
+        customTitle: "same-directory", tty: tty, isBusy: false, isSelectedInWindow: position == 2,
+        visibleGroupID: 5, visibleTabIndex: position, nativeTabID: id)
+    }
+    let automation = StubTerminalAutomation(snapshots: [row("native-a", 1), row("native-b", 2)])
+    let controller = MacTerminalTabController(automation: automation)
+    let first = try await controller.catalog()
+    XCTAssertEqual(Set(first.tabs.map(\.id)).count, 2)
+    automation.snapshots = [row("native-a", 1), row("native-b", 2, tty: "/dev/ttys002", window: 100)]
+    let resolved = try await controller.catalog()
+    XCTAssertEqual(resolved.tabs.map(\.id), first.tabs.map(\.id))
+    XCTAssertEqual(resolved.revision, first.revision)
+    automation.snapshots.reverse()
+    let reorderedRead = try await controller.catalog()
+    XCTAssertEqual(reorderedRead.tabs.map(\.id), first.tabs.map(\.id))
   }
 
   func testResponseRequiresTheCurrentlySelectedTab() async throws {

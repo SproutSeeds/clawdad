@@ -10,8 +10,24 @@ final class RemoteSpeechPreviewHost {
   private var requests = 0
   private var tokens: Set<String> = []
   private var capturing = false
+  private var selectedTab = "window-1-tab-1"
+  private var windowTwoOrder = [1, 2, 3]
+  private var revision = 1
   private let arguments = ProcessInfo.processInfo.arguments
   init(receive: @escaping (Data) -> Void) { self.receive = receive }
+
+  /// Silent PCM exercises transferred-audio playback; it is not voice-quality proof.
+  static func audioFixture() -> Data {
+    let length: UInt32 = 16_000 * 2 * 15
+    var data = Data()
+    func tag(_ text: String) { data.append(contentsOf: text.utf8) }
+    func u32(_ value: UInt32) { var value = value.littleEndian; withUnsafeBytes(of: &value) { data.append(contentsOf: $0) } }
+    func u16(_ value: UInt16) { var value = value.littleEndian; withUnsafeBytes(of: &value) { data.append(contentsOf: $0) } }
+    tag("RIFF"); u32(length + 36); tag("WAVEfmt "); u32(16); u16(1); u16(1)
+    u32(16_000); u32(32_000); u16(2); u16(16); tag("data"); u32(length)
+    data.append(Data(repeating: 0, count: Int(length)))
+    return data
+  }
 
   func send(_ data: Data) -> Bool {
     Task { @MainActor in
@@ -54,10 +70,26 @@ final class RemoteSpeechPreviewHost {
         }
         if let reply = try? RemoteClipboardCodec.encode(result) { receive(reply) }
       } else if let request = try? RemoteTerminalTabCodec.decode(data) {
-        let state = RemoteTerminalTabState(revision: 1, selectedTabId: "preview-tab", tabs: [
-          .init(id: "preview-tab", title: "Preview Terminal", detail: "Window 1", isSelected: true, isBusy: false)
-        ])
-        if let reply = try? RemoteTerminalTabCodec.encode(.listSuccess(requestId: request.requestId, state: state)) { receive(reply) }
+        let grouped = arguments.contains("--clawdad-preview-window-groups")
+        if request.type == RemoteTerminalTabMessage.focusType, let tab = request.tabId { selectedTab = tab }
+        if request.type == RemoteTerminalTabMessage.moveType, let id = request.tabId, let neighborID = request.neighborTabId,
+           let source = Int(id.split(separator: "-").last ?? ""), let neighbor = Int(neighborID.split(separator: "-").last ?? "") {
+          windowTwoOrder.removeAll { $0 == source }
+          if let index = windowTwoOrder.firstIndex(of: neighbor) { windowTwoOrder.insert(source, at: index + (request.placeBefore == true ? 0 : 1)); revision += 1 }
+        }
+        let tabs: [RemoteTerminalTabDescriptor] = grouped ? (1...23).map { index in
+          let window = index <= 20 ? 1 : 2, position = index <= 20 ? index : index - 20
+          let id = "window-\(window)-tab-\(window == 2 ? windowTwoOrder[position - 1] : position)"
+          return .init(id: id, title: "same-directory", detail: "Tab \(position)", isSelected: id == selectedTab,
+            isBusy: false, windowTitle: "Terminal Window \(window)", windowGroupId: "window-\(window)",
+            tabPosition: position, canReorder: true)
+        } : [.init(id: "preview-tab", title: "Preview Terminal", detail: "Window 1", isSelected: true, isBusy: false)]
+        let state = RemoteTerminalTabState(revision: revision, selectedTabId: grouped ? selectedTab : "preview-tab", tabs: tabs)
+        let reply = request.type == RemoteTerminalTabMessage.moveType ? RemoteTerminalTabMessage.moveResult(requestId: request.requestId, state: state)
+          : request.type == RemoteTerminalTabMessage.focusType
+          ? RemoteTerminalTabMessage.focusSuccess(requestId: request.requestId, state: state)
+          : RemoteTerminalTabMessage.listSuccess(requestId: request.requestId, state: state)
+        if let data = try? RemoteTerminalTabCodec.encode(reply) { receive(data) }
       } else if let request = try? RemoteTerminalResponseCodec.decode(data) {
         let response = RemoteTerminalResponse(sessionId: "preview-session", turnId: "preview-turn",
           text: "This is the latest completed answer from the focused Terminal tab. " + String(repeating: "Completed answer. ", count: 12),

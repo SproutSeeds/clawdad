@@ -707,7 +707,7 @@ test("iPhone thread cards read both sent messages and Codex responses aloud on d
   assert.match(contentSource, /MessageReadAloudButton\([\s\S]*MessageCopyButton\(/u);
   assert.match(cloudSource, /type: "speech\.synthesize\.request"/u);
   assert.match(cloudSource, /"executionPreference": \.string\("paired-mac-first"\)/u);
-  assert.match(cloudSource, /"allowRemoteFallback": \.bool\(allowUmbraReadAloudFallback\)/u);
+  assert.match(cloudSource, /"allowRemoteFallback": \.bool\(remoteAssist \? false : allowUmbraReadAloudFallback\)/u);
   assert.match(cloudSource, /case "speech\.synthesis\.chunk":/u);
   assert.match(cloudSource, /case "speech\.synthesis\.complete":/u);
   assert.match(cloudSource, /\.playback,\s*mode: \.spokenAudio\s*\)/u);
@@ -876,7 +876,8 @@ test("Remote Assist lists and focuses Terminal tabs without reading terminal con
     remoteAssistSource,
     /accessibilityLabel\("Refresh \\\(controller\.remoteTerminalName\) tabs"\)/u,
   );
-  assert.match(remoteAssistSource, /controller\.focusRemoteTerminalTab\(tab\.id\)/u);
+  const windowPickerSource = await readFile(new URL("../apps/ios/ClawDadMobile/Sources/ClawDadMobile/RemoteTerminalWindowGroups.swift", import.meta.url), "utf8");
+  assert.match(windowPickerSource, /controller\.focusRemoteTerminalTab\(tab\.id\)/u);
   assert.match(remoteAssistSource, /func pollRemoteTerminalTabs\(\)/u);
   assert.match(remoteAssistSource, /Task\.sleep\(nanoseconds: 2_000_000_000\)/u);
   assert.match(remoteAssistSource, /tab\.hasUnreadActivity/u);
@@ -896,7 +897,9 @@ test("Remote Assist lists and focuses Terminal tabs without reading terminal con
   assert.match(macTerminalTabsSource, /permissionRouter\.openAutomationSettings\(\)/u);
   assert.match(macTerminalTabsSource, /Mac System Settings is open/u);
   assert.match(macTerminalTabsSource, /kAXDescriptionAttribute/u);
-  assert.match(macTerminalTabsSource, /"TabAlert"/u);
+  const nativeTabSource = await readFile(new URL("../native/macos/Sources/ClawDad/MacNativeTerminalTabs.swift", import.meta.url), "utf8");
+  assert.match(nativeTabSource, /"TabAlert"/u);
+  assert.doesNotMatch(nativeTabSource, /contents of|history of|processes of/u);
   assert.doesNotMatch(macTerminalTabsSource, /contents of|history of|processes of/u);
   assert.match(macBuildSource, /<key>NSAppleEventsUsageDescription<\/key>/u);
   assert.match(macBuildSource, /--entitlements "\$entitlements_path"/u);

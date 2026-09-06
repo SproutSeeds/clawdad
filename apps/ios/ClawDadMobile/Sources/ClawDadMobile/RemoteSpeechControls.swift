@@ -42,7 +42,7 @@ struct RemoteSpeakerButton: View {
       ZStack {
         Image(systemName: active ? "stop.fill" : "speaker.wave.2.fill")
           .font(.system(size: 18, weight: .bold))
-        if reader.loading { ProgressView().controlSize(.mini).offset(x: 14, y: -14) }
+        if reader.loading || audio.phase(for: reader.playbackKey) == .preparing { ProgressView().controlSize(.mini).offset(x: 14, y: -14) }
       }.frame(width: 44, height: 44)
     }
     .buttonStyle(RemoteAssistOverlayButtonStyle())
@@ -77,6 +77,7 @@ struct RemoteSpeechStatus: View {
     if !draft.error.isEmpty { return draft.error }
     if draft.hasRecording { return "Recording saved. Tap Retry when ready." }
     if reader.loading { return "Finding text to read…" }
+    if audio.phase(for: reader.playbackKey) == .preparing { return "Preparing voice…" }
     if speaking { return reader.inProgress ? "Reading last completed answer" : "Reading: \(reader.title)" }
     if !reader.error.isEmpty { return reader.error }
     let audioError = audio.message(for: reader.playbackKey)
@@ -104,6 +105,10 @@ struct RemoteSpeechStatus: View {
         }
         .buttonStyle(RemoteAssistOverlayButtonStyle())
         .font(.caption.weight(.bold))
+      }
+      if audio.phase(for: reader.playbackKey) == .failed {
+        Button("Retry Read Aloud") { reader.togglePlayback() }
+          .buttonStyle(RemoteAssistOverlayButtonStyle())
       }
       if !controlsExpanded {
         HStack {

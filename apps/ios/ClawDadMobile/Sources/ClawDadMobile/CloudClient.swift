@@ -26,17 +26,13 @@ final class MobileReadAloudController: NSObject, ObservableObject {
   private var receivedBytes = 0
   private var player: AVAudioPlayer?
   private var timeoutTask: Task<Void, Never>?
-  private let localSpeaker: any MobileSpeechEngine
-  private var localSpeechActive = false
-
-  init(localSpeaker: (any MobileSpeechEngine)? = nil) {
-    self.localSpeaker = localSpeaker ?? AppleMobileSpeechEngine()
-    super.init()
-  }
-
   private let maximumAudioBytes = 256 * 1024 * 1024
   private let maximumChunkBytes = 512 * 1024
-  private let prepareTimeoutNanoseconds: UInt64 = 3 * 60 * 1_000_000_000
+  private let prepareTimeoutNanoseconds: UInt64 = 6 * 60 * 1_000_000_000
+
+  func isPreparing(requestId: String, envelopeId: String) -> Bool {
+    phase == .preparing && self.requestId == requestId && self.envelopeId == envelopeId
+  }
 
   func phase(for key: String) -> MobileReadAloudPhase {
     activeKey == key ? phase : .idle
@@ -71,45 +67,6 @@ final class MobileReadAloudController: NSObject, ObservableObject {
       return
     }
     statusMessage = "Preparing audio on your paired computer..."
-  }
-
-  /// Remote Assist already transferred the exact text over the paired channel.
-  /// Speak that text on this device without relaying generated audio.
-  func toggleLocalSpeech(key: String, text: String) {
-    if activeKey == key, phase == .playing { pause(); return }
-    if activeKey == key, phase == .paused { resume(); return }
-    if activeKey == key, phase == .preparing { return }
-    stop()
-    let spoken = text.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !spoken.isEmpty else {
-      showFailure(key: key, message: "There is no text available to read aloud.")
-      return
-    }
-    activeKey = key
-    do {
-      try activatePlaybackSession()
-      localSpeechActive = true
-      phase = .preparing
-      statusMessage = "Starting iPhone voice…"
-      try localSpeaker.start(text: spoken, onStart: { [weak self] in
-        guard let self, self.localSpeechActive, self.activeKey == key else { return }
-        self.timeoutTask?.cancel()
-        self.timeoutTask = nil
-        self.phase = .playing
-        self.statusMessage = "Reading on iPhone"
-      }, onFinish: { [weak self] successful in
-        guard let self, self.localSpeechActive, self.activeKey == key else { return }
-        if successful { self.finishPlayback() }
-        else { self.showFailure(key: key, message: "Speech was interrupted. Tap Play to restart.") }
-      })
-      timeoutTask = Task { @MainActor [weak self] in
-        try? await Task.sleep(nanoseconds: 10_000_000_000)
-        guard !Task.isCancelled, let self, self.phase == .preparing else { return }
-        self.showFailure(key: key, message: "The iPhone voice did not start. Tap Play to try again.")
-      }
-    } catch {
-      showFailure(key: key, message: "The iPhone could not start speech: \(error.localizedDescription)")
-    }
   }
 
   func receiveChunk(
@@ -200,13 +157,6 @@ final class MobileReadAloudController: NSObject, ObservableObject {
   }
 
   func pause() {
-    if phase == .playing, localSpeechActive {
-      if localSpeaker.pause() {
-        phase = .paused
-        statusMessage = "Audio paused"
-      }
-      return
-    }
     guard phase == .playing, let player else {
       return
     }
@@ -216,15 +166,6 @@ final class MobileReadAloudController: NSObject, ObservableObject {
   }
 
   func resume() {
-    if phase == .paused, localSpeechActive {
-      do {
-        try activatePlaybackSession()
-        guard localSpeaker.resume() else { throw URLError(.cannotOpenFile) }
-        phase = .playing
-        statusMessage = "Reading on iPhone"
-      } catch { showFailure(key: activeKey, message: "The iPhone could not resume speech. Tap Play to restart.") }
-      return
-    }
     guard phase == .paused, let player else {
       return
     }
@@ -394,8 +335,6 @@ final class MobileReadAloudController: NSObject, ObservableObject {
   private func resetPlayback() {
     timeoutTask?.cancel()
     timeoutTask = nil
-    localSpeechActive = false
-    localSpeaker.stop()
     player?.stop()
     player = nil
     requestId = ""
@@ -1481,7 +1420,8 @@ final class CloudSession: ObservableObject {
   }
 
   func toggleRemoteReadAloud(key: String, text: String) {
-    readAloud.toggleLocalSpeech(key: key, text: text)
+    toggleSpeech(key: key, text: text, projectPath: "", sessionId: "",
+                 historyRequestId: "", kind: .response, remoteAssist: true)
   }
 
   private func toggleSpeech(
@@ -1520,6 +1460,7 @@ final class CloudSession: ObservableObject {
     readAloud.begin(key: key, requestId: audioRequestId, envelopeId: envelopeId)
     Task {
       guard readAloud.activeKey == key,
+            readAloud.isPreparing(requestId: audioRequestId, envelopeId: envelopeId),
             speechScope == "\(accountId)/\(workspaceId)/\(hostId)" else { return }
       do {
         try await sendEnvelope(
@@ -1533,7 +1474,7 @@ final class CloudSession: ObservableObject {
             "text": .string(spokenText),
             "source": .string(remoteAssist ? "remote-assist" : "history"),
             "executionPreference": .string("paired-mac-first"),
-            "allowRemoteFallback": .bool(allowUmbraReadAloudFallback)
+            "allowRemoteFallback": .bool(remoteAssist ? false : allowUmbraReadAloudFallback)
           ],
           envelopeId: envelopeId
         )
@@ -2814,6 +2755,19 @@ final class CloudSession: ObservableObject {
       try await envelopeSender(type, body, envelopeId)
       return
     }
+#if DEBUG && os(iOS)
+    if appStorePreviewMode, type == "speech.synthesize.request", let request = body["requestId"]?.stringValue {
+      Task { @MainActor in
+        readAloud.markAccepted(requestId: request)
+        try? await Task.sleep(for: .seconds(ProcessInfo.processInfo.arguments.contains("--clawdad-preview-slow-voice") ? 8 : 1))
+        let data = RemoteSpeechPreviewHost.audioFixture()
+        readAloud.receiveChunk(requestId: request, partIndex: 0, partCount: 1, chunkIndex: 0, chunkCount: 1,
+          fileName: "preview.wav", mimeType: "audio/wav", declaredBytes: data.count, dataBase64: data.base64EncodedString())
+        readAloud.complete(requestId: request, partCount: 1)
+      }
+      return
+    }
+#endif
     guard let socket = task else {
       throw URLError(.notConnectedToInternet)
     }

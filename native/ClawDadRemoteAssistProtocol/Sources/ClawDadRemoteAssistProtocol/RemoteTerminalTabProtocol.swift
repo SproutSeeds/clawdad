@@ -11,6 +11,7 @@ public struct RemoteTerminalTabDescriptor: Codable, Equatable, Sendable {
   public let isSelected: Bool
   public let isBusy: Bool
   public let hasUnreadActivity: Bool
+  public let windowTitle: String?
   public let windowGroupId: String?
   public let tabPosition: Int?
   public let canReorder: Bool
@@ -22,6 +23,7 @@ public struct RemoteTerminalTabDescriptor: Codable, Equatable, Sendable {
     isSelected: Bool,
     isBusy: Bool,
     hasUnreadActivity: Bool = false,
+    windowTitle: String? = nil,
     windowGroupId: String? = nil,
     tabPosition: Int? = nil,
     canReorder: Bool = false
@@ -32,6 +34,7 @@ public struct RemoteTerminalTabDescriptor: Codable, Equatable, Sendable {
     self.isSelected = isSelected
     self.isBusy = isBusy
     self.hasUnreadActivity = hasUnreadActivity
+    self.windowTitle = windowTitle
     self.windowGroupId = windowGroupId
     self.tabPosition = tabPosition
     self.canReorder = canReorder
@@ -44,7 +47,7 @@ public struct RemoteTerminalTabDescriptor: Codable, Equatable, Sendable {
     case isSelected
     case isBusy
     case hasUnreadActivity
-    case windowGroupId, tabPosition, canReorder
+    case windowTitle, windowGroupId, tabPosition, canReorder
   }
 
   public init(from decoder: Decoder) throws {
@@ -58,12 +61,14 @@ public struct RemoteTerminalTabDescriptor: Codable, Equatable, Sendable {
       Bool.self,
       forKey: .hasUnreadActivity
     ) ?? false
+    windowTitle = try container.decodeIfPresent(String.self, forKey: .windowTitle)
     windowGroupId = try container.decodeIfPresent(String.self, forKey: .windowGroupId)
     tabPosition = try container.decodeIfPresent(Int.self, forKey: .tabPosition)
     canReorder = try container.decodeIfPresent(Bool.self, forKey: .canReorder) ?? false
   }
 
   fileprivate func validate() throws {
+    if let windowTitle, windowTitle.isEmpty || windowTitle.utf8.count > Self.maximumTitleBytes { throw RemoteTerminalTabProtocolError.invalidTab }
     if let windowGroupId, windowGroupId.isEmpty || windowGroupId.utf8.count > Self.maximumIDBytes {
       throw RemoteTerminalTabProtocolError.invalidTab
     }

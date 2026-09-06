@@ -1380,7 +1380,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
   }
 
   func moveRemoteTerminalTab(_ tabId: String, relativeTo neighborId: String, before: Bool, dragged: Bool = false) {
-    let revision = dragged ? terminalDragRevision : terminalTabSelection.canonicalState?.revision
+    let revision = dragged ? (terminalDragRevision ?? terminalTabSelection.canonicalState?.revision) : terminalTabSelection.canonicalState?.revision
     terminalDragRevision = nil
     terminalDragExpiresAt = .distantPast
     guard phase == .connected, !remoteScreenLocked, let revision,
@@ -2687,7 +2687,7 @@ private struct RemoteTerminalTabRow: View {
   }
 }
 
-private struct RemoteTerminalTabButton: View {
+struct RemoteTerminalTabButton: View {
   let tab: RemoteTerminalTabDescriptor
   let isSelected: Bool
   let isPending: Bool
@@ -2729,6 +2729,7 @@ private struct RemoteTerminalTabButton: View {
     )
     .disabled(!isEnabled)
     .accessibilityLabel(accessibilityName)
+    .accessibilityIdentifier("clawdad.remote.tab.\(tab.id)")
     .accessibilityValue(isPending ? "Focusing" : "")
     .accessibilityHint(accessibilityHint)
   }
@@ -2745,7 +2746,7 @@ struct RemoteAssistView: View {
   @State private var controlsExpanded = false
   @State private var showingFiles = false
   @State private var controlPage: RemoteAssistControlPage = .primary
-  @State private var terminalDropTarget: String?
+  @State private var terminalWindowExpansion = RemoteTerminalWindowExpansion()
   @AccessibilityFocusState private var accessibilityFocus:
     RemoteAssistAccessibilityFocus?
 
@@ -3408,6 +3409,7 @@ struct RemoteAssistView: View {
         }
         .buttonStyle(RemoteAssistOverlayButtonStyle())
         .accessibilityLabel("Back to Remote Assist controls")
+        .keyboardShortcut(.escape, modifiers: [])
 
         Text("\(controller.remoteTerminalName) Tabs")
           .font(.caption.weight(.heavy))
@@ -3483,69 +3485,7 @@ struct RemoteAssistView: View {
         .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
         .padding(.horizontal, 4)
       } else {
-        ScrollView {
-          LazyVStack(spacing: 6) {
-            ForEach(controller.remoteTerminalTabs, id: \.id) { tab in
-              let isSelected = tab.id ==
-                controller.selectedRemoteTerminalTabId
-              let isPending = tab.id ==
-                controller.pendingRemoteTerminalTabId
-              HStack(spacing: 4) {
-                RemoteTerminalTabButton(
-                tab: tab,
-                isSelected: isSelected,
-                isPending: isPending,
-                isEnabled: controller.phase == .connected &&
-                  !controller.remoteScreenLocked &&
-                  (!isSelected || controller.pendingRemoteTerminalTabId != nil) &&
-                  !isPending,
-                terminalName: controller.remoteTerminalName,
-                computerName: controller.remoteComputerName,
-                onSelect: {
-                  controller.focusRemoteTerminalTab(tab.id)
-                }
-                )
-                if tab.canReorder {
-                  Image(systemName: "line.3.horizontal")
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(ClawDadTheme.cream.opacity(0.65))
-                    .frame(width: 44, height: 48)
-                    .contentShape(Rectangle())
-                    .onDrag {
-                      controller.beginTerminalTabDrag()
-                      return NSItemProvider(object: tab.id as NSString)
-                    } preview: {
-                      Text(tab.title).font(.headline).padding(12)
-                        .foregroundStyle(ClawDadTheme.cream)
-                        .background(ClawDadTheme.background, in: RoundedRectangle(cornerRadius: 10))
-                    }
-                    .accessibilityLabel("Reorder \(tab.title)")
-                    .accessibilityHint("Touch and hold to drag within this window")
-                    .accessibilityAction(named: "Move up") { moveTabOneStep(tab, direction: -1) }
-                    .accessibilityAction(named: "Move down") { moveTabOneStep(tab, direction: 1) }
-                    .contextMenu {
-                      Button("Move up", systemImage: "arrow.up") { moveTabOneStep(tab, direction: -1) }
-                      Button("Move down", systemImage: "arrow.down") { moveTabOneStep(tab, direction: 1) }
-                    }
-                }
-              }
-              .dropDestination(for: String.self) { values, location in
-                guard values.count == 1, let source = values.first, tab.canReorder else { return false }
-                controller.moveRemoteTerminalTab(source, relativeTo: tab.id, before: location.y < 26, dragged: true)
-                return true
-              } isTargeted: { targeted in
-                if targeted { terminalDropTarget = tab.id }
-                else if terminalDropTarget == tab.id { terminalDropTarget = nil }
-              }
-              .overlay(alignment: .top) {
-                if terminalDropTarget == tab.id {
-                  Capsule().fill(ClawDadTheme.gold).frame(height: 3).allowsHitTesting(false)
-                }
-              }
-            }
-          }
-        }
-        .frame(maxHeight: 260)
+        RemoteTerminalWindowPicker(controller: controller, expansion: $terminalWindowExpansion)
 
         if let error = controller.terminalTabError {
           Text(error)
@@ -3564,11 +3504,7 @@ struct RemoteAssistView: View {
     accessibilityFocus = nil
   }
 
-  private func moveTabOneStep(_ tab: RemoteTerminalTabDescriptor, direction: Int) {
-    let group = controller.remoteTerminalTabs.filter { $0.windowGroupId == tab.windowGroupId }
-    guard let index = group.firstIndex(where: { $0.id == tab.id }), group.indices.contains(index + direction) else { return }
-    controller.moveRemoteTerminalTab(tab.id, relativeTo: group[index + direction].id, before: direction < 0)
-  }
+
 }
 
 struct RemoteAssistOverlayButtonStyle: ButtonStyle {

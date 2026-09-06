@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		08A2F61153C0221F74B49988 /* RemoteTerminalReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B67F2E9259E05DBACEB7F04 /* RemoteTerminalReader.swift */; };
+		187E31F4AF200A700830399F /* RemoteTerminalWindowGroups.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4B71B55085B2C1EE623A070 /* RemoteTerminalWindowGroups.swift */; };
 		1A308337EBE5F90AF0C5DD19 /* ClawDadRemoteAssistProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = 3E041F6ED9B6E45F5F37F06A /* ClawDadRemoteAssistProtocol */; };
 		275FAABA58CF0436EC6D32FB /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 471CC1C676A805963BAF2F99 /* Assets.xcassets */; };
 		39F7EDBB4973CC068AC0E2F3 /* RemoteSpeechControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89C609AE055F4F4C09202552 /* RemoteSpeechControls.swift */; };
@@ -27,7 +28,6 @@
 		BF46A08D3F06D8FF71B9D210 /* MobileFiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33B53FE2D8E9ADBA82728DA2 /* MobileFiles.swift */; };
 		F07EBA06FDF3D4509727718D /* RemoteDictationDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35C55DF601F5D3D9ABD04556 /* RemoteDictationDraft.swift */; };
 		F7211DC300102D784A05D5D1 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B8CED3140E0C0FA87EA0782 /* ContentView.swift */; };
-		F97B98D5962D27D339931ED9 /* MobileSpeechEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58BCA439FAE5AEC7B8E71259 /* MobileSpeechEngine.swift */; };
 		FDBB6FDF3DE4BE0AA407E4F7 /* ClawDadMobileApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D668F2D2DA41C5EF31F820B0 /* ClawDadMobileApp.swift */; };
 		FDF87A63AB6BE997E8422599 /* PasskeyRequests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 930A750132AFE74E66A35E11 /* PasskeyRequests.swift */; };
 		FF0A3F9F33A94874E1F92846 /* AppAttestClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 147A8BFF03CEDB70896BAB51 /* AppAttestClient.swift */; };
@@ -57,7 +57,6 @@
 		471CC1C676A805963BAF2F99 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		47DAEBD8C630AA5DA4CC104A /* WebRTCPackage */ = {isa = PBXFileReference; lastKnownFileType = folder; name = WebRTCPackage; path = ../../../vendor/WebRTCPackage; sourceTree = SOURCE_ROOT; };
 		4B67F2E9259E05DBACEB7F04 /* RemoteTerminalReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTerminalReader.swift; sourceTree = "<group>"; };
-		58BCA439FAE5AEC7B8E71259 /* MobileSpeechEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileSpeechEngine.swift; sourceTree = "<group>"; };
 		7A3BE7EC4AB5DE28F2E8E4EF /* RemoteSpeechPreviewHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteSpeechPreviewHost.swift; sourceTree = "<group>"; };
 		8960C1531C592BD814505199 /* SubscriptionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionManager.swift; sourceTree = "<group>"; };
 		89C609AE055F4F4C09202552 /* RemoteSpeechControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteSpeechControls.swift; sourceTree = "<group>"; };
@@ -69,6 +68,7 @@
 		AA4FB03C06FF3E3F780BF6B2 /* RemoteAssist.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteAssist.swift; sourceTree = "<group>"; };
 		C2057536FBECC2BA6153E6B9 /* ClawDadFileTransport */ = {isa = PBXFileReference; lastKnownFileType = folder; name = ClawDadFileTransport; path = ../../../native/ClawDadFileTransport; sourceTree = SOURCE_ROOT; };
 		D668F2D2DA41C5EF31F820B0 /* ClawDadMobileApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClawDadMobileApp.swift; sourceTree = "<group>"; };
+		E4B71B55085B2C1EE623A070 /* RemoteTerminalWindowGroups.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTerminalWindowGroups.swift; sourceTree = "<group>"; };
 		FD8DD24D34A3F29E43308A65 /* CloudClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudClient.swift; sourceTree = "<group>"; };
 		FEF501962B4434FEAA1B97C0 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -109,7 +109,6 @@
 				9EF3E28FFA532EBF14FEAF8B /* DeviceIdentity.swift */,
 				21A33EE26BF9BD9F84918E9F /* FilesLibraryView.swift */,
 				33B53FE2D8E9ADBA82728DA2 /* MobileFiles.swift */,
-				58BCA439FAE5AEC7B8E71259 /* MobileSpeechEngine.swift */,
 				A248092D559C4CD1B15AECEC /* PairedComputer.swift */,
 				930A750132AFE74E66A35E11 /* PasskeyRequests.swift */,
 				26AABBF8F4DF0D8B38BF9365 /* QRScannerView.swift */,
@@ -118,6 +117,7 @@
 				89C609AE055F4F4C09202552 /* RemoteSpeechControls.swift */,
 				7A3BE7EC4AB5DE28F2E8E4EF /* RemoteSpeechPreviewHost.swift */,
 				4B67F2E9259E05DBACEB7F04 /* RemoteTerminalReader.swift */,
+				E4B71B55085B2C1EE623A070 /* RemoteTerminalWindowGroups.swift */,
 				8960C1531C592BD814505199 /* SubscriptionManager.swift */,
 				8F34770E78861322677F1C3C /* VoiceRecorder.swift */,
 			);
@@ -280,7 +280,6 @@
 				AB9E3EA912AF86012C19E96F /* DeviceIdentity.swift in Sources */,
 				4CA1BBCCF6A50D70B8EAA6FE /* FilesLibraryView.swift in Sources */,
 				BF46A08D3F06D8FF71B9D210 /* MobileFiles.swift in Sources */,
-				F97B98D5962D27D339931ED9 /* MobileSpeechEngine.swift in Sources */,
 				930C8384655B365B43D6B7D6 /* PairedComputer.swift in Sources */,
 				FDF87A63AB6BE997E8422599 /* PasskeyRequests.swift in Sources */,
 				8A0DDACD490ED6B80E4A30CA /* QRScannerView.swift in Sources */,
@@ -289,6 +288,7 @@
 				39F7EDBB4973CC068AC0E2F3 /* RemoteSpeechControls.swift in Sources */,
 				3CE919B6795B0B61BEFEA9D0 /* RemoteSpeechPreviewHost.swift in Sources */,
 				08A2F61153C0221F74B49988 /* RemoteTerminalReader.swift in Sources */,
+				187E31F4AF200A700830399F /* RemoteTerminalWindowGroups.swift in Sources */,
 				4D1C0FA879A0AA478DD90B11 /* SubscriptionManager.swift in Sources */,
 				7751604101BB979587499134 /* VoiceRecorder.swift in Sources */,
 			);
@@ -396,7 +396,7 @@
 				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 42;
+				CURRENT_PROJECT_VERSION = 43;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_NS_ASSERTIONS = NO;
@@ -475,7 +475,7 @@
 				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 42;
+				CURRENT_PROJECT_VERSION = 43;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -584,7 +584,7 @@
 				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 42;
+				CURRENT_PROJECT_VERSION = 43;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_NS_ASSERTIONS = NO;
