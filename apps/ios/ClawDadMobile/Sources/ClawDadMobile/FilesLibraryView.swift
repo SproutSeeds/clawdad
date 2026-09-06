@@ -12,10 +12,11 @@ struct FilesLibraryView: View {
   @State private var onlyDownloads = false
   @State private var project = ""
   @State private var format = ""
+  @State private var category = "documents"
 
   private var visibleItems: [MobileLibraryItem] {
     controller.items.filter { item in
-      item.archived == archived && (project.isEmpty || item.project == (project == "__personal__" ? "" : project)) &&
+      (item.category ?? "documents") == category && item.archived == archived && (project.isEmpty || item.project == (project == "__personal__" ? "" : project)) &&
         (format.isEmpty || item.versions.contains { $0.format == format }) &&
         (!onlyDownloads || item.versions.contains { controller.downloadedURL($0) != nil }) &&
         (search.isEmpty || ([item.title, item.project] + item.versions.map(\.fileName)).joined(separator: " ").localizedCaseInsensitiveContains(search))
@@ -34,6 +35,10 @@ struct FilesLibraryView: View {
             Button("Reconnect to Mac", systemImage: "arrow.clockwise") { controller.connect() }
           }
           Toggle("Downloaded on this iPhone", isOn: $onlyDownloads)
+          Picker("Collection", selection: $category) {
+            Text("Documents").tag("documents")
+            Text("Received Images").tag("receivedImages")
+          }.pickerStyle(.segmented)
           HStack {
             Menu("Project", systemImage: "folder") {
               Button("All projects") { project = "" }
@@ -55,9 +60,9 @@ struct FilesLibraryView: View {
             Button("Clear project and type filters") { project = ""; format = "" }
           }
         }
-        Section("Documents") {
+        Section(category == "receivedImages" ? "Received Images" : "Documents") {
           if visibleItems.isEmpty {
-            ContentUnavailableView("No files here yet", systemImage: "folder", description: Text("Add a finished document in ClawDad on your Mac, or ask your agent to save its deliverable to ClawDad Files."))
+            ContentUnavailableView("No files here yet", systemImage: "folder", description: Text(category == "receivedImages" ? "Images sent from Remote Assist appear here once saved on the Mac." : "Add a finished document in ClawDad on your Mac, or ask your agent to save its deliverable to ClawDad Files."))
           }
           ForEach(visibleItems) { item in
             NavigationLink {
@@ -96,7 +101,7 @@ struct FilesLibraryView: View {
             .disabled(controller.busy || controller.connecting)
         }
       }
-      .task(id: "\(search)/\(archived)/\(project)/\(format)") {
+      .task(id: "\(search)/\(archived)/\(project)/\(format)/\(category)") {
         try? await Task.sleep(nanoseconds: 350_000_000)
         guard !Task.isCancelled else { return }
         refresh()
@@ -110,7 +115,7 @@ struct FilesLibraryView: View {
   }
 
   private func refresh(more: Bool = false) {
-    controller.refresh(query: search, archived: archived, more: more, project: project, format: format)
+    controller.refresh(query: search, archived: archived, more: more, project: project, format: format, category: category)
   }
 }
 

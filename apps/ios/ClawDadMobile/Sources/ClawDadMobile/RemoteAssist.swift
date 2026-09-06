@@ -1,6 +1,7 @@
 import ClawDadRemoteAssistProtocol
 import Foundation
 import SwiftUI
+import Combine
 
 struct RemoteAssistOfferAttempt: Equatable {
   let sessionId: String
@@ -435,6 +436,7 @@ struct RemoteViewportTransform: Equatable {
 #if os(iOS)
 import LocalAuthentication
 import UIKit
+import UniformTypeIdentifiers
 @preconcurrency import WebRTC
 
 enum RemoteAssistPhase: Equatable {
@@ -471,6 +473,8 @@ struct RemoteAssistNotice: Equatable, Identifiable {
 
 @MainActor
 final class RemoteAssistController: NSObject, ObservableObject {
+  let imageTransfer: RemoteImageTransfer
+  private var imageObservation: AnyCancellable?
   let dictation = RemoteDictationDraft()
   let terminalReader = RemoteTerminalReader()
   let remoteRecorder = VoiceRecorder()
@@ -576,6 +580,20 @@ final class RemoteAssistController: NSObject, ObservableObject {
   }
 
   override init() {
+#if DEBUG
+    if ProcessInfo.processInfo.arguments.contains("--clawdad-image-transfer-test") {
+      imageTransfer = RemoteImageTransfer(upload: { images, progress in
+        if ProcessInfo.processInfo.arguments.contains("--clawdad-image-count-two"), images.count != 2 { throw RemoteFileError.invalidMessage }
+        for (index, image) in images.enumerated() {
+          try image.upload.validate()
+          try await Task.sleep(nanoseconds: 300_000_000)
+          progress(Double(index + 1) / Double(images.count))
+        }
+      })
+    } else { imageTransfer = RemoteImageTransfer() }
+#else
+    imageTransfer = RemoteImageTransfer()
+#endif
     RTCInitializeSSL()
     super.init()
   }
@@ -584,6 +602,13 @@ final class RemoteAssistController: NSObject, ObservableObject {
     cloudSession = session
     dictation.bind(to: session)
     terminalReader.bind(to: session)
+    imageTransfer.bind(to: session, canAttach: { [weak self] in
+      guard let self else { return false }
+      return self.phase == .connected && !self.remoteInputSuppressed && !self.remoteScreenLocked && self.sessionCapabilities.imageAttachments == true
+    }, send: { [weak self] data in self?.sendControlData(data) ?? false })
+    if imageObservation == nil {
+      imageObservation = imageTransfer.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
+    }
     dictation.onTranscript = { [weak self] in
       guard let self, self.inlineDictationActive else { return }
       // The toolbar Paste action imports the phone clipboard. Keep it in step
@@ -621,6 +646,9 @@ final class RemoteAssistController: NSObject, ObservableObject {
 
   private func prepareSpeechPreviewConnection() {
     phase = .connected
+    if ProcessInfo.processInfo.arguments.contains("--clawdad-image-transfer-test") {
+      UIPasteboard.general.setData(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")!, forPasteboardType: UTType.png.identifier)
+    }
     speechPreviewHost = RemoteSpeechPreviewHost { [weak self] data in self?.receiveControlData(data) }
     rememberDictationTarget()
     requestSessionCapabilities()
@@ -1214,6 +1242,29 @@ final class RemoteAssistController: NSObject, ObservableObject {
     guard !clipboardBusy, !displaySelection.inputSuppressed else {
       return
     }
+    guard !imageTransfer.busy, !imageTransfer.attaching else { return }
+    if imageTransfer.needsPaste, imageTransfer.clipboardChangeCount == UIPasteboard.general.changeCount {
+      imageTransfer.pasteSaved(targetToken: imageSelectionTarget(forceFresh: true))
+      return
+    }
+    if UIPasteboard.general.hasImages {
+      guard sessionCapabilities.imageAttachments == true, !remoteScreenLocked else {
+        imageTransfer.presentError("Reconnect to an unlocked, updated Mac to paste images.")
+        return
+      }
+      let token = imageSelectionTarget()
+      let items = UIPasteboard.general.items
+      var sources: [(Data, String?)] = []
+      for item in items.prefix(RemoteImageLimits.count + 1) {
+        if let bytes = item.first(where: { UTType($0.key)?.conforms(to: .image) == true && $0.value is Data })?.value as? Data {
+          sources.append((bytes, nil))
+        }
+      }
+      if sources.isEmpty { sources = (UIPasteboard.general.images ?? []).prefix(RemoteImageLimits.count + 1).compactMap { $0.pngData().map { ($0, nil) } } }
+      if sources.isEmpty { imageTransfer.presentError("Copy the screenshot again, then tap Paste."); return }
+      imageTransfer.prepare(sources, targetToken: token, clipboardChangeCount: UIPasteboard.general.changeCount)
+      return
+    }
     guard let text = UIPasteboard.general.string, !text.isEmpty else {
       showClipboardNotice(
         "Nothing pasteable is available on this iPhone yet.",
@@ -1224,6 +1275,14 @@ final class RemoteAssistController: NSObject, ObservableObject {
       return
     }
     pastePhoneClipboardToMac([text])
+  }
+
+  func imageSelectionTarget(forceFresh: Bool = false) -> String? {
+    if !forceFresh, let menuCaptureId { return menuCaptureId }
+    flushBufferedText()
+    let id = UUID().uuidString.lowercased()
+    guard let data = try? RemoteSpeechContextMessage.request(.captureTarget, requestId: id).encode(), sendControlData(data) else { return nil }
+    return id
   }
 
   func copyMacSelectionToPhone() {
@@ -1830,6 +1889,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
 
   // One receive path is exercised by the native channel and encoded preview peers.
   func receiveControlData(_ data: Data) {
+    if imageTransfer.receive(data) { return }
     if handleInputResponse(data) { return }
     if handleSessionState(data) { return }
     if handleSpeechContext(data) { return }
@@ -2298,6 +2358,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
   }
 
   private func tearDownPeer() {
+    imageTransfer.disconnected()
     pauseInlineDictation()
     capabilityTask?.cancel()
     capabilityTask = nil
@@ -2877,6 +2938,7 @@ struct RemoteAssistView: View {
           RemoteSpeechStatus(controller: controller, draft: controller.dictation,
                              recorder: controller.remoteRecorder, reader: controller.terminalReader,
                              controlsExpanded: controlsExpanded)
+          RemoteImageStatus(transfer: controller.imageTransfer)
 
           Button {
             if controlsExpanded {
@@ -3102,6 +3164,7 @@ struct RemoteAssistView: View {
         .disabled(
           controller.phase != .connected ||
             controller.clipboardBusy ||
+            controller.imageTransfer.busy || controller.imageTransfer.attaching ||
             controller.remoteInputSuppressed
         )
         .accessibilityLabel(
@@ -3157,6 +3220,8 @@ struct RemoteAssistView: View {
         RemoteSpeakerButton(controller: controller, reader: controller.terminalReader)
         .accessibilityFocused($accessibilityFocus, equals: .terminalReader)
 
+        RemoteImageButton(controller: controller, transfer: controller.imageTransfer)
+
         Button {
           controller.dismissKeyboard()
           collapseControls()
@@ -3169,6 +3234,7 @@ struct RemoteAssistView: View {
         .buttonStyle(RemoteAssistOverlayButtonStyle())
         .accessibilityLabel("Open Files")
         .accessibilityIdentifier("clawdad.remote.files")
+        .disabled(controller.imageTransfer.busy || controller.imageTransfer.attaching)
 
         Button {
           controlPage = .shortcuts

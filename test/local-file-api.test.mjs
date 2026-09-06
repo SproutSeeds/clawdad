@@ -62,4 +62,25 @@ test("authenticated local Files API registers, filters, previews and downloads e
   assert.deepEqual(Buffer.from(chunk.dataBase64, "base64"), bytes.subarray(7));
   const bad = await fetch(`${base}/v1/files/download?id=../../secret&versionId=bad`, { headers });
   assert.equal(bad.status, 400);
+
+  // The native companion supplies the paired owner; raw image bytes never enter
+  // a cloud envelope. Verify the exact routes used by that companion.
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
+  const upload = { id: crypto.randomUUID(), fileName: "Phone screenshot.png", mimeType: "image/png", size: png.length, sha256: crypto.createHash("sha256").update(png).digest("hex") };
+  const imagePost = (route, body, auth = headers) => fetch(`${base}/v1/files/${route}`, { method: "POST", headers: auth, body: JSON.stringify(body) });
+  assert.equal((await imagePost("image-upload", { action: "uploadBegin", owner: "paired-phone", upload }, { "Content-Type": "application/json" })).status, 401);
+  for (const action of ["uploadBegin", "uploadChunk", "uploadFinish"]) {
+    const response = await imagePost("image-upload", { action, owner: "paired-phone", upload, ...(action === "uploadChunk" ? { offset: 0, bytes: png.toString("base64") } : {}) });
+    assert.equal(response.status, 200, await response.text());
+  }
+  const received = await (await fetch(`${base}/v1/files/library?category=receivedImages`, { headers })).json();
+  assert.equal(received.total, 1);
+  assert.equal(JSON.stringify(received).includes("storagePath"), false);
+  const saved = received.items[0];
+  const exact = await fetch(`${base}/v1/files/download?${new URLSearchParams({ id: saved.id, versionId: saved.versions[0].id })}`, { headers });
+  assert.deepEqual(Buffer.from(await exact.arrayBuffer()), png);
+  const resolved = await imagePost("image-resolve", { owner: "paired-phone", uploadIds: [upload.id] });
+  assert.equal(resolved.status, 200);
+  assert.equal((await resolved.json()).images[0].sha256, upload.sha256);
+  assert.equal((await imagePost("image-resolve", { owner: "different-phone", uploadIds: [upload.id] })).status, 400);
 });

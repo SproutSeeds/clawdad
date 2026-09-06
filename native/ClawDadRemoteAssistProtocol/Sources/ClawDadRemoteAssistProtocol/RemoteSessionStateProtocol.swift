@@ -9,15 +9,17 @@ public struct RemoteSessionStateMessage: Codable, Equatable, Sendable {
   public var supportsDictation: Bool? = nil
   public var supportsTerminalReadAloud: Bool? = nil
   public var supportsInlineSpeech: Bool? = nil
+  public var supportsImageAttachments: Bool? = nil
   public var requestId: String? = nil
 
-  public static func state(screenLocked: Bool, supportsDictation: Bool? = nil, supportsTerminalReadAloud: Bool? = nil, supportsInlineSpeech: Bool? = nil, requestId: String? = nil) -> RemoteSessionStateMessage {
+  public static func state(screenLocked: Bool, supportsDictation: Bool? = nil, supportsTerminalReadAloud: Bool? = nil, supportsInlineSpeech: Bool? = nil, supportsImageAttachments: Bool? = nil, requestId: String? = nil) -> RemoteSessionStateMessage {
     RemoteSessionStateMessage(
       type: messageType,
       screenLocked: screenLocked,
       supportsDictation: supportsDictation,
       supportsTerminalReadAloud: supportsTerminalReadAloud,
       supportsInlineSpeech: supportsInlineSpeech,
+      supportsImageAttachments: supportsImageAttachments,
       requestId: requestId
     )
   }
@@ -65,6 +67,7 @@ public struct RemoteSessionCapabilities: Equatable, Sendable {
   public private(set) var dictation: Bool?
   public private(set) var terminalReadAloud: Bool?
   public private(set) var inlineSpeech: Bool?
+  public private(set) var imageAttachments: Bool?
 
   public init() {}
 
@@ -80,7 +83,8 @@ public struct RemoteSessionCapabilities: Equatable, Sendable {
     if let value = state.supportsDictation { dictation = value }
     if let value = state.supportsTerminalReadAloud { terminalReadAloud = value }
     if let value = state.supportsInlineSpeech { inlineSpeech = value }
-    received = received || state.supportsDictation != nil || state.supportsTerminalReadAloud != nil || state.supportsInlineSpeech != nil
+    if let value = state.supportsImageAttachments { imageAttachments = value }
+    received = received || state.supportsDictation != nil || state.supportsTerminalReadAloud != nil || state.supportsInlineSpeech != nil || state.supportsImageAttachments != nil
     if received { timedOut = false }
     return true
   }

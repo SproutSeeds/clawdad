@@ -382,6 +382,58 @@ final class ClawDadMobileUITests: XCTestCase {
   func testInlineDictationStopsAndAutomaticallyInserts() { exerciseInlineDictation(clipboardOnly: false) }
   func testInlineDictationCopiesAndPasteUsesTheNewTranscript() { exerciseInlineDictation(clipboardOnly: true) }
 
+  func testRemoteImageClipboardUsesInlineProgressAndPreservesPhotoPickerReturn() {
+    let app = XCUIApplication()
+    app.launchArguments += ["--clawdad-app-store-preview", "dictation", "--clawdad-image-transfer-test"]
+    app.launch()
+    let photos = app.buttons["clawdad.remote.images"]
+    XCTAssertTrue(photos.waitForExistence(timeout: 20))
+    XCTAssertTrue(waitUntil(timeout: 6) { photos.isEnabled })
+    photos.tap()
+    app.buttons["Photo Library"].tap()
+    let cancel = app.buttons["Cancel"]
+    XCTAssertTrue(cancel.waitForExistence(timeout: 6))
+    cancel.tap()
+    XCTAssertTrue(photos.waitForExistence(timeout: 5))
+    XCTAssertTrue(photos.isEnabled)
+    app.buttons["clawdad.remote.paste"].tap()
+    XCTAssertTrue(app.staticTexts["Images sent to your Terminal draft."].waitForExistence(timeout: 8))
+    XCTAssertFalse(app.textViews["clawdad.remote.dictation.transcript"].exists)
+    let screenshot = XCTAttachment(screenshot: app.screenshot())
+    screenshot.name = "Image clipboard attachment inline receipt"
+    screenshot.lifetime = .keepAlways
+    add(screenshot)
+  }
+
+  func testRemoteImagePhotoLibraryAcceptsMultipleSelectionsAndReturnsToControls() {
+    let app = XCUIApplication()
+    app.launchArguments += ["--clawdad-app-store-preview", "dictation", "--clawdad-image-transfer-test", "--clawdad-image-count-two"]
+    app.launch()
+    let photos = app.buttons["clawdad.remote.images"]
+    XCTAssertTrue(photos.waitForExistence(timeout: 20))
+    XCTAssertTrue(waitUntil(timeout: 6) { photos.isEnabled })
+    photos.tap()
+    app.buttons["Photo Library"].tap()
+    let cells = app.images.matching(identifier: "PXGGridLayout-Info")
+    XCTAssertTrue(waitUntil(timeout: 6) { cells.count >= 2 }, app.debugDescription)
+    // Photos exposes its grid tiles as images without a tappable AX action.
+    cells.element(boundBy: 0).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+    cells.element(boundBy: 1).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+    let add = app.navigationBars["Photos"].buttons["Done"]
+    XCTAssertTrue(add.waitForExistence(timeout: 4), app.debugDescription)
+    add.tap()
+    XCTAssertTrue(app.staticTexts["Images sent to your Terminal draft."].waitForExistence(timeout: 10), app.debugDescription)
+    XCTAssertTrue(photos.isEnabled)
+    XCTAssertTrue(app.buttons["clawdad.remote.dictation"].isEnabled)
+    XCTAssertTrue(app.buttons["clawdad.remote.reader"].isEnabled)
+    // Allow the system Photos dismissal to finish compositing before visual QA.
+    Thread.sleep(forTimeInterval: 1)
+    let screenshot = XCTAttachment(screenshot: app.screenshot())
+    screenshot.name = "Multiple photo selection returns to Remote Assist controls"
+    screenshot.lifetime = .keepAlways
+    self.add(screenshot)
+  }
+
   func testRemoteDictationTakesOverPlayingAudioAndIgnoresLaterParts() {
     let app = XCUIApplication()
     app.launchArguments += ["--clawdad-app-store-preview", "terminal-reader",

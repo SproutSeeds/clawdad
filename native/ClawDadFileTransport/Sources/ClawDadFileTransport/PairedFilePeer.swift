@@ -2,8 +2,17 @@ import Foundation
 import ClawDadRemoteAssistProtocol
 @preconcurrency import WebRTC
 
-/// A separate paired connection with one reliable data channel. No capture,
-/// microphone, input events, or TURN credentials enter the file transport.
+public struct FileIceServer: Codable, Sendable {
+  public let urls: [String]
+  public let username: String?
+  public let credential: String?
+  public init(urls: [String], username: String? = nil, credential: String? = nil) {
+    self.urls = urls; self.username = username; self.credential = credential
+  }
+}
+
+/// A separate paired data connection. Screen, audio and input events stay on
+/// Remote Assist. Relay is opt-in with credentials from the host's budget gate.
 @MainActor
 public final class PairedFilePeer: NSObject {
   public var onCandidate: ((String, String?, Int32) -> Void)?
@@ -16,6 +25,11 @@ public final class PairedFilePeer: NSObject {
   private var candidates: [RTCIceCandidate] = []
   private var assembler = RemoteFileAssembler()
   private var sending = false
+  private var permitsRelay = false
+  private var servers: [FileIceServer] = []
+  private var byteLimit: Int?
+  private var transferredBytes = 0
+  private var failed = false
   public var isOpen: Bool { channel?.readyState == .open }
 
   public override init() {
@@ -24,11 +38,37 @@ public final class PairedFilePeer: NSObject {
     super.init()
   }
 
+  public func configure(iceServers: [FileIceServer], permitsRelay: Bool, byteLimit: Int? = nil) throws {
+    guard peer == nil, iceServers.count <= 8, byteLimit == nil || byteLimit! > 0 else { throw RemoteFileError.invalidMessage }
+    self.permitsRelay = permitsRelay
+    self.byteLimit = byteLimit
+    servers = iceServers.compactMap { server in
+      let urls = server.urls.filter { url in
+        url.utf8.count <= 1024 && (url.hasPrefix("stun:") || (permitsRelay && (url.hasPrefix("turn:") || url.hasPrefix("turns:")) && server.username != nil && server.credential != nil))
+      }
+      return urls.isEmpty ? nil : FileIceServer(urls: urls, username: server.username, credential: server.credential)
+    }
+  }
+
+  private func account(_ count: Int) -> Bool {
+    guard !failed else { return false }
+    if let byteLimit, count > byteLimit - transferredBytes {
+      failed = true
+      stop()
+      onFailure?(RemoteFileError.tooLarge)
+      return false
+    }
+    transferredBytes += count
+    return true
+  }
+
   private func makePeer() throws -> RTCPeerConnection {
     if let peer { return peer }
     let configuration = RTCConfiguration()
     configuration.sdpSemantics = .unifiedPlan
-    configuration.iceServers = [RTCIceServer(urlStrings: ["stun:stun.cloudflare.com:3478"])]
+    configuration.iceServers = servers.isEmpty
+      ? [RTCIceServer(urlStrings: ["stun:stun.cloudflare.com:3478"])]
+      : servers.map { RTCIceServer(urlStrings: $0.urls, username: $0.username, credential: $0.credential) }
     configuration.continualGatheringPolicy = .gatherContinually
     guard let peer = factory.peerConnection(with: configuration,
       constraints: RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil), delegate: self) else { throw RemoteFileError.disconnected }
@@ -73,23 +113,28 @@ public final class PairedFilePeer: NSObject {
   }
 
   public func addCandidate(sdp: String, mid: String?, index: Int32) async {
-    // Even an old or misconfigured peer cannot introduce a paid relay route.
-    guard !sdp.contains(" typ relay ") else { return }
+    guard !failed, sdp.utf8.count <= 4096, index >= 0, index < 128 else { return }
     let candidate = RTCIceCandidate(sdp: sdp, sdpMLineIndex: index, sdpMid: mid)
-    guard let peer, peer.remoteDescription != nil else { candidates.append(candidate); return }
+    // ICE can arrive before the offer supplies the permitted relay policy.
+    // Retain a bounded queue, then apply that policy when the SDP is accepted.
+    guard let peer, peer.remoteDescription != nil else {
+      if candidates.count < 256 { candidates.append(candidate) }
+      return
+    }
+    guard permitsRelay || !sdp.contains(" typ relay ") else { return }
     try? await peer.add(candidate)
   }
 
   private func drainCandidates() async {
     guard let peer else { return }
     let pending = candidates; candidates = []
-    for candidate in pending { try? await peer.add(candidate) }
+    for candidate in pending where permitsRelay || !candidate.sdp.contains(" typ relay ") { try? await peer.add(candidate) }
   }
 
   private func set(_ description: RTCSessionDescription, local: Bool, peer: RTCPeerConnection) async throws {
     // Files offers never negotiate media, including when received from a peer.
     guard !description.sdp.contains("m=video"), !description.sdp.contains("m=audio"),
-          !description.sdp.contains(" typ relay "), description.sdp.utf8.count <= 64 * 1024 else { throw RemoteFileError.invalidMessage }
+          permitsRelay || !description.sdp.contains(" typ relay "), description.sdp.utf8.count <= 64 * 1024 else { throw RemoteFileError.invalidMessage }
     try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
       let completion: (Error?) -> Void = { error in
         if let error { continuation.resume(throwing: error) } else { continuation.resume() }
@@ -106,7 +151,9 @@ public final class PairedFilePeer: NSObject {
     let frames = try RemoteFileFrame.split(data)
     let deadline = Date().addingTimeInterval(15)
     for frame in frames {
-      let buffer = RTCDataBuffer(data: try JSONEncoder().encode(frame), isBinary: true)
+      let encoded = try JSONEncoder().encode(frame)
+      guard account(encoded.count) else { throw RemoteFileError.tooLarge }
+      let buffer = RTCDataBuffer(data: encoded, isBinary: true)
       while true {
         try Task.checkCancellation()
         guard let channel, channel.readyState == .open else { throw RemoteFileError.disconnected }
@@ -160,7 +207,7 @@ extension PairedFilePeer: RTCDataChannelDelegate {
   nonisolated public func dataChannel(_ dataChannel: RTCDataChannel, didReceiveMessageWith buffer: RTCDataBuffer) {
     let data = buffer.data
     Task { @MainActor [weak self] in
-      guard let self else { return }
+      guard let self, self.channel === dataChannel, self.account(data.count) else { return }
       do { if let message = try self.assembler.receive(data) { self.onMessage?(message) } }
       catch { self.onFailure?(error) }
     }

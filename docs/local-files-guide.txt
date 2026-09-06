@@ -13,4 +13,16 @@ Remove from iPhone clears ClawDad's retained copy on the phone. Your Mac library
 The canonical library lives on this Mac at:
 ~/Library/Application Support/ClawDad/Files
 
-Files connects directly between your paired devices. The Mac must be awake and ClawDad running for new downloads. Some networks block a direct connection; try the same Wi-Fi or an existing private network if that happens. This release leaves paid file relays disabled. File storage and document processing remain local. Each file can be up to 100 MB; the Mac library currently allows 10 GB.
+Remote Assist images
+
+Copy a screenshot or photo on your iPhone, select the intended Terminal draft in Remote Assist, then open the controls menu and tap Paste. The photo button also offers Photo Library and Browse Files. Choose up to eight images, up to 20 MB each and 80 MB for the group. PNG screenshots keep their original bytes; other supported photos are converted when necessary for Terminal compatibility.
+
+Images attach individually to the remembered Terminal input and preserve its existing draft. You press Enter when you are ready to send. If the input or tab changes during the transfer, ClawDad saves the images on the Mac and offers them for later paste. Select the intended draft, open the menu, and tap Paste. The photo menu also offers Paste saved images if your iPhone clipboard has changed in the meantime.
+
+The small transfer indicator offers Pause and Retry. Interrupted transfers resume from their confirmed offset. Keep ClawDad open to retain the selected images for retry; completed images remain in the Mac library even if the phone app closes. Dismissing the indicator clears the phone's pending selection. Unfinished transfer scratch expires after 24 hours.
+
+Open Files and choose Received Images to find transferred pictures. Documents remains the view for finished deliverables. Received images live under the local library's received folder and use the same preview, download, pin, and archive controls.
+
+The Mac must be awake and ClawDad running for transfers. Image uploads try a direct connection and can use the existing budget-controlled relay when the network requires it. The cloud retains no image files. A transfer connection is limited to 256 MB of application traffic and ten minutes; the existing monthly relay budgets also apply. Screens, controls, and image bytes use separate connections.
+
+File downloads use direct connections. Some networks block a direct connection; try the same Wi-Fi or an existing private network if that happens. File storage and document processing remain local. A downloadable file can be up to 100 MB; the Mac library currently allows 10 GB.

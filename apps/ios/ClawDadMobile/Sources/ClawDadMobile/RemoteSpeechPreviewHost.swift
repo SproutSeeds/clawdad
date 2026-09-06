@@ -39,8 +39,12 @@ final class RemoteSpeechPreviewHost {
         if requests == 1 { return }
         if arguments.contains("--clawdad-preview-slow-context") { try? await Task.sleep(for: .seconds(2)) }
         let state = RemoteSessionStateMessage.state(screenLocked: false, supportsDictation: true,
-          supportsTerminalReadAloud: true, supportsInlineSpeech: true, requestId: request.requestId)
+          supportsTerminalReadAloud: true, supportsInlineSpeech: true,
+          supportsImageAttachments: arguments.contains("--clawdad-image-transfer-test"), requestId: request.requestId)
         if let reply = try? RemoteSessionStateCodec.encode(state) { receive(reply) }
+      } else if let request = try? RemoteImageAttachmentMessage.decode(data), request.type == "images.attach" {
+        let copied = request.copyOnly == true || !tokens.contains(request.targetToken ?? "") || arguments.contains("--clawdad-preview-clipboard-only")
+        if let reply = try? request.result(disposition: copied ? "copied" : "pasteRequested").encode() { receive(reply) }
       } else if let request = try? RemoteSpeechContextMessage.decode(data) {
         let result: RemoteSpeechContextMessage
         if request.action == .captureTarget {

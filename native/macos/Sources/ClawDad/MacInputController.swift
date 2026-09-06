@@ -78,6 +78,7 @@ final class MacInputController {
 
   private let source: CGEventSource
   private let dictationDelivery = MacDictationDelivery.shared
+  private(set) var imagePasteInProgress = false
   private struct DictationTarget {
     let input: InputTarget
     let window: CFTypeRef?
@@ -222,6 +223,7 @@ final class MacInputController {
     _ message: RemoteClipboardMessage,
     terminalIdentity: @MainActor () async throws -> String?
   ) async -> RemoteClipboardMessage {
+    await waitForImagePaste()
     let capture = message.targetToken.flatMap { dictationTargets.capture(for: $0) }
     var selectedTerminal: String?
     if message.copyOnly != true, capture?.requiresTerminalIdentity == true {
@@ -236,6 +238,45 @@ final class MacInputController {
               terminalIdentity: selectedTerminal, isCurrent: targetIsCurrent) else { return .copied }
       return insertDictation(text, into: target.input)
     })
+  }
+
+  func deliverImages(_ images: MacPreparedImages, request: RemoteImageAttachmentMessage,
+                     terminalIdentity: @MainActor () async throws -> String?) async -> RemoteImageAttachmentMessage {
+    if let inputProcessingTask { await inputProcessingTask.value }
+    if let clipboardCopyTask { await clipboardCopyTask.value }
+    guard !speechSelectionInProgress, !MacConsoleSessionState.isLocked(), pointerInputEnabled else {
+      return request.result(error: "Unlock the Mac and finish the current input operation, then retry your saved images.")
+    }
+    guard !Task.isCancelled, !MacConsoleSessionState.isLocked() else { return request.result(error: "The image is saved on the Mac. Reconnect to paste it.") }
+    let previous = PasteboardSnapshot(NSPasteboard.general)
+    guard images.copy(to: .general) else {
+      previous.restore(to: .general)
+      return request.result(error: "The Mac could not copy these images. Retry the saved attachment.")
+    }
+    guard request.copyOnly != true, let token = request.targetToken else { return request.result(disposition: "copied", pastedCount: 0) }
+    imagePasteInProgress = true
+    defer { imagePasteInProgress = false }
+    var pasted = 0
+    for index in images.urls.indices {
+      guard !Task.isCancelled, let capture = dictationTargets.capture(for: token), capture.generation == inputGeneration else { break }
+      let identity = try? await terminalIdentity()
+      guard !Task.isCancelled, !MacConsoleSessionState.isLocked(), pointerInputEnabled,
+            let target = dictationTargets.resolve(token: token, generation: inputGeneration,
+              terminalIdentity: identity, isCurrent: targetIsCurrent),
+            target.input.bundleIdentifier == "com.apple.Terminal",
+            images.copy(to: .general, from: index, single: true),
+            pressCommandShortcut(keyCode: 9, targetPID: target.input.pid) else { break }
+      pasted += 1
+      // Codex's composer recognizes one pasted image path per event. Keep the
+      // clipboard stable while Terminal consumes Cmd-V, then send the next.
+      try? await Task.sleep(nanoseconds: 180_000_000)
+    }
+    if pasted < images.urls.count { _ = images.copy(to: .general, from: pasted) }
+    return request.result(disposition: pasted == images.urls.count ? "pasteRequested" : "copied", pastedCount: pasted)
+  }
+
+  func waitForImagePaste() async {
+    while imagePasteInProgress, !Task.isCancelled { try? await Task.sleep(nanoseconds: 20_000_000) }
   }
 
   private func attribute(_ element: AXUIElement, _ name: CFString) -> CFTypeRef? {
@@ -265,6 +306,7 @@ final class MacInputController {
   /// Read AX selected text without touching either device's clipboard. Some apps
   /// expose selection only through Copy; preserve the complete pasteboard there.
   func readSpeechSelection(_ request: RemoteSpeechContextMessage) async -> RemoteSpeechContextMessage {
+    await waitForImagePaste()
     guard !speechSelectionInProgress else { return request.failure("Wait for the selected text to finish loading.") }
     speechSelectionInProgress = true
     defer { speechSelectionInProgress = false }
@@ -350,6 +392,14 @@ final class MacInputController {
     _ message: RemoteClipboardMessage,
     respond: @escaping (RemoteClipboardMessage) -> Void
   ) {
+    if imagePasteInProgress {
+      Task { @MainActor [weak self] in
+        await self?.waitForImagePaste()
+        guard !Task.isCancelled else { return }
+        self?.handleClipboard(message, respond: respond)
+      }
+      return
+    }
     guard !speechSelectionInProgress else {
       respond(.failure(action: message.action, requestId: message.requestId, error: "Wait for selected text to finish loading, then retry."))
       return
@@ -750,6 +800,8 @@ final class MacInputController {
     }
 
     while !Task.isCancelled, !inputQueue.isEmpty {
+      await waitForImagePaste()
+      guard !Task.isCancelled else { return }
       let pending = inputQueue.removeFirst()
       let response = await executeInput(pending.message)
       pending.respond?(response)

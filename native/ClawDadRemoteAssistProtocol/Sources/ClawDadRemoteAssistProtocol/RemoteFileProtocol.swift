@@ -1,7 +1,7 @@
 import Foundation
 
 public struct RemoteFileRequest: Codable, Sendable {
-  public enum Action: String, Codable, Sendable { case list, chunk, update }
+  public enum Action: String, Codable, Sendable { case list, chunk, update, uploadBegin, uploadChunk, uploadFinish, uploadCancel }
   public var requestId: String
   public var action: Action
   public var id: String?
@@ -13,15 +13,20 @@ public struct RemoteFileRequest: Codable, Sendable {
   public var format: String?
   public var pinned: Bool?
   public var archived: Bool?
+  public var category: String?
+  public var upload: RemoteImageUpload?
+  public var bytes: Data?
 
   public init(action: Action, id: String? = nil, versionId: String? = nil,
               offset: Int? = nil, cursor: Int? = nil, query: String? = nil,
-              pinned: Bool? = nil, archived: Bool? = nil, project: String? = nil, format: String? = nil) {
+              pinned: Bool? = nil, archived: Bool? = nil, project: String? = nil, format: String? = nil,
+              category: String? = nil, upload: RemoteImageUpload? = nil, bytes: Data? = nil) {
     requestId = UUID().uuidString.lowercased()
     self.action = action; self.id = id; self.versionId = versionId
     self.offset = offset; self.cursor = cursor; self.query = query
     self.pinned = pinned; self.archived = archived
     self.project = project; self.format = format
+    self.category = category; self.upload = upload; self.bytes = bytes
   }
 
   public func validate() throws {
@@ -30,13 +35,24 @@ public struct RemoteFileRequest: Codable, Sendable {
           (offset ?? 0) >= 0, (offset ?? 0) <= 100 * 1024 * 1024,
           (cursor ?? 0) >= 0, (cursor ?? 0) <= 5_000 else { throw RemoteFileError.invalidMessage }
     switch action {
-    case .list: guard id == nil, versionId == nil, offset == nil else { throw RemoteFileError.invalidMessage }
+    case .list: guard id == nil, versionId == nil, offset == nil, upload == nil, bytes == nil,
+                     category == nil || ["documents", "receivedImages", "all"].contains(category!) else { throw RemoteFileError.invalidMessage }
     case .chunk:
       guard let id, UUID(uuidString: id) != nil, let versionId, UUID(uuidString: versionId) != nil,
-            offset != nil, pinned == nil, archived == nil, query == nil, cursor == nil, project == nil, format == nil else { throw RemoteFileError.invalidMessage }
+            offset != nil, pinned == nil, archived == nil, query == nil, cursor == nil, project == nil, format == nil,
+            category == nil, upload == nil, bytes == nil else { throw RemoteFileError.invalidMessage }
     case .update:
       guard let id, UUID(uuidString: id) != nil, versionId == nil, offset == nil,
-            query == nil, cursor == nil, project == nil, format == nil, pinned != nil || archived != nil else { throw RemoteFileError.invalidMessage }
+            query == nil, cursor == nil, project == nil, format == nil, pinned != nil || archived != nil,
+            category == nil, upload == nil, bytes == nil else { throw RemoteFileError.invalidMessage }
+    case .uploadBegin, .uploadChunk, .uploadFinish, .uploadCancel:
+      guard id == nil, versionId == nil, query == nil, cursor == nil, project == nil, format == nil,
+            category == nil, pinned == nil, archived == nil, let upload else { throw RemoteFileError.invalidMessage }
+      try upload.validate()
+      if action == .uploadChunk {
+        guard let offset, let bytes, !bytes.isEmpty, bytes.count <= RemoteImageLimits.chunkBytes,
+              offset <= upload.size, bytes.count <= upload.size - offset else { throw RemoteFileError.invalidMessage }
+      } else if offset != nil || bytes != nil { throw RemoteFileError.invalidMessage }
     }
   }
 }

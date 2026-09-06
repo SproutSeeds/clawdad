@@ -5,7 +5,8 @@ export function installFilesLibrary({ request, native, currentProject }) {
   dialog.className = "files-library-dialog";
   dialog.setAttribute("aria-labelledby", "filesLibraryTitle");
   dialog.innerHTML = `<header><button type="button" data-back>‹ Back</button><h2 id="filesLibraryTitle">Files</h2><button type="button" data-refresh>Refresh</button></header>
-    <p class="files-library-help">Your finished documents live on this Mac. Open Files on your paired iPhone to download a copy.</p>
+    <p class="files-library-help">Your files live on this Mac. Open Files on your paired iPhone to download a copy.</p>
+    <div class="files-library-controls"><select aria-label="Collection" data-category><option value="documents">Documents</option><option value="receivedImages">Received Images</option></select></div>
     <div class="files-library-controls"><input type="search" placeholder="Find a document" aria-label="Search files" data-search><select aria-label="Project" data-project><option value="">All projects</option></select><select aria-label="File type" data-format><option value="">All types</option></select><label><input type="checkbox" data-archive> Archive</label></div>
     <div class="files-library-controls"><button type="button" data-add>Add files…</button><button type="button" data-import>Import older deliverables…</button><button type="button" data-instructions>Copy agent instructions</button></div>
     <p role="status" data-status></p><div class="files-library-list" data-list></div><button type="button" data-more hidden>Load more</button>`;
@@ -24,7 +25,7 @@ export function installFilesLibrary({ request, native, currentProject }) {
     const list = find("[data-list]"); list.replaceChildren();
     if (!entries.length) {
       const empty = document.createElement("p"); empty.className = "files-library-empty";
-      empty.textContent = "No documents here yet. Add a finished file, or copy the instructions for your agent. Source edits stay in their projects.";
+      empty.textContent = find("[data-category]").value === "receivedImages" ? "Images sent from Remote Assist appear here once saved on the Mac." : "No documents here yet. Add a finished file, or copy the instructions for your agent. Source edits stay in their projects.";
       list.append(empty);
     }
     for (const item of entries) {
@@ -66,7 +67,7 @@ export function installFilesLibrary({ request, native, currentProject }) {
     const current = ++generation;
     status("Loading local files…");
     try {
-      const parameters = new URLSearchParams({ query: find("[data-search]").value, project: find("[data-project]").value, format: find("[data-format]").value, archived: String(find("[data-archive]").checked), cursor: String(more ? cursor || 0 : 0) });
+      const parameters = new URLSearchParams({ query: find("[data-search]").value, project: find("[data-project]").value, format: find("[data-format]").value, category: find("[data-category]").value, archived: String(find("[data-archive]").checked), cursor: String(more ? cursor || 0 : 0) });
       const page = await request(`/v1/files/library?${parameters}`);
       if (current !== generation || !dialog.open) return;
       entries = more ? entries.filter((item) => !page.items.some((next) => next.id === item.id)).concat(page.items) : page.items;
@@ -179,6 +180,6 @@ export function installFilesLibrary({ request, native, currentProject }) {
   find("[data-refresh]").addEventListener("click", () => load());
   find("[data-more]").addEventListener("click", () => load(true));
   find("[data-search]").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => load(), 200); });
-  for (const selector of ["[data-project]", "[data-format]", "[data-archive]"]) find(selector).addEventListener("change", () => load());
+  for (const selector of ["[data-category]", "[data-project]", "[data-format]", "[data-archive]"]) find(selector).addEventListener("change", () => load());
   opener.addEventListener("click", () => { dialog.showModal(); find("[data-search]").focus(); load(); });
 }

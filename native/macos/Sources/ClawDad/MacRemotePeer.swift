@@ -93,6 +93,7 @@ final class MacRemotePeer: NSObject {
   var onIceCandidate: ((RTCIceCandidate) -> Void)?
   var onConnectionState: ((RTCPeerConnectionState) -> Void)?
   var onFatalError: ((Error) -> Void)?
+  var resolveImages: (([String]) async throws -> [MacReceivedImage])?
 
   private let factory: RTCPeerConnectionFactory
   private let inputController: MacInputController
@@ -115,6 +116,10 @@ final class MacRemotePeer: NSObject {
   private var terminalResponseTask: Task<Void, Never>?
   private var speechOperationTask: Task<Void, Never>?
   private var pendingDictationRequest: RemoteClipboardMessage?
+  private var imageOperationTask: Task<Void, Never>?
+  private var imageRequest: RemoteImageAttachmentMessage?
+  private var imageReceipts = MacImageDeliveryReceipts()
+  private var targetCaptureTasks: [String: Task<Void, Never>] = [:]
   private var displayAdvertisementGate = RemoteDisplayAdvertisementGate()
   private var displayOperationInProgress = false
   private var displayRefreshPending = false
@@ -267,6 +272,8 @@ final class MacRemotePeer: NSObject {
   }
 
   func stop() {
+    imageOperationTask?.cancel(); imageOperationTask = nil
+    targetCaptureTasks.values.forEach { $0.cancel() }; targetCaptureTasks = [:]
     terminalActivityPrewarmTask?.cancel()
     terminalActivityPrewarmTask = nil
     pendingDictationRequest = nil
@@ -437,7 +444,7 @@ final class MacRemotePeer: NSObject {
 
   static func sessionState(screenLocked: Bool, requestId: String? = nil) -> RemoteSessionStateMessage {
     .state(screenLocked: screenLocked, supportsDictation: true, supportsTerminalReadAloud: true,
-           supportsInlineSpeech: true, requestId: requestId)
+           supportsInlineSpeech: true, supportsImageAttachments: true, requestId: requestId)
   }
 
   private func publishDisplayState() {
@@ -611,6 +618,7 @@ final class MacRemotePeer: NSObject {
         }
       }
       do {
+        if message.type != RemoteTerminalTabMessage.listType { await self.inputController.waitForImagePaste() }
         switch message.type {
         case RemoteTerminalTabMessage.listType:
           let state = try await self.terminalTabController.catalog()
@@ -722,6 +730,20 @@ final class MacRemotePeer: NSObject {
         sendControlData(data)
       }
     }
+    if request.action == .captureTarget {
+      guard targetCaptureTasks[request.requestId] == nil else { return }
+      guard targetCaptureTasks.count < 8 else { send(request.failure("Wait for the input target to finish loading.")); return }
+      // Capturing is read-only and may overlap a speech lookup or delivery.
+      // This prevents an explicit image Paste from losing its caret just
+      // because dictation is finishing. The registry still checks generation.
+      targetCaptureTasks[request.requestId] = Task { @MainActor [weak self] in
+        guard let self else { return }
+        defer { self.targetCaptureTasks.removeValue(forKey: request.requestId) }
+        let response = await self.inputController.captureDictationTarget(request) { try await self.speechTerminalIdentity() }
+        if !Task.isCancelled, let data = try? response.encode() { self.sendControlData(data) }
+      }
+      return
+    }
     guard speechOperationTask == nil else {
       send(request.failure("Wait for the current speech operation to finish."))
       return
@@ -755,6 +777,36 @@ final class MacRemotePeer: NSObject {
       defer { self.speechOperationTask = nil; self.pendingDictationRequest = nil }
       let response = await self.inputController.deliverTargetedDictation(request) { try await self.speechTerminalIdentity() }
       if !Task.isCancelled { self.sendControl(response) }
+    }
+  }
+
+  private func handleImages(_ request: RemoteImageAttachmentMessage) {
+    func send(_ response: RemoteImageAttachmentMessage) {
+      if let data = try? response.encode() { sendControlData(data) }
+    }
+    if let receipt = imageReceipts.response(for: request) { send(receipt); return }
+    guard imageOperationTask == nil else {
+      if imageRequest != request { send(request.result(error: "Wait for the current image attachment to finish.")) }
+      return
+    }
+    guard let resolveImages else { send(request.result(error: "The Mac Files library is starting. Retry shortly.")); return }
+    imageRequest = request
+    imageOperationTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer { self.imageOperationTask = nil; self.imageRequest = nil }
+      do {
+        let images = try await resolveImages(request.uploadIds)
+        let prepared = try await Task.detached { try MacPreparedImages.load(images) }.value
+        if let token = request.targetToken, let capture = self.targetCaptureTasks[token] { await capture.value }
+        if let speechOperationTask = self.speechOperationTask { await speechOperationTask.value }
+        try Task.checkCancellation()
+        let response = await self.inputController.deliverImages(prepared, request: request) { try await self.terminalTabController.catalog().selectedTabId }
+        // Remember before sending; a lost receipt never repeats a paste.
+        if response.error == nil { self.imageReceipts.remember(request, response: response) }
+        if !Task.isCancelled, let data = try? response.encode() { self.sendControlData(data) }
+      } catch {
+        if !Task.isCancelled, let data = try? request.result(error: error.localizedDescription).encode() { self.sendControlData(data) }
+      }
     }
   }
 
@@ -987,6 +1039,10 @@ extension MacRemotePeer: RTCDataChannelDelegate {
         return
       }
       guard self.controlChannel === dataChannel else { return }
+      if let request = try? RemoteImageAttachmentMessage.decode(data), request.type == "images.attach" {
+        self.handleImages(request)
+        return
+      }
       if let request = try? RemoteSessionStateRequest.decode(data) {
         self.publishSessionState(force: true, requestId: request.requestId)
         return

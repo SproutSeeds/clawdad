@@ -30,6 +30,7 @@ struct MobileLibraryItem: Codable, Identifiable, Equatable, Sendable {
   let createdAt: String
   let updatedAt: String
   let versions: [MobileLibraryVersion]
+  var category: String? = nil
   var latest: MobileLibraryVersion? { versions.last }
   var projectName: String { project.isEmpty ? "Personal" : URL(fileURLWithPath: project).lastPathComponent }
 }
@@ -143,6 +144,8 @@ final class MobileFilesController: ObservableObject {
   private var archived = false
   private var project = ""
   private var format = ""
+  private var category = "documents"
+  private var imageUpload = false
   private var operationID = UUID()
   private var needsRefresh = false
   private var pageRevision: Int?
@@ -150,9 +153,10 @@ final class MobileFilesController: ObservableObject {
 
   var computerName: String { session?.activeComputerName ?? "Mac" }
 
-  func open(to session: CloudSession) {
+  func open(to session: CloudSession, imageUpload: Bool = false) {
     let scope = "\(session.accountId)/\(session.workspaceId)/\(session.hostId)"
     close()
+    self.imageUpload = imageUpload
     if self.scope != scope {
       self.scope = scope
       self.cache = try? MobileFileCache(scope: scope)
@@ -160,7 +164,7 @@ final class MobileFilesController: ObservableObject {
     items = cache?.items() ?? []
     projects = Array(Set(items.map(\.project))).sorted()
     formats = Array(Set(items.flatMap { $0.versions.map(\.format) })).sorted()
-    query = ""; archived = false; project = ""; format = ""; nextCursor = nil; pageRevision = nil; error = ""
+    query = ""; archived = false; project = ""; format = ""; category = "documents"; nextCursor = nil; pageRevision = nil; error = ""
     self.session = session
     session.setFilesEnvelopeHandler { [weak self] envelope in self?.handle(envelope) }
     connect()
@@ -177,7 +181,7 @@ final class MobileFilesController: ObservableObject {
       return
     }
     guard session.remoteAssistIdentityReady else { error = "Pair this iPhone again to access Files."; return }
-    connecting = true; error = ""; status = "Connecting directly to \(computerName)…"
+    connecting = true; error = ""; status = "Connecting to \(computerName)…"
     sessionId = UUID().uuidString.lowercased(); receivedOffer = false
     let id = sessionId
     let peer = PairedFilePeer(); self.peer = peer
@@ -189,11 +193,11 @@ final class MobileFilesController: ObservableObject {
       guard let self, self.sessionId == id else { return }
       self.connectTimeout?.cancel(); self.connectTimeout = nil
       self.connected = true; self.connecting = false
-      self.status = "Connected directly to \(self.computerName)"
+      self.status = "Connected to \(self.computerName)"
       if let desired = self.desiredDownload {
         self.desiredDownload = nil
         self.download(desired.0, version: desired.1)
-      } else { self.refresh(query: self.query, archived: self.archived, project: self.project, format: self.format) }
+      } else if !self.imageUpload { self.refresh(query: self.query, archived: self.archived, project: self.project, format: self.format, category: self.category) }
     }
     peer.onMessage = { [weak self] data in self?.receive(data) }
     peer.onFailure = { [weak self] error in
@@ -201,13 +205,13 @@ final class MobileFilesController: ObservableObject {
       self.connectionFailed(error.localizedDescription)
     }
     Task {
-      do { _ = try await session.sendRemoteAssistEnvelope(type: "remote.assist.request", body: ["sessionId": .string(id), "purpose": .string("files"), "transport": .string("webrtc"), "control": .bool(false)]) }
+      do { _ = try await session.sendRemoteAssistEnvelope(type: "remote.assist.request", body: ["sessionId": .string(id), "purpose": .string("files"), "transport": .string("webrtc"), "control": .bool(false), "imageUpload": .bool(self.imageUpload)]) }
       catch { if sessionId == id { connectionFailed(error.localizedDescription) } }
     }
     connectTimeout = Task { @MainActor [weak self] in
       try? await Task.sleep(nanoseconds: 25_000_000_000)
       guard !Task.isCancelled, let self, self.sessionId == id, !self.connected else { return }
-      self.connectionFailed("This network could not establish a direct file connection. Try the same Wi-Fi or your private network. Downloaded copies remain available.")
+      self.connectionFailed(self.imageUpload ? "The image connection could not open. Reconnect and retry; your selected images are retained." : "This network could not establish a direct file connection. Try the same Wi-Fi or your private network. Downloaded copies remain available.")
     }
   }
 
@@ -220,6 +224,12 @@ final class MobileFilesController: ObservableObject {
       receivedOffer = true
       Task {
         do {
+          if imageUpload {
+            guard envelope.body["imageUpload"] == .bool(true) else { throw RemoteFileError.invalidMessage }
+            let data = try JSONEncoder().encode(envelope.body["iceServers"] ?? .array([]))
+            let servers = try JSONDecoder().decode([FileIceServer].self, from: data)
+            try peer.configure(iceServers: servers, permitsRelay: envelope.body["relayAvailable"] == .bool(true), byteLimit: RemoteImageLimits.connectionBytes)
+          }
           let answer = try await peer.acceptOffer(sdp)
           guard sessionId == id else { return }
           _ = try await session?.sendRemoteAssistEnvelope(type: "remote.assist.answer", body: ["sessionId": .string(id), "sdp": .string(answer)])
@@ -270,8 +280,9 @@ final class MobileFilesController: ObservableObject {
     completion?.resume(with: result)
   }
 
-  func refresh(query: String = "", archived: Bool = false, more: Bool = false, project: String = "", format: String = "") {
-    self.query = query; self.archived = archived; self.project = project; self.format = format
+  func refresh(query: String = "", archived: Bool = false, more: Bool = false, project: String = "", format: String = "", category: String = "documents") {
+    guard !imageUpload else { return }
+    self.query = query; self.archived = archived; self.project = project; self.format = format; self.category = category
     guard !busy else { if !more { needsRefresh = true }; return }
     guard connected else { items = cache?.items() ?? items; connect(); return }
     busy = true; error = ""
@@ -281,7 +292,7 @@ final class MobileFilesController: ObservableObject {
       guard let self else { return }
       defer { self.finishWork(operation) }
       do {
-        let data = try await request(RemoteFileRequest(action: .list, cursor: cursor, query: query, archived: archived, project: project, format: format))
+        let data = try await request(RemoteFileRequest(action: .list, cursor: cursor, query: query, archived: archived, project: project, format: format, category: category == "documents" ? nil : category))
         try Task.checkCancellation()
         let page = try JSONDecoder().decode(MobileLibraryPage.self, from: data)
         guard page.items.count <= 10 else { throw RemoteFileError.invalidMessage }
@@ -299,7 +310,7 @@ final class MobileFilesController: ObservableObject {
         let all = Array(cached.values).sorted { $0.updatedAt > $1.updatedAt }
         try cache?.save(all)
         items = more ? items.filter { prior in !page.items.contains(where: { $0.id == prior.id }) } + page.items : page.items
-        status = "\(page.total) document\(page.total == 1 ? "" : "s") on \(computerName) • Direct connection"
+        status = "\(page.total) file\(page.total == 1 ? "" : "s") on \(computerName) • Direct connection"
       } catch is CancellationError { }
       catch { if operationID == operation { self.error = error.localizedDescription } }
     }
@@ -379,11 +390,55 @@ final class MobileFilesController: ObservableObject {
     busy = false; downloadingVersionId = ""; work = nil; refreshToken &+= 1
     if needsRefresh {
       needsRefresh = false
-      refresh(query: query, archived: archived, project: project, format: format)
+      refresh(query: query, archived: archived, project: project, format: format, category: category)
     }
   }
 
   func cancelDownload() { work?.cancel() }
+
+  /// Shares the framing/request machinery with downloads, on an upload-only,
+  /// independently budgeted connection. Completed IDs survive retries on the Mac.
+  func uploadImages(_ images: [PreparedRemoteImage], progress: @escaping (Double) -> Void) async throws {
+    guard imageUpload, !busy, !images.isEmpty, images.count <= RemoteImageLimits.count else { throw RemoteFileError.invalidMessage }
+    let total = images.reduce(0) { $0 + $1.data.count }
+    guard total <= RemoteImageLimits.batchBytes else { throw RemoteFileError.tooLarge }
+    let deadline = Date().addingTimeInterval(28)
+    while connecting, !connected, Date() < deadline {
+      try await Task.sleep(nanoseconds: 40_000_000)
+    }
+    try Task.checkCancellation()
+    guard connected else { throw NSError(domain: "ClawDad.Images", code: 1, userInfo: [NSLocalizedDescriptionKey: error.isEmpty ? "Reconnect to send your selected images." : error]) }
+    busy = true
+    defer { busy = false }
+    var completedBytes = 0
+    for image in images {
+      try image.upload.validate()
+      guard image.upload.size == image.data.count else { throw RemoteFileError.invalidMessage }
+      var receipt = try await imageRequest(.uploadBegin, image: image.upload)
+      progress(Double(completedBytes + receipt.offset) / Double(total))
+      while !receipt.complete, receipt.offset < image.data.count {
+        try Task.checkCancellation()
+        let offset = receipt.offset
+        let end = min(offset + RemoteImageLimits.chunkBytes, image.data.count)
+        receipt = try await imageRequest(.uploadChunk, image: image.upload, offset: offset, bytes: image.data.subdata(in: offset..<end))
+        guard receipt.offset == end else { throw RemoteFileError.invalidMessage }
+        progress(Double(completedBytes + receipt.offset) / Double(total))
+      }
+      if !receipt.complete { receipt = try await imageRequest(.uploadFinish, image: image.upload) }
+      guard receipt.complete, receipt.offset == image.data.count, receipt.itemId != nil, receipt.versionId != nil else { throw RemoteFileError.invalidMessage }
+      completedBytes += image.data.count
+      progress(Double(completedBytes) / Double(total))
+    }
+  }
+
+  private func imageRequest(_ action: RemoteFileRequest.Action, image: RemoteImageUpload, offset: Int? = nil, bytes: Data? = nil) async throws -> RemoteImageUploadReceipt {
+    let data = try await request(RemoteFileRequest(action: action, offset: offset, upload: image, bytes: bytes))
+    try Task.checkCancellation()
+    let receipt = try JSONDecoder().decode(RemoteImageUploadReceipt.self, from: data)
+    guard receipt.uploadId == image.id, receipt.offset >= 0, receipt.offset <= image.size,
+          !receipt.complete || receipt.offset == image.size else { throw RemoteFileError.invalidMessage }
+    return receipt
+  }
   private func connectionFailed(_ message: String) {
     close(); error = message
     items = cache?.items() ?? items

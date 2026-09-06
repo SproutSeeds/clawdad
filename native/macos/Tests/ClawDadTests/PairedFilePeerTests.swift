@@ -1,10 +1,30 @@
 import XCTest
 import Foundation
 import ClawDadFileTransport
+import ClawDadRemoteAssistProtocol
 @testable import ClawDad
 
 @MainActor
 final class PairedFilePeerTests: XCTestCase {
+  func testFilesRejectMediaAndRelayUnlessExplicitlyEnabledAndEnforceByteLimit() async throws {
+    let direct = PairedFilePeer()
+    defer { direct.stop() }
+    for sdp in ["v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n", "v=0\r\na=candidate:1 1 udp 1 127.0.0.1 9 typ relay raddr 0.0.0.0 rport 0\r\n"] {
+      do { _ = try await direct.acceptOffer(sdp); XCTFail("Direct Files accepted media or relay") }
+      catch { XCTAssertEqual(error as? RemoteFileError, .invalidMessage) }
+    }
+    let limited = PairedFilePeer()
+    defer { limited.stop() }
+    try limited.configure(iceServers: [], permitsRelay: true, byteLimit: 64)
+    var failed = false
+    limited.onFailure = { error in XCTAssertEqual(error as? RemoteFileError, .tooLarge); failed = true }
+    do { try await limited.send(Data(repeating: 1, count: 100)); XCTFail("Byte limit was ignored") }
+    catch { XCTAssertEqual(error as? RemoteFileError, .tooLarge) }
+    XCTAssertTrue(failed)
+    do { _ = try await limited.acceptOffer("v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\n"); XCTFail("Relay permission allowed media") }
+    catch { XCTAssertEqual(error as? RemoteFileError, .invalidMessage) }
+  }
+
   func testRealPeersTransferFragmentedBytesWithoutNegotiatingScreenOrAudio() {
     let finished = expectation(description: "Transfer finishes")
     Task { @MainActor in

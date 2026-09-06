@@ -377,7 +377,8 @@ final class RemoteAssistHost: NSObject {
       return
     }
     filesSession?.stop()
-    let session = MacFilesSession(id: id, deviceId: envelope.sourceDeviceId, runtime: runtime) { [weak self] type, body in
+    let session = MacFilesSession(id: id, deviceId: envelope.sourceDeviceId, runtime: runtime,
+      imageUpload: envelope.body["imageUpload"] == .bool(true)) { [weak self] type, body in
       guard let self, self.filesSession?.id == id else { throw RemoteAssistHostError.relayUnavailable }
       try await self.sendRemoteEnvelope(type: type, body: body, targetDeviceId: envelope.sourceDeviceId)
     }
@@ -483,6 +484,10 @@ final class RemoteAssistHost: NSObject {
           factory: factory,
           iceServers: iceServers
         )
+        if let runtime = filesRuntime {
+          let owner = envelope.sourceDeviceId
+          peer.resolveImages = { ids in try await runtime.resolveImages(ids, owner: owner) }
+        }
         currentPeer = peer
         publishStatus()
 
