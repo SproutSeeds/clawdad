@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct MobileVoiceSelection: Codable, Equatable {
+struct MobileVoiceSelection: Codable, Equatable, Sendable {
   var engine: String
   var modelId: String
   var voice: String
@@ -12,7 +12,7 @@ struct MobileVoiceSelection: Codable, Equatable {
   }
 }
 
-struct MobileVoice: Codable, Identifiable, Equatable {
+struct MobileVoice: Codable, Identifiable, Equatable, Sendable {
   let id: String
   let name: String
   let language: String
@@ -21,7 +21,7 @@ struct MobileVoice: Codable, Identifiable, Equatable {
   var label: String { [name, language, gender == "unspecified" ? "" : gender.capitalized].filter { !$0.isEmpty }.joined(separator: " · ") }
 }
 
-struct MobileVoiceModel: Codable, Identifiable {
+struct MobileVoiceModel: Codable, Identifiable, Equatable, Sendable {
   let id: String
   let name: String
   let modelId: String
@@ -33,22 +33,100 @@ struct MobileVoiceModel: Codable, Identifiable {
   let voices: [MobileVoice]
 }
 
-struct MobileVoiceSettings: Codable {
+struct MobileVoiceSettings: Codable, Equatable, Sendable {
   let models: [MobileVoiceModel]
   let selection: MobileVoiceSelection
   let voicesByModel: [String: MobileVoiceSelection]
   let previewText: String
 }
 
+// A refresh updates the catalog and saved preference, while this draft belongs to
+// the current Settings visit. Only an explicit model/filter choice changes it.
+struct MobileVoiceSettingsDraft: Equatable {
+  var selection = MobileVoiceSelection(engine: "kokoro", modelId: "", voice: "af_heart", speed: 1)
+  var language = "All"
+  var gender = "All"
+  private(set) var initialized = false
+  private(set) var settings: MobileVoiceSettings?
+
+  init(settings: MobileVoiceSettings? = nil) { receive(settings) }
+
+  mutating func receive(_ settings: MobileVoiceSettings?) {
+    guard let settings else { return }
+    self.settings = settings
+    guard !initialized else { return }
+    selection = settings.selection
+    initialized = true
+  }
+
+  mutating func selectModel(_ engine: String) {
+    guard let settings, let model = settings.models.first(where: { $0.id == engine }) else { return }
+    selection = settings.voicesByModel[engine] ?? MobileVoiceSelection(
+      engine: engine, modelId: model.modelId, voice: model.defaultVoice, speed: 1)
+    initialized = true
+    language = "All"
+    gender = "All"
+  }
+
+  func visibleVoices() -> [MobileVoice] {
+    (settings?.models.first { $0.id == selection.engine }?.voices ?? []).filter {
+      (language == "All" || $0.language == language) && (gender == "All" || $0.gender == gender)
+    }
+  }
+
+  mutating func chooseVisibleVoice() {
+    let voices = visibleVoices()
+    if !voices.contains(where: { $0.id == selection.voice }), let first = voices.first {
+      selection.voice = first.id
+    }
+  }
+}
+
 struct VoiceSettingsPanel: View {
   @EnvironmentObject private var session: CloudSession
-  @State private var selection = MobileVoiceSelection(engine: "kokoro", modelId: "", voice: "af_heart", speed: 1)
-  @State private var language = "All"
-  @State private var gender = "All"
-  private var model: MobileVoiceModel? { session.voiceSettings?.models.first { $0.id == selection.engine } }
-  private var voices: [MobileVoice] {
-    (model?.voices ?? []).filter { (language == "All" || $0.language == language) && (gender == "All" || $0.gender == gender) }
+  @State private var requestedScope = ""
+  private var scope: String { "\(session.accountId)/\(session.workspaceId)/\(session.hostId)" }
+
+  var body: some View {
+    VoiceSettingsEditor(settings: session.voiceSettings, pending: session.voiceSettingsPending,
+      error: session.voiceSettingsError, status: session.voiceSettingsStatus,
+      request: { session.requestVoiceSettings(selection: $0) },
+      preview: { session.previewVoice($0, text: $1) })
+      .equatable()
+      .id(scope)
+      .task(id: "\(scope)/\(session.ready)") {
+        guard session.ready, requestedScope != scope else { return }
+        requestedScope = scope
+        session.requestVoiceSettings()
+      }
   }
+}
+
+// This form has no CloudSession observation. Equal voice data leaves its native
+// menus intact when unrelated heartbeats, threads, or playback state change.
+private struct VoiceSettingsEditor: View, Equatable {
+  let settings: MobileVoiceSettings?
+  let pending: Bool
+  let error: String
+  let status: String
+  let request: (MobileVoiceSelection?) -> Void
+  let preview: (MobileVoiceSelection, String) -> Void
+  @State private var draft: MobileVoiceSettingsDraft
+
+  init(settings: MobileVoiceSettings?, pending: Bool, error: String, status: String,
+       request: @escaping (MobileVoiceSelection?) -> Void,
+       preview: @escaping (MobileVoiceSelection, String) -> Void) {
+    self.settings = settings; self.pending = pending; self.error = error; self.status = status
+    self.request = request; self.preview = preview
+    _draft = State(initialValue: MobileVoiceSettingsDraft(settings: settings))
+  }
+
+  nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+    lhs.settings == rhs.settings && lhs.pending == rhs.pending && lhs.error == rhs.error && lhs.status == rhs.status
+  }
+
+  private var model: MobileVoiceModel? { draft.settings?.models.first { $0.id == draft.selection.engine } }
+  private var voices: [MobileVoice] { draft.visibleVoices() }
 
   var body: some View {
     ClawDadPanel {
@@ -56,34 +134,35 @@ struct VoiceSettingsPanel: View {
         Text("Voice & Playback").font(.headline).foregroundStyle(ClawDadTheme.gold)
         Text("Used by the main app and Remote Assist. Speech is generated on your paired computer.")
           .font(.caption).foregroundStyle(ClawDadTheme.peach)
-        if let settings = session.voiceSettings {
-          Picker("Model", selection: $selection.engine) {
-            ForEach(settings.models) { model in
-              Text(model.name).tag(model.id)
-            }
-          }.accessibilityIdentifier("voice.model")
+        if let settings = draft.settings {
+          VoiceSettingsPicker(title: "Model", identifier: "voice.model",
+            options: settings.models.map { .init(id: $0.id, label: $0.name) }, value: draft.selection.engine,
+            choose: { draft.selectModel($0) }).equatable()
           if let model {
             Text("\(model.voices.count) voices · \(model.sizeLabel)").font(.caption)
-            Picker("Language", selection: $language) {
-              Text("All languages").tag("All")
-              ForEach(Array(Set(model.voices.map(\.language))).sorted(), id: \.self) { Text($0).tag($0) }
-            }
-            Picker("Voice type", selection: $gender) {
-              Text("All voice types").tag("All")
-              ForEach(Array(Set(model.voices.map(\.gender))).sorted(), id: \.self) {
-                Text($0 == "unspecified" ? "Unspecified" : $0.capitalized).tag($0)
-              }
-            }
-            Picker("Voice", selection: $selection.voice) {
-              ForEach(voices) { Text($0.label).tag($0.id) }
-            }.accessibilityIdentifier("voice.voice")
+            VoiceSettingsPicker(title: "Language", identifier: "voice.language",
+              options: [.init(id: "All", label: "All languages")] +
+                Array(Set(model.voices.map(\.language))).sorted().map { .init(id: $0, label: $0) },
+              value: draft.language, choose: {
+                draft.language = $0; draft.chooseVisibleVoice()
+              }).equatable()
+            VoiceSettingsPicker(title: "Voice type", identifier: "voice.gender",
+              options: [.init(id: "All", label: "All voice types")] +
+                Array(Set(model.voices.map(\.gender))).sorted().map {
+                  .init(id: $0, label: $0 == "unspecified" ? "Unspecified" : $0.capitalized)
+                }, value: draft.gender, choose: {
+                  draft.gender = $0; draft.chooseVisibleVoice()
+                }).equatable()
+            VoiceSettingsPicker(title: "Voice", identifier: "voice.voice",
+              options: voices.map { .init(id: $0.id, label: $0.label) }, value: draft.selection.voice,
+              choose: { draft.selection.voice = $0 }).equatable()
             Text("Each voice has its own delivery and character. Preview voices to compare their style.")
               .font(.caption).foregroundStyle(ClawDadTheme.peach)
             if model.supportsSpeed {
               HStack {
                 Text("Speaking speed")
-                Slider(value: $selection.speed, in: 0.5...2, step: 0.05)
-                Text(selection.speed.formatted(.number.precision(.fractionLength(2))) + "×").monospacedDigit()
+                Slider(value: $draft.selection.speed, in: 0.5...2, step: 0.05)
+                Text(draft.selection.speed.formatted(.number.precision(.fractionLength(2))) + "×").monospacedDigit()
               }
             } else {
               Text("Pocket uses the voice’s natural speaking pace.").font(.caption)
@@ -91,45 +170,120 @@ struct VoiceSettingsPanel: View {
             Text("Voice and language data downloads to your Mac on first use and stays there.")
               .font(.caption).foregroundStyle(ClawDadTheme.peach)
             HStack {
-              Button("Preview voice") { session.previewVoice(selection, text: model.voices.first(where: { $0.id == selection.voice })?.previewText ?? settings.previewText) }
-                .buttonStyle(ClawDadSecondaryButtonStyle()).accessibilityIdentifier("voice.preview")
-              Button("Save voice") { session.requestVoiceSettings(selection: selection) }
+              Button("Preview voice") {
+                preview(draft.selection, model.voices.first(where: { $0.id == draft.selection.voice })?.previewText ?? settings.previewText)
+              }.buttonStyle(ClawDadSecondaryButtonStyle()).accessibilityIdentifier("voice.preview")
+              Button("Save voice") { request(draft.selection) }
                 .buttonStyle(ClawDadSecondaryButtonStyle()).accessibilityIdentifier("voice.save")
-            }.disabled(session.voiceSettingsPending || !model.installed || !model.enabled || voices.isEmpty)
+            }.disabled(pending || !model.installed || !model.enabled || !voices.contains { $0.id == draft.selection.voice })
             if !model.installed || !model.enabled {
               Text("Install \(model.name) in the local speech service on your Mac.").font(.caption)
             }
           }
-        } else if session.voiceSettingsPending {
+        } else if pending {
           ProgressView("Loading voices…")
         }
-        if !session.voiceSettingsError.isEmpty {
-          Text(session.voiceSettingsError).font(.caption).foregroundStyle(ClawDadTheme.peach)
-        } else if !session.voiceSettingsStatus.isEmpty {
-          Text(session.voiceSettingsStatus).font(.caption).foregroundStyle(ClawDadTheme.peach)
+        if !error.isEmpty {
+          Text(error).font(.caption).foregroundStyle(ClawDadTheme.peach)
+        } else if !status.isEmpty {
+          Text(status).font(.caption).foregroundStyle(ClawDadTheme.peach)
         }
-        Button("Refresh voices") { session.requestVoiceSettings() }
-          .disabled(session.voiceSettingsPending)
+        Button("Refresh voices") { request(nil) }
+          .disabled(pending).accessibilityIdentifier("voice.refresh")
       }.foregroundStyle(ClawDadTheme.cream)
     }
-    .onAppear {
-      if let saved = session.voiceSettings?.selection { selection = saved }
-      session.requestVoiceSettings()
-    }
-    .onChange(of: session.voiceSettings?.selection) { _, value in
-      if let value { selection = value; language = "All"; gender = "All" }
-    }
-    .onChange(of: selection.engine) { _, engine in
-      guard let model = session.voiceSettings?.models.first(where: { $0.id == engine }) else { return }
-      selection = session.voiceSettings?.voicesByModel[engine] ?? MobileVoiceSelection(engine: engine, modelId: model.modelId, voice: model.defaultVoice, speed: 1)
-      language = "All"; gender = "All"
-    }
-    .onChange(of: language) { _, _ in chooseVisibleVoice() }
-    .onChange(of: gender) { _, _ in chooseVisibleVoice() }
+    .onChange(of: settings) { _, value in draft.receive(value) }
+  }
+}
+
+// Also isolate each menu from genuine Settings status changes (for example a
+// refresh completing while the user is already browsing another voice).
+private struct VoiceSettingsPicker: View, Equatable {
+  struct Option: Identifiable, Hashable, Sendable {
+    let id: String
+    let label: String
+  }
+  let title: String
+  let identifier: String
+  let options: [Option]
+  let value: String
+  let choose: @MainActor (String) -> Void
+  @State private var voiceChoices: VoiceChoices?
+
+  struct VoiceChoices: Identifiable, Hashable {
+    let id = UUID()
+    let options: [Option]
+    let selected: String
   }
 
-  private func chooseVisibleVoice() {
-    if !voices.contains(where: { $0.id == selection.voice }), let first = voices.first { selection.voice = first.id }
+  nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+    lhs.title == rhs.title && lhs.identifier == rhs.identifier && lhs.options == rhs.options && lhs.value == rhs.value
+  }
+
+  var body: some View {
+    if identifier == "voice.voice" {
+      Button {
+        voiceChoices = VoiceChoices(options: options, selected: value)
+      } label: {
+        HStack {
+          Text(options.first { $0.id == value }?.label ?? "Choose a voice")
+          Spacer(minLength: 8)
+          Image(systemName: "chevron.right")
+        }.frame(minHeight: 44).contentShape(Rectangle())
+      }
+      .buttonStyle(.plain).foregroundStyle(ClawDadTheme.gold)
+      .accessibilityLabel("Voice").accessibilityValue(options.first { $0.id == value }?.label ?? "Choose a voice")
+      .accessibilityIdentifier(identifier)
+      .navigationDestination(item: $voiceChoices) { snapshot in
+        VoiceChoicesList(snapshot: snapshot, choose: choose)
+      }
+    } else {
+      Picker(title, selection: Binding(get: { value }, set: { choose($0) })) {
+        ForEach(options) { Text($0.label).tag($0.id) }
+      }.accessibilityIdentifier(identifier)
+    }
+  }
+}
+
+// Capture the options when opening the list. Session/catalog updates can keep
+// arriving without replacing rows or moving the reader's scroll position.
+private struct VoiceChoicesList: View {
+  @Environment(\.dismiss) private var dismiss
+  let snapshot: VoiceSettingsPicker.VoiceChoices
+  let choose: @MainActor (String) -> Void
+
+  var body: some View {
+    List(snapshot.options) { option in
+      Button {
+        choose(option.id)
+        dismiss()
+      } label: {
+        HStack {
+          Text(option.label).foregroundStyle(ClawDadTheme.cream)
+          Spacer(minLength: 8)
+          if snapshot.selected == option.id {
+            Image(systemName: "checkmark").foregroundStyle(ClawDadTheme.gold)
+          }
+        }.frame(minHeight: 44).contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .accessibilityIdentifier("voice.option.\(option.id)")
+      .listRowBackground(ClawDadTheme.panel)
+    }
+    .listStyle(.plain).scrollContentBackground(.hidden)
+    .background(ClawDadTheme.background)
+    .accessibilityIdentifier("voice.options.list")
+    .navigationTitle("Choose a voice")
+#if os(iOS)
+    .navigationBarTitleDisplayMode(.inline)
+    .navigationBarBackButtonHidden(true)
+#endif
+    .toolbar {
+      ToolbarItem(placement: .cancellationAction) {
+        Button { dismiss() } label: { Label("Back", systemImage: "chevron.left") }
+          .keyboardShortcut(.cancelAction).accessibilityIdentifier("voice.options.back")
+      }
+    }
   }
 }
 

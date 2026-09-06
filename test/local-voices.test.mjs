@@ -119,3 +119,56 @@ test("background desktop refresh preserves voice menu options while model change
   assert.notEqual(control("#speechVoice").children, voiceOptions);
   assert.equal(control("#speechVoice").value, "Jasper");
 });
+
+test("desktop refresh leaves a focused native voice menu at its browsed option", async () => {
+  const source = await readFile(new URL("../web/app.js", import.meta.url), "utf8");
+  const functionSource = source.slice(source.indexOf("function speechFilteredVoices("), source.indexOf("function bindSpeechSettings("));
+  const controls = new Map();
+  const control = id => {
+    if (!controls.has(id)) controls.set(id, {dataset: {}, value: "", children: [], replaceChildren(...items) { this.children = items; }});
+    return controls.get(id);
+  };
+  const models = catalog.models.map(m => ({...m, voices: m.voices.map(v => ({...v, name: v.id, language: "English", gender: "unspecified"}))}));
+  const state = {speechSettings: {models}, speechDraft: {engine: "pocket", voice: "anna", speed: 1}, speechLanguage: "All", speechGender: "All"};
+  const document = {querySelector: control, createElement: () => ({}), activeElement: null};
+  const context = vm.createContext({state, document});
+  vm.runInContext(functionSource, context);
+  context.renderSpeechSettings();
+  const menu = control("#speechVoice"), options = menu.children;
+  document.activeElement = menu;
+  // Native select browsing can change value before the change event commits it.
+  menu.value = "alba";
+  state.speechSettingsPending = true;
+  for (let i = 0; i < 10; i++) context.renderSpeechSettings();
+  assert.equal(menu.value, "alba");
+  assert.equal(menu.children, options);
+  assert.equal(menu.disabled, false);
+  document.activeElement = null;
+  context.renderSpeechSettings();
+  assert.equal(menu.value, "anna"); // Cancelled browsing returns to the draft.
+});
+
+test("desktop refresh and delayed save replies preserve newer drafts and filters", async () => {
+  const source = await readFile(new URL("../web/app.js", import.meta.url), "utf8");
+  const functionSource = source.slice(source.indexOf("async function loadSpeechSettings("), source.indexOf("function speechFilteredVoices("));
+  for (const saving of [false, true]) {
+    let finish;
+    const response = new Promise(resolve => { finish = resolve; });
+    const state = {
+      speechSettings: {...catalog, selection: {engine: "pocket", voice: "alba", speed: 1}},
+      speechDraft: {engine: "kitten", voice: "Jasper", speed: 1.15},
+      speechLanguage: "English", speechGender: "male",
+    };
+    const context = vm.createContext({state, fetchJson: () => response, renderAll() {}, renderSpeechSettings() {}});
+    vm.runInContext(functionSource, context);
+    const pending = context.loadSpeechSettings(saving ? {...state.speechDraft} : null);
+    // Continue comparing a different voice while the request is in flight.
+    state.speechDraft = {engine: "pocket", voice: "anna", speed: 1};
+    finish({...catalog, selection: {engine: "kitten", voice: "Jasper", speed: 1.15}});
+    await pending;
+    assert.equal(state.speechDraft.voice, "anna");
+    assert.equal(state.speechLanguage, "English");
+    assert.equal(state.speechGender, "male");
+    assert.equal(state.speechSettings.selection.voice, "Jasper");
+  }
+});

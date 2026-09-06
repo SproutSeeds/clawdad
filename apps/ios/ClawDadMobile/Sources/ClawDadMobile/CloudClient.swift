@@ -658,6 +658,18 @@ final class CloudSession: ObservableObject {
     self.modelOptions = fixture.modelOptions
     self.hostOnline = true
     self.startupWorkspaceReady = true
+    if ProcessInfo.processInfo.arguments.contains("--clawdad-voice-refresh-test") {
+      Task { [weak self] in
+        for tick in 0..<120 {
+          try? await Task.sleep(for: .seconds(1))
+          guard let self else { return }
+          // Exercise real published session updates while a native menu is open.
+          self.lastHostSeenAt = Date()
+          self.historyStatus = "Preview thread update \(tick)"
+          if tick % 3 == 0 { self.requestVoiceSettings() }
+        }
+      }
+    }
   }
 #endif
 
@@ -2116,7 +2128,8 @@ final class CloudSession: ObservableObject {
             envelope.body["requestId"]?.stringValue == voiceSettingsRequestId else { return }
       voiceSettingsPending = false
       do {
-        voiceSettings = try JSONDecoder().decode(MobileVoiceSettings.self, from: JSONEncoder().encode(envelope.body))
+        let received = try JSONDecoder().decode(MobileVoiceSettings.self, from: JSONEncoder().encode(envelope.body))
+        if voiceSettings != received { voiceSettings = received }
         voiceSettingsError = ""
         voiceSettingsStatus = savingVoiceSettings ? "Voice saved. Applies to your next reading." : ""
       } catch { voiceSettingsError = "The Mac returned an unreadable voice catalog. Update ClawDad and retry." }
@@ -2844,7 +2857,8 @@ final class CloudSession: ObservableObject {
       }
       let (data, response) = try await URLSession.shared.data(for: request)
       guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
-      voiceSettings = try JSONDecoder().decode(MobileVoiceSettings.self, from: data)
+      let received = try JSONDecoder().decode(MobileVoiceSettings.self, from: data)
+      if voiceSettings != received { voiceSettings = received }
       voiceSettingsPending = false
       voiceSettingsStatus = type == "speech.voices.update" ? "Voice saved. Applies to your next reading." : ""
       return

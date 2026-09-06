@@ -7125,6 +7125,10 @@ function renderSettingsModal() {
     return;
   }
 
+  // Rebuilding nearby Settings rows can also reposition a native select popup.
+  // Its own change handler updates dependent controls; resume this panel on blur.
+  if (["speechModel", "speechLanguage", "speechGender", "speechVoice", "speechSpeed"].includes(document.activeElement?.id)) return;
+
   const roots = settingsWorkspaceRootDrafts();
   elements.settingsModal.hidden = false;
   setText(elements.settingsState, state.settingsWorkspaceStatus, {
@@ -11274,9 +11278,9 @@ async function loadSpeechSettings(selection = null) {
       method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify({selection}),
     } : {});
     state.speechSettings = settings;
-    state.speechDraft = {...settings.selection};
-    state.speechLanguage = "All";
-    state.speechGender = "All";
+    // The saved preference and the voice being auditioned have separate lifetimes.
+    // A refresh or a late save reply must not discard work made while it loaded.
+    if (!state.speechDraft) state.speechDraft = {...settings.selection};
     state.speechSettingsStatus = selection ? "Voice saved for ClawDad and Remote Assist. Applies to your next reading." : "";
     renderAll();
   } catch (error) { state.speechSettingsStatus = error.message; }
@@ -11296,6 +11300,9 @@ function renderSpeechSettings() {
   const model = state.speechSettings?.models.find((entry) => entry.id === state.speechDraft?.engine);
   const fill = (id, items, selected) => {
     const select = document.querySelector(id);
+    // Native menus can expose the highlighted value before committing change.
+    // Leave the open control alone until its blur/change events finish.
+    if (document.activeElement === select && select.children.length) return;
     const optionsKey = JSON.stringify(items);
     if (select.dataset.voiceOptions !== optionsKey) {
       select.replaceChildren(...items.map(([value, label]) => {
@@ -11304,7 +11311,7 @@ function renderSpeechSettings() {
       select.dataset.voiceOptions = optionsKey;
     }
     if (select.value !== (selected || "")) select.value = selected || "";
-    select.disabled = state.speechSettingsPending || !items.length;
+    select.disabled = !items.length;
   };
   fill("#speechModel", (state.speechSettings?.models || []).map((m) => [m.id, m.name]), model?.id);
   fill("#speechLanguage", [["All", "All languages"], ...[...new Set((model?.voices || []).map(v => v.language))].sort().map(v => [v,v])], state.speechLanguage);
@@ -11312,8 +11319,8 @@ function renderSpeechSettings() {
   fill("#speechVoice", speechFilteredVoices().map(v => [v.id, [v.name,v.language,v.gender === "unspecified" ? "" : v.gender].filter(Boolean).join(" · ")]), state.speechDraft?.voice);
   document.querySelector("#speechModelDetail").textContent = model ? `${model.voices.length} voices · ${model.sizeLabel}` : "";
   const speed = document.querySelector("#speechSpeed");
-  speed.value = String(state.speechDraft?.speed || 1);
-  speed.disabled = !model?.supportsSpeed || state.speechSettingsPending;
+  if (document.activeElement !== speed) speed.value = String(state.speechDraft?.speed || 1);
+  speed.disabled = !model?.supportsSpeed;
   document.querySelector("#speechSpeedLabel").textContent = model?.supportsSpeed ? `Speaking speed: ${Number(speed.value).toFixed(2)}×` : "This voice uses its natural speaking pace";
   for (const id of ["#speechSave", "#speechPreview"]) document.querySelector(id).disabled = state.speechSettingsPending || !model?.installed || !model?.enabled || !speechFilteredVoices().length;
   document.querySelector("#speechRefresh").disabled = state.speechSettingsPending;
@@ -11321,6 +11328,11 @@ function renderSpeechSettings() {
 }
 
 function bindSpeechSettings() {
+  for (const id of ["#speechModel", "#speechLanguage", "#speechGender", "#speechVoice", "#speechSpeed"]) {
+    document.querySelector(id)?.addEventListener("blur", () => {
+      setTimeout(() => { renderSpeechSettings(); renderSettingsModal(); }, 0);
+    });
+  }
   document.querySelector("#speechModel")?.addEventListener("change", event => {
     const engine = event.target.value;
     const model = state.speechSettings.models.find(m => m.id === engine);

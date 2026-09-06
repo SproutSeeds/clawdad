@@ -6,6 +6,72 @@ final class ClawDadMobileUITests: XCTestCase {
     continueAfterFailure = false
   }
 
+  func testVoiceMenuKeepsItsScrollPositionDuringSessionUpdates() {
+    let app = XCUIApplication()
+    app.launchArguments += ["--clawdad-app-store-preview", "workspace", "--clawdad-live-voices-test", "--clawdad-voice-refresh-test"]
+    app.launch()
+    XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 20))
+    app.buttons["Settings"].tap()
+    let model = app.buttons["voice.model"]
+    XCTAssertTrue(model.waitForExistence(timeout: 15))
+    model.tap()
+    app.buttons["Kokoro"].tap()
+    app.buttons["voice.voice"].tap()
+    let list = app.descendants(matching: .any).matching(identifier: "voice.options.list").firstMatch
+    XCTAssertTrue(list.waitForExistence(timeout: 5))
+    let lastVoice = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Yunyang")).firstMatch
+    for _ in 0..<15 {
+      if lastVoice.isHittable { break }
+      list.swipeUp()
+    }
+    XCTAssertTrue(lastVoice.isHittable, "The end of the voice menu should be reachable.")
+    let position = lastVoice.frame.minY
+    let moved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+      !lastVoice.isHittable || abs(lastVoice.frame.minY - position) > 8
+    }, object: nil)
+    moved.isInverted = true
+    XCTAssertEqual(XCTWaiter.wait(for: [moved], timeout: 6), .completed,
+      "Background catalog/heartbeat updates must not close or scroll the voice menu.")
+    let screenshot = XCTAttachment(screenshot: app.screenshot())
+    screenshot.name = "Voice menu stays at the last voice during updates"
+    screenshot.lifetime = .keepAlways; add(screenshot)
+    lastVoice.tap()
+    XCTAssertTrue(waitUntil(timeout: 5) {
+      app.buttons["voice.voice"].label.contains("Yunyang") ||
+        (app.buttons["voice.voice"].value as? String)?.contains("Yunyang") == true
+    })
+    app.buttons["Done"].tap()
+    XCTAssertTrue(app.buttons["Settings"].isHittable)
+  }
+
+  func testSavingAndRefreshingKeepTheCurrentVoiceFilters() {
+    let app = XCUIApplication()
+    app.launchArguments += ["--clawdad-app-store-preview", "workspace", "--clawdad-live-voices-test"]
+    app.launch()
+    XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 20))
+    app.buttons["Settings"].tap()
+    XCTAssertTrue(app.buttons["voice.model"].waitForExistence(timeout: 15))
+    app.buttons["voice.model"].tap()
+    app.buttons["Kitten TTS"].tap()
+    app.buttons["voice.gender"].tap()
+    app.buttons["Male"].tap()
+    app.buttons["voice.voice"].tap()
+    app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Jasper")).firstMatch.tap()
+    app.buttons["voice.save"].tap()
+    XCTAssertTrue(app.staticTexts["Voice saved. Applies to your next reading."].waitForExistence(timeout: 10))
+    app.buttons["voice.refresh"].tap()
+    XCTAssertTrue(waitUntil(timeout: 10) { app.buttons["voice.refresh"].isEnabled })
+    let gender = app.buttons["voice.gender"]
+    XCTAssertTrue(gender.label.contains("Male") || (gender.value as? String)?.contains("Male") == true)
+    let voice = app.buttons["voice.voice"]
+    XCTAssertTrue(voice.label.contains("Jasper") || (voice.value as? String)?.contains("Jasper") == true)
+    voice.tap()
+    app.buttons["voice.options.back"].tap()
+    XCTAssertTrue(voice.label.contains("Jasper") || (voice.value as? String)?.contains("Jasper") == true)
+    app.buttons["Done"].tap()
+    XCTAssertTrue(app.buttons["Settings"].isHittable)
+  }
+
   func testVoiceSettingsShowsEveryModelAndPreservesChoicesAfterBack() {
     let app = XCUIApplication()
     app.launchArguments += ["--clawdad-app-store-preview", "workspace", "--clawdad-live-voices-test"]

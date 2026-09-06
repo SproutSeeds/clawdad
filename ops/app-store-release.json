@@ -1,6 +1,6 @@
 {
   "schema": "clawdad.app-store-release/1",
-  "generatedAt": "2026-09-06T13:38:02.844Z",
+  "generatedAt": "2026-09-06T14:30:08.903Z",
   "app": {
     "id": "6783090068",
     "name": "ClawDad Mobile",
@@ -26,8 +26,8 @@
   "beta": {
     "groupId": "bbba6b69-7ac4-4d56-bc41-e9456d56b02e",
     "groupName": "ClawDad Internal",
-    "buildId": "5b8eed0d-a7f9-49be-9fae-fed388d229e8",
-    "buildNumber": "46",
+    "buildId": "598976ce-b848-486a-9fb2-1121c87ee7ac",
+    "buildNumber": "47",
     "processingState": "VALID",
     "usesNonExemptEncryption": false,
     "assignedToGroup": true,
