@@ -6,9 +6,27 @@ struct MacTerminalResponseFailure: LocalizedError {
   var errorDescription: String? { message }
 }
 
-struct MacCodexConversation: Equatable {
+struct MacCodexConversation: Equatable, Sendable {
   let sessionId: String
   let path: URL
+
+  static func load(path: URL, sessionRoot: URL) throws -> Self? {
+    let url = path.resolvingSymlinksInPath()
+    let root = sessionRoot.resolvingSymlinksInPath().path + "/"
+    guard url.path.hasPrefix(root), url.pathExtension == "jsonl",
+          url.lastPathComponent.hasPrefix("rollout-") else { return nil }
+    let handle = try FileHandle(forReadingFrom: url)
+    defer { try? handle.close() }
+    let prefix = try handle.read(upToCount: 256 * 1024) ?? Data()
+    guard let end = prefix.firstIndex(of: 10),
+          let record = try? JSONSerialization.jsonObject(with: prefix[..<end]) as? [String: Any],
+          record["type"] as? String == "session_meta",
+          let payload = record["payload"] as? [String: Any],
+          payload["source"] as? String == "cli",
+          let id = payload["id"] as? String, UUID(uuidString: id) != nil,
+          url.lastPathComponent.hasSuffix("\(id).jsonl") else { return nil }
+    return Self(sessionId: id, path: url)
+  }
 }
 
 /// Reads the selected terminal's owning CLI conversation, never a project-wide latest file.
@@ -40,23 +58,11 @@ struct MacTerminalResponseReader: Sendable {
       throw MacTerminalResponseFailure(message: "No supported Codex conversation is running in this tab. You can read selected text instead.")
     }
     let files = try run("/usr/sbin/lsof", ["-a", "-p", pids.joined(separator: ","), "-Fn"])
-    let root = sessionRoot.resolvingSymlinksInPath().path + "/"
     var conversations: [String: MacCodexConversation] = [:]
     for line in Set(files.split(separator: "\n").filter { $0.hasPrefix("n") }) {
-      let url = URL(fileURLWithPath: String(line.dropFirst())).resolvingSymlinksInPath()
-      guard url.path.hasPrefix(root), url.pathExtension == "jsonl",
-            url.lastPathComponent.hasPrefix("rollout-") else { continue }
-      let handle = try FileHandle(forReadingFrom: url)
-      defer { try? handle.close() }
-      let prefix = try handle.read(upToCount: 256 * 1024) ?? Data()
-      guard let end = prefix.firstIndex(of: 10),
-            let record = try? JSONSerialization.jsonObject(with: prefix[..<end]) as? [String: Any],
-            record["type"] as? String == "session_meta",
-            let payload = record["payload"] as? [String: Any],
-            payload["source"] as? String == "cli",
-            let id = payload["id"] as? String, UUID(uuidString: id) != nil,
-            url.lastPathComponent.hasSuffix("\(id).jsonl") else { continue }
-      conversations[id] = MacCodexConversation(sessionId: id, path: url)
+      if let conversation = try MacCodexConversation.load(
+        path: URL(fileURLWithPath: String(line.dropFirst())), sessionRoot: sessionRoot
+      ) { conversations[conversation.sessionId] = conversation }
     }
     guard conversations.count == 1, let conversation = conversations.values.first else {
       throw MacTerminalResponseFailure(message: conversations.isEmpty

@@ -9,6 +9,8 @@ public struct RemoteTerminalTabDescriptor: Codable, Equatable, Sendable {
   public let title: String
   public let detail: String
   public let isSelected: Bool
+  /// The host has verified an agent request in progress for this tab.
+  /// Selection, an open shell/agent process, and unread output are independent.
   public let isBusy: Bool
   public let hasUnreadActivity: Bool
   public let windowTitle: String?

@@ -11,7 +11,6 @@ struct MacTerminalTabSnapshot: Equatable, Sendable {
   let tabIndex: Int
   let customTitle: String
   let tty: String
-  let isBusy: Bool
   let isSelectedInWindow: Bool
   let hasUnreadActivity: Bool
   let visibleGroupID: Int?
@@ -26,7 +25,6 @@ struct MacTerminalTabSnapshot: Equatable, Sendable {
     tabIndex: Int,
     customTitle: String,
     tty: String,
-    isBusy: Bool,
     isSelectedInWindow: Bool,
     hasUnreadActivity: Bool = false,
     visibleGroupID: Int? = nil,
@@ -40,7 +38,6 @@ struct MacTerminalTabSnapshot: Equatable, Sendable {
     self.tabIndex = tabIndex
     self.customTitle = customTitle
     self.tty = tty
-    self.isBusy = isBusy
     self.isSelectedInWindow = isSelectedInWindow
     self.hasUnreadActivity = hasUnreadActivity
     self.visibleGroupID = visibleGroupID
@@ -131,6 +128,7 @@ final class MacTerminalTabController {
   private let automation: MacTerminalAutomating
   private let permissionRouter: MacTerminalAutomationPermissionRouting
   private let readResponse: @MainActor (String) async throws -> RemoteTerminalResponse
+  private let activity: MacTerminalAgentActivityMonitoring
   private var revision = 1
   private var hasCatalog = false
   private var topology: [MacTerminalTabTopologyEntry] = []
@@ -162,12 +160,14 @@ final class MacTerminalTabController {
   init(
     automation: MacTerminalAutomating = MacTerminalAutomation(),
     permissionRouter: MacTerminalAutomationPermissionRouting? = nil,
+    activity: MacTerminalAgentActivityMonitoring? = nil,
     readResponse: @escaping @MainActor (String) async throws -> RemoteTerminalResponse = { tty in
       try await Task.detached(priority: .userInitiated) { try MacTerminalResponseReader().read(tty: tty) }.value
     }
   ) {
     self.automation = automation
     self.readResponse = readResponse
+    self.activity = activity ?? MacTerminalAgentActivityMonitor()
     self.permissionRouter = permissionRouter ??
       MacTerminalAutomationPermissionRouter()
   }
@@ -336,6 +336,7 @@ final class MacTerminalTabController {
     snapshotsByIdentifier.removeAll(keepingCapacity: true)
 
     var selectedTabID: String?
+    let busyTTYs = activity.busyTTYs(in: Set(snapshots.map(\.tty)))
     let descriptors = snapshots.map { snapshot in
       let identity = identity(for: snapshot)
       let identifier = identifiers[identity] ?? UUID().uuidString.lowercased()
@@ -350,7 +351,7 @@ final class MacTerminalTabController {
         title: macTerminalTabTitle(snapshot.customTitle),
         detail: "Window \(windowNumbers[snapshot.groupID] ?? 1) • Tab \(snapshot.position)",
         isSelected: isSelected,
-        isBusy: snapshot.isBusy,
+        isBusy: busyTTYs.contains(snapshot.tty),
         hasUnreadActivity: snapshot.hasUnreadActivity && !isSelected,
         windowTitle: "Terminal Window \(windowNumbers[snapshot.groupID] ?? 1)",
         windowGroupId: "terminal-window-\(snapshot.groupID)",
@@ -657,19 +658,17 @@ final class MacTerminalAutomation: MacTerminalAutomating, @unchecked Sendable {
     set windowIds to id of windows
     set titlesByWindow to custom title of tabs of windows
     set ttysByWindow to tty of tabs of windows
-    set busyByWindow to busy of tabs of windows
     set selectedByWindow to selected of tabs of windows
     if (id of windows) is not windowIds then error "Terminal window order changed during discovery" number -1712
     repeat with windowIndex from 1 to count of windowIds
       set windowId to item windowIndex of windowIds
       set tabTitles to item windowIndex of titlesByWindow
       set tabTTYs to item windowIndex of ttysByWindow
-      set tabBusy to item windowIndex of busyByWindow
       set tabSelected to item windowIndex of selectedByWindow
       repeat with tabIndex from 1 to count of tabTTYs
         set tabTitle to item tabIndex of tabTitles
         if tabTitle is missing value then set tabTitle to ""
-        set end of tabRows to {windowId as integer, windowIndex, tabIndex, tabTitle as text, item tabIndex of tabTTYs, item tabIndex of tabBusy, item tabIndex of tabSelected}
+        set end of tabRows to {windowId as integer, windowIndex, tabIndex, tabTitle as text, item tabIndex of tabTTYs, item tabIndex of tabSelected}
       end repeat
     end repeat
     return tabRows
@@ -834,7 +833,7 @@ final class MacTerminalAutomation: MacTerminalAutomating, @unchecked Sendable {
     return value as? String
   }
 
-  private static func parseCatalog(
+  static func parseCatalog(
     _ descriptor: NSAppleEventDescriptor
   ) throws -> [MacTerminalTabSnapshot] {
     var snapshots: [MacTerminalTabSnapshot] = []
@@ -851,7 +850,7 @@ final class MacTerminalAutomation: MacTerminalAutomating, @unchecked Sendable {
     }
     for rowIndex in 1...rowCount {
       guard let row = descriptor.atIndex(rowIndex),
-            row.numberOfItems == 7,
+            row.numberOfItems == 6,
             let customTitle = row.atIndex(4)?.stringValue,
             let tty = row.atIndex(5)?.stringValue,
             !tty.isEmpty else {
@@ -867,8 +866,7 @@ final class MacTerminalAutomation: MacTerminalAutomating, @unchecked Sendable {
         tabIndex: Int(row.atIndex(3)?.int32Value ?? 0),
         customTitle: customTitle,
         tty: tty,
-        isBusy: row.atIndex(6)?.booleanValue ?? false,
-        isSelectedInWindow: row.atIndex(7)?.booleanValue ?? false
+        isSelectedInWindow: row.atIndex(6)?.booleanValue ?? false
       ))
     }
     guard snapshots.allSatisfy({

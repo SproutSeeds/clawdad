@@ -218,7 +218,7 @@ private final class TerminalGraph {
     ([selected] + (0..<3).filter { $0 != selected }).enumerated().map { offset, tab in
       MacTerminalTabSnapshot(windowID: 100 + tab, windowIndex: offset + 1,
         tabIndex: 1, customTitle: "duplicate", tty: "/dev/ttys\(tab)",
-        isBusy: false, isSelectedInWindow: true)
+        isSelectedInWindow: true)
     }
   }
 

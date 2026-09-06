@@ -103,7 +103,7 @@ final class NativeWindowTabFixtureTests: XCTestCase {
     func shells(selected: Int) -> [MacTerminalTabSnapshot] {
       (0..<21).map { index in
         MacTerminalTabSnapshot(windowID: index + 100, windowIndex: index == selected ? 1 : index + 2,
-          tabIndex: 1, customTitle: "same-directory", tty: "/dev/ttys\(index)", isBusy: false, isSelectedInWindow: true)
+          tabIndex: 1, customTitle: "same-directory", tty: "/dev/ttys\(index)", isSelectedInWindow: true)
       }
     }
     let initial = try reader.snapshots(application: application) { shells(selected: 12) }

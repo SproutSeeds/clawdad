@@ -4,6 +4,48 @@ import XCTest
 
 @MainActor
 final class MacTerminalTabTests: XCTestCase {
+  private func makeController(
+    automation: MacTerminalAutomating,
+    permissionRouter: MacTerminalAutomationPermissionRouting? = nil,
+    activity: MacTerminalAgentActivityMonitoring? = nil,
+    readResponse: @escaping @MainActor (String) async throws -> RemoteTerminalResponse = { _ in
+      throw MacTerminalResponseFailure(message: "No test response")
+    }
+  ) -> MacTerminalTabController {
+    MacTerminalTabController(automation: automation, permissionRouter: permissionRouter,
+      activity: activity ?? StubTerminalAgentActivity(), readResponse: readResponse)
+  }
+
+  func testOnlyTheOwningRequestIsBusyAcrossFocusAndCompletion() async throws {
+    let automation = StubTerminalAutomation(snapshots: initialSnapshots)
+    let activity = StubTerminalAgentActivity()
+    activity.working = ["/dev/ttys001"]
+    let controller = makeController(automation: automation, activity: activity)
+    let initial = try await controller.catalog()
+    XCTAssertEqual(initial.tabs.map(\.isBusy), [true, false])
+    let focused = try await controller.focus(tabID: initial.tabs[1].id, expectedRevision: initial.revision)
+    XCTAssertEqual(focused.tabs.map(\.isBusy), [true, false])
+    XCTAssertEqual(focused.selectedTabId, initial.tabs[1].id)
+    activity.working = ["/dev/ttys002"]
+    let changed = try await controller.catalog()
+    XCTAssertEqual(changed.tabs.map(\.isBusy), [false, true])
+    XCTAssertEqual(changed.revision, initial.revision)
+    XCTAssertEqual(changed.tabs.map(\.id), initial.tabs.map(\.id))
+    activity.working = []
+    let finished = try await controller.catalog()
+    XCTAssertFalse(finished.tabs.contains(where: \.isBusy))
+  }
+
+  func testFocusingAnIdleAgentDoesNotMarkAnyTabBusy() async throws {
+    let automation = StubTerminalAutomation(snapshots: initialSnapshots)
+    let controller = makeController(automation: automation)
+    let initial = try await controller.catalog()
+    XCTAssertFalse(initial.tabs.contains(where: \.isBusy))
+    let focused = try await controller.focus(tabID: initial.tabs[1].id, expectedRevision: initial.revision)
+    XCTAssertEqual(focused.selectedTabId, initial.tabs[1].id)
+    XCTAssertFalse(focused.tabs.contains(where: \.isBusy))
+  }
+
   func testDirectoryLabelsKeepSpacesAndDuplicateNamesWithoutPathsOrStatus() {
     XCTAssertEqual(macTerminalTabTitle("/Volumes/Code/My Project — ⠸ agent — codex"), "My Project")
     XCTAssertEqual(macTerminalTabTitle("~/work/duplicate — -zsh"), "duplicate")
@@ -18,9 +60,25 @@ final class MacTerminalTabTests: XCTestCase {
       XCTAssertTrue(script?.compileAndReturnError(&error) == true, error?.description ?? "No script")
     }
   }
+  func testCatalogDecodesSelectionAfterRemovingTheShellBusyColumn() throws {
+    let catalog = NSAppleEventDescriptor.list()
+    let row = NSAppleEventDescriptor.list()
+    let fields: [NSAppleEventDescriptor] = [
+      .init(int32: 10), .init(int32: 1), .init(int32: 2),
+      .init(string: "same-directory"), .init(string: "/dev/ttys001"), .init(boolean: true)
+    ]
+    for (index, value) in fields.enumerated() { row.insert(value, at: index + 1) }
+    catalog.insert(row, at: 1)
+    let snapshots = try MacTerminalAutomation.parseCatalog(catalog)
+    XCTAssertEqual(snapshots.count, 1)
+    XCTAssertEqual(snapshots[0].windowID, 10)
+    XCTAssertEqual(snapshots[0].tabIndex, 2)
+    XCTAssertEqual(snapshots[0].tty, "/dev/ttys001")
+    XCTAssertTrue(snapshots[0].isSelectedInWindow)
+  }
   func testCatalogUsesOpaqueStableIdentifiersAndOneGlobalSelection() async throws {
     let automation = StubTerminalAutomation(snapshots: initialSnapshots)
-    let controller = MacTerminalTabController(automation: automation)
+    let controller = makeController(automation: automation)
 
     let first = try await controller.catalog()
     let second = try await controller.catalog()
@@ -41,7 +99,7 @@ final class MacTerminalTabTests: XCTestCase {
 
   func testTopologyRevisionChangesOnlyWhenTabIdentityOrOrderChanges() async throws {
     let automation = StubTerminalAutomation(snapshots: initialSnapshots)
-    let controller = MacTerminalTabController(automation: automation)
+    let controller = makeController(automation: automation)
     let first = try await controller.catalog()
 
     automation.snapshots[0] = MacTerminalTabSnapshot(
@@ -50,7 +108,6 @@ final class MacTerminalTabTests: XCTestCase {
       tabIndex: 1,
       customTitle: "renamed",
       tty: "/dev/ttys001",
-      isBusy: false,
       isSelectedInWindow: true,
       hasUnreadActivity: true
     )
@@ -79,7 +136,7 @@ final class MacTerminalTabTests: XCTestCase {
 
   func testFocusRejectsAnAlreadyObservedTopologyChangeBeforeAutomation() async throws {
     let automation = StubTerminalAutomation(snapshots: initialSnapshots)
-    let controller = MacTerminalTabController(automation: automation)
+    let controller = makeController(automation: automation)
     let initial = try await controller.catalog()
     automation.snapshots.append(snapshot(
       windowID: 30,
@@ -104,7 +161,7 @@ final class MacTerminalTabTests: XCTestCase {
 
   func testFocusRaisesRequestedWindowAndReturnsFreshSelection() async throws {
     let automation = StubTerminalAutomation(snapshots: initialSnapshots)
-    let controller = MacTerminalTabController(automation: automation)
+    let controller = makeController(automation: automation)
     let initial = try await controller.catalog()
     let targetID = initial.tabs[1].id
 
@@ -121,7 +178,7 @@ final class MacTerminalTabTests: XCTestCase {
 
   func testEmptyCatalogDoesNotLaunchTerminal() async throws {
     let automation = StubTerminalAutomation(snapshots: [])
-    let controller = MacTerminalTabController(automation: automation)
+    let controller = makeController(automation: automation)
 
     let state = try await controller.catalog()
 
@@ -132,10 +189,10 @@ final class MacTerminalTabTests: XCTestCase {
 
   func testNativeTabStripOrderOverridesFocusOrder() async throws {
     let automation = StubTerminalAutomation(snapshots: [
-      MacTerminalTabSnapshot(windowID: 20, windowIndex: 1, tabIndex: 1, customTitle: "second", tty: "/dev/ttys002", isBusy: false, isSelectedInWindow: true, visibleGroupID: 10, visibleTabIndex: 2),
-      MacTerminalTabSnapshot(windowID: 10, windowIndex: 2, tabIndex: 1, customTitle: "first", tty: "/dev/ttys001", isBusy: false, isSelectedInWindow: true, visibleGroupID: 10, visibleTabIndex: 1)
+      MacTerminalTabSnapshot(windowID: 20, windowIndex: 1, tabIndex: 1, customTitle: "second", tty: "/dev/ttys002", isSelectedInWindow: true, visibleGroupID: 10, visibleTabIndex: 2),
+      MacTerminalTabSnapshot(windowID: 10, windowIndex: 2, tabIndex: 1, customTitle: "first", tty: "/dev/ttys001", isSelectedInWindow: true, visibleGroupID: 10, visibleTabIndex: 1)
     ])
-    let controller = MacTerminalTabController(automation: automation)
+    let controller = makeController(automation: automation)
     let state = try await controller.catalog()
     XCTAssertEqual(state.tabs.map(\.title), ["first", "second"])
     XCTAssertEqual(state.tabs.map(\.windowGroupId), ["terminal-window-10", "terminal-window-10"])
@@ -145,11 +202,11 @@ final class MacTerminalTabTests: XCTestCase {
   func testNativeControlIdentitySurvivesRepeatedTitlesAndLateShellResolution() async throws {
     func row(_ id: String, _ position: Int, tty: String = "", window: Int = 0) -> MacTerminalTabSnapshot {
       MacTerminalTabSnapshot(windowID: window, windowIndex: 1, tabIndex: 1,
-        customTitle: "same-directory", tty: tty, isBusy: false, isSelectedInWindow: position == 2,
+        customTitle: "same-directory", tty: tty, isSelectedInWindow: position == 2,
         visibleGroupID: 5, visibleTabIndex: position, nativeTabID: id)
     }
     let automation = StubTerminalAutomation(snapshots: [row("native-a", 1), row("native-b", 2)])
-    let controller = MacTerminalTabController(automation: automation)
+    let controller = makeController(automation: automation)
     let first = try await controller.catalog()
     XCTAssertEqual(Set(first.tabs.map(\.id)).count, 2)
     automation.snapshots = [row("native-a", 1), row("native-b", 2, tty: "/dev/ttys002", window: 100)]
@@ -163,7 +220,7 @@ final class MacTerminalTabTests: XCTestCase {
 
   func testResponseRequiresTheCurrentlySelectedTab() async throws {
     let automation = StubTerminalAutomation(snapshots: initialSnapshots)
-    let controller = MacTerminalTabController(automation: automation, readResponse: { _ in
+    let controller = makeController(automation: automation, readResponse: { _ in
       XCTFail("An unselected tab must not be read")
       throw MacTerminalResponseFailure(message: "Unexpected read")
     })
@@ -177,7 +234,7 @@ final class MacTerminalTabTests: XCTestCase {
 
   func testResponseIsDiscardedIfTabChangesDuringRead() async throws {
     let automation = StubTerminalAutomation(snapshots: initialSnapshots)
-    let controller = MacTerminalTabController(automation: automation, readResponse: { tty in
+    let controller = makeController(automation: automation, readResponse: { tty in
       XCTAssertEqual(tty, "/dev/ttys001")
       try await automation.focusTab(windowID: 20, tabIndex: 1)
       return RemoteTerminalResponse(sessionId: "session", turnId: "turn", text: "Now stale",
@@ -197,7 +254,7 @@ final class MacTerminalTabTests: XCTestCase {
       readError: automationDeniedFailure
     )
     let permissionRouter = StubTerminalPermissionRouter()
-    let controller = MacTerminalTabController(
+    let controller = makeController(
       automation: automation,
       permissionRouter: permissionRouter
     )
@@ -226,7 +283,7 @@ final class MacTerminalTabTests: XCTestCase {
       focusError: automationDeniedFailure
     )
     let permissionRouter = StubTerminalPermissionRouter()
-    let controller = MacTerminalTabController(
+    let controller = makeController(
       automation: automation,
       permissionRouter: permissionRouter
     )
@@ -254,7 +311,7 @@ final class MacTerminalTabTests: XCTestCase {
       )
     )
     let permissionRouter = StubTerminalPermissionRouter()
-    let controller = MacTerminalTabController(
+    let controller = makeController(
       automation: automation,
       permissionRouter: permissionRouter
     )
@@ -309,9 +366,11 @@ final class MacTerminalTabTests: XCTestCase {
   func testMoveUsesLiveTabIdentityPreservesSelectionAndConfirmsActualOrder() async throws {
     let automation = StubTerminalAutomation(snapshots: (1...3).map { position in
       MacTerminalTabSnapshot(windowID: 10, windowIndex: 1, tabIndex: position, customTitle: "Tab \(position)",
-        tty: "/dev/ttys00\(position)", isBusy: true, isSelectedInWindow: position == 2)
+        tty: "/dev/ttys00\(position)", isSelectedInWindow: position == 2)
     })
-    let controller = MacTerminalTabController(automation: automation)
+    let activity = StubTerminalAgentActivity()
+    activity.working = ["/dev/ttys001"]
+    let controller = makeController(automation: automation, activity: activity)
     let state = try await controller.catalog()
     let move = RemoteTerminalTabMessage.moveRequest(tabId: state.tabs[0].id, neighborTabId: state.tabs[2].id,
       placeBefore: false, expectedRevision: state.revision, requestId: "move")
@@ -319,7 +378,7 @@ final class MacTerminalTabTests: XCTestCase {
     XCTAssertEqual(moved.tabs.map(\.id), [state.tabs[1].id, state.tabs[2].id, state.tabs[0].id])
     XCTAssertEqual(moved.selectedTabId, state.selectedTabId)
     XCTAssertEqual(moved.revision, state.revision + 1)
-    XCTAssertTrue(moved.tabs.allSatisfy(\.isBusy))
+    XCTAssertEqual(moved.tabs.map(\.isBusy), [false, false, true])
     do { _ = try await controller.move(move); XCTFail("Old moves must not replay") }
     catch let failure as MacTerminalTabFailure { XCTAssertEqual(failure.code, "stale_catalog") }
     automation.ignoreMove = true
@@ -362,7 +421,6 @@ final class MacTerminalTabTests: XCTestCase {
       tabIndex: 1,
       customTitle: title,
       tty: tty,
-      isBusy: true,
       isSelectedInWindow: true,
       hasUnreadActivity: hasUnreadActivity
     )
@@ -375,6 +433,12 @@ final class MacTerminalTabTests: XCTestCase {
       state: nil
     )
   }
+}
+
+@MainActor
+private final class StubTerminalAgentActivity: MacTerminalAgentActivityMonitoring {
+  var working = Set<String>()
+  func busyTTYs(in ttys: Set<String>) -> Set<String> { working.intersection(ttys) }
 }
 
 @MainActor
@@ -422,7 +486,7 @@ private final class StubTerminalAutomation: MacTerminalAutomating {
     for snapshot in snapshots where !windows.contains(snapshot.windowID) { windows.append(snapshot.windowID) }
     snapshots = snapshots.map { snapshot in
       MacTerminalTabSnapshot(windowID: snapshot.windowID, windowIndex: (windows.firstIndex(of: snapshot.windowID) ?? 0) + 1,
-        tabIndex: snapshot.tabIndex, customTitle: snapshot.customTitle, tty: snapshot.tty, isBusy: snapshot.isBusy,
+        tabIndex: snapshot.tabIndex, customTitle: snapshot.customTitle, tty: snapshot.tty,
         isSelectedInWindow: snapshot.windowID == windowID ? snapshot.tty == target.tty : snapshot.isSelectedInWindow,
         hasUnreadActivity: snapshot.hasUnreadActivity, visibleGroupID: snapshot.visibleGroupID, visibleTabIndex: snapshot.visibleTabIndex)
     }.sorted { $0.windowIndex == $1.windowIndex ? $0.tabIndex < $1.tabIndex : $0.windowIndex < $1.windowIndex }
@@ -443,7 +507,7 @@ private final class StubTerminalAutomation: MacTerminalAutomating {
     snapshots += group.enumerated().map { offset, value in
       MacTerminalTabSnapshot(windowID: value.windowID, windowIndex: value.windowIndex,
         tabIndex: value.visibleGroupID == nil ? offset + 1 : value.tabIndex, customTitle: value.customTitle,
-        tty: value.tty, isBusy: value.isBusy, isSelectedInWindow: value.isSelectedInWindow,
+        tty: value.tty, isSelectedInWindow: value.isSelectedInWindow,
         visibleGroupID: value.visibleGroupID, visibleTabIndex: value.visibleGroupID == nil ? nil : offset + 1)
     }
   }

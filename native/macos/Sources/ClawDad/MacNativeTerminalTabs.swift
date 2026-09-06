@@ -233,7 +233,7 @@ final class MacNativeTerminalTabs {
       let shell = candidateShells[tab.id].flatMap { liveShells[$0.tty] }
       return MacTerminalTabSnapshot(windowID: shell?.windowID ?? 0,
         windowIndex: tab.focused ? 1 : tab.groupID + 1, tabIndex: shell?.tabIndex ?? tab.position,
-        customTitle: tab.title, tty: shell?.tty ?? "", isBusy: shell?.isBusy ?? false,
+        customTitle: tab.title, tty: shell?.tty ?? "",
         isSelectedInWindow: tab.selected, hasUnreadActivity: tab.unread,
         visibleGroupID: tab.groupID, visibleTabIndex: tab.position, nativeTabID: tab.id,
         reorderAvailable: tab.canReorder)
