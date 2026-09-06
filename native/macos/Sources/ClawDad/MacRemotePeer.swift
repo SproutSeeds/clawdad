@@ -1,6 +1,7 @@
 import AppKit
 import ClawDadRemoteAssistProtocol
 import Foundation
+import OSLog
 @preconcurrency import WebRTC
 
 struct RemoteAnswerApplicationGate {
@@ -570,7 +571,15 @@ final class MacRemotePeer: NSObject {
       guard let self else {
         return
       }
+      let started = ProcessInfo.processInfo.systemUptime
+      var outcome = "ok"
       defer {
+        let elapsed = Int((ProcessInfo.processInfo.systemUptime - started) * 1_000)
+        if message.type != RemoteTerminalTabMessage.listType || outcome != "ok" || elapsed > 300 {
+          Logger(subsystem: "earth.frg.ClawDad", category: "Terminal").info(
+            "operation=\(message.type, privacy: .public) outcome=\(outcome, privacy: .public) elapsed_ms=\(elapsed)"
+          )
+        }
         self.terminalOperationTask = nil
         if let move = self.queuedTerminalMove {
           self.queuedTerminalMove = nil
@@ -615,6 +624,7 @@ final class MacRemotePeer: NSObject {
           return
         }
       } catch let failure as MacTerminalTabFailure {
+        outcome = failure.code
         guard !Task.isCancelled else {
           return
         }
@@ -625,6 +635,7 @@ final class MacRemotePeer: NSObject {
           state: failure.state
         )
       } catch {
+        outcome = "failed"
         guard !Task.isCancelled else {
           return
         }

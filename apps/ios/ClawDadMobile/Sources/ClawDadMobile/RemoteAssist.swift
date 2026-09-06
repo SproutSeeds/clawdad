@@ -240,7 +240,6 @@ struct RemoteTerminalTabSelectionState: Equatable {
     requestId: String
   ) -> RemoteTerminalTabRequestAttempt? {
     guard let canonicalState,
-          (canonicalState.selectedTabId != tabId || pendingTabId != nil),
           canonicalState.tabs.contains(where: { $0.id == tabId }) else {
       return nil
     }
@@ -1374,9 +1373,23 @@ final class RemoteAssistController: NSObject, ObservableObject {
   }
 
   func beginTerminalTabDrag() {
+    // Retire an in-flight poll so its late reply cannot change the rows under
+    // the finger. Ending the gesture resumes polling immediately.
+    if let pending = terminalTabSelection.pendingAttempt, pending.kind == .catalog {
+      _ = terminalTabSelection.timeOut(requestId: pending.requestId)
+      terminalTabTimeoutTask?.cancel()
+      terminalTabTimeoutTask = nil
+      silentTerminalTabRequestId = nil
+      publishTerminalTabSelection()
+    }
     terminalDragRevision = terminalTabSelection.canonicalState?.revision
     terminalDragExpiresAt = Date().addingTimeInterval(20)
     UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+  }
+
+  func endTerminalTabDrag() {
+    terminalDragRevision = nil
+    terminalDragExpiresAt = .distantPast
   }
 
   func moveRemoteTerminalTab(_ tabId: String, relativeTo neighborId: String, before: Bool, dragged: Bool = false) {
@@ -1972,11 +1985,11 @@ final class RemoteAssistController: NSObject, ObservableObject {
         UINotificationFeedbackGenerator().notificationOccurred(.success)
       }
     } else if application.matchedPendingRequest, !isSilent {
-      if message.errorCode == "stale_catalog", case .focus(let target) = pendingBefore?.kind,
+      if ["stale_catalog", "layout_unavailable", "focus_failed"].contains(message.errorCode ?? ""),
+         message.state != nil, case .focus(let target) = pendingBefore?.kind,
          terminalFocusRetryTabId != target, remoteTerminalTabs.contains(where: { $0.id == target }) {
         terminalFocusRetryTabId = target
-        if selectedRemoteTerminalTabId != target { focusRemoteTerminalTab(target, retrying: true) }
-        else { showClipboardNotice("Terminal tab is selected", isError: false) }
+        focusRemoteTerminalTab(target, retrying: true)
         return true
       }
       let failureMessage = message.error ??

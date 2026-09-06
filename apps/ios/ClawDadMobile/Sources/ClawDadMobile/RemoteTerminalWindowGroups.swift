@@ -40,6 +40,7 @@ import SwiftUI
 struct RemoteTerminalWindowPicker: View {
   @ObservedObject var controller: RemoteAssistController
   @Binding var expansion: RemoteTerminalWindowExpansion
+  @GestureState private var dragging = false
   private var groups: [RemoteTerminalWindowGroup] { RemoteTerminalWindowGroup.make(controller.remoteTerminalTabs) }
 
   var body: some View {
@@ -75,8 +76,14 @@ struct RemoteTerminalWindowPicker: View {
                 onSelect: { controller.focusRemoteTerminalTab(tab.id) })
               .listRowInsets(EdgeInsets(top: 3, leading: 0, bottom: 3, trailing: 0))
               .listRowBackground(Color.clear)
-              .moveDisabled(!tab.canReorder || controller.remoteScreenLocked)
-              .simultaneousGesture(LongPressGesture(minimumDuration: 0.3).onEnded { _ in controller.beginTerminalTabDrag() })
+              .moveDisabled(!tab.canReorder || controller.remoteScreenLocked || controller.pendingRemoteTerminalTabId != nil)
+              .simultaneousGesture(
+                LongPressGesture(minimumDuration: 0.3)
+                  .sequenced(before: DragGesture(minimumDistance: 0))
+                  .updating($dragging) { value, active, _ in
+                    if case .second(true, _) = value { active = true }
+                  }
+              )
             }
             .onMove { offsets, destination in move(group, offsets: offsets, destination: destination) }
           }
@@ -90,10 +97,16 @@ struct RemoteTerminalWindowPicker: View {
     .frame(height: 300)
     .onAppear { reconcile() }
     .onChange(of: controller.remoteTerminalTabs) { _, _ in reconcile() }
+    .onChange(of: dragging) { _, active in
+      if active { controller.beginTerminalTabDrag() }
+      else { controller.endTerminalTabDrag() }
+    }
+    .onDisappear { controller.endTerminalTabDrag() }
   }
 
   private func reconcile() { expansion.reconcile(groups, selected: controller.selectedRemoteTerminalTabId) }
   private func move(_ group: RemoteTerminalWindowGroup, offsets: IndexSet, destination: Int) {
+    defer { controller.endTerminalTabDrag() }
     guard offsets.count == 1, let source = offsets.first, group.tabs.indices.contains(source),
           (0...group.tabs.count).contains(destination), destination != source, destination != source + 1,
           let current = groups.first(where: { $0.id == group.id }), current.tabs.map(\.id) == group.tabs.map(\.id) else { return }

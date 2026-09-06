@@ -6,8 +6,12 @@ import XCTest
 /// Real AppKit windows, isolated from the user's Terminal and shell sessions.
 @MainActor
 final class NativeWindowTabFixtureTests: XCTestCase {
+  // Native tab containers tear down asynchronously on current macOS. Let the
+  // isolated XCTest process own their lifetime, instead of closing 21 tabs during
+  // an in-flight AppKit layout transition.
+  private static var fixtureWindows: [NSWindow] = []
   private func children(_ element: AnyObject) -> [AnyObject] {
-    (element as? NSAccessibilityProtocol)?.accessibilityChildren()?.map { $0 as AnyObject } ?? []
+    NSAccessibility.unignoredChildren(from: (element as? NSAccessibilityProtocol)?.accessibilityChildren() ?? []).map { $0 as AnyObject }
   }
   private func role(_ element: AnyObject) -> NSAccessibility.Role? {
     (element as? NSAccessibilityProtocol)?.accessibilityRole()
@@ -24,14 +28,16 @@ final class NativeWindowTabFixtureTests: XCTestCase {
       let window = NSWindow(contentRect: NSRect(x: 180, y: 180, width: 480, height: 250),
         styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
       window.isReleasedWhenClosed = false
+      window.animationBehavior = .none
       window.title = "same-directory"
       window.tabbingIdentifier = index == 20 ? "clawdad-fixture-second" : "clawdad-fixture-first"
       window.contentView = NSTextView(frame: window.contentLayoutRect)
       windows.append(window)
     }
-    defer { windows.forEach { $0.close() } }
+    Self.fixtureWindows = windows
     for window in windows.dropFirst().prefix(19) { windows[0].addTabbedWindow(window, ordered: .above) }
     windows[0].orderBack(nil); windows[20].orderBack(nil)
+    RunLoop.current.run(until: Date().addingTimeInterval(0.1))
     let firstStrip = try strip(windows[0])
     let original = tabs(firstStrip)
     XCTAssertEqual(original.count, 20, "Accessibility must include tabs beyond the visible strip")
@@ -60,14 +66,37 @@ final class NativeWindowTabFixtureTests: XCTestCase {
         if attribute == kAXWindowsAttribute { return [handle(focused), handle(windows[20])] as CFArray }
         if attribute == kAXFocusedWindowAttribute { return handle(focused) }
       }
-      guard let accessible = object as? NSAccessibilityProtocol else { return nil }
+      guard let accessible = object as? NSAccessibilityProtocol else {
+        // AppKit's tab-close proxies still expose the public legacy AX protocol.
+        guard let legacy = object as? NSObject,
+              legacy.responds(to: NSSelectorFromString("accessibilityAttributeValue:")) else { return nil }
+        let raw = legacy.perform(NSSelectorFromString("accessibilityAttributeValue:"), with: attribute)?.takeUnretainedValue()
+        if attribute == kAXChildrenAttribute || attribute == kAXTabsAttribute {
+          return ((raw as? [AnyObject]) ?? []).map(handle) as CFArray
+        }
+        return raw as CFTypeRef?
+      }
       switch attribute {
       case kAXChildrenAttribute: return self.children(object).map(handle) as CFArray
       case kAXTabsAttribute: return (accessible.accessibilityTabs() ?? []).map { handle($0 as AnyObject) } as CFArray
-      case kAXRoleAttribute: return accessible.accessibilityRole()?.rawValue as NSString?
+      case kAXRoleAttribute: return (accessible.accessibilityRole()?.rawValue ?? kAXUnknownRole) as NSString
       case kAXTitleAttribute: return accessible.accessibilityTitle() as NSString?
       case kAXDescriptionAttribute: return accessible.accessibilityLabel() as NSString?
-      case kAXValueAttribute: return accessible.accessibilityValue() as CFTypeRef?
+      case kAXValueAttribute:
+        if self.role(object) == .tabGroup,
+           let value = accessible.accessibilityValue() as AnyObject?,
+           self.role(value) == .radioButton { return handle(value) }
+        if self.role(object) == .tabGroup,
+           let selected = self.tabs(object).first(where: {
+             (($0 as? NSAccessibilityProtocol)?.accessibilityValue() as? NSNumber)?.boolValue == true
+           }) { return handle(selected) }
+        return accessible.accessibilityValue() as CFTypeRef?
+      case kAXPositionAttribute:
+        var point = accessible.accessibilityFrame().origin
+        return AXValueCreate(.cgPoint, &point)
+      case kAXSizeAttribute:
+        var size = accessible.accessibilityFrame().size
+        return AXValueCreate(.cgSize, &size)
       default: return nil
       }
     }

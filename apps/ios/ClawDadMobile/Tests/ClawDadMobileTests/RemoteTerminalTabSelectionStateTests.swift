@@ -20,16 +20,17 @@ final class RemoteTerminalTabSelectionStateTests: XCTestCase {
     XCTAssertEqual(selection.tabs.count, 2)
   }
 
-  func testFocusRequiresKnownUnselectedTab() {
+  func testExplicitTapReassertsKnownSelectionAndRejectsUnknownTab() {
     var selection = RemoteTerminalTabSelectionState()
     _ = selection.applyResult(
       .listSuccess(requestId: "bootstrap", state: state())
     )
 
-    XCTAssertNil(selection.beginFocus(
+    XCTAssertNotNil(selection.beginFocus(
       tabId: "tab-one",
       requestId: "request-selected"
     ))
+    XCTAssertNil(selection.beginFocus(tabId: "tab-one", requestId: "duplicate-pending"))
     XCTAssertNil(selection.beginFocus(
       tabId: "missing",
       requestId: "request-missing"

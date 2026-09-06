@@ -4,6 +4,13 @@ import XCTest
 
 @MainActor
 final class MacTerminalTabTests: XCTestCase {
+  func testDirectoryLabelsKeepSpacesAndDuplicateNamesWithoutPathsOrStatus() {
+    XCTAssertEqual(macTerminalTabTitle("/Volumes/Code/My Project — ⠸ agent — codex"), "My Project")
+    XCTAssertEqual(macTerminalTabTitle("~/work/duplicate — -zsh"), "duplicate")
+    XCTAssertEqual(macTerminalTabTitle("file:///Users/example/My%20Project/"), "My Project")
+    XCTAssertEqual(macTerminalTabTitle("⠸ clawdad"), "clawdad")
+    XCTAssertEqual(macTerminalTabTitle("Release review"), "Release review")
+  }
   func testBatchedCatalogAndIdentityFocusScriptsCompileWithoutRunningTerminal() {
     for source in [MacTerminalAutomation.catalogScript, MacTerminalAutomation.focusScript(windowID: 10, tabIndex: 2, tty: "/dev/ttys001")] {
       let script = NSAppleScript(source: source)
