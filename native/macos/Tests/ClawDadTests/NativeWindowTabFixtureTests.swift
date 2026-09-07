@@ -116,5 +116,18 @@ final class NativeWindowTabFixtureTests: XCTestCase {
     XCTAssertEqual(changed.map(\.nativeTabID), initial.map(\.nativeTabID))
     XCTAssertEqual(changed.map(\.groupID), initial.map(\.groupID))
     XCTAssertEqual(changed.first { $0.windowIndex == 1 && $0.isSelectedInWindow }?.tty, "/dev/ttys5")
+
+    // Verify native tab/window lifetime separately from AX actuation. The
+    // in-process AX adapter cannot model AppKit's external accessibility bridge
+    // after it rebuilds the strip; action targeting is covered by CloseGraph.
+    let beforeClose = group.windows
+    windows[5].close()
+    XCTAssertEqual(group.windows, beforeClose.filter { $0 !== windows[5] })
+    XCTAssertEqual(group.windows.count, 19)
+    XCTAssertFalse(group.selectedWindow === windows[5])
+    XCTAssertTrue(windows[20].isVisible)
+    windows[20].close()
+    XCTAssertFalse(windows[20].isVisible)
+    XCTAssertEqual(group.windows.count, 19)
   }
 }

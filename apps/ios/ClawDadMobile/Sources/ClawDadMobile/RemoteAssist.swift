@@ -305,6 +305,12 @@ struct RemoteTerminalTabSelectionState: Equatable {
     return begin(kind: .move(tabId: tabId), requestId: requestId)
   }
 
+  mutating func applyCloseState(_ state: RemoteTerminalTabState) {
+    guard state.revision >= (canonicalState?.revision ?? 0) else { return }
+    pendingAttempt = nil
+    canonicalState = state
+  }
+
   private mutating func begin(
     kind: RemoteTerminalTabRequestKind,
     requestId: String
@@ -521,6 +527,11 @@ final class RemoteAssistController: NSObject, ObservableObject {
   @Published private(set) var terminalTabRequestPending = false
   @Published private(set) var terminalTabCatalogLoading = false
   @Published private(set) var terminalTabError: String?
+  @Published private(set) var closingTerminalTabId: String?
+  @Published var terminalCloseConfirmation: RemoteTerminalCloseIntent?
+  private var terminalCloseIntent: RemoteTerminalCloseIntent?
+  private var terminalCloseRequest: RemoteTerminalTabCloseMessage?
+  private var terminalCloseTimeout: Task<Void, Never>?
 
   private weak var cloudSession: CloudSession?
   private let factory = RTCPeerConnectionFactory()
@@ -567,7 +578,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
   }
 
   var remoteInputSuppressed: Bool {
-    displaySelectionPending
+    displaySelectionPending || closingTerminalTabId != nil
   }
 
   var remoteComputerName: String {
@@ -1495,6 +1506,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
 
   private func beginRemoteTerminalTabCatalog(silently: Bool) {
     guard phase == .connected,
+          closingTerminalTabId == nil,
           !remoteScreenLocked,
           Date() >= terminalDragExpiresAt,
           !terminalTabSelection.requestPending else {
@@ -1519,6 +1531,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
 
   func focusRemoteTerminalTab(_ tabId: String, retrying: Bool = false) {
     guard phase == .connected,
+          closingTerminalTabId == nil,
           !remoteScreenLocked,
           let tab = remoteTerminalTabs.first(where: { $0.id == tabId }) else {
       return
@@ -1575,7 +1588,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
     let revision = dragged ? (terminalDragRevision ?? terminalTabSelection.canonicalState?.revision) : terminalTabSelection.canonicalState?.revision
     terminalDragRevision = nil
     terminalDragExpiresAt = .distantPast
-    guard phase == .connected, !remoteScreenLocked, let revision,
+    guard phase == .connected, !remoteScreenLocked, closingTerminalTabId == nil, let revision,
           let source = remoteTerminalTabs.first(where: { $0.id == tabId }), source.canReorder,
           let neighbor = remoteTerminalTabs.first(where: { $0.id == neighborId }),
           tabId != neighborId, source.windowGroupId == neighbor.windowGroupId else { return }
@@ -1590,6 +1603,106 @@ final class RemoteAssistController: NSObject, ObservableObject {
     showClipboardNotice("Moving Terminal tab…", isError: false, autoDismiss: false)
     sendTerminalTabRequest(.moveRequest(tabId: tabId, neighborTabId: neighborId, placeBefore: before,
                                        expectedRevision: revision, requestId: requestId), attempt: attempt)
+  }
+
+  var canCloseTerminalTabs: Bool {
+    phase == .connected && !remoteScreenLocked && sessionCapabilities.terminalTabClose == true &&
+      closingTerminalTabId == nil && (terminalTabSelection.pendingAttempt == nil || terminalTabSelection.catalogLoading)
+  }
+
+  func requestCloseTerminalTab(_ id: String) {
+    guard canCloseTerminalTabs, let state = terminalTabSelection.canonicalState,
+          let tab = state.tabs.first(where: { $0.id == id }) else { return }
+    if let attempt = terminalTabSelection.pendingAttempt { _ = terminalTabSelection.timeOut(requestId: attempt.requestId) }
+    terminalTabTimeoutTask?.cancel(); terminalTabTimeoutTask = nil
+    silentTerminalTabRequestId = nil
+    publishTerminalTabSelection()
+    let intent = RemoteTerminalCloseIntent(tab: tab, revision: state.revision,
+      isLastTab: state.tabs.filter { $0.windowGroupId == tab.windowGroupId }.count == 1)
+    closingTerminalTabId = id
+    terminalCloseIntent = intent
+    terminalCloseConfirmation = intent
+    dismissKeyboard()
+  }
+
+  func confirmTerminalClose(_ intent: RemoteTerminalCloseIntent) {
+    guard terminalCloseIntent?.id == intent.id, phase == .connected, !remoteScreenLocked else { cancelTerminalClose(); return }
+    terminalCloseConfirmation = nil
+    let request: RemoteTerminalTabCloseMessage
+    if let token = intent.token {
+      request = .resolve(tabId: intent.tab.id, token: token, confirm: true, requestId: UUID().uuidString.lowercased())
+    } else {
+      request = .request(tabId: intent.tab.id, revision: intent.revision, requestId: UUID().uuidString.lowercased())
+    }
+    sendTerminalClose(request)
+  }
+
+  func cancelTerminalClose() {
+    terminalCloseConfirmation = nil
+    if let intent = terminalCloseIntent, let token = intent.token, phase == .connected {
+      sendTerminalClose(.resolve(tabId: intent.tab.id, token: token, confirm: false, requestId: UUID().uuidString.lowercased()))
+    } else { clearTerminalClose() }
+  }
+
+  private func clearTerminalClose() {
+    terminalCloseTimeout?.cancel(); terminalCloseTimeout = nil
+    terminalCloseRequest = nil; terminalCloseIntent = nil
+    terminalCloseConfirmation = nil; closingTerminalTabId = nil
+  }
+
+  private func sendTerminalClose(_ request: RemoteTerminalTabCloseMessage) {
+    terminalCloseTimeout?.cancel()
+    terminalCloseRequest = request
+    guard let data = try? request.encode() else { clearTerminalClose(); return }
+    showClipboardNotice(request.confirm == false ? "Keeping Terminal tab open…" : "Closing Terminal tab…", isError: false, autoDismiss: false)
+    _ = sendControlData(data)
+    terminalCloseTimeout = Task { @MainActor [weak self] in
+      for attempt in 0..<4 {
+        try? await Task.sleep(for: .seconds(4))
+        guard !Task.isCancelled, let self, self.terminalCloseRequest == request else { return }
+        if attempt < 3 { _ = self.sendControlData(data) }
+        else {
+          self.clearTerminalClose()
+          self.showClipboardNotice("The Mac has not confirmed the close. Checking its current tabs…", isError: false)
+          self.beginRemoteTerminalTabCatalog(silently: true)
+        }
+      }
+    }
+  }
+
+  private func handleTerminalClose(_ data: Data) -> Bool {
+    guard let result = try? RemoteTerminalTabCloseMessage.decode(data), result.type == "terminal.tab.close.result" else { return false }
+    guard terminalCloseRequest?.requestId == result.requestId,
+          terminalCloseRequest?.tabId == result.tabId else {
+      if result.outcome == .confirmationRequired, let token = result.confirmationToken,
+         token != terminalCloseIntent?.token,
+         let cancel = try? RemoteTerminalTabCloseMessage.resolve(tabId: result.tabId, token: token,
+           confirm: false, requestId: UUID().uuidString.lowercased()).encode() { _ = sendControlData(cancel) }
+      return true
+    }
+    terminalCloseTimeout?.cancel(); terminalCloseTimeout = nil
+    terminalCloseRequest = nil
+    if let state = result.state { terminalTabSelection.applyCloseState(state); publishTerminalTabSelection() }
+    if result.outcome == .confirmationRequired, let previous = terminalCloseIntent {
+      var next = RemoteTerminalCloseIntent(tab: result.state?.tabs.first { $0.id == result.tabId } ?? previous.tab,
+        revision: result.state?.revision ?? previous.revision, isLastTab: previous.isLastTab)
+      next.token = result.confirmationToken; next.nativePrompt = result.prompt; next.nativeButton = result.confirmLabel
+      terminalCloseIntent = next
+      terminalCloseConfirmation = next
+      clipboardNotice = nil
+      let intentID = next.id
+      terminalCloseTimeout = Task { @MainActor [weak self] in
+        try? await Task.sleep(for: .seconds(55))
+        guard !Task.isCancelled, let self, self.terminalCloseIntent?.id == intentID else { return }
+        self.cancelTerminalClose()
+      }
+    } else {
+      clearTerminalClose()
+      terminalTabError = result.outcome == .failed ? result.prompt : nil
+      showClipboardNotice(result.outcome == .closed ? "Terminal tab closed" : result.outcome == .cancelled
+        ? "Terminal tab kept open" : result.prompt ?? "Check the Mac before trying to close this tab again.", isError: result.outcome == .failed)
+    }
+    return true
   }
 
   private func sendTerminalTabRequest(
@@ -1993,6 +2106,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
     supportsTerminalReadAloud = sessionCapabilities.terminalReadAloud == true
     sendPendingTargetCapture()
     if message.screenLocked {
+      cancelTerminalClose()
       cancelTerminalLookup()
       terminalReader.invalidate("Unlock the Mac to read Terminal text.")
     }
@@ -2009,6 +2123,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
 
   // One receive path is exercised by the native channel and encoded preview peers.
   func receiveControlData(_ data: Data) {
+    if handleTerminalClose(data) { return }
     if handleQuickChat(data) { return }
     if imageTransfer.receive(data) { return }
     if handleInputResponse(data) { return }
@@ -2484,6 +2599,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
   }
 
   private func tearDownPeer() {
+    clearTerminalClose()
     quickChatTask?.cancel()
     quickChatTask = nil
     pendingQuickChat = nil
@@ -3134,6 +3250,11 @@ struct RemoteAssistView: View {
     }
     .statusBarHidden(true)
     .persistentSystemOverlays(.hidden)
+    .alert(item: $controller.terminalCloseConfirmation) { intent in
+      Alert(title: Text(intent.title), message: Text(intent.message),
+        primaryButton: .destructive(Text(intent.button)) { controller.confirmTerminalClose(intent) },
+        secondaryButton: .cancel { controller.cancelTerminalClose() })
+    }
     .onAppear {
       #if DEBUG
       if [.dictation, .terminalReader].contains(ClawDadAppStorePreviewScenario.current) {
@@ -3142,7 +3263,10 @@ struct RemoteAssistView: View {
       #endif
     }
     .onChange(of: scenePhase) { _, phase in
-      if phase == .background { controller.pauseInlineDictation() }
+      if phase == .background {
+        controller.pauseInlineDictation()
+        controller.cancelTerminalClose()
+      }
     }
     .sheet(isPresented: $showingFiles, onDismiss: {
       controlsExpanded = true

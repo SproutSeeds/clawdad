@@ -42,6 +42,19 @@ final class MacNativeTerminalTabs {
   private let readAttribute: ((AXUIElement, String) throws -> CFTypeRef?)?
   private let now: () -> TimeInterval
   private var deadline: TimeInterval = .infinity
+  // Injection is used only by isolated native AppKit fixtures.
+  var performCloseAction: ((AXUIElement, String) -> AXError)?
+  private struct ClosePrompt {
+    let token: String
+    let application: AXUIElement
+    let target: Binding
+    let sheet: AXUIElement
+    let cancel: AXUIElement
+    let accept: AXUIElement
+    let text: String
+    let label: String
+  }
+  private var closePrompt: ClosePrompt?
 
   init(readAttribute: ((AXUIElement, String) throws -> CFTypeRef?)? = nil,
        now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
@@ -291,6 +304,140 @@ final class MacNativeTerminalTabs {
       throw failure("Terminal has not confirmed the requested tab.")
     }
     // The controller also verifies the selected TTY with a transactional catalog.
+  }
+
+  func close(_ id: String, application: AXUIElement) throws -> MacTerminalNativeCloseOutcome {
+    deadline = now() + 5
+    defer { deadline = .infinity }
+    guard closePrompt == nil else { throw failure("Finish the current close confirmation first.") }
+    let current = try capture(application: application)
+    guard current.count == bindings.count,
+          current.allSatisfy({ item in bindings.contains { $0.id == item.id && $0.groupID == item.groupID && $0.position == item.position } }),
+          let target = current.first(where: { $0.id == id }) else {
+      throw failure("The tabs changed. Refresh the picker before closing this tab.")
+    }
+    guard try sheets(target.window).isEmpty else { throw failure("Finish the existing Terminal dialog before closing this tab.") }
+    let group = current.filter { $0.groupID == target.groupID }
+    let button: AXUIElement
+    if CFEqual(target.control, target.window) {
+      guard group.count == 1, let close = try element(target.window, kAXCloseButtonAttribute) else {
+        throw failure("Terminal did not expose this tab’s close button.")
+      }
+      button = close
+    } else {
+      // AppKit exposes the tab's own close proxy beneath its radio button.
+      // Never fall back to the physical window's button for a multi-tab group.
+      let buttons = try descendants(target.control, depth: 2).filter { try role($0) == kAXButtonRole }
+      guard buttons.count == 1, let close = buttons.first else {
+        throw failure("Terminal did not expose a unique close button for this tab.")
+      }
+      button = close
+    }
+    try pressCloseButton(button)
+    return try waitForClose(target, application: application, allowPrompt: true)
+  }
+
+  func resolveClose(token: String, confirm: Bool) throws -> MacTerminalNativeCloseOutcome {
+    deadline = now() + 5
+    defer { deadline = .infinity }
+    guard let pending = closePrompt, pending.token == token else { throw failure("This close confirmation expired.") }
+    let current = try sheets(pending.target.window)
+    guard current.count == 1, CFEqual(current[0], pending.sheet),
+          let fresh = try prompt(in: pending.sheet, target: pending.target, application: pending.application),
+          CFEqual(fresh.accept, pending.accept), CFEqual(fresh.cancel, pending.cancel),
+          fresh.text == pending.text, fresh.label == pending.label else {
+      throw failure("The Terminal dialog changed. Close was cancelled.")
+    }
+    if confirm {
+      guard try observe(application: pending.application).contains(where: { window in
+        CFEqual(window.window, pending.target.window) && window.tabs.contains { CFEqual($0.control, pending.target.control) }
+      }) else { throw failure("The tab changed while its close confirmation was open.") }
+    }
+    // Consume before pressing: an ambiguous AX response must never repeat a close.
+    closePrompt = nil
+    try pressCloseButton(confirm ? pending.accept : pending.cancel)
+    if confirm { return try waitForClose(pending.target, application: pending.application, allowPrompt: false) }
+    repeat {
+      if try sheets(pending.target.window).allSatisfy({ !CFEqual($0, pending.sheet) }) { return .cancelled }
+      Thread.sleep(forTimeInterval: 0.04)
+    } while now() < deadline - 0.25
+    throw failure("Terminal has not confirmed cancellation yet.")
+  }
+
+  func cancelClose() {
+    guard let pending = closePrompt else { return }
+    deadline = now() + 1.5
+    defer { closePrompt = nil; deadline = .infinity }
+    // A disconnect/timeout can cancel only the exact sheet this operation opened.
+    if let current = try? sheets(pending.target.window), current.contains(where: { CFEqual($0, pending.sheet) }),
+       let button = try? element(pending.sheet, kAXCancelButtonAttribute), CFEqual(button, pending.cancel) {
+      try? pressCloseButton(pending.cancel)
+    }
+  }
+
+  private func waitForClose(_ target: Binding, application: AXUIElement, allowPrompt: Bool) throws -> MacTerminalNativeCloseOutcome {
+    repeat {
+      let layout: [ObservedWindow]
+      do { layout = try observe(application: application) }
+      catch {
+        // Closing can briefly invalidate the strip while AppKit selects its next
+        // tab. Recheck observation; never press the close control again.
+        Thread.sleep(forTimeInterval: 0.04)
+        continue
+      }
+      if layout.reduce(0, { $0 + $1.tabs.count }) < bindings.count,
+         !layout.contains(where: { $0.tabs.contains { CFEqual($0.control, target.control) } }) { return .closed }
+      let attached = try sheets(target.window)
+      if !attached.isEmpty {
+        guard allowPrompt, attached.count == 1,
+              let warning = try prompt(in: attached[0], target: target, application: application) else {
+          if attached.count == 1, let cancel = try element(attached[0], kAXCancelButtonAttribute) {
+            try? pressCloseButton(cancel)
+          }
+          throw failure("Terminal opened a dialog that could not be confirmed safely.")
+        }
+        closePrompt = warning
+        return .confirmation(token: warning.token, prompt: warning.text, button: warning.label)
+      }
+      Thread.sleep(forTimeInterval: 0.04)
+    } while now() < deadline - 0.25
+    throw failure("Terminal has not confirmed that the tab closed yet.")
+  }
+
+  private func element(_ parent: AXUIElement, _ attribute: String) throws -> AXUIElement? {
+    guard let raw = try value(parent, attribute), CFGetTypeID(raw) == AXUIElementGetTypeID() else { return nil }
+    return unsafeBitCast(raw, to: AXUIElement.self)
+  }
+  private func descendants(_ root: AXUIElement, depth: Int) throws -> [AXUIElement] {
+    guard depth > 0 else { return [] }
+    let children = try elements(root, kAXChildrenAttribute)
+    guard children.count <= 32 else { throw failure("Terminal’s close control is unavailable.") }
+    return try children + children.flatMap { try descendants($0, depth: depth - 1) }
+  }
+  private func sheets(_ window: AXUIElement) throws -> [AXUIElement] {
+    return try elements(window, kAXChildrenAttribute).filter { try role($0) == kAXSheetRole }
+  }
+  private func prompt(in sheet: AXUIElement, target: Binding, application: AXUIElement) throws -> ClosePrompt? {
+    guard let accept = try element(sheet, kAXDefaultButtonAttribute),
+          let cancel = try element(sheet, kAXCancelButtonAttribute), !CFEqual(accept, cancel) else { return nil }
+    let children = try descendants(sheet, depth: 4)
+    let buttons = try children.filter { try role($0) == kAXButtonRole }
+    guard buttons.count == 2, buttons.contains(where: { CFEqual($0, accept) }), buttons.contains(where: { CFEqual($0, cancel) }),
+          let label = try value(accept, kAXTitleAttribute) as? String, !label.isEmpty, label.utf8.count <= 128 else { return nil }
+    let texts = try children.filter { try role($0) == kAXStaticTextRole }.compactMap { child in
+      try (value(child, kAXValueAttribute) as? String) ?? (value(child, kAXTitleAttribute) as? String)
+    }.filter { !$0.isEmpty }
+    let text = texts.joined(separator: "\n\n")
+    guard !text.isEmpty, text.utf8.count <= 2048 else { return nil }
+    return ClosePrompt(token: UUID().uuidString.lowercased(), application: application, target: target,
+      sheet: sheet, cancel: cancel, accept: accept, text: text, label: label)
+  }
+  private func pressCloseButton(_ button: AXUIElement) throws {
+    try prepare(button)
+    guard try value(button, kAXEnabledAttribute) as? Bool != false else { throw failure("Terminal’s close button is disabled.") }
+    let result = performCloseAction?(button, kAXPressAction) ?? AXUIElementPerformAction(button, kAXPressAction as CFString)
+    // cannotComplete may mean the action succeeded but opened a modal sheet.
+    guard result == .success || result == .cannotComplete else { throw failure("Terminal could not complete the close action.") }
   }
   private func failure(_ message: String) -> MacTerminalTabFailure {
     MacTerminalTabFailure(code: "layout_unavailable", message: message, state: nil)

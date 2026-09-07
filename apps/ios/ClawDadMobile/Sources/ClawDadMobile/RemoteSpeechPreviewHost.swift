@@ -17,8 +17,13 @@ final class RemoteSpeechPreviewHost {
   private var windowTwoOrder = [1, 2, 3]
   private var revision = 1
   private var quickChatReceipts: [String: (RemoteQuickChatMessage, RemoteQuickChatMessage)] = [:]
+  private var closeReceipts: [String: RemoteTerminalTabCloseMessage] = [:]
+  private var closeTokens: [String: String] = [:]
   private let arguments = ProcessInfo.processInfo.arguments
-  init(receive: @escaping (Data) -> Void) { self.receive = receive }
+  init(receive: @escaping (Data) -> Void) {
+    self.receive = receive
+    if arguments.contains("--clawdad-preview-last-tab") { windowTwoOrder = [1] }
+  }
 
   /// Silent PCM exercises transferred-audio playback; it is not voice-quality proof.
   static func audioFixture() -> Data {
@@ -42,7 +47,8 @@ final class RemoteSpeechPreviewHost {
         if arguments.contains("--clawdad-preview-slow-context") { try? await Task.sleep(for: .seconds(2)) }
         let state = RemoteSessionStateMessage.state(screenLocked: false, supportsDictation: true,
           supportsTerminalReadAloud: true, supportsInlineSpeech: true,
-          supportsImageAttachments: arguments.contains("--clawdad-image-transfer-test"), supportsQuickChat: true, requestId: request.requestId)
+          supportsImageAttachments: arguments.contains("--clawdad-image-transfer-test"), supportsQuickChat: true,
+          supportsTerminalTabClose: !arguments.contains("--clawdad-preview-old-close-host"), requestId: request.requestId)
         if let reply = try? RemoteSessionStateCodec.encode(state) { receive(reply) }
       } else if let request = try? RemoteQuickChatMessage.decode(data), request.type == "quick.chat" {
         if let (original, receipt) = quickChatReceipts[request.requestId] {
@@ -98,8 +104,36 @@ final class RemoteSpeechPreviewHost {
             : .failure(action: .paste, requestId: request.requestId, error: "Paste contained stale text.")
         }
         if let reply = try? RemoteClipboardCodec.encode(result) { receive(reply) }
+      } else if let request = try? RemoteTerminalTabCloseMessage.decode(data) {
+        if let receipt = closeReceipts[request.requestId], let reply = try? receipt.encode() { receive(reply); return }
+        let response: RemoteTerminalTabCloseMessage
+        if request.type == "terminal.tab.close", arguments.contains("--clawdad-preview-close-process") {
+          let token = UUID().uuidString.lowercased()
+          closeTokens[token] = request.tabId
+          response = request.result(.confirmationRequired, state: terminalState(), token: token,
+            prompt: "Closing this tab will terminate the running process: codex.", confirmLabel: "Terminate")
+        } else if request.confirm == false {
+          closeTokens.removeValue(forKey: request.confirmationToken ?? "")
+          response = request.result(.cancelled, state: terminalState())
+        } else if request.type == "terminal.tab.close" || closeTokens[request.confirmationToken ?? ""] == request.tabId {
+          if let number = Int(request.tabId.split(separator: "-").last ?? "") {
+            if request.tabId.hasPrefix("window-1-") { windowOneOrder.removeAll { $0 == number } }
+            else { windowTwoOrder.removeAll { $0 == number } }
+          }
+          if selectedTab == request.tabId {
+            selectedTab = windowOneOrder.first.map { "window-1-tab-\($0)" } ?? windowTwoOrder.first.map { "window-2-tab-\($0)" } ?? ""
+          }
+          revision += 1
+          closeTokens.removeValue(forKey: request.confirmationToken ?? "")
+          response = request.result(.closed, state: terminalState())
+        } else {
+          response = request.result(.failed, state: terminalState(), prompt: "Confirmation expired.", errorCode: "confirmation_expired")
+        }
+        closeReceipts[request.requestId] = response
+        if arguments.contains("--clawdad-preview-close-drop-receipt") { return }
+        if arguments.contains("--clawdad-preview-close-delay") { try? await Task.sleep(for: .seconds(2)) }
+        if let reply = try? response.encode() { receive(reply) }
       } else if let request = try? RemoteTerminalTabCodec.decode(data) {
-        let grouped = arguments.contains("--clawdad-preview-window-groups")
         if request.type == RemoteTerminalTabMessage.listType {
           catalogRequests += 1
           if catalogRequests == 1, arguments.contains("--clawdad-preview-slow-catalog") {
@@ -121,15 +155,7 @@ final class RemoteSpeechPreviewHost {
             }
           }
         }
-        let tabs: [RemoteTerminalTabDescriptor] = grouped ? (1...23).map { index in
-          let window = index <= 20 ? 1 : 2, position = index <= 20 ? index : index - 20
-          let id = "window-\(window)-tab-\(window == 2 ? windowTwoOrder[position - 1] : windowOneOrder[position - 1])"
-          let detail = "Tab \(position)" + (arguments.contains("--clawdad-preview-terminal-poll-count") ? " · Update \(catalogRequests)" : "")
-          return .init(id: id, title: "same-directory", detail: detail, isSelected: id == selectedTab,
-            isBusy: false, windowTitle: "Terminal Window \(window)", windowGroupId: "window-\(window)",
-            tabPosition: position, canReorder: true)
-        } : [.init(id: "preview-tab", title: "Preview Terminal", detail: "Window 1", isSelected: true, isBusy: false)]
-        let state = RemoteTerminalTabState(revision: revision, selectedTabId: grouped ? selectedTab : "preview-tab", tabs: tabs)
+        let state = terminalState()
         let reply = request.type == RemoteTerminalTabMessage.moveType ? RemoteTerminalTabMessage.moveResult(requestId: request.requestId, state: state)
           : request.type == RemoteTerminalTabMessage.focusType
           ? RemoteTerminalTabMessage.focusSuccess(requestId: request.requestId, state: state)
@@ -143,6 +169,20 @@ final class RemoteSpeechPreviewHost {
       }
     }
     return true
+  }
+
+  private func terminalState() -> RemoteTerminalTabState {
+    let grouped = arguments.contains("--clawdad-preview-window-groups")
+    let tabs: [RemoteTerminalTabDescriptor] = grouped ? [(1, windowOneOrder), (2, windowTwoOrder)].flatMap { window, order in
+      order.enumerated().map { offset, number in
+        let id = "window-\(window)-tab-\(number)", position = offset + 1
+        let detail = "Tab \(position)" + (arguments.contains("--clawdad-preview-terminal-poll-count") ? " · Update \(catalogRequests)" : "")
+        return .init(id: id, title: "same-directory", detail: detail, isSelected: id == selectedTab,
+          isBusy: arguments.contains("--clawdad-preview-close-process") && number == 2,
+          windowTitle: "Terminal Window \(window)", windowGroupId: "window-\(window)", tabPosition: position, canReorder: order.count > 1)
+      }
+    } : [.init(id: "preview-tab", title: "Preview Terminal", detail: "Window 1", isSelected: true, isBusy: false)]
+    return RemoteTerminalTabState(revision: revision, selectedTabId: grouped ? (selectedTab.isEmpty ? nil : selectedTab) : "preview-tab", tabs: tabs)
   }
 }
 #endif

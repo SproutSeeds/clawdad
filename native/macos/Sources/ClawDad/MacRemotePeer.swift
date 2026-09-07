@@ -111,6 +111,9 @@ final class MacRemotePeer: NSObject {
   private var terminalActivityPrewarmTask: Task<Void, Never>?
   private var queuedTerminalRequest: RemoteTerminalTabMessage?
   private var queuedTerminalMove: RemoteTerminalTabMessage?
+  private var terminalCloseTask: Task<Void, Never>?
+  private var activeTerminalCloseRequest: RemoteTerminalTabCloseMessage?
+  private var terminalCloseBusy: Bool { terminalCloseTask != nil || terminalTabController.closing.hasPendingConfirmation }
   private var controlOutbox: [Data] = []
   private var controlSendTask: Task<Void, Never>?
   private var terminalResponseTask: Task<Void, Never>?
@@ -273,6 +276,9 @@ final class MacRemotePeer: NSObject {
   }
 
   func stop() {
+    terminalCloseTask?.cancel(); terminalCloseTask = nil
+    activeTerminalCloseRequest = nil
+    Task { [terminalTabController] in await terminalTabController.closing.cancel() }
     imageOperationTask?.cancel(); imageOperationTask = nil
     targetCaptureTasks.values.forEach { $0.cancel() }; targetCaptureTasks = [:]
     terminalActivityPrewarmTask?.cancel()
@@ -436,6 +442,8 @@ final class MacRemotePeer: NSObject {
     }
     lastPublishedScreenLocked = screenLocked
     if screenLocked {
+      terminalCloseTask?.cancel()
+      Task { [terminalTabController] in await terminalTabController.closing.cancel() }
       terminalActivityPrewarmTask?.cancel()
       terminalActivityPrewarmTask = nil
     } else {
@@ -446,7 +454,8 @@ final class MacRemotePeer: NSObject {
 
   static func sessionState(screenLocked: Bool, requestId: String? = nil) -> RemoteSessionStateMessage {
     .state(screenLocked: screenLocked, supportsDictation: true, supportsTerminalReadAloud: true,
-           supportsInlineSpeech: true, supportsImageAttachments: true, supportsQuickChat: true, requestId: requestId)
+           supportsInlineSpeech: true, supportsImageAttachments: true, supportsQuickChat: true,
+           supportsTerminalTabClose: true, requestId: requestId)
   }
 
   private func publishDisplayState() {
@@ -575,6 +584,10 @@ final class MacRemotePeer: NSObject {
             message.type == RemoteTerminalTabMessage.moveType else {
       return
     }
+    guard !terminalCloseBusy else {
+      sendTerminalFailure(for: message, code: "request_in_progress", error: "Finish the tab close confirmation first.", state: nil)
+      return
+    }
     if message.type != RemoteTerminalTabMessage.listType { inputController.invalidateDictationTarget() }
     guard !MacConsoleSessionState.isLocked() else {
       sendTerminalFailure(
@@ -677,6 +690,37 @@ final class MacRemotePeer: NSObject {
           state: nil
         )
       }
+    }
+  }
+
+  private func handleTerminalClose(_ request: RemoteTerminalTabCloseMessage) {
+    func send(_ response: RemoteTerminalTabCloseMessage) {
+      if let data = try? response.encode() { sendControlData(data) }
+    }
+    guard terminalCloseTask == nil else {
+      if activeTerminalCloseRequest != request {
+        send(request.result(.failed, state: nil, prompt: "Wait for the current tab close.", errorCode: "request_in_progress"))
+      }
+      return
+    }
+    guard request.confirm == false || !MacConsoleSessionState.isLocked() else {
+      send(request.result(.failed, state: nil, prompt: "Unlock the Mac before closing a tab.", errorCode: "mac_locked"))
+      return
+    }
+    inputController.invalidateDictationTarget()
+    activeTerminalCloseRequest = request
+    // Keep an accepted close separate from coalesced focus/poll requests.
+    queuedTerminalRequest = nil
+    queuedTerminalMove = nil
+    terminalCloseTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer { self.terminalCloseTask = nil; self.activeTerminalCloseRequest = nil }
+      if let operation = self.terminalOperationTask { await operation.value }
+      if let operation = self.speechOperationTask { await operation.value }
+      await self.inputController.waitForImagePaste()
+      guard !Task.isCancelled else { return }
+      let response = await self.terminalTabController.closing.handle(request)
+      if !Task.isCancelled, let data = try? response.encode() { self.sendControlData(data) }
     }
   }
 
@@ -1061,6 +1105,13 @@ extension MacRemotePeer: RTCDataChannelDelegate {
         return
       }
       guard self.controlChannel === dataChannel else { return }
+      if let request = try? RemoteTerminalTabCloseMessage.decode(data), request.type != "terminal.tab.close.result" {
+        self.handleTerminalClose(request)
+        return
+      }
+      // A pending native dialog must only receive its addressed close/cancel
+      // decision. The phone also disables input during this operation.
+      if self.terminalCloseBusy, (try? RemoteSessionStateRequest.decode(data)) == nil { return }
       if let request = try? RemoteImageAttachmentMessage.decode(data), request.type == "images.attach" {
         self.handleImages(request)
         return

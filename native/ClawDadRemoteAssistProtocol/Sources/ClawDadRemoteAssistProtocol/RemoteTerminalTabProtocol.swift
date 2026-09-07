@@ -69,7 +69,7 @@ public struct RemoteTerminalTabDescriptor: Codable, Equatable, Sendable {
     canReorder = try container.decodeIfPresent(Bool.self, forKey: .canReorder) ?? false
   }
 
-  fileprivate func validate() throws {
+  func validate() throws {
     if let windowTitle, windowTitle.isEmpty || windowTitle.utf8.count > Self.maximumTitleBytes { throw RemoteTerminalTabProtocolError.invalidTab }
     if let windowGroupId, windowGroupId.isEmpty || windowGroupId.utf8.count > Self.maximumIDBytes {
       throw RemoteTerminalTabProtocolError.invalidTab
@@ -106,7 +106,7 @@ public struct RemoteTerminalTabState: Codable, Equatable, Sendable {
     self.tabs = tabs
   }
 
-  fileprivate func validate() throws {
+  func validate() throws {
     guard revision >= 1, tabs.count <= Self.maximumTabs else {
       throw RemoteTerminalTabProtocolError.invalidState
     }

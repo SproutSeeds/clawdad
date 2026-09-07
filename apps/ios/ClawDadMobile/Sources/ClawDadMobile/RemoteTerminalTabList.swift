@@ -18,6 +18,9 @@ struct RemoteTerminalTabList: UIViewRepresentable {
     var layout = UICollectionLayoutListConfiguration(appearance: .plain)
     layout.showsSeparators = false
     layout.backgroundColor = .clear
+    layout.trailingSwipeActionsConfigurationProvider = { [weak coordinator = context.coordinator] path in
+      coordinator?.closeActions(at: path)
+    }
     let view = UICollectionView(frame: .zero, collectionViewLayout: UICollectionViewCompositionalLayout.list(using: layout))
     view.backgroundColor = .clear
     view.contentInsetAdjustmentBehavior = .never
@@ -53,13 +56,15 @@ struct RemoteTerminalTabList: UIViewRepresentable {
       let enabled: Bool
       let terminalName: String
       let computerName: String
+      let canClose: Bool
 
       @MainActor init(_ parent: RemoteTerminalTabList) {
         groups = parent.groups
         expanded = parent.expanded
         selected = parent.controller.selectedRemoteTerminalTabId
         pending = parent.controller.pendingRemoteTerminalTabId
-        enabled = parent.controller.phase == .connected && !parent.controller.remoteScreenLocked
+        enabled = parent.controller.phase == .connected && !parent.controller.remoteScreenLocked && parent.controller.closingTerminalTabId == nil
+        canClose = parent.controller.canCloseTerminalTabs
         terminalName = parent.controller.remoteTerminalName
         computerName = parent.controller.remoteComputerName
       }
@@ -90,6 +95,9 @@ struct RemoteTerminalTabList: UIViewRepresentable {
         else { return }
       }
       guard next != presentation else { return }
+      // Keep a revealed Close action steady while status polls arrive. UIKit
+      // owns the swipe state; updates resume as soon as the card slides back.
+      if next.enabled, collectionView?.visibleCells.contains(where: { $0.configurationState.isSwiped }) == true { return }
       presentation = next
       collectionView?.reloadData()
     }
@@ -105,6 +113,11 @@ struct RemoteTerminalTabList: UIViewRepresentable {
       let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "terminal", for: indexPath) as! UICollectionViewListCell
       cell.backgroundConfiguration = .clear()
       cell.accessories = []
+      cell.configurationUpdateHandler = { [weak self] _, state in
+        if !state.isSwiped { DispatchQueue.main.async { [weak self] in
+          guard let self else { return }; self.update(self.parent)
+        } }
+      }
       let group = presentation.groups[indexPath.section]
       if indexPath.item == 0 {
         let expanded = presentation.expanded.contains(group.id)
@@ -136,6 +149,11 @@ struct RemoteTerminalTabList: UIViewRepresentable {
               isPending: state.pending == tab.id, isEnabled: state.enabled && state.pending != tab.id,
               terminalName: state.terminalName, computerName: state.computerName,
               onSelect: { [weak self] in self?.parent.controller.focusRemoteTerminalTab(tab.id) })
+              .accessibilityActions {
+                if state.canClose {
+                  Button("Close Tab") { [weak self] in self?.parent.controller.requestCloseTerminalTab(tab.id) }
+                }
+              }
             RemoteTerminalReorderHandle(tab: tab, enabled: canMove,
               moveUp: { [weak self] in self?.moveAccessible(tab.id, delta: -1) ?? false },
               moveDown: { [weak self] in self?.moveAccessible(tab.id, delta: 1) ?? false })
@@ -151,6 +169,20 @@ struct RemoteTerminalTabList: UIViewRepresentable {
         if let index = group.tabs.firstIndex(where: { $0.id == id }) { return IndexPath(item: index + 1, section: section) }
       }
       return nil
+    }
+
+    func closeActions(at path: IndexPath) -> UISwipeActionsConfiguration? {
+      guard movingTabID == nil, presentation.canClose, presentation.groups.indices.contains(path.section),
+            path.item > 0, presentation.groups[path.section].tabs.indices.contains(path.item - 1) else { return nil }
+      let id = presentation.groups[path.section].tabs[path.item - 1].id
+      let close = UIContextualAction(style: .destructive, title: "Close") { [weak self] _, _, finish in
+        finish(true)
+        self?.parent.controller.requestCloseTerminalTab(id)
+      }
+      close.image = UIImage(systemName: "xmark")
+      let configuration = UISwipeActionsConfiguration(actions: [close])
+      configuration.performsFirstActionWithFullSwipe = false
+      return configuration
     }
 
     func collectionView(_ collectionView: UICollectionView, canMoveItemAt indexPath: IndexPath) -> Bool {

@@ -219,6 +219,81 @@ final class ClawDadMobileUITests: XCTestCase {
     XCTAssertEqual(speaker.label, "Read selected text or latest Terminal response")
   }
 
+  func testCloseSwipeRequiresConfirmationAndLostReplyDoesNotCloseNeighbor() {
+    let app = XCUIApplication()
+    app.launchArguments += ["--clawdad-app-store-preview", "terminal-reader", "--clawdad-preview-window-groups", "--clawdad-preview-close-drop-receipt", "--clawdad-preview-terminal-poll-count"]
+    app.launch()
+    let chooser = app.buttons["Choose Terminal tab"]
+    XCTAssertTrue(chooser.waitForExistence(timeout: 20)); chooser.tap()
+    let first = app.buttons["clawdad.remote.tab.window-1-tab-1"]
+    let second = app.buttons["clawdad.remote.tab.window-1-tab-2"]
+    XCTAssertTrue(second.waitForExistence(timeout: 10))
+    first.swipeLeft()
+    XCTAssertFalse(app.alerts.firstMatch.exists, "Full swipe must only reveal Close")
+    let close = app.buttons["Close"]
+    XCTAssertTrue(close.waitForExistence(timeout: 5))
+    Thread.sleep(forTimeInterval: 3)
+    XCTAssertTrue(close.isHittable, "Background status updates must preserve the revealed Close action")
+    close.tap()
+    let alert = app.alerts["Close same-directory?"]
+    XCTAssertTrue(alert.waitForExistence(timeout: 5))
+    XCTAssertTrue(alert.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Terminal Window 1 · Tab 1")).firstMatch.exists)
+    alert.buttons["Cancel"].tap()
+    XCTAssertTrue(first.exists)
+    first.swipeLeft(); close.tap()
+    alert.buttons["Close Tab"].tap()
+    XCTAssertTrue(first.exists, "The row remains until the host verifies closure")
+    XCTAssertTrue(waitUntil(timeout: 10) { !first.exists })
+    XCTAssertTrue(second.exists)
+    XCTAssertTrue(second.label.contains("selected"))
+    XCTAssertTrue(second.label.contains("Tab 1"))
+    XCTAssertTrue(app.staticTexts["19 tabs"].exists)
+    let attachment = XCTAttachment(screenshot: app.screenshot())
+    attachment.name = "Verified close follows native selection"; attachment.lifetime = .keepAlways; add(attachment)
+  }
+
+  func testCloseNativeProcessWarningCanCancelAndThenConfirmFromPhone() {
+    let app = XCUIApplication()
+    app.launchArguments += ["--clawdad-app-store-preview", "terminal-reader", "--clawdad-preview-window-groups", "--clawdad-preview-close-process"]
+    app.launch()
+    let chooser = app.buttons["Choose Terminal tab"]
+    XCTAssertTrue(chooser.waitForExistence(timeout: 20)); chooser.tap()
+    let second = app.buttons["clawdad.remote.tab.window-1-tab-2"]
+    XCTAssertTrue(second.waitForExistence(timeout: 10))
+    second.swipeLeft(); app.buttons["Close"].tap()
+    let alert = app.alerts["Close same-directory?"]
+    XCTAssertTrue(alert.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "An agent is working")).firstMatch.exists)
+    alert.buttons["Close Tab"].tap()
+    XCTAssertTrue(alert.buttons["Terminate"].waitForExistence(timeout: 8))
+    alert.buttons["Cancel"].tap()
+    XCTAssertTrue(app.staticTexts["Terminal tab kept open"].waitForExistence(timeout: 6))
+    XCTAssertTrue(second.exists)
+    second.swipeLeft(); app.buttons["Close"].tap(); alert.buttons["Close Tab"].tap()
+    XCTAssertTrue(alert.buttons["Terminate"].waitForExistence(timeout: 8)); alert.buttons["Terminate"].tap()
+    XCTAssertTrue(waitUntil(timeout: 8) { !second.exists })
+    XCTAssertTrue(app.buttons["clawdad.remote.tab.window-1-tab-1"].exists)
+  }
+
+  func testClosingLastTabRemovesOnlyItsWindowGroup() {
+    let app = XCUIApplication()
+    app.launchArguments += ["--clawdad-app-store-preview", "terminal-reader", "--clawdad-preview-window-groups", "--clawdad-preview-last-tab"]
+    app.launch()
+    let chooser = app.buttons["Choose Terminal tab"]
+    XCTAssertTrue(chooser.waitForExistence(timeout: 20)); chooser.tap()
+    let firstGroup = app.buttons["clawdad.remote.window.window-1"]
+    XCTAssertTrue(firstGroup.waitForExistence(timeout: 8)); firstGroup.tap()
+    let secondGroup = app.buttons["clawdad.remote.window.window-2"]
+    secondGroup.tap()
+    let last = app.buttons["clawdad.remote.tab.window-2-tab-1"]
+    XCTAssertTrue(last.waitForExistence(timeout: 5)); last.swipeLeft(); app.buttons["Close"].tap()
+    let alert = app.alerts["Close same-directory?"]
+    XCTAssertTrue(alert.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "last tab")).firstMatch.exists)
+    alert.buttons["Close Window"].tap()
+    XCTAssertTrue(waitUntil(timeout: 8) { !secondGroup.exists })
+    XCTAssertTrue(firstGroup.exists)
+    XCTAssertTrue(app.staticTexts["20 tabs"].exists)
+  }
+
   func testTerminalCardsScrollFromLeftCenterAndRightWithoutSelectingOrMoving() {
     let app = XCUIApplication()
     app.launchArguments += ["--clawdad-app-store-preview", "terminal-reader", "--clawdad-preview-window-groups"]

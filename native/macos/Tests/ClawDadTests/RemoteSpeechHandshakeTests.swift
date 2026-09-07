@@ -48,6 +48,7 @@ final class RemoteSpeechHandshakeTests: XCTestCase {
         XCTAssertEqual(capabilities.terminalReadAloud, true)
         XCTAssertEqual(capabilities.inlineSpeech, true)
         XCTAssertEqual(capabilities.quickChat, true)
+        XCTAssertEqual(capabilities.terminalTabClose, true)
       } catch { XCTFail(error.localizedDescription) }
     }
     wait(for: [finished], timeout: 18)

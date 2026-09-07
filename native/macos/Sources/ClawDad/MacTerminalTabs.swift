@@ -77,6 +77,9 @@ struct MacTerminalTabFailure: LocalizedError {
 }
 
 protocol MacTerminalAutomating: AnyObject {
+  @MainActor func closeTab(_ snapshot: MacTerminalTabSnapshot) async throws -> MacTerminalNativeCloseOutcome
+  @MainActor func resolveTabClose(token: String, confirm: Bool) async throws -> MacTerminalNativeCloseOutcome
+  @MainActor func cancelTabClose() async
   @MainActor var supportsReordering: Bool { get }
   @MainActor
   func readTabs() async throws -> [MacTerminalTabSnapshot]
@@ -91,6 +94,13 @@ protocol MacTerminalAutomating: AnyObject {
 }
 
 extension MacTerminalAutomating {
+  @MainActor func closeTab(_ snapshot: MacTerminalTabSnapshot) async throws -> MacTerminalNativeCloseOutcome {
+    throw MacTerminalTabFailure(code: "close_unavailable", message: "Update ClawDad on the Mac to close Terminal tabs.", state: nil)
+  }
+  @MainActor func resolveTabClose(token: String, confirm: Bool) async throws -> MacTerminalNativeCloseOutcome {
+    throw MacTerminalTabFailure(code: "confirmation_expired", message: "This close confirmation expired.", state: nil)
+  }
+  @MainActor func cancelTabClose() async {}
   @MainActor func focusTab(_ snapshot: MacTerminalTabSnapshot) async throws {
     try await focusTab(windowID: snapshot.windowID, tabIndex: snapshot.tabIndex, tty: snapshot.tty)
   }
@@ -146,6 +156,9 @@ final class MacTerminalTabController {
   private var windowNumbers: [Int: Int] = [:]
   private var nextWindowNumber = 1
   private var lastState: RemoteTerminalTabState?
+  lazy var closing = MacTerminalTabCloseController(automation: automation,
+    catalog: { [unowned self] in try await self.catalog() },
+    snapshot: { [unowned self] in self.snapshotsByIdentifier[$0] })
 
   func latestResponse(_ request: RemoteTerminalResponseMessage) async throws -> RemoteTerminalResponseMessage {
     let state = try await catalog()
@@ -463,6 +476,38 @@ final class MacTerminalAutomation: MacTerminalAutomating, @unchecked Sendable {
     label: "earth.frg.ClawDad.remote-assist.terminal",
     qos: .userInitiated
   )
+
+  @MainActor func closeTab(_ snapshot: MacTerminalTabSnapshot) async throws -> MacTerminalNativeCloseOutcome {
+    guard let id = snapshot.nativeTabID else {
+      throw MacTerminalTabFailure(code: "close_unavailable", message: "Refresh the picker to identify this native tab before closing it.", state: nil)
+    }
+    return try await withCheckedThrowingContinuation { continuation in
+      queue.async { continuation.resume(with: Result {
+        guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Terminal").first,
+              !MacConsoleSessionState.isLocked() else {
+          throw MacTerminalTabFailure(code: "tab_unavailable", message: "Connect to an unlocked Mac with Terminal open.", state: nil)
+        }
+        return try self.nativeTabs.close(id, application: AXUIElementCreateApplication(app.processIdentifier))
+      }) }
+    }
+  }
+
+  @MainActor func resolveTabClose(token: String, confirm: Bool) async throws -> MacTerminalNativeCloseOutcome {
+    try await withCheckedThrowingContinuation { continuation in
+      queue.async { continuation.resume(with: Result {
+        guard !confirm || !MacConsoleSessionState.isLocked() else {
+          throw MacTerminalTabFailure(code: "mac_locked", message: "Unlock the Mac before closing a Terminal tab.", state: nil)
+        }
+        return try self.nativeTabs.resolveClose(token: token, confirm: confirm)
+      }) }
+    }
+  }
+
+  @MainActor func cancelTabClose() async {
+    await withCheckedContinuation { continuation in
+      queue.async { self.nativeTabs.cancelClose(); continuation.resume() }
+    }
+  }
 
   @MainActor
   func readTabs() async throws -> [MacTerminalTabSnapshot] {

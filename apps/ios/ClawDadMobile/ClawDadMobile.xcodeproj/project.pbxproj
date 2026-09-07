@@ -25,6 +25,7 @@
 		7528DEE2F3D0A122F71E8C32 /* MobileFileExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83005EBBAE60D00DFFF52D33 /* MobileFileExport.swift */; };
 		7751604101BB979587499134 /* VoiceRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F34770E78861322677F1C3C /* VoiceRecorder.swift */; };
 		790F723DF6F713A6DFC6D572 /* ClawDadFileTransport in Frameworks */ = {isa = PBXBuildFile; productRef = 84BA80B2B0BC5779C92A402A /* ClawDadFileTransport */; };
+		798B9DC6C3FE54E4C34FF512 /* RemoteTerminalCloseIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AD474B9C5025C1E3B07688E /* RemoteTerminalCloseIntent.swift */; };
 		854A5AC2401B066B721E86D2 /* ClawDadMobileUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11E193EDE43AF5D11AADF538 /* ClawDadMobileUITests.swift */; };
 		8A0DDACD490ED6B80E4A30CA /* QRScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26AABBF8F4DF0D8B38BF9365 /* QRScannerView.swift */; };
 		930C8384655B365B43D6B7D6 /* PairedComputer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A248092D559C4CD1B15AECEC /* PairedComputer.swift */; };
@@ -74,6 +75,7 @@
 		83005EBBAE60D00DFFF52D33 /* MobileFileExport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileFileExport.swift; sourceTree = "<group>"; };
 		8960C1531C592BD814505199 /* SubscriptionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionManager.swift; sourceTree = "<group>"; };
 		89C609AE055F4F4C09202552 /* RemoteSpeechControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteSpeechControls.swift; sourceTree = "<group>"; };
+		8AD474B9C5025C1E3B07688E /* RemoteTerminalCloseIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTerminalCloseIntent.swift; sourceTree = "<group>"; };
 		8F34770E78861322677F1C3C /* VoiceRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceRecorder.swift; sourceTree = "<group>"; };
 		930A750132AFE74E66A35E11 /* PasskeyRequests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PasskeyRequests.swift; sourceTree = "<group>"; };
 		9EF3E28FFA532EBF14FEAF8B /* DeviceIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceIdentity.swift; sourceTree = "<group>"; };
@@ -141,6 +143,7 @@
 				061444F36751011C7753FD06 /* RemoteQuickChat.swift */,
 				89C609AE055F4F4C09202552 /* RemoteSpeechControls.swift */,
 				7A3BE7EC4AB5DE28F2E8E4EF /* RemoteSpeechPreviewHost.swift */,
+				8AD474B9C5025C1E3B07688E /* RemoteTerminalCloseIntent.swift */,
 				4B67F2E9259E05DBACEB7F04 /* RemoteTerminalReader.swift */,
 				1CBE9BB9E28B2AADC9243157 /* RemoteTerminalTabList.swift */,
 				E4B71B55085B2C1EE623A070 /* RemoteTerminalWindowGroups.swift */,
@@ -321,6 +324,7 @@
 				B099B7C46FB342BFB8A80C77 /* RemoteQuickChat.swift in Sources */,
 				39F7EDBB4973CC068AC0E2F3 /* RemoteSpeechControls.swift in Sources */,
 				3CE919B6795B0B61BEFEA9D0 /* RemoteSpeechPreviewHost.swift in Sources */,
+				798B9DC6C3FE54E4C34FF512 /* RemoteTerminalCloseIntent.swift in Sources */,
 				08A2F61153C0221F74B49988 /* RemoteTerminalReader.swift in Sources */,
 				4004BF2CF15494DE5009C531 /* RemoteTerminalTabList.swift in Sources */,
 				187E31F4AF200A700830399F /* RemoteTerminalWindowGroups.swift in Sources */,
@@ -432,7 +436,7 @@
 				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 51;
+				CURRENT_PROJECT_VERSION = 52;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_NS_ASSERTIONS = NO;
@@ -511,7 +515,7 @@
 				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 51;
+				CURRENT_PROJECT_VERSION = 52;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -620,7 +624,7 @@
 				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 51;
+				CURRENT_PROJECT_VERSION = 52;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_NS_ASSERTIONS = NO;
