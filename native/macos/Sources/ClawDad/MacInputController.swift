@@ -78,6 +78,7 @@ final class MacInputController {
 
   private let source: CGEventSource
   private let dictationDelivery = MacDictationDelivery.shared
+  private let quickChatDelivery = MacQuickChatDelivery()
   private(set) var imagePasteInProgress = false
   private struct DictationTarget {
     let input: InputTarget
@@ -286,6 +287,10 @@ final class MacInputController {
   }
 
   private func targetIsCurrent(_ capture: DictationTarget) -> Bool {
+    targetIsCurrent(capture, checkSelection: true)
+  }
+
+  private func targetIsCurrent(_ capture: DictationTarget, checkSelection: Bool) -> Bool {
     let original = capture.input
     guard let current = eligibleDictationTarget(),
           original.pid == current.pid, CFEqual(original.element, current.element),
@@ -296,11 +301,38 @@ final class MacInputController {
     if original.bundleIdentifier == "com.apple.Terminal" {
       return true // The registry also validates the exact selected native Terminal tab identity.
     }
-    if let selection = capture.selection {
+    if checkSelection, let selection = capture.selection {
       guard let currentSelection = attribute(current.element, kAXSelectedTextRangeAttribute as CFString),
             CFEqual(selection, currentSelection) else { return false }
     }
     return true
+  }
+
+  func sendQuickChat(_ request: RemoteQuickChatMessage,
+                    terminalIdentity: @MainActor () async throws -> String?) async -> RemoteQuickChatMessage {
+    if let inputProcessingTask { await inputProcessingTask.value }
+    if let clipboardCopyTask { await clipboardCopyTask.value }
+    await waitForImagePaste()
+    let token = request.targetToken ?? ""
+    let needsTerminal = dictationTargets.capture(for: token)?.requiresTerminalIdentity == true
+    return await quickChatDelivery.deliver(request, insertIfCurrent: { [self] in
+      let identity = needsTerminal ? try? await terminalIdentity() : nil
+      guard !Task.isCancelled, !speechSelectionInProgress,
+            let target = dictationTargets.resolve(token: token, generation: inputGeneration,
+              terminalIdentity: identity, isCurrent: targetIsCurrent) else { return false }
+      return await insertText(request.text ?? "", into: target.input)
+    }, submitIfCurrent: { [self] in
+      let identity = needsTerminal ? try? await terminalIdentity() : nil
+      guard !Task.isCancelled,
+            let target = dictationTargets.resolve(token: token, generation: inputGeneration,
+              terminalIdentity: identity, isCurrent: { targetIsCurrent($0, checkSelection: false) })
+      else { return false }
+      // Insertion moves the caret. Recheck the app, element, window and native
+      // Terminal tab, then post Enter without another suspension point.
+      let accepted = pressKey("enter", targetPID: target.input.pid)
+      invalidateDictationTarget()
+      return accepted
+    })
   }
 
   /// Read AX selected text without touching either device's clipboard. Some apps

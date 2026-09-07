@@ -16,6 +16,7 @@ final class RemoteSpeechPreviewHost {
   private var windowOneOrder = Array(1...20)
   private var windowTwoOrder = [1, 2, 3]
   private var revision = 1
+  private var quickChatReceipts: [String: (RemoteQuickChatMessage, RemoteQuickChatMessage)] = [:]
   private let arguments = ProcessInfo.processInfo.arguments
   init(receive: @escaping (Data) -> Void) { self.receive = receive }
 
@@ -41,8 +42,26 @@ final class RemoteSpeechPreviewHost {
         if arguments.contains("--clawdad-preview-slow-context") { try? await Task.sleep(for: .seconds(2)) }
         let state = RemoteSessionStateMessage.state(screenLocked: false, supportsDictation: true,
           supportsTerminalReadAloud: true, supportsInlineSpeech: true,
-          supportsImageAttachments: arguments.contains("--clawdad-image-transfer-test"), requestId: request.requestId)
+          supportsImageAttachments: arguments.contains("--clawdad-image-transfer-test"), supportsQuickChat: true, requestId: request.requestId)
         if let reply = try? RemoteSessionStateCodec.encode(state) { receive(reply) }
+      } else if let request = try? RemoteQuickChatMessage.decode(data), request.type == "quick.chat" {
+        if let (original, receipt) = quickChatReceipts[request.requestId] {
+          let response = original == request ? receipt : request.result(error: "Replay changed the preset.")
+          if let reply = try? response.encode() { receive(reply) }
+          return
+        }
+        let expected = arguments.firstIndex(of: "--clawdad-quick-chat-expect").flatMap { index in
+          index + 1 < arguments.count ? arguments[index + 1] : nil
+        }
+        let valid = tokens.contains(request.targetToken ?? "") &&
+          !arguments.contains("--clawdad-preview-clipboard-only") &&
+          !arguments.contains("--clawdad-quick-chat-focus-changed") &&
+          (expected == nil || request.text == expected)
+        let response = request.result(error: valid ? nil : "Preset not sent. Tap the intended Mac input, then reopen Quick Chat.")
+        quickChatReceipts[request.requestId] = (request, response)
+        if let token = request.targetToken { tokens.remove(token) }
+        if arguments.contains("--clawdad-quick-chat-drop-receipt") { return }
+        if let reply = try? response.encode() { receive(reply) }
       } else if let request = try? RemoteImageAttachmentMessage.decode(data), request.type == "images.attach" {
         let copied = request.copyOnly == true || !tokens.contains(request.targetToken ?? "") || arguments.contains("--clawdad-preview-clipboard-only")
         if let reply = try? request.result(disposition: copied ? "copied" : "pasteRequested").encode() { receive(reply) }

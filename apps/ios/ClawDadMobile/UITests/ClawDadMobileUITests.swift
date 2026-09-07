@@ -6,6 +6,67 @@ final class ClawDadMobileUITests: XCTestCase {
     continueAfterFailure = false
   }
 
+  func testQuickChatSendsWithOneTapAfterDelayedCaptureAndLostReceipt() {
+    let app = XCUIApplication()
+    app.launchArguments = ["--clawdad-app-store-preview", "terminal-reader", "--clawdad-quick-chat-test",
+      "--clawdad-reset-quick-chat", "--clawdad-preview-slow-context", "--clawdad-quick-chat-drop-receipt",
+      "--clawdad-quick-chat-expect", "Continue with the next implementation steps."]
+    app.launch()
+    let quickChat = app.buttons["clawdad.remote.quickChat"]
+    XCTAssertTrue(quickChat.waitForExistence(timeout: 20))
+    XCTAssertFalse(app.staticTexts["Secure session"].exists)
+    quickChat.tap()
+    let preset = app.buttons["clawdad.quickChat.preset.continue"]
+    XCTAssertTrue(preset.waitForExistence(timeout: 5))
+    let attachment = XCTAttachment(screenshot: app.screenshot())
+    attachment.name = "Quick Chat in compact controls"; attachment.lifetime = .keepAlways; add(attachment)
+    preset.tap()
+    XCTAssertTrue(app.staticTexts["Sent: Continue implementation"].waitForExistence(timeout: 18))
+    XCTAssertFalse(app.staticTexts["Delivery wasn’t confirmed. Check the Mac before sending again."].exists)
+  }
+
+  func testQuickChatReportsAChangedTargetWithoutSubmittingElsewhere() {
+    let app = XCUIApplication()
+    app.launchArguments = ["--clawdad-app-store-preview", "terminal-reader", "--clawdad-quick-chat-test",
+      "--clawdad-reset-quick-chat", "--clawdad-quick-chat-focus-changed"]
+    app.launch()
+    XCTAssertTrue(app.buttons["clawdad.remote.quickChat"].waitForExistence(timeout: 20))
+    app.buttons["clawdad.remote.quickChat"].tap()
+    app.buttons["clawdad.quickChat.preset.pwd"].tap()
+    XCTAssertTrue(app.staticTexts["Preset not sent. Tap the intended Mac input, then reopen Quick Chat."].waitForExistence(timeout: 10))
+    XCTAssertFalse(app.staticTexts["Sent: Current directory"].exists)
+  }
+
+  func testQuickChatCanEditAddSaveAndReturnWithoutSending() {
+    let app = XCUIApplication()
+    app.launchArguments = ["--clawdad-app-store-preview", "terminal-reader", "--clawdad-quick-chat-test", "--clawdad-reset-quick-chat"]
+    app.launch()
+    XCTAssertTrue(app.buttons["clawdad.remote.quickChat"].waitForExistence(timeout: 20))
+    app.buttons["clawdad.remote.quickChat"].tap()
+    app.buttons["clawdad.quickChat.edit"].tap()
+    app.buttons["clawdad.quickChat.preset.pwd"].tap()
+    XCTAssertTrue(app.textFields["clawdad.quickChat.title"].exists)
+    app.buttons["clawdad.quickChat.back"].tap()
+    let addButton = app.buttons["clawdad.quickChat.add"]
+    for _ in 0..<4 where !addButton.isHittable { app.swipeUp() }
+    addButton.tap()
+    let title = app.textFields["clawdad.quickChat.title"]
+    title.tap(); title.typeText("My preset")
+    let text = app.textViews["clawdad.quickChat.text"]
+    text.tap(); text.typeText("Explain the changes.")
+    app.buttons["clawdad.quickChat.save"].tap()
+    app.buttons["clawdad.quickChat.back"].tap()
+    app.buttons["clawdad.quickChat.back"].tap()
+    XCTAssertTrue(app.buttons["clawdad.remote.quickChat"].exists)
+    XCTAssertFalse(app.staticTexts["Sent: My preset"].exists)
+    app.terminate()
+    app.launchArguments.removeAll { $0 == "--clawdad-reset-quick-chat" }
+    app.launch()
+    XCTAssertTrue(app.buttons["clawdad.remote.quickChat"].waitForExistence(timeout: 20))
+    app.buttons["clawdad.remote.quickChat"].tap()
+    XCTAssertTrue(app.buttons.containing(.staticText, identifier: "My preset").firstMatch.exists)
+  }
+
   func testVoiceMenuKeepsItsScrollPositionDuringSessionUpdates() {
     let app = XCUIApplication()
     app.launchArguments += ["--clawdad-app-store-preview", "workspace", "--clawdad-live-voices-test", "--clawdad-voice-refresh-test"]

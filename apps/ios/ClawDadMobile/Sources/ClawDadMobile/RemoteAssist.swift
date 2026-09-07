@@ -493,6 +493,10 @@ final class RemoteAssistController: NSObject, ObservableObject {
   private var menuTargetToken: String?
   private var dictationCaptureId: String?
   private var dictationTargetToken: String?
+  @Published private(set) var quickChatSending = false
+  private var quickChatTask: Task<Void, Never>?
+  private var pendingQuickChat: RemoteQuickChatMessage?
+  private var quickChatTitle = ""
 #if DEBUG
   private var speechPreviewHost: RemoteSpeechPreviewHost?
 #endif
@@ -934,6 +938,75 @@ final class RemoteAssistController: NSObject, ObservableObject {
     restoreKeyboardFocusAfterControl()
   }
 
+  var quickChatUnavailableReason: String? {
+    if phase != .connected { return "Reconnect to send a preset." }
+    if remoteScreenLocked { return "Unlock the Mac to send a preset." }
+    if remoteInputSuppressed || pendingRemoteTerminalTabId != nil { return "Finishing the screen or tab change…" }
+    if inlineDictationActive || dictation.sending || clipboardBusy || imageTransfer.busy || imageTransfer.attaching {
+      return "Finish the current input operation first."
+    }
+    if sessionCapabilities.received && sessionCapabilities.quickChat != true { return "Update ClawDad on your Mac to use Quick Chat." }
+    return nil
+  }
+
+  func sendQuickChat(_ preset: RemoteQuickChatPreset) {
+    guard preset.isValid, !quickChatSending else { return }
+    if let reason = quickChatUnavailableReason { showClipboardNotice(reason, isError: true); return }
+    if menuCaptureId == nil { rememberDictationTarget() }
+    let captureId = menuCaptureId
+    quickChatSending = true
+    quickChatTitle = preset.title
+    quickChatTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      if !self.sessionCapabilities.received { self.requestSessionCapabilities() }
+      let deadline = Date().addingTimeInterval(10)
+      while self.phase == .connected, self.menuCaptureId == captureId,
+            (!self.sessionCapabilities.received || self.menuTargetToken == nil), Date() < deadline {
+        try? await Task.sleep(for: .milliseconds(40))
+        guard !Task.isCancelled else { return }
+      }
+      guard !Task.isCancelled else { return }
+      guard self.quickChatUnavailableReason == nil, self.menuCaptureId == captureId,
+            self.sessionCapabilities.quickChat == true,
+            let token = self.menuTargetToken else {
+        self.finishQuickChat(self.quickChatUnavailableReason ?? "Tap the intended Mac input, then reopen Quick Chat.", isError: true)
+        return
+      }
+      let request = RemoteQuickChatMessage.request(text: preset.text, targetToken: token,
+        requestId: UUID().uuidString.lowercased())
+      guard let data = try? request.encode() else { self.finishQuickChat("This preset could not be sent.", isError: true); return }
+      self.pendingQuickChat = request
+      // Repeat the same addressed request when its receipt is delayed. The Mac
+      // retains its outcome, including partial insertion, to prevent resubmission.
+      for _ in 0..<4 {
+        guard !Task.isCancelled, self.phase == .connected, self.pendingQuickChat == request else { return }
+        _ = self.sendControlData(data)
+        try? await Task.sleep(for: .seconds(5))
+      }
+      guard !Task.isCancelled else { return }
+      self.finishQuickChat("Delivery wasn’t confirmed. Check the Mac before sending again.", isError: true)
+    }
+  }
+
+  private func finishQuickChat(_ notice: String, isError: Bool) {
+    quickChatTask?.cancel()
+    quickChatTask = nil
+    pendingQuickChat = nil
+    quickChatSending = false
+    menuCaptureId = nil
+    menuTargetToken = nil
+    showClipboardNotice(notice, isError: isError)
+    if !isError { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+  }
+
+  private func handleQuickChat(_ data: Data) -> Bool {
+    guard let response = try? RemoteQuickChatMessage.decode(data), response.type == "quick.chat.result" else { return false }
+    guard response.requestId == pendingQuickChat?.requestId else { return true }
+    finishQuickChat(response.ok == true ? "Sent: \(quickChatTitle)" : response.error ?? "This preset could not be sent.",
+                   isError: response.ok != true)
+    return true
+  }
+
   func pastePhoneClipboardToMac(_ values: [String]) {
     guard !clipboardBusy, !displaySelection.inputSuppressed else {
       return
@@ -1020,7 +1093,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
 
   /// Capture before dismissing the phone keyboard or changing control pages.
   func rememberDictationTarget() {
-    guard !inlineDictationActive, !dictation.sending else { return }
+    guard !inlineDictationActive, !dictation.sending, !quickChatSending else { return }
     flushBufferedText()
     targetCaptureTask?.cancel()
     menuCaptureId = UUID().uuidString.lowercased()
@@ -1936,6 +2009,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
 
   // One receive path is exercised by the native channel and encoded preview peers.
   func receiveControlData(_ data: Data) {
+    if handleQuickChat(data) { return }
     if imageTransfer.receive(data) { return }
     if handleInputResponse(data) { return }
     if handleSessionState(data) { return }
@@ -2410,6 +2484,10 @@ final class RemoteAssistController: NSObject, ObservableObject {
   }
 
   private func tearDownPeer() {
+    quickChatTask?.cancel()
+    quickChatTask = nil
+    pendingQuickChat = nil
+    quickChatSending = false
     imageTransfer.disconnected()
     pauseInlineDictation()
     capabilityTask?.cancel()
@@ -2701,12 +2779,14 @@ enum RemoteAssistError: LocalizedError {
 
 private enum RemoteAssistControlPage: Equatable {
   case primary
+  case quickChat
   case shortcuts
   case screens
   case terminalTabs
 }
 
 private enum RemoteAssistAccessibilityFocus: Hashable {
+  case quickChat
   case dictation
   case terminalReader
   case screenChooser
@@ -2866,6 +2946,7 @@ struct RemoteAssistView: View {
   @EnvironmentObject private var session: CloudSession
   @Environment(\.scenePhase) private var scenePhase
   @StateObject private var files = MobileFilesController()
+  @StateObject private var quickChat = RemoteQuickChatStore()
   var onClose: () -> Void
   @State private var viewportZoomed = false
   @State private var viewportResetToken = 0
@@ -2990,6 +3071,14 @@ struct RemoteAssistView: View {
           RemoteSpeechStatus(controller: controller, draft: controller.dictation,
                              recorder: controller.remoteRecorder, reader: controller.terminalReader,
                              controlsExpanded: controlsExpanded)
+          if controller.quickChatSending {
+            HStack(spacing: 6) {
+              ProgressView().tint(ClawDadTheme.gold)
+              Text("Sending preset…").font(.caption)
+            }
+            .foregroundStyle(ClawDadTheme.cream)
+            .accessibilityIdentifier("clawdad.quickChat.sending")
+          }
           RemoteImageStatus(transfer: controller.imageTransfer)
 
           Button {
@@ -3111,6 +3200,14 @@ struct RemoteAssistView: View {
       switch controlPage {
       case .primary:
         primaryControlPanel
+      case .quickChat:
+        RemoteQuickChatPanel(store: quickChat, sending: controller.quickChatSending,
+          unavailableReason: controller.quickChatUnavailableReason,
+          onSend: { preset in controller.sendQuickChat(preset); collapseControls() },
+          onBack: {
+            controlPage = .primary
+            accessibilityFocus = .quickChat
+          })
       case .shortcuts:
         shortcutControlPanel
       case .screens:
@@ -3137,6 +3234,8 @@ struct RemoteAssistView: View {
     switch controlPage {
     case .primary:
       Self.mainControlPanelWidth
+    case .quickChat:
+      Self.terminalTabControlPanelWidth
     case .shortcuts:
       Self.shortcutControlPanelWidth
     case .screens:
@@ -3158,19 +3257,12 @@ struct RemoteAssistView: View {
 
   private var primaryControlPanel: some View {
     VStack(alignment: .trailing, spacing: 8) {
-      Label(
-        controller.remoteScreenLocked
-          ? "\(controller.remoteComputerKind) Locked"
-          : "Secure session",
-        systemImage: "lock.fill"
-      )
-      .font(.caption.weight(.bold))
-      .foregroundStyle(
-        controller.remoteScreenLocked
-          ? ClawDadTheme.gold
-          : ClawDadTheme.good
-      )
-      .padding(.horizontal, 4)
+      if controller.remoteScreenLocked {
+        Label("\(controller.remoteComputerKind) Locked", systemImage: "lock.fill")
+          .font(.caption.weight(.bold))
+          .foregroundStyle(ClawDadTheme.gold)
+          .padding(.horizontal, 4)
+      }
 
       LazyVGrid(
         columns: Self.mainControlColumns,
@@ -3273,6 +3365,16 @@ struct RemoteAssistView: View {
         .accessibilityFocused($accessibilityFocus, equals: .terminalReader)
 
         RemoteImageButton(controller: controller, transfer: controller.imageTransfer)
+
+        Button { controlPage = .quickChat } label: {
+          Image(systemName: "text.bubble.fill")
+            .font(.system(size: 18, weight: .bold)).frame(width: 44, height: 44)
+        }
+        .buttonStyle(RemoteAssistOverlayButtonStyle())
+        .accessibilityLabel("Quick Chat")
+        .accessibilityIdentifier("clawdad.remote.quickChat")
+        .accessibilityHint("Shows presets you can send immediately or edit")
+        .accessibilityFocused($accessibilityFocus, equals: .quickChat)
 
         Button {
           controller.dismissKeyboard()

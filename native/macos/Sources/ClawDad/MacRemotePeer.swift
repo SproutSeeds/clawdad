@@ -116,6 +116,7 @@ final class MacRemotePeer: NSObject {
   private var terminalResponseTask: Task<Void, Never>?
   private var speechOperationTask: Task<Void, Never>?
   private var pendingDictationRequest: RemoteClipboardMessage?
+  private var pendingQuickChatRequest: RemoteQuickChatMessage?
   private var imageOperationTask: Task<Void, Never>?
   private var imageRequest: RemoteImageAttachmentMessage?
   private var imageReceipts = MacImageDeliveryReceipts()
@@ -277,6 +278,7 @@ final class MacRemotePeer: NSObject {
     terminalActivityPrewarmTask?.cancel()
     terminalActivityPrewarmTask = nil
     pendingDictationRequest = nil
+    pendingQuickChatRequest = nil
     speechOperationTask?.cancel()
     speechOperationTask = nil
     answerApplicationGate.invalidate()
@@ -444,7 +446,7 @@ final class MacRemotePeer: NSObject {
 
   static func sessionState(screenLocked: Bool, requestId: String? = nil) -> RemoteSessionStateMessage {
     .state(screenLocked: screenLocked, supportsDictation: true, supportsTerminalReadAloud: true,
-           supportsInlineSpeech: true, supportsImageAttachments: true, requestId: requestId)
+           supportsInlineSpeech: true, supportsImageAttachments: true, supportsQuickChat: true, requestId: requestId)
   }
 
   private func publishDisplayState() {
@@ -780,6 +782,26 @@ final class MacRemotePeer: NSObject {
     }
   }
 
+  private func handleQuickChat(_ request: RemoteQuickChatMessage) {
+    func send(_ response: RemoteQuickChatMessage) {
+      if let data = try? response.encode() { sendControlData(data) }
+    }
+    guard speechOperationTask == nil else {
+      if pendingQuickChatRequest != request {
+        send(request.result(error: "Finish the current input operation, then send your preset."))
+      }
+      return
+    }
+    pendingQuickChatRequest = request
+    speechOperationTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer { self.speechOperationTask = nil; self.pendingQuickChatRequest = nil }
+      if let token = request.targetToken, let capture = self.targetCaptureTasks[token] { await capture.value }
+      let response = await self.inputController.sendQuickChat(request) { try await self.speechTerminalIdentity() }
+      if !Task.isCancelled { send(response) }
+    }
+  }
+
   private func handleImages(_ request: RemoteImageAttachmentMessage) {
     func send(_ response: RemoteImageAttachmentMessage) {
       if let data = try? response.encode() { sendControlData(data) }
@@ -1045,6 +1067,10 @@ extension MacRemotePeer: RTCDataChannelDelegate {
       }
       if let request = try? RemoteSessionStateRequest.decode(data) {
         self.publishSessionState(force: true, requestId: request.requestId)
+        return
+      }
+      if let request = try? RemoteQuickChatMessage.decode(data), request.type == "quick.chat" {
+        self.handleQuickChat(request)
         return
       }
       if let request = try? RemoteSpeechContextMessage.decode(data), request.type == "speech.context" {

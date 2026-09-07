@@ -31,6 +31,7 @@
 		9FAEDA464727521A0D77839C /* RemoteAssist.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA4FB03C06FF3E3F780BF6B2 /* RemoteAssist.swift */; };
 		A108218C025FA0193F36DE60 /* VoiceSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 088F57A9C660D2D5A01BEF9B /* VoiceSettings.swift */; };
 		AB9E3EA912AF86012C19E96F /* DeviceIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EF3E28FFA532EBF14FEAF8B /* DeviceIdentity.swift */; };
+		B099B7C46FB342BFB8A80C77 /* RemoteQuickChat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 061444F36751011C7753FD06 /* RemoteQuickChat.swift */; };
 		B1B8CC3DCD795B5AC6B1BC36 /* RemoteImageTransfer.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE33916CC85A1B24B0C5A55E /* RemoteImageTransfer.swift */; };
 		BF46A08D3F06D8FF71B9D210 /* MobileFiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33B53FE2D8E9ADBA82728DA2 /* MobileFiles.swift */; };
 		EDA340FC5A4C8FDF0090ABB0 /* RemoteImagePreparation.swift in Sources */ = {isa = PBXBuildFile; fileRef = D70593B6087D12EBB653329D /* RemoteImagePreparation.swift */; };
@@ -53,6 +54,7 @@
 
 /* Begin PBXFileReference section */
 		03F34ABFFB51FC546D105D8F /* ClawDadMobileUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = ClawDadMobileUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		061444F36751011C7753FD06 /* RemoteQuickChat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteQuickChat.swift; sourceTree = "<group>"; };
 		088F57A9C660D2D5A01BEF9B /* VoiceSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceSettings.swift; sourceTree = "<group>"; };
 		11E193EDE43AF5D11AADF538 /* ClawDadMobileUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClawDadMobileUITests.swift; sourceTree = "<group>"; };
 		147A8BFF03CEDB70896BAB51 /* AppAttestClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppAttestClient.swift; sourceTree = "<group>"; };
@@ -136,6 +138,7 @@
 				B8D58EFA993E7A1DF2232B2C /* RemoteImageControls.swift */,
 				D70593B6087D12EBB653329D /* RemoteImagePreparation.swift */,
 				BE33916CC85A1B24B0C5A55E /* RemoteImageTransfer.swift */,
+				061444F36751011C7753FD06 /* RemoteQuickChat.swift */,
 				89C609AE055F4F4C09202552 /* RemoteSpeechControls.swift */,
 				7A3BE7EC4AB5DE28F2E8E4EF /* RemoteSpeechPreviewHost.swift */,
 				4B67F2E9259E05DBACEB7F04 /* RemoteTerminalReader.swift */,
@@ -315,6 +318,7 @@
 				6EF3DA15AB6D72CF82769244 /* RemoteImageControls.swift in Sources */,
 				EDA340FC5A4C8FDF0090ABB0 /* RemoteImagePreparation.swift in Sources */,
 				B1B8CC3DCD795B5AC6B1BC36 /* RemoteImageTransfer.swift in Sources */,
+				B099B7C46FB342BFB8A80C77 /* RemoteQuickChat.swift in Sources */,
 				39F7EDBB4973CC068AC0E2F3 /* RemoteSpeechControls.swift in Sources */,
 				3CE919B6795B0B61BEFEA9D0 /* RemoteSpeechPreviewHost.swift in Sources */,
 				08A2F61153C0221F74B49988 /* RemoteTerminalReader.swift in Sources */,
@@ -428,7 +432,7 @@
 				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 50;
+				CURRENT_PROJECT_VERSION = 51;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_NS_ASSERTIONS = NO;
@@ -507,7 +511,7 @@
 				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 50;
+				CURRENT_PROJECT_VERSION = 51;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -616,7 +620,7 @@
 				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 50;
+				CURRENT_PROJECT_VERSION = 51;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_NS_ASSERTIONS = NO;

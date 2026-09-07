@@ -743,7 +743,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
   private var remoteComputerManager: MacRemoteComputerManager?
   private var remoteAssistClient: MacRemoteAssistClient?
   private var remoteAssistWindowController: MacRemoteAssistWindowController?
-  private var remoteAssistIndicator: NSPanel?
+  private var remoteAssistStopMenuItem: NSMenuItem?
   private var nativeInstanceGuard: NativeAppInstanceGuard?
   private let updateController = ClawDadUpdateController()
 
@@ -853,6 +853,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     )
     updateItem.target = updateController
     appMenu.addItem(updateItem)
+    let stopItem = NSMenuItem(title: "Stop Remote Assist", action: #selector(stopRemoteAssistFromMac), keyEquivalent: "")
+    stopItem.target = self
+    stopItem.isHidden = true
+    appMenu.addItem(stopItem)
+    remoteAssistStopMenuItem = stopItem
     appMenu.addItem(.separator())
     appMenu.addItem(
       withTitle: "Quit \(appName)",
@@ -1296,12 +1301,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
   }
 
   private func updateRemoteAssistStatus(_ status: RemoteAssistHostStatus) {
-    if status.active {
-      showRemoteAssistIndicator()
-    } else {
-      remoteAssistIndicator?.orderOut(nil)
-      remoteAssistIndicator = nil
-    }
+    remoteAssistStopMenuItem?.isHidden = !status.active
 
     guard let data = try? JSONSerialization.data(
       withJSONObject: status.dictionary
@@ -1349,91 +1349,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     webView?.evaluateJavaScript(
       "window.dispatchEvent(new CustomEvent('clawdad-native-remote-computers-status', { detail: \(json) }));"
     )
-  }
-
-  private func showRemoteAssistIndicator() {
-    if let remoteAssistIndicator {
-      positionRemoteAssistIndicator(remoteAssistIndicator)
-      remoteAssistIndicator.orderFrontRegardless()
-      return
-    }
-
-    let panel = NSPanel(
-      contentRect: NSRect(x: 0, y: 0, width: 330, height: 64),
-      styleMask: [.nonactivatingPanel, .hudWindow],
-      backing: .buffered,
-      defer: false
-    )
-    panel.level = .floating
-    panel.isOpaque = false
-    panel.backgroundColor = .clear
-    panel.hasShadow = true
-    panel.hidesOnDeactivate = false
-    panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-
-    let effect = NSVisualEffectView(frame: panel.contentView?.bounds ?? .zero)
-    effect.material = .hudWindow
-    effect.blendingMode = .behindWindow
-    effect.state = .active
-    effect.wantsLayer = true
-    effect.layer?.cornerRadius = 12
-    effect.translatesAutoresizingMaskIntoConstraints = false
-
-    let icon = NSImageView()
-    icon.image = NSImage(
-      systemSymbolName: "iphone.radiowaves.left.and.right",
-      accessibilityDescription: "Remote Assist"
-    )
-    icon.contentTintColor = .systemGreen
-    icon.translatesAutoresizingMaskIntoConstraints = false
-
-    let label = NSTextField(labelWithString: "Remote Assist active")
-    label.font = NSFont.systemFont(ofSize: 14, weight: .semibold)
-    label.textColor = .labelColor
-
-    let stopButton = NSButton(
-      title: "Stop",
-      target: self,
-      action: #selector(stopRemoteAssistFromMac)
-    )
-    stopButton.bezelStyle = .rounded
-    stopButton.keyEquivalent = ""
-
-    let stack = NSStackView(views: [icon, label, stopButton])
-    stack.orientation = .horizontal
-    stack.alignment = .centerY
-    stack.spacing = 12
-    stack.translatesAutoresizingMaskIntoConstraints = false
-
-    let content = NSView(frame: panel.contentView?.bounds ?? .zero)
-    content.addSubview(effect)
-    content.addSubview(stack)
-    panel.contentView = content
-    NSLayoutConstraint.activate([
-      effect.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-      effect.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-      effect.topAnchor.constraint(equalTo: content.topAnchor),
-      effect.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-      stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
-      stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
-      stack.centerYAnchor.constraint(equalTo: content.centerYAnchor),
-      icon.widthAnchor.constraint(equalToConstant: 24),
-      icon.heightAnchor.constraint(equalToConstant: 24)
-    ])
-
-    remoteAssistIndicator = panel
-    positionRemoteAssistIndicator(panel)
-    panel.orderFrontRegardless()
-  }
-
-  private func positionRemoteAssistIndicator(_ panel: NSPanel) {
-    let visibleFrame = NSScreen.main?.visibleFrame
-      ?? NSScreen.screens.first?.visibleFrame
-      ?? .zero
-    panel.setFrameOrigin(NSPoint(
-      x: visibleFrame.maxX - panel.frame.width - 24,
-      y: visibleFrame.maxY - panel.frame.height - 24
-    ))
   }
 
   @objc private func stopRemoteAssistFromMac() {
