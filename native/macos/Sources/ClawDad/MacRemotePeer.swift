@@ -719,7 +719,12 @@ final class MacRemotePeer: NSObject {
       if let operation = self.speechOperationTask { await operation.value }
       await self.inputController.waitForImagePaste()
       guard !Task.isCancelled else { return }
+      let started = ProcessInfo.processInfo.systemUptime
       let response = await self.terminalTabController.closing.handle(request)
+      let elapsed = Int((ProcessInfo.processInfo.systemUptime - started) * 1_000)
+      Logger(subsystem: "earth.frg.ClawDad", category: "Terminal").info(
+        "operation=\(request.type, privacy: .public) outcome=\(response.outcome?.rawValue ?? "unknown", privacy: .public) error_code=\(response.errorCode ?? "none", privacy: .public) elapsed_ms=\(elapsed)"
+      )
       if !Task.isCancelled, let data = try? response.encode() { self.sendControlData(data) }
     }
   }

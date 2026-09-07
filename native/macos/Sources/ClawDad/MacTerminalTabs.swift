@@ -481,10 +481,25 @@ final class MacTerminalAutomation: MacTerminalAutomating, @unchecked Sendable {
     guard let id = snapshot.nativeTabID else {
       throw MacTerminalTabFailure(code: "close_unavailable", message: "Refresh the picker to identify this native tab before closing it.", state: nil)
     }
+    guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Terminal").first,
+          !MacConsoleSessionState.isLocked() else {
+      throw MacTerminalTabFailure(code: "tab_unavailable", message: "Connect to an unlocked Mac with Terminal open.", state: nil)
+    }
+    // As with switching tabs, make Terminal active before using its tab controls.
+    // A successful accessibility action alone does not prove the tab responded.
+    if !app.isActive {
+      app.activate(options: [.activateIgnoringOtherApps])
+      for _ in 0..<20 {
+        if app.isActive { break }
+        try await Task.sleep(nanoseconds: 25_000_000)
+      }
+    }
+    guard app.isActive else {
+      throw MacTerminalTabFailure(code: "close_unavailable", message: "Terminal could not become active. The tab was kept open.", state: nil)
+    }
     return try await withCheckedThrowingContinuation { continuation in
       queue.async { continuation.resume(with: Result {
-        guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Terminal").first,
-              !MacConsoleSessionState.isLocked() else {
+        guard app.isActive, !app.isTerminated, !MacConsoleSessionState.isLocked() else {
           throw MacTerminalTabFailure(code: "tab_unavailable", message: "Connect to an unlocked Mac with Terminal open.", state: nil)
         }
         return try self.nativeTabs.close(id, application: AXUIElementCreateApplication(app.processIdentifier))
