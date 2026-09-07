@@ -1,3 +1,4 @@
+import {PushNotificationService, pushConfigured} from './push-notifications.mjs';
 const protocolVersion = "clawdad.cloud.v1";
 
 function json(status, payload) {
@@ -138,6 +139,8 @@ const publicPages = Object.freeze({
       <p>Project files, Codex thread history, terminal output, and ClawDad logs remain on your Mac. The ClawDad relay forwards message and Remote Assist signaling in real time and does not durably store message bodies, attachments, code, terminal output, voice recordings, or screen content.</p>
       <h2>Remote Assist</h2>
       <p>Remote Assist is opt-in. Screen and control media uses an encrypted WebRTC connection. Connection signaling passes through the ClawDad relay. When relay fallback is available and needed by a restrictive network, encrypted media may transit Cloudflare's relay service.</p>
+      <h2>Response notifications</h2>
+      <p>If you enable response notifications, the relay stores your Apple push token and delivery preferences. It queues the directory name, conversation and computer identifiers, and completion time for up to 24 hours to deliver an alert through Apple Push Notification service. Response text and full file paths stay on your Mac. Turn alerts off in ClawDad Settings to remove your push registration; revoking a paired device also disables its alerts.</p>
       <h2>Service providers</h2>
       <p>Cloudflare provides the network relay and may process ordinary network metadata such as IP address and request timing. Apple processes App Store purchases. Codex runs on your Mac under your separate OpenAI account and terms.</p>
       <h2>Tracking and advertising</h2>
@@ -1122,6 +1125,7 @@ export class WorkspaceRelay {
     this.state = state;
     this.env = env;
     this.sessions = new Map();
+    this.pushNotifications = new PushNotificationService(state, env);
     for (const socket of this.state.getWebSockets?.() || []) {
       const metadata = this.deserializeSocketMetadata(socket);
       if (metadata) {
@@ -1448,6 +1452,7 @@ export class WorkspaceRelay {
       tokenHash: "",
       revokedAt,
     });
+    await this.pushNotifications.revoke(deviceId);
     for (const [socket, metadata] of this.activeSessions()) {
       if (metadata.role === "device" && metadata.deviceId === deviceId) {
         try {
@@ -1603,12 +1608,42 @@ export class WorkspaceRelay {
     };
   }
 
+  async notifications(request, route) {
+    const host = await this.hostAccess();
+    if (!host) return json(401, {ok:false,error:'Pair a computer first'});
+    if (route.action === '/notifications/events') {
+      if (request.method !== 'POST') return json(405,{ok:false,error:'method not allowed'});
+      if (!await this.requestHasHostAccess(request, host)) return json(401,{ok:false,error:'host authorization required'});
+      try {
+        const payload = await accessJson(request);
+        const identity = {accountId:host.accountId,workspaceId:host.workspaceId,hostId:host.hostId,
+          hostName:String(payload.hostName || 'ClawDad').replace(/[\r\n\x00-\x1f]/g,'').slice(0,100)};
+        const result = await this.pushNotifications.submit(payload, identity);
+        return json(result.accepted ? 202 : 503, result);
+      } catch { return json(400,{ok:false,error:'Invalid notification event'}); }
+    }
+    if (route.action !== '/notifications/device') return json(404,{ok:false,error:'not found'});
+    const deviceId = new URL(request.url).searchParams.get('deviceId') || '';
+    if (!validAccessIdentifier(deviceId)) return json(400,{ok:false,error:'device identity required'});
+    const device = await this.state.storage.get(`${accessDevicePrefix}${deviceId}`);
+    if (!device?.tokenHash || device.revokedAt || await tokenHash(bearerToken(request)) !== device.tokenHash) return json(401,{ok:false,error:'paired device authorization required'});
+    if (request.method === 'GET') return json(200,{ok:true,configured:pushConfigured(this.env)});
+    if (!['PUT','DELETE'].includes(request.method)) return json(405,{ok:false,error:'method not allowed'});
+    try {
+      const value = request.method === 'DELETE' ? {enabled:false} : await accessJson(request);
+      return json(200,{ok:true,...await this.pushNotifications.register(deviceId,value)});
+    } catch { return json(400,{ok:false,error:'Invalid notification registration'}); }
+  }
+
+  async alarm() { await this.pushNotifications.alarm(); }
+
   async fetch(request) {
     const url = new URL(request.url);
     const route = workspaceRoute(url.pathname);
     if (!route) {
       return json(404, { ok: false, error: "not found" });
     }
+    if (route.action.startsWith('/notifications/')) return this.notifications(request, route);
     if (route.action === "/access/claim") {
       return this.claimWorkspace(request, route);
     }

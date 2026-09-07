@@ -36,6 +36,7 @@ struct ContentView: View {
   @StateObject private var remoteAssist = RemoteAssistController()
   @StateObject private var files = MobileFilesController()
   @StateObject private var assistant = MobileAssistantController()
+  @ObservedObject private var notifications = MobileNotificationController.shared
   @AppStorage("clawdad.threadScope") private var threadScopeRaw = MobileThreadScope.project.rawValue
   @FocusState private var messageEditorFocused: Bool
 
@@ -293,8 +294,25 @@ struct ContentView: View {
       } message: {
         Text("Add a name to make this thread easier to find, or leave it blank.")
       }
+      .safeAreaInset(edge: .top) {
+        if !session.notificationStatus.isEmpty {
+          HStack {
+            ProgressView()
+            Text(session.notificationStatus).font(.caption)
+            Spacer()
+            Button("Cancel", action: session.cancelNotificationOpen)
+          }
+          .padding(12)
+          .background(ClawDadTheme.background)
+        }
+      }
+      .alert("Open response", isPresented: Binding(get: { !session.notificationError.isEmpty }, set: { if !$0 { session.notificationError = "" } })) {
+        Button("OK") { session.notificationError = "" }
+      } message: { Text(session.notificationError) }
       .onAppear {
         assistant.bind(session)
+        notifications.bind(session)
+        openPendingNotification()
         remoteAssist.bind(to: session)
         session.connectIfPaired()
         presentAppStorePreviewIfNeeded()
@@ -302,6 +320,7 @@ struct ContentView: View {
       .onChange(of: scenePhase) { _, phase in
         if phase == .active {
           session.connectIfPaired()
+          notifications.bind(session)
         } else if phase == .background {
           voiceRecorder.cancel()
         }
@@ -312,6 +331,12 @@ struct ContentView: View {
       .onChange(of: session.activeComputerId) { _, _ in
         assistant.bind(session)
         selectedThreadSelection = nil
+      }
+      .onChange(of: session.pairedComputers.map { "\($0.id)|\($0.pairedAt)|\($0.cloudUrl)" }) { _, _ in notifications.bind(session) }
+      .onChange(of: notifications.pendingOpen) { _, _ in openPendingNotification() }
+      .onChange(of: session.notificationThread) { _, thread in
+        guard let thread else { return }
+        selectedThreadSelection = MobileThreadSelection(computerId: session.activeComputerId, initialThread: thread)
       }
       .onChange(of: threadScopeRaw) { _, _ in
         session.requestCatalog(
@@ -331,6 +356,19 @@ struct ContentView: View {
         appendVoiceTranscription(transcription)
       }
     }
+  }
+
+  private func openPendingNotification() {
+    guard let notification = notifications.pendingOpen else { return }
+    notifications.pendingOpen = nil
+    showingSettings = false
+    showingAssistant = false
+    showingFiles = false
+    showingTools = false
+    showingProjectPicker = false
+    showingRemoteAssist = false
+    selectedThreadSelection = nil
+    session.openNotification(notification)
   }
 
   private func presentAppStorePreviewIfNeeded() {
@@ -3215,6 +3253,7 @@ struct SettingsView: View {
         ScrollView {
           VStack(spacing: 14) {
             VoiceSettingsPanel()
+            NotificationSettingsPanel()
             ClawDadPanel {
               VStack(alignment: .leading, spacing: 12) {
                 HStack {

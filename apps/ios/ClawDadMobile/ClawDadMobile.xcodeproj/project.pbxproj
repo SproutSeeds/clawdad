@@ -12,6 +12,7 @@
 		187E31F4AF200A700830399F /* RemoteTerminalWindowGroups.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4B71B55085B2C1EE623A070 /* RemoteTerminalWindowGroups.swift */; };
 		1A308337EBE5F90AF0C5DD19 /* ClawDadRemoteAssistProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = 3E041F6ED9B6E45F5F37F06A /* ClawDadRemoteAssistProtocol */; };
 		275FAABA58CF0436EC6D32FB /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 471CC1C676A805963BAF2F99 /* Assets.xcassets */; };
+		2EFAB0BA46EC3D36BAF2E9A0 /* MobileNotifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97E3CAB4A99E84BAFA945FA2 /* MobileNotifications.swift */; };
 		39F7EDBB4973CC068AC0E2F3 /* RemoteSpeechControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89C609AE055F4F4C09202552 /* RemoteSpeechControls.swift */; };
 		3B51519C1804A2B28C237997 /* CloudModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 395E23F4DD2363BA0762CE4C /* CloudModels.swift */; };
 		3CA091886654915398868F62 /* CloudClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD8DD24D34A3F29E43308A65 /* CloudClient.swift */; };
@@ -59,6 +60,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		00CEB08E4894CB9B2E7A559B /* ClawDadMobile.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ClawDadMobile.entitlements; sourceTree = "<group>"; };
 		03F34ABFFB51FC546D105D8F /* ClawDadMobileUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = ClawDadMobileUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		061444F36751011C7753FD06 /* RemoteQuickChat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteQuickChat.swift; sourceTree = "<group>"; };
 		088F57A9C660D2D5A01BEF9B /* VoiceSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceSettings.swift; sourceTree = "<group>"; };
@@ -85,6 +87,7 @@
 		8AD474B9C5025C1E3B07688E /* RemoteTerminalCloseIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTerminalCloseIntent.swift; sourceTree = "<group>"; };
 		8F34770E78861322677F1C3C /* VoiceRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceRecorder.swift; sourceTree = "<group>"; };
 		930A750132AFE74E66A35E11 /* PasskeyRequests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PasskeyRequests.swift; sourceTree = "<group>"; };
+		97E3CAB4A99E84BAFA945FA2 /* MobileNotifications.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileNotifications.swift; sourceTree = "<group>"; };
 		99C468715F6ABFF27CB4041C /* AssistantConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantConnection.swift; sourceTree = "<group>"; };
 		9D4E99AEE8642626D8FD9843 /* AssistantPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantPreview.swift; sourceTree = "<group>"; };
 		9EF3E28FFA532EBF14FEAF8B /* DeviceIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceIdentity.swift; sourceTree = "<group>"; };
@@ -146,6 +149,7 @@
 				83005EBBAE60D00DFFF52D33 /* MobileFileExport.swift */,
 				33B53FE2D8E9ADBA82728DA2 /* MobileFiles.swift */,
 				A01E4E35032819166F419843 /* MobileFilesPreview.swift */,
+				97E3CAB4A99E84BAFA945FA2 /* MobileNotifications.swift */,
 				A248092D559C4CD1B15AECEC /* PairedComputer.swift */,
 				930A750132AFE74E66A35E11 /* PasskeyRequests.swift */,
 				26AABBF8F4DF0D8B38BF9365 /* QRScannerView.swift */,
@@ -189,6 +193,7 @@
 			isa = PBXGroup;
 			children = (
 				471CC1C676A805963BAF2F99 /* Assets.xcassets */,
+				00CEB08E4894CB9B2E7A559B /* ClawDadMobile.entitlements */,
 				FEF501962B4434FEAA1B97C0 /* Info.plist */,
 			);
 			path = Resources;
@@ -332,6 +337,7 @@
 				7528DEE2F3D0A122F71E8C32 /* MobileFileExport.swift in Sources */,
 				BF46A08D3F06D8FF71B9D210 /* MobileFiles.swift in Sources */,
 				4DCD11D7065D315AEF5D4EEB /* MobileFilesPreview.swift in Sources */,
+				2EFAB0BA46EC3D36BAF2E9A0 /* MobileNotifications.swift in Sources */,
 				930C8384655B365B43D6B7D6 /* PairedComputer.swift in Sources */,
 				FDF87A63AB6BE997E8422599 /* PasskeyRequests.swift in Sources */,
 				8A0DDACD490ED6B80E4A30CA /* QRScannerView.swift in Sources */,
@@ -380,6 +386,8 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CLAWDAD_CLOUD_URL = "http://127.0.0.1:8787";
 				CLAWDAD_FOUNDING_BETA_ACCESS = YES;
+				CLAWDAD_PUSH_ENVIRONMENT = development;
+				CODE_SIGN_ENTITLEMENTS = Resources/ClawDadMobile.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				INFOPLIST_FILE = Resources/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
@@ -403,6 +411,8 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CLAWDAD_CLOUD_URL = "https://clawdad-cloud.frg.earth";
+				CLAWDAD_PUSH_ENVIRONMENT = production;
+				CODE_SIGN_ENTITLEMENTS = Resources/ClawDadMobile.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				INFOPLIST_FILE = Resources/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
@@ -456,7 +466,7 @@
 				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 54;
+				CURRENT_PROJECT_VERSION = 55;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_NS_ASSERTIONS = NO;
@@ -535,7 +545,7 @@
 				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 54;
+				CURRENT_PROJECT_VERSION = 55;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -591,6 +601,8 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CLAWDAD_CLOUD_URL = "https://clawdad-cloud.frg.earth";
+				CLAWDAD_PUSH_ENVIRONMENT = production;
+				CODE_SIGN_ENTITLEMENTS = Resources/ClawDadMobile.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				INFOPLIST_FILE = Resources/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
@@ -644,7 +656,7 @@
 				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 54;
+				CURRENT_PROJECT_VERSION = 55;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_NS_ASSERTIONS = NO;

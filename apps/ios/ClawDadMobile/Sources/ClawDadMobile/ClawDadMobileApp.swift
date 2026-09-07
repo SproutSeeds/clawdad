@@ -5,6 +5,7 @@ import UIKit
 
 @main
 struct ClawDadMobileApp: App {
+  @UIApplicationDelegateAdaptor(ClawDadPushAppDelegate.self) private var pushDelegate
   @StateObject private var session: CloudSession
   @StateObject private var subscription: SubscriptionManager
 

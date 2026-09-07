@@ -233,8 +233,23 @@ against the bundled Apple trust roots.
 The production relay remains in compatibility mode until build 31 is installed
 on a physical iPhone and a fresh pairing proves the per-device credential path.
 After that proof, enable relay enforcement and recheck connection, revocation,
-and re-pairing. Passkeys, App Attest, APNs, and multi-Mac account recovery are
+and re-pairing. Passkeys, App Attest, and multi-Mac account recovery are
 future account-platform work; they are not claimed by this beta.
+
+## Terminal response notifications
+
+Mac build 69 and iPhone build 55 add opt-in response alerts under Settings.
+The Mac samples CLI-owned Codex transcripts without selecting Terminal tabs.
+Only a completed turn containing an assistant answer produces an event; focus,
+screen output, aborted turns, and historical answers do not trigger alerts.
+The notification shows the directory, a short conversation reference, and the
+completion time in the iPhone's time zone. Tapping it asks the paired Mac for
+the exact conversation through the authenticated, signed connection.
+
+The Mac must be awake with ClawDad running. Apple push credentials must be
+configured on the existing relay; see `cloud/README.md`. The iPhone must enable
+the setting and allow notifications. Automated and simulator checks do not
+replace a physical iPhone delivery-and-tap check.
 
 ## Acceptance Test
 

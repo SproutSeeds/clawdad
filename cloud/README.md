@@ -74,3 +74,40 @@ clawdad cloud-host
 ## Storage Boundary
 
 The relay should store account, device, host, and revocation metadata. It should avoid durable storage of project message bodies, terminal output, attachments, and code content unless a future encrypted-cache mode is explicitly enabled.
+
+## iPhone response alerts
+
+The existing `WorkspaceRelay` Durable Object delivers opt-in Apple push alerts.
+No additional Worker, storage bucket, database, or paid speech service is needed.
+Registration requires the paired iPhone's relay credential; completion events
+require the Mac host credential. Revoking a device also removes its push token.
+
+Configure these secrets on `clawdad-cloud` for production/TestFlight:
+
+- `CLAWDAD_APNS_PRIVATE_KEY`: the APNs `.p8` signing key, kept outside the repository.
+- `CLAWDAD_APNS_KEY_ID`: its Apple key identifier.
+- `CLAWDAD_APNS_TEAM_ID`: the Apple Developer team identifier.
+
+Use an Apple push key valid for production and topic `earth.frg.clawdad.ios`.
+The App Store Connect upload key cannot send Apple push notifications. Debug
+device builds use the sandbox endpoint and need their own
+`CLAWDAD_APNS_DEVELOPMENT_KEY_ID` and `CLAWDAD_APNS_DEVELOPMENT_PRIVATE_KEY`.
+The app's `aps-environment` entitlement must match its delivery environment.
+
+The relay retains registration tokens until opt-out, revocation, or Apple's
+invalid-token response. Completion metadata (directory, conversation and host
+identifiers, completion time) expires within 24 hours. Durable alarms retry
+temporary provider failures and checkpoint successful recipients. APNs collapse
+identifiers suppress redundant alerts for the same completed turn. No transcript
+text or full local file path is sent to APNs or stored in the relay queue.
+
+The Mac stores its private notification cursor and outbox beside its cloud config
+as `terminal-notifications.json`, with owner-only permissions. Local notification
+links remain resolvable for up to 30 days, capped at 1,000 events. Discovery reads
+process metadata and owned Codex transcript files; it does not focus Terminal.
+
+Verification: `node --test test/push-notifications.test.mjs test/terminal-notifications.test.mjs`.
+Local workerd on macOS cannot establish the same APNs HTTP/2 transport used by
+deployed Workers, so physical production-device delivery remains a separate check.
+See [Apple APNs setup](https://developer.apple.com/documentation/usernotifications/establishing-a-token-based-connection-to-apns)
+and the [workerd HTTP/2 issue](https://github.com/cloudflare/workerd/issues/4841).

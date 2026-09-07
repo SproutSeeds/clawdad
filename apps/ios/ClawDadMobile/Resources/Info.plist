@@ -22,6 +22,8 @@
 	<false/>
 	<key>ClawDadCloudURL</key>
 	<string>$(CLAWDAD_CLOUD_URL)</string>
+	<key>ClawDadPushEnvironment</key>
+	<string>$(CLAWDAD_PUSH_ENVIRONMENT)</string>
 	<key>ClawDadFoundingBetaAccess</key>
 	<string>$(CLAWDAD_FOUNDING_BETA_ACCESS)</string>
 	<key>NSCameraUsageDescription</key>

@@ -24,7 +24,7 @@ settings:
     CODE_SIGN_STYLE: Automatic
     DEVELOPMENT_TEAM: 4QV4WR9G32
     MARKETING_VERSION: "0.7.0"
-    CURRENT_PROJECT_VERSION: "54"
+    CURRENT_PROJECT_VERSION: "55"
     CLAWDAD_FOUNDING_BETA_ACCESS: "NO"
 
 targets:
@@ -44,6 +44,8 @@ targets:
         PRODUCT_NAME: ClawDad
         PRODUCT_BUNDLE_IDENTIFIER: earth.frg.clawdad.ios
         INFOPLIST_FILE: Resources/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Resources/ClawDadMobile.entitlements
+        CLAWDAD_PUSH_ENVIRONMENT: production
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         TARGETED_DEVICE_FAMILY: "1"
@@ -52,6 +54,7 @@ targets:
         SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: "NO"
       configs:
         Debug:
+          CLAWDAD_PUSH_ENVIRONMENT: development
           CLAWDAD_CLOUD_URL: "http://127.0.0.1:8787"
           CLAWDAD_FOUNDING_BETA_ACCESS: "YES"
         Staging:

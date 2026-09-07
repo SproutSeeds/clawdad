@@ -166,6 +166,29 @@ final class ClawDadMobileUITests: XCTestCase {
     XCTAssertTrue(settings.isHittable)
   }
 
+  func testResponseNotificationsRemainOptInAcrossSettingsNavigation() {
+    let app = XCUIApplication()
+    app.launchArguments = ["--clawdad-app-store-preview", "workspace", "-clawdad.notifications.enabled", "NO"]
+    app.launch()
+    XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 20))
+    app.buttons["Settings"].tap()
+    let notifications = app.switches["Agent response notifications"]
+    XCTAssertTrue(notifications.waitForExistence(timeout: 5))
+    XCTAssertEqual(notifications.value as? String, "0")
+    XCTAssertTrue(app.staticTexts["Directory name and completion time. Tap an alert to open that conversation."].exists)
+    let screenshot = XCTAttachment(screenshot: app.screenshot())
+    screenshot.name = "Response notification settings"
+    screenshot.lifetime = .keepAlways
+    add(screenshot)
+    app.buttons["Done"].tap()
+    XCTAssertTrue(app.buttons["Settings"].isHittable)
+    app.buttons["Settings"].tap()
+    XCTAssertTrue(notifications.waitForExistence(timeout: 5))
+    XCTAssertEqual(notifications.value as? String, "0")
+    app.buttons["Done"].tap()
+    XCTAssertTrue(app.buttons["Settings"].isHittable)
+  }
+
   func testComposerDictationTakesOverPendingRemotePlayback() {
     let app = XCUIApplication()
     app.launchArguments += ["--clawdad-app-store-preview", "terminal-reader", "--clawdad-preview-slow-voice"]

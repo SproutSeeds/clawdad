@@ -488,6 +488,12 @@ final class CloudSession: ObservableObject {
   }
   @Published var historyItems: [MobileHistoryItem] = []
   @Published var historyStatus = ""
+  @Published var notificationThread: MobileThreadSummary?
+  @Published var notificationStatus = ""
+  @Published var notificationError = ""
+  private var notificationOpenTask: Task<Void, Never>?
+  private var notificationOpenRequestId = ""
+  private var notificationTarget: CompletedTurnNotification?
   @Published var events: [String] = []
   @Published var pairingStatus = ""
   @Published var modelOptions: [CodexModelSummary] = []
@@ -575,6 +581,7 @@ final class CloudSession: ObservableObject {
   private let defaults: UserDefaults
   private let envelopeSender: EnvelopeSender?
   private var appStorePreviewMode = false
+  var isAppStorePreview: Bool { appStorePreviewMode }
 
   init(defaults: UserDefaults = .standard, readAloud: MobileReadAloudController? = nil, envelopeSender: EnvelopeSender? = nil) {
     self.readAloud = readAloud ?? MobileReadAloudController()
@@ -860,6 +867,9 @@ final class CloudSession: ObservableObject {
   }
 
   func forgetPairing() {
+    if let computer = pairedComputers.first(where: { $0.id == activeComputerId }) {
+      MobileNotificationController.shared.forget(computer)
+    }
     readAloud.stop()
     voiceSettings = nil
     let forgottenComputerId = activeComputerId
@@ -1036,7 +1046,54 @@ final class CloudSession: ObservableObject {
     requestModels()
   }
 
+  func cancelNotificationOpen() {
+    notificationOpenTask?.cancel()
+    notificationOpenTask = nil
+    notificationOpenRequestId = ""
+    notificationTarget = nil
+    notificationStatus = ""
+  }
+
+  func openNotification(_ notification: CompletedTurnNotification) {
+    cancelNotificationOpen()
+    notificationThread = nil
+    notificationError = ""
+    guard let computer = pairedComputers.first(where: { notification.matches($0) }) else {
+      notificationError = "This notification belongs to a computer that is no longer paired with this iPhone."
+      return
+    }
+    notificationTarget = notification
+    let requestId = UUID().uuidString.lowercased()
+    notificationOpenRequestId = requestId
+    if activeComputerId != computer.id || !ready { switchComputer(to: computer.id) }
+    notificationStatus = "Opening \(notification.directory) response…"
+    notificationOpenTask = Task {
+      do {
+        let deadline = Date().addingTimeInterval(60)
+        while !ready && Date() < deadline {
+          try await Task.sleep(for: .milliseconds(250))
+          guard notificationOpenRequestId == requestId else { return }
+        }
+        guard !Task.isCancelled, notificationOpenRequestId == requestId else { return }
+        guard ready, notification.matches(computer), activeComputerId == computer.id else {
+          throw URLError(.notConnectedToInternet)
+        }
+        try await sendEnvelope(type: "notification.open.request", body: ["eventId": .string(notification.eventId)], envelopeId: requestId)
+        try await Task.sleep(for: .seconds(30))
+        guard notificationOpenRequestId == requestId else { return }
+        notificationError = "The Mac has not returned this response yet. Open the alert again after it reconnects."
+        cancelNotificationOpen()
+      } catch is CancellationError { }
+      catch {
+        guard notificationOpenRequestId == requestId else { return }
+        notificationError = "Connect to this Mac to open the completed response."
+        cancelNotificationOpen()
+      }
+    }
+  }
+
   func selectThread(_ thread: MobileThreadSummary, historyLimit: Int = 20) {
+    if notificationThread?.id != thread.id { notificationThread = nil }
     selectedProjectPath = thread.projectPath
     selectedSessionId = thread.sessionId
     self.historyLimit = historyLimit
@@ -2020,6 +2077,21 @@ final class CloudSession: ObservableObject {
 
   func apply(_ envelope: CloudEnvelope) {
     switch envelope.type {
+    case "notification.opened":
+      guard let target = notificationTarget,
+        envelope.body["inReplyTo"]?.stringValue == notificationOpenRequestId,
+        envelope.accountId == target.accountId, envelope.workspaceId == target.workspaceId,
+        envelope.sourceDeviceId == target.hostId, verifyPairedHostEnvelope(envelope),
+        envelope.body["eventId"]?.stringValue == target.eventId,
+        envelope.body["sessionId"]?.stringValue == target.sessionId,
+        let projectPath = envelope.body["projectPath"]?.stringValue, projectPath.hasPrefix("/") else { return }
+      let thread = MobileThreadSummary(projectName: target.directory, projectPath: projectPath,
+        title: "\(target.directory) · \(target.sessionId.suffix(6))", provider: "codex", sessionId: target.sessionId,
+        active: false, status: "completed", lastDispatch: "", lastResponse: target.completedAt, lastActivityAt: target.completedAt)
+      cancelNotificationOpen()
+      notificationThread = thread
+      selectThread(thread, historyLimit: 50)
+      requestHistory(limit: 50)
     case "catalog.snapshot":
       guard let request = catalogRequest,
             envelope.sourceDeviceId == hostId,
@@ -2034,6 +2106,7 @@ final class CloudSession: ObservableObject {
       guard !recentOnly || request.recentOnly else { return }
       let previousActivity = selectedThreadActivity(in: workspace)
       let previousSelection = "\(selectedProjectPath)::\(selectedSessionId)"
+      let openingNotifiedThread = notificationThread?.projectPath == selectedProjectPath && notificationThread?.sessionId == selectedSessionId
       let projects = recentOnly ? workspace.projects : parseProjects(envelope.body["projects"])
       let parsedRecentThreads = parseRecentThreadSummaries(
         envelope.body["recentThreads"],
@@ -2062,10 +2135,10 @@ final class CloudSession: ObservableObject {
           recentThreads.contains { $0.projectPath == selected.path && $0.sessionId == resolvedSessionId }
         if sessionStillAvailable {
           selectedSessionId = resolvedSessionId
-        } else if !catalogRefreshPending && request.projectPath == selected.path {
+        } else if !openingNotifiedThread && !catalogRefreshPending && request.projectPath == selected.path {
           selectedSessionId = selected.activeSessionId
         }
-      } else if !catalogRefreshPending, request.refreshHistory, let first = projects.first {
+      } else if !openingNotifiedThread, !catalogRefreshPending, request.refreshHistory, let first = projects.first {
         selectedProjectPath = first.path
         selectedSessionId = first.activeSessionId
       }
