@@ -740,6 +740,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
   private var service: ClawDadService?
   private var systemReadiness: MacSystemReadiness?
   private var remoteAssistHost: RemoteAssistHost?
+  private var assistantBridge: MacAssistantBridge?
   private var remoteComputerManager: MacRemoteComputerManager?
   private var remoteAssistClient: MacRemoteAssistClient?
   private var remoteAssistWindowController: MacRemoteAssistWindowController?
@@ -798,6 +799,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
   }
 
   func applicationWillTerminate(_ notification: Notification) {
+    assistantBridge?.stop()
     remoteAssistWindowController?.closeSession()
     remoteComputerManager?.stop()
     remoteAssistHost?.stop()
@@ -929,6 +931,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
 
   private func loadApp(baseURL: URL, service: ClawDadService) {
     remoteAssistHost?.filesRuntime = MacFilesRuntime(baseURL: baseURL, token: service.token)
+    let assistantRuntime = MacAssistantRuntime(baseURL: baseURL, token: service.token)
+    remoteAssistHost?.assistantRuntime = assistantRuntime
+    assistantBridge?.stop()
+    assistantBridge = MacAssistantBridge(runtime: assistantRuntime, repoRoot: service.repoRoot)
+    assistantBridge?.start()
     updateStatus("Opening ClawDad...")
     let configuration = WKWebViewConfiguration()
     configuration.applicationNameForUserAgent = "ClawDadNative/0.1"

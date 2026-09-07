@@ -6463,6 +6463,7 @@ async function prepareAndPlayMessageAudio(audioKey, payload) {
 }
 
 async function playMessageAudio(audioKey, payload) {
+  if (state.assistantVoiceActive) throw new Error("End the Assistant voice conversation before starting another reader.");
   const status = audioPlaybackStatus(audioKey);
   if (!["playing", "paused"].includes(status)) {
     const playback = reserveMessageAudioPlayback(audioKey);
@@ -12424,6 +12425,15 @@ function stopVoiceStream() {
   state.voiceStream = null;
 }
 
+window.addEventListener("clawdad:assistant-will-start-voice", (event) => {
+  if (["recording", "transcribing"].includes(state.voiceState)) event.preventDefault();
+});
+window.addEventListener("clawdad:assistant-voice", (event) => {
+  state.assistantVoiceActive = event.detail?.active === true;
+  if (state.assistantVoiceActive) stopActiveMessageAudio();
+  updateComposerVoiceButton();
+});
+
 function setVoiceState(nextState, error = "") {
   state.voiceState = nextState;
   state.voiceError = String(error || "");
@@ -12437,7 +12447,7 @@ function updateComposerVoiceButton() {
   }
   const recording = state.voiceState === "recording";
   const transcribing = state.voiceState === "transcribing";
-  const disabled = transcribing || state.dispatchPending;
+  const disabled = transcribing || state.dispatchPending || state.assistantVoiceActive;
   const inputLabel = state.voiceActiveInputLabel || voiceInputDeviceLabel();
   button.classList.toggle("is-recording", recording);
   button.classList.toggle("is-loading", transcribing);
@@ -12501,6 +12511,7 @@ async function transcribeComposerVoice(blob, { fileName = "clawdad-voice.webm", 
 }
 
 async function startVoiceRecording() {
+  if (state.assistantVoiceActive) return;
   if (!voiceRecordingSupported()) {
     elements.composerVoiceCaptureInput?.click();
     return;

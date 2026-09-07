@@ -71,6 +71,7 @@ test("desktop reading uses the latest saved voice and Stop cancels a pending set
     const playback = {stopped: false};
     let prepared = null;
     const context = vm.createContext({
+      state: {},
       activeMessageAudio: playback,
       audioPlaybackStatus: () => "idle",
       reserveMessageAudioPlayback: () => playback,

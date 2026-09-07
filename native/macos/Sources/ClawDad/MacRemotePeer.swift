@@ -97,7 +97,7 @@ final class MacRemotePeer: NSObject {
 
   private let factory: RTCPeerConnectionFactory
   private let inputController: MacInputController
-  private let terminalTabController = MacTerminalTabController()
+  private let terminalTabController = MacTerminalTabController.shared
   private let iceServers: [RemoteIceServerConfiguration]
   private var peerConnection: RTCPeerConnection?
   private var controlChannel: RTCDataChannel?
@@ -1110,6 +1110,12 @@ extension MacRemotePeer: RTCDataChannelDelegate {
         return
       }
       guard self.controlChannel === dataChannel else { return }
+      if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+         let type = object["type"] as? String,
+         ["pointer", "scroll", "key", "text", RemoteInputMessage.commandType,
+          RemoteClipboardMessage.commandType, "quick.chat", "images.attach"].contains(type) || type.hasPrefix("terminal.tab.") {
+        MacAssistantInteractionGate.shared.noteManualInput()
+      }
       if let request = try? RemoteTerminalTabCloseMessage.decode(data), request.type != "terminal.tab.close.result" {
         self.handleTerminalClose(request)
         return

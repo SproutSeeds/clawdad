@@ -566,6 +566,7 @@ final class CloudSession: ObservableObject {
   private var lastEntitlementFingerprint = ""
   private var remoteAssistEnvelopeHandler: ((CloudEnvelope) -> Void)?
   private var filesEnvelopeHandler: ((CloudEnvelope) -> Void)?
+  private var assistantEnvelopeHandler: ((CloudEnvelope) -> Void)?
   private var connectionRequested = true
   private var reconnectAttempt = 0
   private var lastRelayPongAt = Date.distantPast
@@ -1621,6 +1622,7 @@ final class CloudSession: ObservableObject {
   func setFilesEnvelopeHandler(_ handler: ((CloudEnvelope) -> Void)?) {
     filesEnvelopeHandler = handler
   }
+  func setAssistantEnvelopeHandler(_ handler: ((CloudEnvelope) -> Void)?) { assistantEnvelopeHandler = handler }
 
   func syncEntitlement(
     _ entitlement: ClawDadEntitlementSnapshot?,
@@ -2341,6 +2343,7 @@ final class CloudSession: ObservableObject {
       }
       remoteAssistEnvelopeHandler?(envelope)
       filesEnvelopeHandler?(envelope)
+      assistantEnvelopeHandler?(envelope)
     case "error":
       sessionCreatePending = false
       let message = envelope.body["error"]?.stringValue ?? "Cloud error"

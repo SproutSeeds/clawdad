@@ -1,0 +1,22 @@
+#assistantOpen { position:absolute;top:18px;left:100px;z-index:3;padding:10px 14px;cursor:pointer; }
+.assistant-dialog { width:min(760px,calc(100vw - 28px));height:min(880px,calc(100dvh - 36px));max-height:calc(100dvh - 36px);padding:0;background:#080708;color:#ffebbd;border:1px solid #605139;border-radius:22px;font-size:16px; }
+.assistant-dialog::backdrop { background:#000b; }
+.assistant-layout { display:flex;flex-direction:column;height:100%;min-height:0; }
+.assistant-head,.assistant-controls,.assistant-composer { display:flex;gap:12px;align-items:center;padding:14px 18px;flex-shrink:0; }
+.assistant-head h2 { margin:0;font-size:21px;flex:1;text-align:center; }
+.assistant-dialog button,.assistant-call button { width:auto;flex:0 0 auto;cursor:pointer;color:inherit;background:#211a11;border:1px solid #6b552c;border-radius:10px;padding:10px 13px;font:inherit; }
+.assistant-dialog button:disabled { cursor:default;opacity:.5; }
+.assistant-dialog button:focus-visible,.assistant-call button:focus-visible { outline:2px solid #ffc640;outline-offset:3px; }
+.assistant-status { flex:1;min-width:0;color:#c9bb9e;font-size:14px; }
+.assistant-feed,.assistant-workspace { padding:14px 22px;overflow:auto;flex:1;min-height:0; }
+.assistant-message { margin:0 0 22px;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.55; }
+.assistant-message strong { display:block;color:#ffc640;font-size:12px;margin-bottom:6px; }
+.assistant-task { padding:12px;margin-bottom:12px;border:1px solid #57472c;border-radius:12px;white-space:pre-wrap;overflow-wrap:anywhere; }
+.assistant-task p { margin:8px 0;font-size:14px; }
+.assistant-workspace button { display:flex;justify-content:space-between;gap:18px;width:100%;text-align:left;margin-bottom:10px; }
+.assistant-error { color:#ffd06c;padding:0 18px;margin:0;font-size:14px; }
+.assistant-composer textarea { width:auto;min-width:0;resize:vertical;min-height:46px;max-height:180px;flex:1;background:#181416;color:inherit;border:1px solid #544432;border-radius:12px;padding:12px;font:inherit; }
+.assistant-controls .assistant-talk { flex:1;background:#f4bd42;color:#160e03;font-weight:700; }
+.assistant-call { position:fixed;bottom:12px;left:50%;transform:translateX(-50%);z-index:30;display:flex;align-items:center;gap:14px;max-width:calc(100vw - 24px);background:#101010;color:#ffebbd;padding:8px 12px;border:1px solid #645234;border-radius:16px; }
+.assistant-call[hidden],.assistant-dialog [hidden] { display:none !important; }
+@media(max-width:520px){#assistantOpen{left:86px;top:10px}.assistant-head,.assistant-controls,.assistant-composer{padding:10px;gap:8px}.assistant-feed,.assistant-workspace{padding:12px}}

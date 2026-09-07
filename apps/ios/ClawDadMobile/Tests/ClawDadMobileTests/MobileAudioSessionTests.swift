@@ -4,6 +4,17 @@ import XCTest
 
 @MainActor
 final class MobileAudioSessionTests: XCTestCase {
+  func testConversationOwnsAudioUntilExplicitlyEnded() throws {
+    var uses:[MobileAudioSession.Use]=[]
+    let audio=MobileAudioSession(activate:{uses.append($0)},deactivate:{})
+    let conversation=try audio.beginConversation(onReplaced:{XCTFail("Another feature must not replace conversation audio")})
+    XCTAssertThrowsError(try audio.beginRecording())
+    XCTAssertThrowsError(try audio.reservePlayback(onReplaced:{}))
+    XCTAssertEqual(uses,[.conversation])
+    audio.release(conversation)
+    let recording=try audio.beginRecording();audio.release(recording)
+    XCTAssertEqual(uses,[.conversation,.recording])
+  }
   private func silentAudio() -> Data {
     let count: UInt32 = 16_000 * 2 * 5
     var wav = Data()

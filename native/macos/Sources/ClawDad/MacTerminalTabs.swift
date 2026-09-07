@@ -143,6 +143,7 @@ final class MacTerminalAutomationPermissionRouter:
 
 @MainActor
 final class MacTerminalTabController {
+  static let shared = MacTerminalTabController()
   private let automation: MacTerminalAutomating
   private let permissionRouter: MacTerminalAutomationPermissionRouting
   private let readResponse: @MainActor (String) async throws -> RemoteTerminalResponse
@@ -156,6 +157,11 @@ final class MacTerminalTabController {
   private var windowNumbers: [Int: Int] = [:]
   private var nextWindowNumber = 1
   private var lastState: RemoteTerminalTabState?
+  func assistantSnapshot(tabID: String) -> MacTerminalTabSnapshot? { snapshotsByIdentifier[tabID] }
+  func assistantIdentifier(tty: String) -> String? {
+    let matches = snapshotsByIdentifier.filter { !$0.value.tty.isEmpty && $0.value.tty == tty }
+    return matches.count == 1 ? matches.first?.key : nil
+  }
   lazy var closing = MacTerminalTabCloseController(automation: automation,
     catalog: { [unowned self] in try await self.catalog() },
     snapshot: { [unowned self] in self.snapshotsByIdentifier[$0] })

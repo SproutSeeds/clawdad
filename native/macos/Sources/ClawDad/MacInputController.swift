@@ -174,6 +174,18 @@ final class MacInputController {
     releaseRemoteInputState()
   }
 
+  func sendAssistantKey(_ key: String, modifiers: [String], targetPID: pid_t) -> Bool {
+    guard AXIsProcessTrusted(), !MacConsoleSessionState.isLocked(),
+      NSWorkspace.shared.frontmostApplication?.processIdentifier == targetPID,
+      let stroke = assistantKeyStroke(key, modifiers: modifiers) else { return false }
+    return postKeyStroke(stroke, targetPID: targetPID)
+  }
+
+  func sendAssistantText(_ text: String, isAllowed: () -> Bool) async -> Bool {
+    guard let target = eligibleDictationTarget(), isAllowed(), !MacConsoleSessionState.isLocked() else { return false }
+    return await insertText(text, into: target)
+  }
+
   func prepareForDisplayTransition() {
     invalidateDictationTarget()
     pointerInputEnabled = false
@@ -309,6 +321,7 @@ final class MacInputController {
   }
 
   func sendQuickChat(_ request: RemoteQuickChatMessage,
+                    isAllowed: @MainActor () -> Bool = { true },
                     terminalIdentity: @MainActor () async throws -> String?) async -> RemoteQuickChatMessage {
     if let inputProcessingTask { await inputProcessingTask.value }
     if let clipboardCopyTask { await clipboardCopyTask.value }
@@ -317,13 +330,13 @@ final class MacInputController {
     let needsTerminal = dictationTargets.capture(for: token)?.requiresTerminalIdentity == true
     return await quickChatDelivery.deliver(request, insertIfCurrent: { [self] in
       let identity = needsTerminal ? try? await terminalIdentity() : nil
-      guard !Task.isCancelled, !speechSelectionInProgress,
+      guard !Task.isCancelled, isAllowed(), !speechSelectionInProgress,
             let target = dictationTargets.resolve(token: token, generation: inputGeneration,
               terminalIdentity: identity, isCurrent: targetIsCurrent) else { return false }
       return await insertText(request.text ?? "", into: target.input)
     }, submitIfCurrent: { [self] in
       let identity = needsTerminal ? try? await terminalIdentity() : nil
-      guard !Task.isCancelled,
+      guard !Task.isCancelled, isAllowed(),
             let target = dictationTargets.resolve(token: token, generation: inputGeneration,
               terminalIdentity: identity, isCurrent: { targetIsCurrent($0, checkSelection: false) })
       else { return false }

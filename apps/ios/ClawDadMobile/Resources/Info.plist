@@ -27,7 +27,7 @@
 	<key>NSCameraUsageDescription</key>
 	<string>ClawDad uses the camera to scan the pairing QR code from your Mac.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>ClawDad records voice notes so it can transcribe them into your message draft.</string>
+	<string>ClawDad uses your microphone for dictation and voice conversations with your Mac assistant.</string>
 	<key>UILaunchScreen</key>
 	<dict>
 		<key>UIColorName</key>

@@ -22,10 +22,12 @@
     </script>
     <link rel="stylesheet" href="/app.css?v=__CLAWDAD_ASSET_VERSION__">
     <link rel="stylesheet" href="/files-library.css?v=__CLAWDAD_ASSET_VERSION__">
+    <link rel="stylesheet" href="/assistant.css?v=__CLAWDAD_ASSET_VERSION__">
   </head>
   <body>
     <main class="app-shell">
       <button id="filesLibraryOpen" class="thread-button" type="button" aria-haspopup="dialog" aria-label="Open Files">Files</button>
+      <button id="assistantOpen" class="thread-button" type="button" aria-haspopup="dialog" aria-controls="assistantDialog">Assistant</button>
       <button
         id="settingsButton"
         class="thread-button settings-button"
@@ -1310,6 +1312,20 @@
       </section>
     </div>
 
+    <dialog id="assistantDialog" class="assistant-dialog" aria-labelledby="assistantHeading">
+      <div class="assistant-layout">
+        <div class="assistant-head"><button id="assistantBack" type="button">‹ Back</button><h2 id="assistantHeading">Assistant</h2><button id="assistantPause" type="button">Pause control</button></div>
+        <div class="assistant-controls"><span id="assistantStatus" class="assistant-status" role="status">Connecting to your Mac…</span><button id="assistantWorkspaceToggle" type="button" aria-pressed="false">Workspace</button></div>
+        <div id="assistantFeed" class="assistant-feed"><div id="assistantWelcome" class="assistant-message"><strong>Your Mac, in the conversation.</strong>Talk through an idea, ask about a project, or send work to one of your existing Terminal tabs. Speech uses your current ClawDad voice and transcription settings.</div></div>
+        <div id="assistantWorkspace" class="assistant-workspace" hidden></div>
+        <div id="assistantTasks" class="assistant-tasks" style="max-height:160px;overflow:auto;padding:0 18px"></div>
+        <p id="assistantError" class="assistant-error" role="status"></p>
+        <form id="assistantComposer" class="assistant-composer"><textarea id="assistantDraft" rows="2" placeholder="Message Assistant" aria-label="Message Assistant"></textarea><button id="assistantSend" type="submit">Send</button></form>
+        <div class="assistant-controls"><button id="assistantMuteInline" type="button" hidden>Mute</button><button id="assistantTalk" type="button" class="assistant-talk">Start talking</button></div>
+      </div>
+    </dialog>
+    <div id="assistantCall" class="assistant-call" hidden><button id="assistantReturn" type="button">Assistant</button><span id="assistantCallStatus">Listening…</span><button id="assistantMute" type="button">Mute</button><button id="assistantEnd" type="button">End</button></div>
     <script type="module" src="/app.js?v=__CLAWDAD_ASSET_VERSION__"></script>
+    <script type="module" src="/assistant.js?v=__CLAWDAD_ASSET_VERSION__"></script>
   </body>
 </html>

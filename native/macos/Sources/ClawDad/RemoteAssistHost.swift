@@ -2,6 +2,7 @@ import AppKit
 import ApplicationServices
 import CoreGraphics
 import Foundation
+import ClawDadRemoteAssistProtocol
 @preconcurrency import WebRTC
 
 struct RemoteAssistHostStatus: Equatable {
@@ -94,6 +95,8 @@ final class RemoteAssistHost: NSObject {
   var onStatusChange: ((RemoteAssistHostStatus) -> Void)?
   var filesRuntime: MacFilesRuntime?
   private var filesSession: MacFilesSession?
+  var assistantRuntime: MacAssistantRuntime?
+  private var assistantSession: MacAssistantSession?
 
   private let factory: RTCPeerConnectionFactory
   private var socket: URLSessionWebSocketTask?
@@ -171,6 +174,8 @@ final class RemoteAssistHost: NSObject {
       }
       connectIfNeeded()
     } else {
+      assistantSession?.stop()
+      assistantSession = nil
       stopActiveSession(reason: "Remote Assist was turned off on the Mac.")
     }
     publishStatus()
@@ -235,6 +240,8 @@ final class RemoteAssistHost: NSObject {
   }
 
   func stop() {
+    assistantSession?.stop()
+    assistantSession = nil
     filesSession?.stop()
     filesSession = nil
     stopActiveSession(
@@ -335,6 +342,15 @@ final class RemoteAssistHost: NSObject {
     }
     rememberEnvelope(envelope.id)
 
+    if envelope.type == "remote.assist.request", envelope.body["purpose"]?.stringValue == "assistant" {
+      handleAssistantRequest(envelope)
+      return
+    }
+    if envelope.body["sessionId"]?.stringValue == assistantSession?.id {
+      assistantSession?.handle(envelope)
+      return
+    }
+
     if envelope.type == "remote.assist.request", envelope.body["purpose"]?.stringValue == "files" {
       handleFilesRequest(envelope)
       return
@@ -362,6 +378,36 @@ final class RemoteAssistHost: NSObject {
       )
     default:
       break
+    }
+  }
+
+  private func handleAssistantRequest(_ envelope: RemoteCloudEnvelope) {
+    guard let id=envelope.body["sessionId"]?.stringValue, UUID(uuidString:id) != nil else{return}
+    guard enabled, let runtime=assistantRuntime else {
+      sendError("Enable Remote Assist on the Mac to connect Assistant.",code:"assistant_unavailable",sessionId:id,targetDeviceId:envelope.sourceDeviceId);return
+    }
+    if assistantSession?.id==id,assistantSession?.deviceId==envelope.sourceDeviceId{return}
+    if let existing=assistantSession,existing.deviceId != envelope.sourceDeviceId {
+      sendError("Assistant is connected to another paired device.",code:"assistant_busy",sessionId:id,targetDeviceId:envelope.sourceDeviceId);return
+    }
+    assistantSession?.stop()
+    let session=MacAssistantSession(id:id,deviceId:envelope.sourceDeviceId,runtime:runtime){[weak self] type,body in
+      guard let self,self.assistantSession?.id==id else{throw AssistantProtocolError.disconnected}
+      try await self.sendRemoteEnvelope(type:type,body:body,targetDeviceId:envelope.sourceDeviceId)
+    }
+    assistantSession=session
+    session.onStop={ [weak self,weak session] in
+      guard let self,let session,self.assistantSession===session else{return}
+      session.stop();self.assistantSession=nil
+      Task {try? await self.sendRemoteEnvelope(type:"remote.assist.stop",body:["sessionId":.string(id),"reason":.string("Renewing the Assistant connection.")],targetDeviceId:envelope.sourceDeviceId)}
+    }
+    Task {
+      do{try await session.start()}
+      catch {
+        guard assistantSession===session else{return}
+        sendError(error.localizedDescription,code:"assistant_connection_failed",sessionId:id,targetDeviceId:envelope.sourceDeviceId)
+        session.stop();assistantSession=nil
+      }
     }
   }
 

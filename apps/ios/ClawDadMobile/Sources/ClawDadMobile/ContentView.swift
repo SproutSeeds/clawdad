@@ -16,6 +16,7 @@ struct ContentView: View {
   @State private var showingScanner = false
   @State private var showingRemoteAssist = false
   @State private var showingFiles = false
+  @State private var showingAssistant = false
   @State private var showingTools = false
   @State private var showingProjectPicker = false
   @State private var showingNewThreadPrompt = false
@@ -34,6 +35,7 @@ struct ContentView: View {
   @StateObject private var voiceRecorder = VoiceRecorder()
   @StateObject private var remoteAssist = RemoteAssistController()
   @StateObject private var files = MobileFilesController()
+  @StateObject private var assistant = MobileAssistantController()
   @AppStorage("clawdad.threadScope") private var threadScopeRaw = MobileThreadScope.project.rawValue
   @FocusState private var messageEditorFocused: Bool
 
@@ -177,6 +179,18 @@ struct ContentView: View {
       .animation(reduceMotion ? nil : .easeInOut(duration: 0.38), value: session.startupLoading)
       .clawDadNavigationHidden()
       .safeAreaInset(edge: .bottom, spacing: 0) { ReadAloudBar(reader: session.readAloud) }
+      .safeAreaInset(edge: .bottom, spacing: 0) { AssistantCallBar(controller: assistant) { showingAssistant = true } }
+      .sheet(isPresented: $showingAssistant) {
+        AssistantView(controller: assistant, onClose: { showingAssistant = false }, onWatch: {
+          showingAssistant = false
+          Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            showingRemoteAssist = true
+            remoteAssist.bind(to: session)
+            remoteAssist.start()
+          }
+        })
+      }
       .sheet(isPresented: $showingSettings) {
         SettingsView(openScanner: {
           showingSettings = false
@@ -185,6 +199,7 @@ struct ContentView: View {
         .environmentObject(session)
         .environmentObject(subscription)
         .safeAreaInset(edge: .bottom, spacing: 0) { ReadAloudBar(reader: session.readAloud) }
+        .safeAreaInset(edge: .bottom, spacing: 0) { AssistantCallBar(controller: assistant) }
       }
       .sheet(isPresented: $showingTools) {
         ClawToolsSheet(
@@ -195,12 +210,14 @@ struct ContentView: View {
         .environmentObject(session)
         .presentationDetents([.large])
         .safeAreaInset(edge: .bottom, spacing: 0) { ReadAloudBar(reader: session.readAloud) }
+        .safeAreaInset(edge: .bottom, spacing: 0) { AssistantCallBar(controller: assistant) }
       }
 #if os(iOS)
       .sheet(isPresented: $showingFiles) {
         FilesLibraryView(controller: files) { showingFiles = false }
           .environmentObject(session)
           .safeAreaInset(edge: .bottom, spacing: 0) { ReadAloudBar(reader: session.readAloud) }
+          .safeAreaInset(edge: .bottom, spacing: 0) { AssistantCallBar(controller: assistant) }
       }
 #endif
       .sheet(isPresented: $showingProjectPicker) {
@@ -211,6 +228,7 @@ struct ContentView: View {
           }
         )
         .presentationDetents([.large])
+        .safeAreaInset(edge: .bottom, spacing: 0) { AssistantCallBar(controller: assistant) }
       }
       .sheet(item: $selectedThreadSelection) { selection in
         let thread = resolveMobileThreadSelection(
@@ -245,7 +263,7 @@ struct ContentView: View {
         )
       }
       .clawDadRemoteAssistCover(isPresented: $showingRemoteAssist) {
-        RemoteAssistView(controller: remoteAssist) {
+        RemoteAssistView(controller: remoteAssist, assistant: assistant) {
           showingRemoteAssist = false
         }
       }
@@ -272,6 +290,7 @@ struct ContentView: View {
         Text("Add a name to make this thread easier to find, or leave it blank.")
       }
       .onAppear {
+        assistant.bind(session)
         remoteAssist.bind(to: session)
         session.connectIfPaired()
         presentAppStorePreviewIfNeeded()
@@ -287,6 +306,7 @@ struct ContentView: View {
         if showing { voiceRecorder.cancel() }
       }
       .onChange(of: session.activeComputerId) { _, _ in
+        assistant.bind(session)
         selectedThreadSelection = nil
       }
       .onChange(of: threadScopeRaw) { _, _ in
@@ -512,6 +532,16 @@ struct ContentView: View {
   private var settingsOverlay: some View {
     VStack {
       HStack {
+        Button {
+          dismissKeyboard()
+          assistant.bind(session)
+          showingAssistant = true
+        } label: {
+          Image(systemName: "headphones").font(.system(size: 18, weight: .bold)).frame(width: 44, height: 44)
+        }
+        .buttonStyle(ClawDadGhostButtonStyle())
+        .accessibilityLabel("Open Assistant")
+        .accessibilityIdentifier("clawdad.assistant.open")
         Button {
           dismissKeyboard()
           showingRemoteAssist = true

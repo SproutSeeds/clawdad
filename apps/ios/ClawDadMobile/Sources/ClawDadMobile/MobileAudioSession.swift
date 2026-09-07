@@ -5,7 +5,7 @@ import Foundation
 /// A playback reservation covers preparation too, so capture can reject late audio.
 @MainActor
 final class MobileAudioSession {
-  enum Use { case recording, playback }
+  enum Use { case recording, playback, conversation }
   static let shared = MobileAudioSession()
 
   private struct Owner {
@@ -50,6 +50,15 @@ final class MobileAudioSession {
     }
   }
 
+  func beginConversation(onReplaced: @escaping () -> Void) throws -> UUID {
+    try requireAvailableMicrophone()
+    releaseCurrentOwner()
+    let id=UUID()
+    owner=Owner(id:id,use:.conversation,onReplaced:onReplaced)
+    do {try activate(.conversation);owner?.active=true;return id}
+    catch {release(id);throw error}
+  }
+
   func activatePlayback(_ id: UUID) throws {
     guard owner?.id == id, owner?.use == .playback else { throw AudioError.expired }
     try activate(.playback)
@@ -65,6 +74,7 @@ final class MobileAudioSession {
 
   private func requireAvailableMicrophone() throws {
     if owner?.use == .recording { throw AudioError.recordingInProgress }
+    if owner?.use == .conversation { throw AudioError.conversationInProgress }
   }
 
   private func releaseCurrentOwner() {
@@ -82,6 +92,7 @@ final class MobileAudioSession {
     switch use {
     case .recording: try session.setCategory(.record, mode: .default)
     case .playback: try session.setCategory(.playback, mode: .spokenAudio)
+    case .conversation: try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth])
     }
     try session.setActive(true)
 #endif
@@ -94,10 +105,11 @@ final class MobileAudioSession {
   }
 
   enum AudioError: LocalizedError {
-    case recordingInProgress, expired
+    case recordingInProgress, conversationInProgress, expired
     var errorDescription: String? {
       switch self {
       case .recordingInProgress: return "Finish dictation before starting audio playback."
+      case .conversationInProgress: return "End the Assistant voice conversation before using another microphone or playback control."
       case .expired: return "This audio was stopped. Tap the speaker to read it again."
       }
     }

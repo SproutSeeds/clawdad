@@ -5,6 +5,7 @@ node_modules/
 .clawdad/
 .wrangler/
 .playwright-mcp/
+.cache/assistant-*
 native/macos/.build/
 native/macos/dist/
 native/ClawDadRemoteAssistProtocol/.build/

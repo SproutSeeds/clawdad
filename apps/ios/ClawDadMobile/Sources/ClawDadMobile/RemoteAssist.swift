@@ -3059,6 +3059,7 @@ struct RemoteTerminalTabButton: View {
 
 struct RemoteAssistView: View {
   @ObservedObject var controller: RemoteAssistController
+  var assistant: MobileAssistantController? = nil
   @EnvironmentObject private var session: CloudSession
   @Environment(\.scenePhase) private var scenePhase
   @StateObject private var files = MobileFilesController()
@@ -3068,6 +3069,7 @@ struct RemoteAssistView: View {
   @State private var viewportResetToken = 0
   @State private var controlsExpanded = false
   @State private var showingFiles = false
+  @State private var showingAssistant = false
   @State private var controlPage: RemoteAssistControlPage = .primary
   @State private var terminalWindowExpansion = RemoteTerminalWindowExpansion()
   @AccessibilityFocusState private var accessibilityFocus:
@@ -3250,6 +3252,14 @@ struct RemoteAssistView: View {
     }
     .statusBarHidden(true)
     .persistentSystemOverlays(.hidden)
+    .safeAreaInset(edge: .top, spacing: 0) {
+      if let assistant { AssistantCallBar(controller: assistant) { showingAssistant = true } }
+    }
+    .sheet(isPresented: $showingAssistant) {
+      if let assistant {
+        AssistantView(controller: assistant, onClose: { showingAssistant = false }, onWatch: { showingAssistant = false })
+      }
+    }
     .alert(item: $controller.terminalCloseConfirmation) { intent in
       Alert(title: Text(intent.title), message: Text(intent.message),
         primaryButton: .destructive(Text(intent.button)) { controller.confirmTerminalClose(intent) },
@@ -3489,6 +3499,15 @@ struct RemoteAssistView: View {
         .accessibilityFocused($accessibilityFocus, equals: .terminalReader)
 
         RemoteImageButton(controller: controller, transfer: controller.imageTransfer)
+
+        if let assistant {
+          Button { assistant.bind(session); showingAssistant = true } label: {
+            Image(systemName: "headphones").font(.system(size: 18, weight: .bold)).frame(width: 44, height: 44)
+          }
+          .buttonStyle(RemoteAssistOverlayButtonStyle())
+          .accessibilityLabel("Open Assistant")
+          .accessibilityIdentifier("clawdad.remote.assistant")
+        }
 
         Button { controlPage = .quickChat } label: {
           Image(systemName: "text.bubble.fill")
@@ -4453,6 +4472,7 @@ final class RemoteAssistController: ObservableObject {
 
 struct RemoteAssistView: View {
   @ObservedObject var controller: RemoteAssistController
+  var assistant: MobileAssistantController? = nil
   var onClose: () -> Void
 
   var body: some View {
