@@ -9,9 +9,12 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import {
   ensureCachedTtsAudio,
+  readTtsManifest,
   resolveTtsRuntimeConfig,
   splitTtsText,
 } from "../lib/tts-cache.mjs";
+import { handleCloudEnvelope } from "../lib/cloud-host-connector.mjs";
+import { generateP256KeyPair, normalizeCloudEnvelope, signCloudEnvelope, verifyCloudEnvelopeSignature } from "../lib/cloud-protocol.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const serverScript = path.join(repoRoot, "lib", "server.mjs");
@@ -150,10 +153,19 @@ async function startFakeDocReaderSpeech({
   },
   errorBody = "",
   audioPrefix = "fake-wav",
+  beforeSpeech = async () => {},
 } = {}) {
   const speechCalls = [];
   const healthCalls = [];
   const server = http.createServer(async (req, res) => {
+    if (req.method === "GET" && req.url === "/v1/voices") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({schema: "clawdad.local-voices/1", models: [{
+        id: "kokoro", modelId: "kokoro-82m-v1", name: "Kokoro", enabled: true,
+        installed: true, supportsSpeed: true, voices: [{id: "af_heart", name: "Heart"}],
+      }]}));
+      return;
+    }
     if (req.method === "GET" && req.url === "/healthz") {
       healthCalls.push({ method: req.method, url: req.url });
       res.writeHead(healthStatus, { "content-type": "application/json" });
@@ -172,6 +184,7 @@ async function startFakeDocReaderSpeech({
       accept: req.headers.accept,
       body: JSON.parse(body || "{}"),
     });
+    await beforeSpeech(speechCalls.length);
     if (speechStatus >= 400) {
       res.writeHead(speechStatus, { "content-type": "application/json" });
       res.end(errorBody || JSON.stringify({ message: "local speech failed" }));
@@ -869,6 +882,85 @@ test("paired iPhone Read Aloud uses Mac speech before the optional Umbra fallbac
     await umbra.close();
     await mac.close();
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("one signed Read Aloud request downloads completed parts through the real server while later speech generates", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-tts-progressive-http-"));
+  const fixtureHome = path.join(root, "home");
+  const projectPath = path.join(root, "project");
+  const configPath = path.join(root, "server.json");
+  const catalogScript = path.join(root, "catalog-fixture");
+  await writeFile(catalogScript, `#!/usr/bin/env node\nprocess.stdout.write(${JSON.stringify(JSON.stringify({tabs:[{path: projectPath, title: "Speech fixture"}]}))});\n`, {mode: 0o755});
+  let releaseLaterPart;
+  const laterPart = new Promise(resolve => { releaseLaterPart = resolve; });
+  const speech = await startFakeDocReaderSpeech({ beforeSpeech: async index => {
+    if (index === 2) await laterPart;
+  } });
+  await mkdir(fixtureHome, { recursive: true });
+  await mkdir(projectPath, { recursive: true });
+  await writeJson(path.join(fixtureHome, "state.json"), {
+    version: 3, projects: { [projectPath]: { status: "idle", active_session_id: "speech-session",
+      sessions: { "speech-session": {slug: "Speech fixture", provider: "codex", status: "idle"} } } },
+  });
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  await writeJson(configPath, { host: "127.0.0.1", port, authMode: "token", defaultProject: projectPath });
+  const child = spawn(process.execPath, [serverScript, "serve", "--config", configPath], {
+    cwd: repoRoot,
+    env: { ...process.env, CLAWDAD_HOME: fixtureHome, CLAWDAD_CODEX_HOME: path.join(root, "codex"),
+      CLAWDAD_BIN_PATH: catalogScript, CLAWDAD_SERVER_TOKEN: "speech-fixture",
+      CLAWDAD_CODEX_APP_SERVER_MODE: "isolated", CLAWDAD_TTS_ENABLED: "true",
+      CLAWDAD_TTS_PROVIDER: "doc-reader", CLAWDAD_DOC_READER_URL: speech.baseUrl,
+      CLAWDAD_DOC_READER_TTS_URL: speech.baseUrl, CLAWDAD_DOC_READER_TTS_FALLBACK_URL: speech.baseUrl },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const host = generateP256KeyPair();
+  const phone = generateP256KeyPair();
+  const config = { accountId: "test-account", workspaceId: "test-workspace", hostId: "test-mac",
+    localUrl: baseUrl, localToken: "speech-fixture", hostPrivateKeyPem: host.privateKey,
+    hostPublicKeyPem: host.publicKey, trustedDevicePublicKeys: { "test-phone": phone.publicKey } };
+  const envelope = signCloudEnvelope(normalizeCloudEnvelope({ type: "speech.synthesize.request",
+    accountId: config.accountId, workspaceId: config.workspaceId, sourceDeviceId: "test-phone", targetHostId: config.hostId,
+    body: { requestId: "first-and-only-tap", source: "remote-assist", project: "",
+      text: "This first sentence should play before the next part is finished. The later part remains blocked until that audio has reached the phone.",
+      executionPreference: "paired-mac-first", allowRemoteFallback: false,
+      voiceSelection: {engine: "kokoro", modelId: "kokoro-82m-v1", voice: "af_heart", speed: 1} },
+  }), phone.privateKey);
+  const sent = [];
+  try {
+    await waitForHealth(baseUrl, child);
+    const result = await handleCloudEnvelope(envelope, config, async message => {
+      sent.push(message);
+      assert.equal(verifyCloudEnvelopeSignature(message, host.publicKey), true);
+      if (message.type === "speech.synthesis.chunk" && message.body.partIndex === 0) {
+        const manifest = await readTtsManifest(projectPath, message.body.audioId);
+        assert.equal(manifest.state, "generating");
+        assert.equal(manifest.parts.length, 1);
+        assert.equal(message.body.partCount, 2);
+        assert.equal(Buffer.from(message.body.dataBase64, "base64").toString(), "fake-wav-1");
+        const query = new URLSearchParams({project: projectPath, audioId: manifest.audioId, part: "part-001.wav"});
+        const range = await fetch(`${baseUrl}/v1/tts/audio?${query}`, {
+          headers: {authorization: "Bearer speech-fixture", range: "bytes=0-3"},
+        });
+        assert.equal(range.status, 206);
+        assert.equal(await range.text(), "fake");
+        query.set("part", "part-002.wav");
+        const pending = await fetch(`${baseUrl}/v1/tts/audio?${query}`, {headers: {authorization: "Bearer speech-fixture"}});
+        assert.equal(pending.status, 409);
+        assert.equal((await pending.json()).errorCode, "audio_not_ready");
+        releaseLaterPart();
+      }
+    });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.deepEqual(sent.map(message => message.type), ["speech.synthesize.accepted", "speech.synthesis.chunk", "speech.synthesis.chunk", "speech.synthesis.complete"]);
+    assert.equal(sent.at(-1).body.partCount, 2);
+    assert.equal(speech.speechCalls.length, 2);
+  } finally {
+    releaseLaterPart();
+    await stopServer(child);
+    await speech.close();
+    await rm(root, {recursive: true, force: true});
   }
 });
 

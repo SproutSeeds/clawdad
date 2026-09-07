@@ -1026,6 +1026,79 @@ test("Read Aloud delivers the first part before generation completes and freezes
   assert.equal(sent.filter(e=>e.type === "speech.synthesis.chunk")[0].body.partCount,2);
 });
 
+for (const recovery of ["legacy readiness", "structured readiness", "local service restart", "audio connection reset"]) {
+  test(`one Read Aloud tap recovers from ${recovery} without repeating a delivered part`, async t => {
+    const device = generateP256KeyPair();
+    const config = hostConfig({trustedDevicePublicKeys: {"ios-phone": device.publicKey}});
+    const originalFetch = globalThis.fetch;
+    t.after(() => { globalThis.fetch = originalFetch; });
+    const requests = [];
+    const audioGets = [0, 0];
+    const sent = [];
+    const voice = {engine: "kokoro", modelId: "kokoro-82m-v1", voice: "af_heart", speed: 1};
+    const parts = [0, 1].map(index => ({fileName: `part-${index}.wav`, url: `/v1/tts/audio?part=${index}`}));
+    globalThis.fetch = async (url, options = {}) => {
+      const route = new URL(url);
+      if (route.pathname === "/v1/tts/voices") return Response.json({selection: voice});
+      if (route.pathname === "/v1/tts/message") {
+        requests.push(JSON.parse(options.body));
+        if (recovery === "local service restart" && requests.length === 1) {
+          return Response.json({error: "Service restarting"}, {status: 503});
+        }
+        return Response.json({audio: {state: "ready", audioId: "same-audio", chunkCount: 2, parts}});
+      }
+      const index = Number(route.searchParams.get("part"));
+      audioGets[index]++;
+      if (index === 1 && audioGets[index] === 1 && recovery !== "local service restart") {
+        assert.equal(sent.filter(message => message.type === "speech.synthesis.chunk").length, 1);
+        if (recovery === "audio connection reset") throw new TypeError("fetch failed", {cause: {code: "ECONNRESET"}});
+        return Response.json(recovery === "legacy readiness" ? {error: "audio is not ready"} :
+          {error: "Audio is still preparing.", errorCode: "audio_not_ready"}, {status: recovery === "legacy readiness" ? 404 : 409});
+      }
+      return new Response(`audio-part-${index}`, {headers: {"content-type": "audio/wav"}});
+    };
+    const envelope = signCloudEnvelope(normalizeCloudEnvelope({type: "speech.synthesize.request",
+      accountId: config.accountId, workspaceId: config.workspaceId, sourceDeviceId: "ios-phone", targetHostId: config.hostId,
+      body: {requestId: "single-tap", project: "/workspace/clawdad", text: "Keep this text and its voice through recovery."},
+    }), device.privateKey);
+    assert.equal((await handleCloudEnvelope(envelope, config, async message => {sent.push(message);})).ok, true);
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].poll, false);
+    assert.equal(requests[1].poll, true);
+    assert.deepEqual(requests[0], {...requests[1], poll: false});
+    assert.deepEqual(requests[1].voiceSelection, voice);
+    assert.deepEqual(audioGets, recovery === "local service restart" ? [1, 1] : [1, 2]);
+    assert.deepEqual(sent.map(message => message.type), ["speech.synthesize.accepted", "speech.synthesis.chunk", "speech.synthesis.chunk", "speech.synthesis.complete"]);
+    assert.equal(sent.at(-1).body.totalBytes, Buffer.byteLength("audio-part-0audio-part-1"));
+    assert.equal(sent.every(message => verifyCloudEnvelopeSignature(message, config.hostPublicKeyPem)), true);
+  });
+}
+
+test("Read Aloud preserves authorization failures instead of treating them as preparing audio", async t => {
+  const device = generateP256KeyPair();
+  const config = hostConfig({trustedDevicePublicKeys: {"ios-phone": device.publicKey}});
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  let audioGets = 0;
+  globalThis.fetch = async url => {
+    const route = new URL(url).pathname;
+    if (route === "/v1/tts/voices") return Response.json({});
+    if (route === "/v1/tts/message") return Response.json({audio: {state: "ready", parts: [{url: "/v1/tts/audio?part=1"}]}});
+    audioGets++;
+    return Response.json({error: "Unauthorized"}, {status: 401});
+  };
+  const envelope = signCloudEnvelope(normalizeCloudEnvelope({type: "speech.synthesize.request",
+    accountId: config.accountId, workspaceId: config.workspaceId, sourceDeviceId: "ios-phone", targetHostId: config.hostId,
+    body: {requestId: "auth-failure", project: "/workspace/clawdad", text: "Read this once."},
+  }), device.privateKey);
+  const sent = [];
+  const result = await handleCloudEnvelope(envelope, config, async message => {sent.push(message);});
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "Unauthorized");
+  assert.equal(audioGets, 1);
+  assert.equal(sent.at(-1).type, "error");
+});
+
 test("Remote Assist Read Aloud uses the host default without a mirrored project or turn", async (t) => {
   const deviceKeys = generateP256KeyPair();
   const config = hostConfig({ trustedDevicePublicKeys: { "ios-phone": deviceKeys.publicKey } });

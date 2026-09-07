@@ -1,5 +1,9 @@
 # First-tap reading and iPhone file export repair
 
+Follow-up: [Mac build 61 repairs the audio download handoff](speech-handoff-repair-2026-09-06.md).
+The previous streaming checks missed the real server's full-manifest readiness
+gate. Build 50's Terminal lookup, audio-route, and Files repairs remain in place.
+
 iPhone 0.7.0 build 50 is available in ClawDad Internal TestFlight with repairs for
 Remote Assist reading and Files. Installed Mac build 60 supports this update.
 
