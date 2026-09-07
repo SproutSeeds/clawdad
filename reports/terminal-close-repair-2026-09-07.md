@@ -1,8 +1,9 @@
 # Terminal close verification repair
 
-Prepared Mac-side source patch for the iPhone report on installed Mac build 63.
-The installed app remains build 63; this repair has not been installed or released.
-The existing iPhone build 52 and close-message protocol are compatible.
+Mac build 64 is signed, notarized, installed, and running with the Terminal close
+repair. Its authenticated host health and runtime checks pass. The existing
+iPhone build 52 and close-message protocol are compatible; this repair requires
+reconnecting Remote Assist after the Mac app restart, without an iPhone update.
 
 ## Audit
 
@@ -53,7 +54,7 @@ sequence resolves the observed issue.
 Selecting a background tab for closing brings it into view. Terminal determines
 the selected neighbor after closure; Cancel keeps the selected target open.
 
-## Verification and release gate
+## Verification
 
 The original implementation fails three new regression cases with the exact
 reported timeout: background close delivery without effect, a modal blocking
@@ -71,10 +72,39 @@ WebRTC Sendable warnings are unchanged. Logs and the reviewable patch are under
 No open user Terminal tabs were selected, modified, or closed by this audit.
 The native close tests use an injected accessibility graph; the separate AppKit
 fixture covers real tab/window lifetime, not external Terminal AX actuation.
-Before calling the issue resolved on-device, install a new signed Mac build and
-verify Close and Cancel against disposable selected/background/overflow tabs,
+Before calling the issue resolved on-device, verify Close and Cancel against
+disposable selected/background/overflow tabs using the installed build 64,
 including a running-process warning and the last tab in a separate window. Check
 that neighboring tabs remain open and that one tap closes only the requested tab.
+
+## Installed release
+
+- Repair source commit: `2eba0fe`.
+- Installed app: `/Applications/ClawDad.app`, version `0.7.0`, build `64`.
+- Apple notarization: `Accepted`, submission
+  `5f6d81e0-1069-49dd-b026-ad4052fbc80d`; ticket stapled. Strict code-signature and
+  Gatekeeper checks pass on the installed app.
+- Installed executable SHA-256:
+  `285789870fbcb88a38b3725a0294092204b2a8d56f197a237c09654e1c8b0a39`.
+- Stapled release ZIP SHA-256:
+  `73d1bd5f637a9d848317a1e21d29651fc2cd2dd3290d378a7d7417a337b3e3ef`.
+- Reopened the installed app and verified one running process from its canonical
+  Applications path. Authenticated `/healthz` returns HTTP 200, `ok: true`, and
+  `codexAppServer.ready: true`; `/v1/native/capabilities` returns HTTP 200.
+- Bundle, active-runtime, and capability fingerprints agree:
+  `05cc15e94b79da25d113c55c8dba0cffac8ffba4e5e58ee7384bb1f43a9cd66b`.
+  The native-only repair preserves the verified runtime and framework resources
+  from build 63. Source, installed bundle, and active copies of `lib/server.mjs`,
+  `lib/cloud-host-connector.mjs`, and `lib/app-store-connect.mjs` match by SHA-256.
+- Final installation checks recorded at `2026-09-07T04:51:02.218Z` in
+  `mac-install-verification.json` under the candidate directory. Packaging,
+  notarization, signature, and test evidence remain alongside it; `rollback/`
+  retains the previously signed build 63.
+
+This is the private native Mac release. The existing iPhone build remains 52;
+public npm, GitHub releases, and the public appcast were not changed. The code and
+installation checks establish that the repair is deployed. Physical iPhone to
+Terminal close verification remains pending.
 
 ## Workspace
 
