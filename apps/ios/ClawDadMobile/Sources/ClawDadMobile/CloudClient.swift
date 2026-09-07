@@ -30,6 +30,7 @@ final class MobileReadAloudController: NSObject, ObservableObject {
   private let audioSession: MobileAudioSession
   private var audioSessionID: UUID?
   private var timeoutTask: Task<Void, Never>?
+  private var playbackStartTask: Task<Void, Never>?
   private let maximumAudioBytes = 256 * 1024 * 1024
   private let maximumChunkBytes = 512 * 1024
   private let prepareTimeoutNanoseconds: UInt64 = 6 * 60 * 1_000_000_000
@@ -177,7 +178,13 @@ final class MobileReadAloudController: NSObject, ObservableObject {
   }
 
   func resume() {
-    guard phase == .paused, let player else {
+    guard phase == .paused else { return }
+    guard let player else {
+      // A part may finish just as Pause is pressed. Resume the next available
+      // part, or keep waiting for it, without losing the user's playback intent.
+      phase = .preparing
+      statusMessage = "Preparing the next part…"
+      startAvailableAudio()
       return
     }
     do {
@@ -280,12 +287,33 @@ final class MobileReadAloudController: NSObject, ObservableObject {
   }
 
   private func startAvailableAudio() {
-    guard player == nil, phase != .paused, playlist.indices.contains(playlistIndex) else { return }
+    guard player == nil, playbackStartTask == nil, phase != .paused, playlist.indices.contains(playlistIndex) else { return }
     do {
       try activatePlaybackSession()
       try playCurrentPart()
     } catch {
-      fail(requestId: requestId, message: "ClawDad could not play this audio: \(error.localizedDescription)")
+      let attempt = requestId
+      guard !attempt.isEmpty, phase == .preparing || phase == .playing else { return }
+      phase = .preparing
+      statusMessage = "Starting audio…"
+      // Audio routes can still be settling after recording or opening Remote
+      // Assist. Retain the received file and retry startup within this tap.
+      playbackStartTask = Task { @MainActor [weak self] in
+        var lastError = error
+        for delay: UInt64 in [250_000_000, 750_000_000, 1_500_000_000] {
+          try? await Task.sleep(nanoseconds: delay)
+          guard !Task.isCancelled, let self, self.requestId == attempt, self.phase == .preparing else { return }
+          do {
+            try self.activatePlaybackSession()
+            try self.playCurrentPart()
+            self.playbackStartTask = nil
+            return
+          } catch { lastError = error }
+        }
+        guard let self, !Task.isCancelled, self.requestId == attempt else { return }
+        self.playbackStartTask = nil
+        self.fail(requestId: attempt, message: "ClawDad could not play this audio: \(lastError.localizedDescription)")
+      }
     }
   }
 
@@ -323,11 +351,7 @@ final class MobileReadAloudController: NSObject, ObservableObject {
     playlistIndex += 1
     player = nil
     if playlist.indices.contains(playlistIndex) {
-      do {
-        try playCurrentPart()
-      } catch {
-        fail(requestId: requestId, message: "ClawDad could not play the next audio part.")
-      }
+      startAvailableAudio()
     } else if transferComplete {
       finishPlayback()
     } else {
@@ -354,6 +378,8 @@ final class MobileReadAloudController: NSObject, ObservableObject {
   }
 
   private func resetPlayback() {
+    playbackStartTask?.cancel()
+    playbackStartTask = nil
     timeoutTask?.cancel()
     timeoutTask = nil
     player?.delegate = nil

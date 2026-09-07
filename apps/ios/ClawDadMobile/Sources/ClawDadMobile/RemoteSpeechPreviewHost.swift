@@ -9,6 +9,7 @@ final class RemoteSpeechPreviewHost {
   private let receive: (Data) -> Void
   private var requests = 0
   private var catalogRequests = 0
+  private var selectionRequests = 0
   private var tokens: Set<String> = []
   private var capturing = false
   private var selectedTab = "window-1-tab-1"
@@ -46,6 +47,7 @@ final class RemoteSpeechPreviewHost {
         let copied = request.copyOnly == true || !tokens.contains(request.targetToken ?? "") || arguments.contains("--clawdad-preview-clipboard-only")
         if let reply = try? request.result(disposition: copied ? "copied" : "pasteRequested").encode() { receive(reply) }
       } else if let request = try? RemoteSpeechContextMessage.decode(data) {
+        if request.action == .selection { selectionRequests += 1 }
         let result: RemoteSpeechContextMessage
         if request.action == .captureTarget {
           capturing = true
@@ -56,6 +58,8 @@ final class RemoteSpeechPreviewHost {
             targetName: arguments.contains("--clawdad-preview-clipboard-only") ? nil : "Preview editor")
         } else if capturing {
           result = request.failure("Selection collided with target capture.")
+        } else if selectionRequests == 1, arguments.contains("--clawdad-preview-selection-busy-once") {
+          result = request.failure("Wait for the current speech operation to finish.")
         } else if arguments.contains("--clawdad-preview-selection-error") {
           result = request.failure("Selection unavailable. Tap the speaker to retry.")
         } else {
@@ -77,7 +81,12 @@ final class RemoteSpeechPreviewHost {
         if let reply = try? RemoteClipboardCodec.encode(result) { receive(reply) }
       } else if let request = try? RemoteTerminalTabCodec.decode(data) {
         let grouped = arguments.contains("--clawdad-preview-window-groups")
-        if request.type == RemoteTerminalTabMessage.listType { catalogRequests += 1 }
+        if request.type == RemoteTerminalTabMessage.listType {
+          catalogRequests += 1
+          if catalogRequests == 1, arguments.contains("--clawdad-preview-slow-catalog") {
+            try? await Task.sleep(for: .seconds(9))
+          }
+        }
         if request.type == RemoteTerminalTabMessage.focusType, let tab = request.tabId { selectedTab = tab }
         if request.type == RemoteTerminalTabMessage.moveType, let id = request.tabId, let neighborID = request.neighborTabId,
            let source = Int(id.split(separator: "-").last ?? ""), let neighbor = Int(neighborID.split(separator: "-").last ?? "") {

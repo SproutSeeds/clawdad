@@ -35,7 +35,7 @@ struct MobileLibraryItem: Codable, Identifiable, Equatable, Sendable {
   var projectName: String { project.isEmpty ? "Personal" : URL(fileURLWithPath: project).lastPathComponent }
 }
 
-struct MobileLibraryPage: Decodable {
+struct MobileLibraryPage: Codable {
   let revision: Int
   let items: [MobileLibraryItem]
   let nextCursor: Int?
@@ -44,7 +44,7 @@ struct MobileLibraryPage: Decodable {
   let formats: [String]?
 }
 
-struct MobileLibraryChunk: Decodable {
+struct MobileLibraryChunk: Codable {
   let id: String
   let versionId: String
   let offset: Int
@@ -150,6 +150,9 @@ final class MobileFilesController: ObservableObject {
   private var needsRefresh = false
   private var pageRevision: Int?
   private var desiredDownload: (MobileLibraryItem, MobileLibraryVersion)?
+#if DEBUG && os(iOS)
+  private var exportPreview: MobileFilesPreview?
+#endif
 
   var computerName: String { session?.activeComputerName ?? "Mac" }
 
@@ -167,6 +170,18 @@ final class MobileFilesController: ObservableObject {
     query = ""; archived = false; project = ""; format = ""; category = "documents"; nextCursor = nil; pageRevision = nil; error = ""
     self.session = session
     session.setFilesEnvelopeHandler { [weak self] envelope in self?.handle(envelope) }
+#if DEBUG && os(iOS)
+    if ClawDadAppStorePreviewScenario.current != nil, ProcessInfo.processInfo.arguments.contains("--clawdad-files-export-test") {
+      do {
+        if exportPreview == nil { exportPreview = MobileFilesPreview() }
+        try cache?.save([exportPreview!.item])
+        items = [exportPreview!.item]
+        connected = true
+        status = "Files export test"
+      } catch { self.error = error.localizedDescription }
+      return
+    }
+#endif
     connect()
   }
 
@@ -247,6 +262,9 @@ final class MobileFilesController: ObservableObject {
 
   private func request(_ command: RemoteFileRequest) async throws -> Data {
     try command.validate()
+#if DEBUG && os(iOS)
+    if let exportPreview { return try exportPreview.response(to: command) }
+#endif
     guard pending == nil, connected, let peer else { throw RemoteFileError.disconnected }
     return try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { continuation in

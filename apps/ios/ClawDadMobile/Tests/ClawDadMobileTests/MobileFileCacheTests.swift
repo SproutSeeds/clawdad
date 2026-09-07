@@ -3,6 +3,38 @@ import CryptoKit
 @testable import ClawDadMobile
 
 final class MobileFileCacheTests: XCTestCase {
+  func testExportRetainsExactNamedFileAfterCachedDownloadIsRemoved() throws {
+    let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: base) }
+    let cache = try MobileFileCache(scope: "account/mac", base: base)
+    let data = Data("Finished report with real text.".utf8)
+    let version = MobileLibraryVersion(id: UUID().uuidString, fileName: "My report.txt", format: "txt", mimeType: "text/plain", size: data.count,
+      sha256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(), createdAt: "today")
+    try data.write(to: cache.url(version, partial: true))
+    let downloaded = try cache.finish(version)
+    let exported = try MobileFileExport.prepare(source: downloaded, version: version, base: base.appendingPathComponent("exports"))
+    XCTAssertEqual(exported.url.lastPathComponent, version.fileName)
+    XCTAssertNotEqual(exported.url, downloaded)
+    try cache.removeDownload(version)
+    XCTAssertEqual(try Data(contentsOf: exported.url), data)
+    exported.remove()
+    XCTAssertFalse(FileManager.default.fileExists(atPath: exported.url.path))
+  }
+
+  func testExportRejectsSameSizeCorruptionAndPreservesOriginal() throws {
+    let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: base) }
+    let cache = try MobileFileCache(scope: "account/mac", base: base)
+    let data = Data("Good".utf8)
+    let version = MobileLibraryVersion(id: UUID().uuidString, fileName: "Report.txt", format: "txt", mimeType: "text/plain", size: data.count,
+      sha256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(), createdAt: "today")
+    let downloaded = try cache.url(version)
+    try Data("Bad!".utf8).write(to: downloaded)
+    let exports = base.appendingPathComponent("exports")
+    XCTAssertThrowsError(try MobileFileExport.prepare(source: downloaded, version: version, base: exports))
+    XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: exports.path), [])
+    XCTAssertEqual(try Data(contentsOf: downloaded), Data("Bad!".utf8))
+  }
   func testOfflineDownloadChecksHashAndIsScopedToPairedComputer() throws {
     let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: base) }

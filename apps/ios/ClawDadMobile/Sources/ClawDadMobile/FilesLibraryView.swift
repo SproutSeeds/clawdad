@@ -122,7 +122,23 @@ struct FilesLibraryView: View {
 private struct MobileFileDetail: View {
   let item: MobileLibraryItem
   @ObservedObject var controller: MobileFilesController
-  @State private var previewURL: URL?
+  private enum FileAction { case preview, save, share }
+  private struct PendingFile: Identifiable {
+    let id = UUID()
+    let version: MobileLibraryVersion
+    let source: URL
+    let action: FileAction
+  }
+  private struct Presentation: Identifiable {
+    let file: MobileFileExport
+    let action: FileAction
+    var id: UUID { file.id }
+  }
+  @State private var requestedFile: PendingFile?
+  @State private var presentation: Presentation?
+  @State private var retainedFile: MobileFileExport?
+  @State private var fileNotice = ""
+  @State private var fileError = ""
   @Environment(\.dismiss) private var dismiss
   private var current: MobileLibraryItem { controller.items.first { $0.id == item.id } ?? item }
   private var latestFormats: [MobileLibraryVersion] {
@@ -137,6 +153,9 @@ private struct MobileFileDetail: View {
         Text(current.projectName).foregroundStyle(.secondary)
         Text(controller.status).font(.footnote).foregroundStyle(.secondary)
         if !controller.error.isEmpty { Text(controller.error).font(.footnote).foregroundStyle(ClawDadTheme.peach) }
+        if requestedFile != nil { ProgressView("Preparing file…") }
+        if !fileNotice.isEmpty { Text(fileNotice).font(.footnote).accessibilityIdentifier("clawdad.files.export.status") }
+        if !fileError.isEmpty { Text(fileError).font(.footnote).foregroundStyle(ClawDadTheme.peach) }
       }
       Section("Latest files") { ForEach(latestFormats) { version in versionRow(version) } }
       if current.versions.count > latestFormats.count {
@@ -160,7 +179,49 @@ private struct MobileFileDetail: View {
     .navigationTitle("Document")
     .scrollContentBackground(.hidden)
     .background(ClawDadTheme.background)
-    .quickLookPreview($previewURL)
+    .sheet(item: $presentation, onDismiss: {
+      retainedFile?.remove(); retainedFile = nil
+    }) { displayed in
+      switch displayed.action {
+      case .preview:
+        MobileFilePreview(file: displayed.file) { presentation = nil }
+      case .save:
+        NavigationStack {
+          MobileFileSavePicker(file: displayed.file) { destination in
+            if let destination { fileNotice = "Saved \(destination.lastPathComponent) to Files." }
+            presentation = nil
+          }
+          .navigationTitle("Save to Files")
+          .navigationBarTitleDisplayMode(.inline)
+          .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+              Button("Cancel") { presentation = nil }.keyboardShortcut(.cancelAction)
+            }
+          }
+        }
+      case .share:
+        MobileFileShareSheet(file: displayed.file) { completed, error in
+          if let error { fileError = "Sharing failed: \(error.localizedDescription)" }
+          else if completed { fileNotice = "File shared." }
+          presentation = nil
+        }
+      }
+    }
+    .task(id: requestedFile?.id) {
+      guard let requested = requestedFile else { return }
+      do {
+        let file = try await Task.detached(priority: .userInitiated) {
+          try MobileFileExport.prepare(source: requested.source, version: requested.version)
+        }.value
+        guard !Task.isCancelled else { file.remove(); return }
+        retainedFile = file
+        presentation = Presentation(file: file, action: requested.action)
+      } catch {
+        guard !Task.isCancelled else { return }
+        fileError = error.localizedDescription
+      }
+      requestedFile = nil
+    }
     .navigationBarBackButtonHidden()
     .toolbar {
       ToolbarItem(placement: .cancellationAction) {
@@ -175,10 +236,14 @@ private struct MobileFileDetail: View {
       Text("\(ByteCountFormatter.string(fromByteCount: Int64(version.size), countStyle: .file)) • \(String(version.createdAt.prefix(10)))")
         .font(.caption).foregroundStyle(.secondary)
       if let url = controller.downloadedURL(version) {
-        Button("Open preview", systemImage: "doc.text.magnifyingglass") { previewURL = url }
-        ShareLink(item: url) { Label("Save to Files or share", systemImage: "square.and.arrow.up") }
+        Button("Open preview", systemImage: "doc.text.magnifyingglass") { open(version, source: url, action: .preview) }
+          .accessibilityIdentifier("clawdad.files.preview").disabled(requestedFile != nil || retainedFile != nil)
+        Button("Save to Files", systemImage: "folder.badge.plus") { open(version, source: url, action: .save) }
+          .accessibilityIdentifier("clawdad.files.save").disabled(requestedFile != nil || retainedFile != nil)
+        Button("Share", systemImage: "square.and.arrow.up") { open(version, source: url, action: .share) }
+          .accessibilityIdentifier("clawdad.files.share").disabled(requestedFile != nil || retainedFile != nil)
         Button("Remove iPhone download", systemImage: "trash", role: .destructive) { controller.removeDownload(version) }
-          .font(.footnote)
+          .font(.footnote).disabled(requestedFile != nil || retainedFile != nil)
       } else if controller.downloadingVersionId == version.id {
         ProgressView(value: controller.downloadProgress)
         Button("Pause download", systemImage: "pause") { controller.cancelDownload() }
@@ -189,6 +254,15 @@ private struct MobileFileDetail: View {
       }
     }
     .padding(.vertical, 6)
+    // Automatic List buttons share the row's action. In this row that could
+    // invoke Remove Download alongside Preview or Share and delete their source.
+    .buttonStyle(.borderless)
+  }
+
+  private func open(_ version: MobileLibraryVersion, source: URL, action: FileAction) {
+    guard requestedFile == nil, presentation == nil, retainedFile == nil else { return }
+    fileNotice = ""; fileError = ""
+    requestedFile = PendingFile(version: version, source: source, action: action)
   }
 }
 #endif

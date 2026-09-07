@@ -4,6 +4,52 @@ import XCTest
 
 @MainActor
 final class MobileAudioSessionTests: XCTestCase {
+  private func silentAudio() -> Data {
+    let count: UInt32 = 16_000 * 2 * 5
+    var wav = Data()
+    func tag(_ text: String) { wav.append(contentsOf: text.utf8) }
+    func u32(_ value: UInt32) { var value = value.littleEndian; withUnsafeBytes(of: &value) { wav.append(contentsOf: $0) } }
+    func u16(_ value: UInt16) { var value = value.littleEndian; withUnsafeBytes(of: &value) { wav.append(contentsOf: $0) } }
+    tag("RIFF"); u32(count + 36); tag("WAVEfmt "); u32(16); u16(1); u16(1)
+    u32(16_000); u32(32_000); u16(2); u16(16); tag("data"); u32(count)
+    wav.append(Data(repeating: 0, count: Int(count)))
+    return wav
+  }
+
+  func testFirstAudioPartAutomaticallyRetriesTemporaryActivationFailure() async throws {
+    var activations = 0
+    let audio = MobileAudioSession(activate: { _ in
+      activations += 1
+      if activations == 1 { throw URLError(.cannotOpenFile) }
+    }, deactivate: {})
+    let reader = MobileReadAloudController(audioSession: audio)
+    defer { reader.stop() }
+    let wav = silentAudio()
+    reader.begin(key: "first-tap", requestId: "request", envelopeId: "envelope")
+    reader.receiveChunk(requestId: "request", partIndex: 0, partCount: 1, chunkIndex: 0, chunkCount: 1,
+      fileName: "response.wav", mimeType: "audio/wav", declaredBytes: wav.count, dataBase64: wav.base64EncodedString())
+    reader.complete(requestId: "request", partCount: 1)
+    XCTAssertEqual(reader.phase, .preparing)
+    let deadline = Date().addingTimeInterval(3)
+    while reader.phase == .preparing, Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
+    XCTAssertEqual(reader.phase, .playing, reader.errorMessage)
+    XCTAssertEqual(activations, 2)
+  }
+
+  func testStopDuringAudioStartupRetryRejectsLatePlayback() async throws {
+    var activations = 0
+    let reader = MobileReadAloudController(audioSession: MobileAudioSession(activate: { _ in
+      activations += 1; throw URLError(.cannotOpenFile)
+    }, deactivate: {}))
+    let wav = silentAudio()
+    reader.begin(key: "first-tap", requestId: "request", envelopeId: "envelope")
+    reader.receiveChunk(requestId: "request", partIndex: 0, partCount: 1, chunkIndex: 0, chunkCount: 1,
+      fileName: "response.wav", mimeType: "audio/wav", declaredBytes: wav.count, dataBase64: wav.base64EncodedString())
+    reader.stop()
+    try await Task.sleep(for: .milliseconds(350))
+    XCTAssertEqual(reader.phase, .idle)
+    XCTAssertEqual(activations, 1)
+  }
   func testRecordingCancelsPreparingPlaybackAndRejectsLateAudio() throws {
     var uses: [MobileAudioSession.Use] = []
     var deactivations = 0

@@ -484,6 +484,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
   private var capabilityTask: Task<Void, Never>?
   private var targetCaptureTask: Task<Void, Never>?
   private var speechSelectionTask: Task<Void, Never>?
+  private var speechSelectionRetries = 0
   private var recordingTask: Task<Void, Never>?
   private var recordingGeneration = UUID()
   private var automaticDeliveryTask: Task<Void, Never>?
@@ -534,6 +535,8 @@ final class RemoteAssistController: NSObject, ObservableObject {
   private var silentTerminalTabRequestId: String?
   private var readAfterTerminalCatalog = false
   private var terminalResponseTimeoutTask: Task<Void, Never>?
+  private var terminalReadCatalogAttempts = 0
+  private var terminalReadTargetTabId: String?
   private var textFlushTask: Task<Void, Never>?
   private var bufferedText = ""
   private var textBufferStartedAt: Date?
@@ -1130,10 +1133,17 @@ final class RemoteAssistController: NSObject, ObservableObject {
       showClipboardNotice(reason, isError: true)
       return
     }
+    speechSelectionRetries = 0
+    requestInlineSpeechSelection()
+  }
+
+  private func requestInlineSpeechSelection() {
     let requestId = UUID().uuidString.lowercased()
     terminalReader.beginSelection(requestId: requestId, tabId: "")
     speechSelectionTask = Task { @MainActor [weak self] in
       guard let self else { return }
+      if self.speechSelectionRetries > 0 { try? await Task.sleep(for: .milliseconds(400)) }
+      guard !Task.isCancelled else { return }
       guard await self.waitForInlineSpeech() else {
         if !Task.isCancelled { self.terminalReader.cancelLookup() }
         return
@@ -1153,8 +1163,16 @@ final class RemoteAssistController: NSObject, ObservableObject {
       }
       try? await Task.sleep(nanoseconds: 6_000_000_000)
       guard !Task.isCancelled, self.terminalReader.selectionRequestId == requestId else { return }
+      if self.retryInlineSpeechSelection() { return }
       self.terminalReader.fail("The Mac did not return selected text. Tap the speaker to retry.")
     }
+  }
+
+  private func retryInlineSpeechSelection() -> Bool {
+    guard speechSelectionRetries < 2, phase == .connected, !remoteScreenLocked, !remoteInputSuppressed else { return false }
+    speechSelectionRetries += 1
+    requestInlineSpeechSelection()
+    return true
   }
 
   private func handleSpeechContext(_ data: Data) -> Bool {
@@ -1175,6 +1193,7 @@ final class RemoteAssistController: NSObject, ObservableObject {
       guard terminalReader.selectionRequestId == message.requestId else { return true }
       speechSelectionTask?.cancel()
       if message.ok != true {
+        if message.error?.hasPrefix("Wait for ") == true, retryInlineSpeechSelection() { return true }
         terminalReader.fail(message.error ?? "Selected text could not be read. Tap the speaker to retry.")
       } else if let text = message.text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
         _ = terminalReader.receiveSelection(requestId: message.requestId, text: text)
@@ -1190,24 +1209,42 @@ final class RemoteAssistController: NSObject, ObservableObject {
       terminalReader.fail("Connect to an updated, unlocked Mac to read Terminal responses.")
       return
     }
+    cancelTerminalLookup()
     terminalReader.beginLookup()
     readAfterTerminalCatalog = true
-    beginRemoteTerminalTabCatalog(silently: true)
-    terminalResponseTimeoutTask?.cancel()
     terminalResponseTimeoutTask = Task { @MainActor [weak self] in
-      try? await Task.sleep(nanoseconds: 20_000_000_000)
-      guard !Task.isCancelled, let self, self.terminalReader.loading else { return }
+      guard let self else { return }
+      let deadline = Date().addingTimeInterval(30)
+      // A cold catalog can outlast the picker's eight-second poll timeout. Keep
+      // the user's read intent alive and reissue that read-only request instead
+      // of leaving it waiting for a reply the picker has already discarded.
+      while !Task.isCancelled, self.terminalReader.loading, Date() < deadline {
+        if self.readAfterTerminalCatalog, !self.terminalTabSelection.requestPending,
+           Date() >= self.terminalDragExpiresAt {
+          guard self.terminalReadCatalogAttempts < 3 else { break }
+          self.terminalReadCatalogAttempts += 1
+          self.beginRemoteTerminalTabCatalog(silently: true)
+        }
+        try? await Task.sleep(nanoseconds: 250_000_000)
+      }
+      guard !Task.isCancelled, self.terminalReader.loading else { return }
       self.readAfterTerminalCatalog = false
-      self.terminalReader.fail("The Mac took too long to read this tab. Tap Read latest response again.")
+      self.terminalReader.fail("The Mac could not finish loading this response. Check the connection and try again.")
     }
   }
 
   private func readCurrentTerminalResponse() {
     guard let state = terminalTabSelection.canonicalState,
           let selectedTabId = state.selectedTabId else {
+      if terminalReadCatalogAttempts < 3 { readAfterTerminalCatalog = true; return }
       terminalReader.fail("Choose a Terminal tab, then tap Read latest response.")
       return
     }
+    guard terminalReadTargetTabId == nil || terminalReadTargetTabId == selectedTabId else {
+      terminalReader.fail("The selected Terminal tab changed. Tap the speaker to read the new tab.")
+      return
+    }
+    terminalReadTargetTabId = selectedTabId
     let request = RemoteTerminalResponseMessage.request(
       requestId: UUID().uuidString.lowercased(), tabId: selectedTabId,
       expectedRevision: state.revision
@@ -1223,6 +1260,8 @@ final class RemoteAssistController: NSObject, ObservableObject {
     speechSelectionTask?.cancel()
     speechSelectionTask = nil
     readAfterTerminalCatalog = false
+    terminalReadCatalogAttempts = 0
+    terminalReadTargetTabId = nil
     terminalResponseTimeoutTask?.cancel()
     terminalResponseTimeoutTask = nil
     terminalReader.cancelLookup()
@@ -1232,6 +1271,14 @@ final class RemoteAssistController: NSObject, ObservableObject {
     guard let message = try? RemoteTerminalResponseCodec.decode(data),
           message.type == RemoteTerminalResponseMessage.resultType else { return false }
     if terminalReader.receive(message, selectedTabId: selectedRemoteTerminalTabId) {
+      if message.ok != true, terminalReadCatalogAttempts < 3,
+         phase == .connected, !remoteScreenLocked, !remoteInputSuppressed {
+        // Revalidate the same tab before retrying; never follow a changed focus
+        // to another response just because a read failed.
+        terminalReader.beginLookup()
+        readAfterTerminalCatalog = true
+        return true
+      }
       terminalResponseTimeoutTask?.cancel()
       terminalResponseTimeoutTask = nil
     }
@@ -2024,9 +2071,14 @@ final class RemoteAssistController: NSObject, ObservableObject {
     publishTerminalTabSelection()
 
     if readAfterTerminalCatalog, application.matchedPendingRequest {
-      readAfterTerminalCatalog = false
-      if message.ok == true { readCurrentTerminalResponse() }
-      else { terminalReader.fail(message.error ?? "Terminal tabs could not be refreshed.") }
+      if message.ok == true {
+        readAfterTerminalCatalog = false
+        readCurrentTerminalResponse()
+      } else if terminalReadCatalogAttempts >= 3 ||
+                  ["mac_locked", "permission_required", "automation_denied"].contains(message.errorCode ?? "") {
+        readAfterTerminalCatalog = false
+        terminalReader.fail(message.error ?? "Terminal tabs could not be refreshed.")
+      }
     }
 
     if message.ok == true {

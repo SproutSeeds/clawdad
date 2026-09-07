@@ -324,6 +324,75 @@ final class ClawDadMobileUITests: XCTestCase {
     XCTAssertTrue(files.isHittable)
   }
 
+  func testRemoteFilesDownloadsPreviewsAndSavesRealPDF() {
+    let app = XCUIApplication()
+    app.launchArguments += ["--clawdad-app-store-preview", "terminal-reader", "--clawdad-files-export-test"]
+    app.launch()
+    let files = app.buttons["clawdad.remote.files"]
+    XCTAssertTrue(files.waitForExistence(timeout: 20))
+    files.tap()
+    let document = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "ClawDad Shared Files Test")).firstMatch
+    XCTAssertTrue(document.waitForExistence(timeout: 8), app.debugDescription)
+    document.tap()
+    let download = app.buttons["Download to iPhone"]
+    XCTAssertTrue(download.waitForExistence(timeout: 5))
+    download.tap()
+    let preview = app.buttons["clawdad.files.preview"]
+    XCTAssertTrue(preview.waitForExistence(timeout: 8))
+    preview.tap()
+    let done = app.buttons["Done"].firstMatch
+    XCTAssertTrue(done.waitForExistence(timeout: 8), app.debugDescription)
+    let page = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "Hello from your Mac")).firstMatch
+    XCTAssertTrue(page.waitForExistence(timeout: 10), app.debugDescription)
+    let screenshot = XCTAttachment(screenshot: app.screenshot())
+    screenshot.name = "Downloaded PDF in Quick Look"; screenshot.lifetime = .keepAlways; add(screenshot)
+    done.tap()
+    XCTAssertTrue(preview.waitForExistence(timeout: 5), "Preview must preserve the downloaded file.")
+    let save = app.buttons["clawdad.files.save"]
+    save.tap()
+    let confirm = app.buttons["Save"].firstMatch
+    XCTAssertTrue(confirm.waitForExistence(timeout: 8), app.debugDescription)
+    confirm.tap()
+    let replace = app.buttons["Replace"]
+    if replace.waitForExistence(timeout: 1) { replace.tap() }
+    XCTAssertTrue(app.staticTexts["Saved ClawDad-Shared-Files-Test.pdf to Files."].waitForExistence(timeout: 10), app.debugDescription)
+    XCTAssertTrue(preview.exists, "Export must preserve the iPhone library copy.")
+    save.tap()
+    let cancel = app.buttons["Cancel"].firstMatch
+    XCTAssertTrue(cancel.waitForExistence(timeout: 8), app.debugDescription)
+    cancel.tap()
+    XCTAssertTrue(preview.waitForExistence(timeout: 5))
+    XCTAssertFalse(app.staticTexts["Saved ClawDad-Shared-Files-Test.pdf to Files."].exists, "Cancelled export must not claim success.")
+  }
+
+  func testRemoteFilesShareSavesPDFToFilesAndPreservesDownload() {
+    let app = XCUIApplication()
+    app.launchArguments += ["--clawdad-app-store-preview", "terminal-reader", "--clawdad-files-export-test"]
+    app.launch()
+    let files = app.buttons["clawdad.remote.files"]
+    XCTAssertTrue(files.waitForExistence(timeout: 20))
+    files.tap()
+    let document = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "ClawDad Shared Files Test")).firstMatch
+    XCTAssertTrue(document.waitForExistence(timeout: 8))
+    document.tap()
+    let download = app.buttons["Download to iPhone"]
+    XCTAssertTrue(download.waitForExistence(timeout: 5))
+    download.tap()
+    let share = app.buttons["clawdad.files.share"]
+    XCTAssertTrue(share.waitForExistence(timeout: 8))
+    share.tap()
+    let saveActions = app.cells.matching(NSPredicate(format: "label == %@", "Save to Files"))
+    XCTAssertTrue(waitUntil(timeout: 8) { saveActions.allElementsBoundByIndex.contains { $0.isHittable } }, app.debugDescription)
+    saveActions.allElementsBoundByIndex.first { $0.isHittable }!.tap()
+    let confirm = app.buttons["Save"].firstMatch
+    XCTAssertTrue(confirm.waitForExistence(timeout: 8), app.debugDescription)
+    confirm.tap()
+    let replace = app.buttons["Replace"]
+    if replace.waitForExistence(timeout: 2) { replace.tap() }
+    XCTAssertTrue(app.staticTexts["File shared."].waitForExistence(timeout: 10), app.debugDescription)
+    XCTAssertTrue(app.buttons["clawdad.files.preview"].exists, "Sharing must preserve the iPhone library copy.")
+  }
+
   func testOneSpeakerTapWaitsForDelayedCapabilitiesAndTargetCapture() {
     let app = XCUIApplication()
     app.launchArguments += ["--clawdad-app-store-preview", "terminal-reader", "--clawdad-preview-slow-context"]
@@ -364,6 +433,42 @@ final class ClawDadMobileUITests: XCTestCase {
     speaker.tap()
     XCTAssertTrue(app.staticTexts["Reading: Preview Terminal"].waitForExistence(timeout: 8))
     speaker.tap()
+  }
+
+  func testFirstSpeakerTapRecoversWhenInitialCatalogTimesOut() {
+    let app = XCUIApplication()
+    app.launchArguments += ["--clawdad-app-store-preview", "terminal-reader", "--clawdad-preview-no-selection", "--clawdad-preview-slow-catalog"]
+    app.launch()
+    let speaker = app.buttons["clawdad.remote.reader"]
+    XCTAssertTrue(speaker.waitForExistence(timeout: 20))
+    speaker.tap()
+    XCTAssertTrue(app.staticTexts["Reading: Preview Terminal"].waitForExistence(timeout: 18))
+    XCTAssertEqual(speaker.label, "Stop Read Aloud")
+    speaker.tap()
+  }
+
+  func testFirstSpeakerTapWaitsForBusySelectionWorker() {
+    let app = XCUIApplication()
+    app.launchArguments += ["--clawdad-app-store-preview", "terminal-reader", "--clawdad-preview-selection-busy-once"]
+    app.launch()
+    let speaker = app.buttons["clawdad.remote.reader"]
+    XCTAssertTrue(speaker.waitForExistence(timeout: 20))
+    speaker.tap()
+    XCTAssertTrue(app.staticTexts["Reading: Selected Mac text"].waitForExistence(timeout: 10))
+    speaker.tap()
+  }
+
+  func testStopCancelsDelayedFirstTerminalRead() {
+    let app = XCUIApplication()
+    app.launchArguments += ["--clawdad-app-store-preview", "terminal-reader", "--clawdad-preview-no-selection", "--clawdad-preview-slow-catalog"]
+    app.launch()
+    let speaker = app.buttons["clawdad.remote.reader"]
+    XCTAssertTrue(speaker.waitForExistence(timeout: 20))
+    speaker.tap()
+    XCTAssertTrue(app.staticTexts["Finding text to read…"].waitForExistence(timeout: 5))
+    speaker.tap()
+    XCTAssertFalse(app.staticTexts["Reading: Preview Terminal"].waitForExistence(timeout: 11))
+    XCTAssertEqual(speaker.label, "Read selected text or latest Terminal response")
   }
 
   func testSelectionFailureDoesNotReadAnUnrelatedTerminalAnswer() {
@@ -445,7 +550,12 @@ final class ClawDadMobileUITests: XCTestCase {
     XCTAssertTrue(app.staticTexts["Reading: Selected Mac text"].waitForExistence(timeout: 8))
     let mic = app.buttons["clawdad.remote.dictation"]
     mic.tap()
-    XCTAssertTrue(app.staticTexts["Recording 0:10"].waitForExistence(timeout: 14))
+    let recording = app.staticTexts["clawdad.remote.speech.status"]
+    XCTAssertTrue(waitUntil(timeout: 14) {
+      guard recording.label.hasPrefix("Recording "),
+            let seconds = Int(recording.label.split(separator: ":").last ?? "") else { return false }
+      return seconds >= 10
+    }, "Capture must keep advancing after the delayed audio part: \(recording.label)")
     XCTAssertEqual(speaker.label, "Read selected text or latest Terminal response")
     mic.tap()
     XCTAssertTrue(app.staticTexts["Inserted on Preview Mac"].waitForExistence(timeout: 8))
