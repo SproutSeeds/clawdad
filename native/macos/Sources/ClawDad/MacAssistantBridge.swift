@@ -199,7 +199,7 @@ final class MacAssistantBridge {
       )
     }
     let capture = await input.captureDictationTarget(.request(.captureTarget, requestId: id)) {
-      [tabs] in try await tabs.catalog().selectedTabId
+      [tabs] in try await tabs.inputIdentity()
     }
     guard capture.ok == true, let token = capture.token else {
       throw MacAssistantError("The Terminal input could not be captured.")
@@ -220,7 +220,7 @@ final class MacAssistantBridge {
     let result = await input.sendQuickChat(
       .request(text: text, targetToken: token, requestId: id),
       isAllowed: { [interaction] in interaction.isCurrent(ticket) }
-    ) { [tabs] in try await tabs.catalog().selectedTabId }
+    ) { [tabs] in try await tabs.inputIdentity() }
     guard result.ok == true else {
       throw MacAssistantError(result.error ?? "Terminal input was not confirmed.")
     }
@@ -231,14 +231,21 @@ final class MacAssistantBridge {
     ]
   }
 
+  private var coordinatorProcessIsAlive: Bool {
+    guard let raw = try? String(contentsOf: root.appendingPathComponent("terminal.pid"), encoding: .utf8),
+          let pid = Int32(raw.trimmingCharacters(in: .whitespacesAndNewlines)), pid > 0 else { return false }
+    return kill(pid, 0) == 0
+  }
+
   private func launch() async throws -> [String: AssistantValue] {
-    if coordinator == nil,
+    if coordinator == nil, coordinatorProcessIsAlive,
       let tty = try? String(
         contentsOf: root.appendingPathComponent("terminal.tty"), encoding: .utf8
       ).trimmingCharacters(in: .whitespacesAndNewlines),
       let conversation = try? await Task.detached(operation: {
         try MacTerminalResponseReader().resolve(tty: tty)
-      }).value
+      }).value,
+      macAssistantConversationMatches(conversation, directory: root, expectedSessionID: nil)
     {
       coordinator = [
         "tty": .string(tty), "sessionId": .string(conversation.sessionId),
@@ -248,18 +255,15 @@ final class MacAssistantBridge {
     if let tty = coordinator?["tty"]?.string,
       let conversation = try? await Task.detached(operation: {
         try MacTerminalResponseReader().resolve(tty: tty)
-      }).value
+      }).value,
+      macAssistantConversationMatches(conversation, directory: root, expectedSessionID: coordinator?["sessionId"]?.string)
     {
       let state = try await tabs.catalog()
       coordinator?["tabId"] = tabs.assistantIdentifier(tty: tty).map(AssistantValue.string) ?? .null
       coordinator?["conversationPath"] = .string(conversation.path.path)
       return ["coordinator": .object(coordinator!), "catalog": try .encode(state)]
     }
-    if let raw = try? String(
-      contentsOf: root.appendingPathComponent("terminal.pid"), encoding: .utf8),
-      let pid = Int32(raw.trimmingCharacters(in: .whitespacesAndNewlines)), pid > 0,
-      kill(pid, 0) == 0
-    {
+    if coordinatorProcessIsAlive {
       throw MacAssistantError(
         "The Assistant tab is already open. Complete its Codex startup, then try again.")
     }
@@ -290,13 +294,7 @@ final class MacAssistantBridge {
     }
     let q: (String) -> String = { "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "'" }
     let mcp = repoRoot.appendingPathComponent("lib/assistant-mcp.mjs").path
-    let encoded: (String) throws -> String = {
-      String(decoding: try JSONEncoder().encode($0), as: UTF8.self)
-    }
-    let settings = [
-      "mcp_servers.clawdad_assistant.command=\(try encoded(node))",
-      "mcp_servers.clawdad_assistant.args=[\(try encoded(mcp))]",
-    ]
+    let settings = try macAssistantMCPOverrides(nodePath: node, mcpPath: mcp)
     let config = settings.flatMap { ["-c", $0] }.map(q).joined(separator: " ")
     let resume =
       coordinator?["sessionId"]?.string.flatMap {
@@ -324,12 +322,13 @@ final class MacAssistantBridge {
       [command], withApplicationAt: terminal, configuration: configOpen)
     for _ in 0..<40 {
       try Task.checkCancellation()
-      if let tty = try? String(
+      if coordinatorProcessIsAlive, let tty = try? String(
         contentsOf: root.appendingPathComponent("terminal.tty"), encoding: .utf8
       ).trimmingCharacters(in: .whitespacesAndNewlines),
         let conversation = try? await Task.detached(operation: {
           try MacTerminalResponseReader().resolve(tty: tty)
-        }).value
+        }).value,
+        macAssistantConversationMatches(conversation, directory: root, expectedSessionID: coordinator?["sessionId"]?.string)
       {
         let state = try await tabs.catalog()
         coordinator = [

@@ -83,6 +83,7 @@ protocol MacTerminalAutomating: AnyObject {
   @MainActor var supportsReordering: Bool { get }
   @MainActor
   func readTabs() async throws -> [MacTerminalTabSnapshot]
+  @MainActor func inputIdentity() async throws -> String?
   @MainActor func focusTab(_ snapshot: MacTerminalTabSnapshot) async throws
   @MainActor func moveTab(_ snapshot: MacTerminalTabSnapshot, toIndex: Int, group: [MacTerminalTabSnapshot]) async throws
   @MainActor
@@ -94,6 +95,11 @@ protocol MacTerminalAutomating: AnyObject {
 }
 
 extension MacTerminalAutomating {
+  @MainActor func inputIdentity() async throws -> String? {
+    let selected = try await readTabs().filter { $0.windowIndex == 1 && $0.isSelectedInWindow }
+    guard selected.count == 1, let tab = selected.first else { return nil }
+    return tab.nativeTabID ?? "\(tab.windowID):\(tab.tabIndex):\(tab.tty)"
+  }
   @MainActor func closeTab(_ snapshot: MacTerminalTabSnapshot) async throws -> MacTerminalNativeCloseOutcome {
     throw MacTerminalTabFailure(code: "close_unavailable", message: "Update ClawDad on the Mac to close Terminal tabs.", state: nil)
   }
@@ -162,23 +168,28 @@ final class MacTerminalTabController {
     let matches = snapshotsByIdentifier.filter { !$0.value.tty.isEmpty && $0.value.tty == tty }
     return matches.count == 1 ? matches.first?.key : nil
   }
+  func inputIdentity() async throws -> String? { try await automation.inputIdentity() }
   lazy var closing = MacTerminalTabCloseController(automation: automation,
     catalog: { [unowned self] in try await self.catalog() },
     snapshot: { [unowned self] in self.snapshotsByIdentifier[$0] })
 
   func latestResponse(_ request: RemoteTerminalResponseMessage) async throws -> RemoteTerminalResponseMessage {
     let state = try await catalog()
-    guard state.revision == request.expectedRevision,
-          state.selectedTabId == request.tabId,
-          let target = snapshotsByIdentifier[request.tabId] else {
+    guard state.selectedTabId == request.tabId,
+          let target = snapshotsByIdentifier[request.tabId],
+          target.nativeTabID != nil || state.revision == request.expectedRevision else {
       throw MacTerminalResponseFailure(message: "The selected Terminal tab changed. Tap Read latest response again.")
+    }
+    guard !target.tty.isEmpty else {
+      throw MacTerminalResponseFailure(message: "This Terminal tab has no verified running shell to read.")
     }
     let response = try await readResponse(target.tty)
     try Task.checkCancellation()
     let refreshed = try await catalog()
-    guard refreshed.revision == request.expectedRevision,
-          refreshed.selectedTabId == request.tabId,
-          snapshotsByIdentifier[request.tabId]?.tty == target.tty else {
+    guard refreshed.selectedTabId == request.tabId,
+          let current = snapshotsByIdentifier[request.tabId], current.tty == target.tty,
+          current.windowID == target.windowID, current.tabIndex == target.tabIndex,
+          target.nativeTabID != nil || refreshed.revision == request.expectedRevision else {
       throw MacTerminalResponseFailure(message: "The selected Terminal tab changed while reading. Try again.")
     }
     return request.success(tabTitle: macTerminalTabTitle(target.customTitle), response: response)
@@ -527,6 +538,18 @@ final class MacTerminalAutomation: MacTerminalAutomating, @unchecked Sendable {
   @MainActor func cancelTabClose() async {
     await withCheckedContinuation { continuation in
       queue.async { self.nativeTabs.cancelClose(); continuation.resume() }
+    }
+  }
+
+  @MainActor
+  func inputIdentity() async throws -> String? {
+    guard let terminal = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Terminal").first,
+          terminal.isActive, AXIsProcessTrusted(), !MacConsoleSessionState.isLocked() else { return nil }
+    return try await withCheckedThrowingContinuation { continuation in
+      queue.async { continuation.resume(with: Result {
+        guard terminal.isActive, !terminal.isTerminated, !MacConsoleSessionState.isLocked() else { return nil }
+        return try self.nativeTabs.inputIdentity(application: AXUIElementCreateApplication(terminal.processIdentifier))
+      }) }
     }
   }
 
@@ -938,14 +961,15 @@ final class MacTerminalAutomation: MacTerminalAutomating, @unchecked Sendable {
             row.numberOfItems == 7,
             let customTitle = row.atIndex(4)?.stringValue,
             let activityWindowTitle = row.atIndex(7)?.stringValue,
-            let tty = row.atIndex(5)?.stringValue,
-            !tty.isEmpty else {
+            let ttyDescriptor = row.atIndex(5) else {
         throw MacTerminalTabFailure(
           code: "invalid_catalog",
           message: "Terminal returned an unreadable tab list.",
           state: nil
         )
       }
+      let reportedTTY = ttyDescriptor.stringValue ?? ""
+      let tty = reportedTTY.range(of: "^/dev/tty[A-Za-z0-9]+$", options: .regularExpression) != nil ? reportedTTY : ""
       snapshots.append(MacTerminalTabSnapshot(
         windowID: Int(row.atIndex(1)?.int32Value ?? 0),
         windowIndex: Int(row.atIndex(2)?.int32Value ?? 0),

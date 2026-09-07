@@ -212,6 +212,7 @@ final class MacInputController {
   ) async -> RemoteSpeechContextMessage {
     // A retry returns the original capture, including a deliberate clipboard-only capture.
     if let previous = dictationTargets.capture(for: request.requestId) {
+      if let failure = previous.failure { return request.failure(failure) }
       return request.success(token: request.requestId, targetName: previous.value?.input.applicationName)
     }
     if let inputProcessingTask { await inputProcessingTask.value }
@@ -223,13 +224,32 @@ final class MacInputController {
       applicationLaunch: NSRunningApplication(processIdentifier: target.pid)?.launchDate
     ) }
     var selectedTerminal: String?
+    var failure: String?
     if input?.bundleIdentifier == "com.apple.Terminal" {
-      selectedTerminal = try? await terminalIdentity()
+      do {
+        selectedTerminal = try await terminalIdentity()
+        if selectedTerminal == nil { failure = "The Terminal input could not be identified. Your text can still be copied." }
+      } catch { failure = error.localizedDescription }
+    }
+    if let capture, Task.isCancelled || generation != inputGeneration || !targetIsCurrent(capture) {
+      failure = "The focused input changed while it was being captured. Your text can still be copied."
     }
     dictationTargets.remember(.init(value: capture, generation: generation,
       expiresAt: Date().addingTimeInterval(20 * 60), requiresTerminalIdentity: input?.bundleIdentifier == "com.apple.Terminal",
-      terminalIdentity: selectedTerminal), token: request.requestId)
+      terminalIdentity: selectedTerminal, failure: failure), token: request.requestId)
+    if let failure { return request.failure(failure) }
     return request.success(token: request.requestId, targetName: input?.applicationName)
+  }
+
+  private func recoverTerminalIdentity(
+    for capture: MacDictationTargetRegistry<DictationTarget>.Capture?,
+    read: @MainActor () async throws -> String?
+  ) async -> String? {
+    guard let capture, let value = capture.value, capture.failure == nil else { return nil }
+    return await macRecoverTerminalInputIdentity(expected: capture.terminalIdentity,
+      isCurrent: { [self] in
+        capture.generation == inputGeneration && capture.expiresAt > Date() && targetIsCurrent(value)
+      }, read: read)
   }
 
   func deliverTargetedDictation(
@@ -240,7 +260,7 @@ final class MacInputController {
     let capture = message.targetToken.flatMap { dictationTargets.capture(for: $0) }
     var selectedTerminal: String?
     if message.copyOnly != true, capture?.requiresTerminalIdentity == true {
-      selectedTerminal = try? await terminalIdentity()
+      selectedTerminal = await recoverTerminalIdentity(for: capture, read: terminalIdentity)
     }
     guard !Task.isCancelled else {
       return .failure(action: .dictation, requestId: message.requestId, error: "Remote Assist disconnected. Your transcript is saved.")
@@ -272,7 +292,7 @@ final class MacInputController {
     var pasted = 0
     for index in images.urls.indices {
       guard !Task.isCancelled, let capture = dictationTargets.capture(for: token), capture.generation == inputGeneration else { break }
-      let identity = try? await terminalIdentity()
+      let identity = await recoverTerminalIdentity(for: capture, read: terminalIdentity)
       guard !Task.isCancelled, !MacConsoleSessionState.isLocked(), pointerInputEnabled,
             let target = dictationTargets.resolve(token: token, generation: inputGeneration,
               terminalIdentity: identity, isCurrent: targetIsCurrent),
@@ -329,13 +349,13 @@ final class MacInputController {
     let token = request.targetToken ?? ""
     let needsTerminal = dictationTargets.capture(for: token)?.requiresTerminalIdentity == true
     return await quickChatDelivery.deliver(request, insertIfCurrent: { [self] in
-      let identity = needsTerminal ? try? await terminalIdentity() : nil
+      let identity = needsTerminal ? await recoverTerminalIdentity(for: dictationTargets.capture(for: token), read: terminalIdentity) : nil
       guard !Task.isCancelled, isAllowed(), !speechSelectionInProgress,
             let target = dictationTargets.resolve(token: token, generation: inputGeneration,
               terminalIdentity: identity, isCurrent: targetIsCurrent) else { return false }
       return await insertText(request.text ?? "", into: target.input)
     }, submitIfCurrent: { [self] in
-      let identity = needsTerminal ? try? await terminalIdentity() : nil
+      let identity = needsTerminal ? await recoverTerminalIdentity(for: dictationTargets.capture(for: token), read: terminalIdentity) : nil
       guard !Task.isCancelled, isAllowed(),
             let target = dictationTargets.resolve(token: token, generation: inputGeneration,
               terminalIdentity: identity, isCurrent: { targetIsCurrent($0, checkSelection: false) })

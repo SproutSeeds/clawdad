@@ -137,6 +137,60 @@ final class MacTerminalTabTests: XCTestCase {
     XCTAssertFalse(first.tabs[0].id.contains("ttys"))
   }
 
+  func testFinishedShellMetadataDoesNotDiscardReadableNeighbors() throws {
+    for unavailable in [NSAppleEventDescriptor(string: ""), NSAppleEventDescriptor.null()] {
+      let catalog = NSAppleEventDescriptor.list()
+      for index in 1...2 {
+        let row = NSAppleEventDescriptor.list()
+        let fields: [NSAppleEventDescriptor] = [
+          .init(int32: Int32(index)), .init(int32: Int32(index)), .init(int32: 1),
+          .init(string: "same-directory"), index == 1 ? .init(string: "/dev/ttys001") : unavailable,
+          .init(boolean: true), .init(string: "same-directory")
+        ]
+        for (offset, field) in fields.enumerated() { row.insert(field, at: offset + 1) }
+        catalog.insert(row, at: index)
+      }
+      let decoded = try MacTerminalAutomation.parseCatalog(catalog)
+      XCTAssertEqual(decoded.map(\.tty), ["/dev/ttys001", ""])
+    }
+  }
+
+  func testNativeResponseSurvivesAnUnrelatedWindowClosingDuringRead() async throws {
+    let target = MacTerminalTabSnapshot(windowID: 10, windowIndex: 1, tabIndex: 1,
+      customTitle: "same-directory", tty: "/dev/ttys001", isSelectedInWindow: true, nativeTabID: "native-one")
+    let automation = StubTerminalAutomation(snapshots: [target, initialSnapshots[1]])
+    let controller = makeController(automation: automation, readResponse: { tty in
+      XCTAssertEqual(tty, target.tty)
+      automation.snapshots = [target]
+      return RemoteTerminalResponse(sessionId: "session", turnId: "turn", text: "The intended answer",
+        completedAt: "2026-09-07T12:00:00Z", inProgress: false)
+    })
+    let state = try await controller.catalog()
+    let result = try await controller.latestResponse(.request(requestId: "read", tabId: state.selectedTabId!, expectedRevision: state.revision))
+    XCTAssertEqual(result.response?.text, "The intended answer")
+    XCTAssertTrue(result.ok == true)
+  }
+
+  func testNativeResponseRejectsAReplacedShellAndAnUnverifiedTTY() async throws {
+    for replacement in ["/dev/ttys999", ""] {
+      func tab(_ tty: String) -> MacTerminalTabSnapshot {
+        MacTerminalTabSnapshot(windowID: 10, windowIndex: 1, tabIndex: 1,
+          customTitle: "same-directory", tty: tty, isSelectedInWindow: true, nativeTabID: "native-one")
+      }
+      let automation = StubTerminalAutomation(snapshots: [tab("/dev/ttys001")])
+      let controller = makeController(automation: automation, readResponse: { _ in
+        automation.snapshots = [tab(replacement)]
+        return RemoteTerminalResponse(sessionId: "session", turnId: "turn", text: "Stale",
+          completedAt: "2026-09-07T12:00:00Z", inProgress: false)
+      })
+      let state = try await controller.catalog()
+      do {
+        _ = try await controller.latestResponse(.request(requestId: "read", tabId: state.selectedTabId!, expectedRevision: state.revision))
+        XCTFail("A replaced or unknown shell cannot supply the response")
+      } catch { XCTAssertTrue(error.localizedDescription.contains("changed while reading")) }
+    }
+  }
+
   func testTopologyRevisionChangesOnlyWhenTabIdentityOrOrderChanges() async throws {
     let automation = StubTerminalAutomation(snapshots: initialSnapshots)
     let controller = makeController(automation: automation)

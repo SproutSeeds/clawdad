@@ -772,7 +772,7 @@ final class MacRemotePeer: NSObject {
       await operation.value
       try Task.checkCancellation()
     }
-    return try await terminalTabController.catalog().selectedTabId
+    return try await terminalTabController.inputIdentity()
   }
 
   private func handleSpeechContext(_ request: RemoteSpeechContextMessage) {
@@ -871,7 +871,10 @@ final class MacRemotePeer: NSObject {
         if let token = request.targetToken, let capture = self.targetCaptureTasks[token] { await capture.value }
         if let speechOperationTask = self.speechOperationTask { await speechOperationTask.value }
         try Task.checkCancellation()
-        let response = await self.inputController.deliverImages(prepared, request: request) { try await self.terminalTabController.catalog().selectedTabId }
+        // A queued focus operation waits for image paste to finish. Reading the
+        // focused control directly avoids waiting on that operation in return.
+        // Its input-generation change still cancels insertion into the old tab.
+        let response = await self.inputController.deliverImages(prepared, request: request) { try await self.terminalTabController.inputIdentity() }
         // Remember before sending; a lost receipt never repeats a paste.
         if response.error == nil { self.imageReceipts.remember(request, response: response) }
         if !Task.isCancelled, let data = try? response.encode() { self.sendControlData(data) }

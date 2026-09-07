@@ -97,7 +97,9 @@ final class MacNativeTerminalTabTests: XCTestCase {
       graph.failWindows = false
       XCTAssertEqual(try reader.snapshots(application: graph.app) { graph.shells }, initial)
     }
-    XCTAssertThrowsError(try reader.snapshots(application: graph.app) { [] })
+    let withoutShells = try reader.snapshots(application: graph.app) { [] }
+    XCTAssertEqual(withoutShells.map(\.nativeTabID), initial.map(\.nativeTabID))
+    XCTAssertTrue(withoutShells.allSatisfy { $0.tty.isEmpty })
     XCTAssertEqual(try reader.snapshots(application: graph.app) { graph.shells }, initial)
     XCTAssertThrowsError(try reader.snapshots(application: graph.app) {
       graph.failWindows = true
@@ -105,6 +107,99 @@ final class MacNativeTerminalTabTests: XCTestCase {
     })
     graph.failWindows = false
     XCTAssertEqual(try reader.snapshots(application: graph.app) { graph.shells }, initial)
+  }
+
+  func testFinishedAssistantWindowCannotDisableOtherTabsOrChangeTheirIdentities() throws {
+    let graph = TerminalGraph()
+    let reader = MacNativeTerminalTabs(readAttribute: graph.read)
+    let before = try reader.snapshots(application: graph.app) { graph.shells }
+    graph.includeOtherWindow = true
+    let after = try reader.snapshots(application: graph.app) { graph.shells }
+    XCTAssertEqual(after.count, 4) // The finished window has no scripting shell.
+    XCTAssertEqual(Array(after.prefix(3)).map(\.nativeTabID), before.map(\.nativeTabID))
+    XCTAssertEqual(after.first { $0.windowIndex == 1 && $0.isSelectedInWindow }?.tty, "/dev/ttys1")
+    XCTAssertEqual(after.last?.tty, "")
+    graph.otherTTY = ""
+    XCTAssertEqual(try reader.snapshots(application: graph.app) { graph.shells }, after)
+  }
+
+  func testReusedTTYIsQuarantinedWithoutDisablingTheUnambiguousSelectedTab() throws {
+    let graph = TerminalGraph()
+    let reader = MacNativeTerminalTabs(readAttribute: graph.read)
+    graph.selected = 0
+    _ = try reader.snapshots(application: graph.app) { graph.shells }
+    graph.selected = 1
+    graph.includeOtherWindow = true
+    graph.otherTTY = "/dev/ttys0"
+    let rows = try reader.snapshots(application: graph.app) { graph.shells }
+    XCTAssertEqual(rows.count, 4)
+    XCTAssertEqual(rows[1].tty, "/dev/ttys1")
+    XCTAssertTrue(rows.filter { $0.position != 2 }.allSatisfy { $0.tty.isEmpty })
+    graph.selected = 0
+    let ambiguous = try reader.snapshots(application: graph.app) { graph.shells }
+    XCTAssertEqual(ambiguous[0].tty, "", "Never reuse a formerly verified TTY after it becomes ambiguous")
+  }
+
+  func testBackgroundWindowOrderAndArrivalDoNotInvalidateTheFocusedShell() throws {
+    let graph = TerminalGraph()
+    graph.includeOtherWindow = true
+    let reader = MacNativeTerminalTabs(readAttribute: graph.read)
+    let before = try reader.snapshots(application: graph.app) { graph.shells }
+    let after = try reader.snapshots(application: graph.app) {
+      graph.reverseWindows.toggle()
+      return graph.shells
+    }
+    XCTAssertEqual(Set(after.compactMap(\.nativeTabID)), Set(before.compactMap(\.nativeTabID)))
+    XCTAssertEqual(after.first { $0.windowIndex == 1 && $0.isSelectedInWindow }?.tty, "/dev/ttys1")
+    graph.includeOtherWindow = false
+    let removed = try reader.snapshots(application: graph.app) { graph.shells }
+    XCTAssertEqual(removed.count, 3)
+    XCTAssertEqual(removed.map(\.nativeTabID), Array(before.prefix(3)).map(\.nativeTabID))
+  }
+
+  func testFocusedSelectionChangingDuringDiscoveryIsRetriedWithoutCrossBinding() throws {
+    let graph = TerminalGraph()
+    let reader = MacNativeTerminalTabs(readAttribute: graph.read)
+    let before = try reader.snapshots(application: graph.app) { graph.shells }
+    var attempts = 0
+    let after = try reader.snapshots(application: graph.app) {
+      attempts += 1
+      let shells = graph.shells
+      graph.selected = 2
+      return shells
+    }
+    XCTAssertEqual(attempts, 2)
+    XCTAssertEqual(after.map(\.nativeTabID), before.map(\.nativeTabID))
+    XCTAssertEqual(after[2].tty, "/dev/ttys2")
+  }
+
+  func testInputIdentityDoesNotReadTheGlobalCatalogAndStillDistinguishesTabs() throws {
+    let graph = TerminalGraph()
+    graph.failWindows = true
+    let reader = MacNativeTerminalTabs(readAttribute: graph.read)
+    let first = try reader.inputIdentity(application: graph.app)
+    XCTAssertEqual(try reader.inputIdentity(application: graph.app), first)
+    graph.selected = 2
+    XCTAssertNotEqual(try reader.inputIdentity(application: graph.app), first)
+    graph.selected = 1
+    XCTAssertEqual(try reader.inputIdentity(application: graph.app), first)
+    graph.window = graph.newElement()
+    XCTAssertNotEqual(try reader.inputIdentity(application: graph.app), first)
+  }
+
+  func testInputCaptureRejectsSelectionChangingBetweenItsTwoReads() throws {
+    let graph = TerminalGraph()
+    var selections = 0
+    let reader = MacNativeTerminalTabs(readAttribute: { element, attribute in
+      if attribute == kAXValueAttribute && CFEqual(element, graph.strip) {
+        selections += 1
+        if selections == 2 { graph.selected = 2 }
+      }
+      return try graph.read(element, attribute)
+    })
+    XCTAssertThrowsError(try reader.inputIdentity(application: graph.app)) { error in
+      XCTAssertEqual((error as? MacTerminalTabFailure)?.code, "selection_changed")
+    }
   }
 
   func testStripReplacementAndFocusMRUDoNotRenumberPhysicalWindow() throws {
@@ -292,6 +387,11 @@ private final class TerminalGraph {
   lazy var strip = newElement()
   lazy var area = newElement()
   lazy var controls = (0..<3).map { _ in newElement() }
+  lazy var otherWindow = newElement()
+  lazy var otherArea = newElement()
+  var includeOtherWindow = false
+  var otherTTY: String?
+  var reverseWindows = false
   var selected = 1
   var enumeration = [0, 1, 2]
   var failWindows = false
@@ -300,11 +400,16 @@ private final class TerminalGraph {
   var windowTitles: [String]?
   var shells: [MacTerminalTabSnapshot] {
     // Native macOS tabs are three scripting windows with one shell each.
-    ([selected] + (0..<3).filter { $0 != selected }).enumerated().map { offset, tab in
+    var rows = ([selected] + (0..<3).filter { $0 != selected }).enumerated().map { offset, tab in
       MacTerminalTabSnapshot(windowID: 100 + tab, windowIndex: offset + 1,
         tabIndex: 1, customTitle: "duplicate", tty: "/dev/ttys\(tab)",
         isSelectedInWindow: true, activityWindowTitle: windowTitles?[tab])
     }
+    if let otherTTY {
+      rows.append(MacTerminalTabSnapshot(windowID: 200, windowIndex: 4, tabIndex: 1,
+        customTitle: "ClawDad Assistant", tty: otherTTY, isSelectedInWindow: true))
+    }
+    return rows
   }
 
   func read(_ element: AXUIElement, _ attribute: String) throws -> CFTypeRef? {
@@ -314,11 +419,15 @@ private final class TerminalGraph {
     switch attribute {
     case kAXWindowsAttribute where isApp:
       if failWindows { throw MacTerminalTabFailure(code: "layout_unavailable", message: "Transient read failure", state: nil) }
-      return [window] as CFArray
+      let windows = includeOtherWindow ? [window, otherWindow] : [window]
+      return (reverseWindows ? windows.reversed().map { $0 } : windows) as CFArray
     case kAXFocusedWindowAttribute where isApp: return window
     case kAXRoleAttribute:
+      if CFEqual(element, otherWindow) { return kAXWindowRole as CFString }
+      if CFEqual(element, otherArea) { return kAXTextAreaRole as CFString }
       return (isWindow ? kAXWindowRole : isStrip ? kAXTabGroupRole : isArea ? kAXTextAreaRole : kAXRadioButtonRole) as CFString
     case kAXChildrenAttribute:
+      if CFEqual(element, otherWindow) { return [otherArea] as CFArray }
       return (isWindow ? [area, strip] : isStrip ? controls : []) as CFArray
     case kAXTabsAttribute where isStrip: return enumeration.map { controls[$0] } as CFArray
     case kAXValueAttribute where isStrip: return controls[selected]

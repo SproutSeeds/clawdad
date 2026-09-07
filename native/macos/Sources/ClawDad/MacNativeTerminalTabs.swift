@@ -40,6 +40,9 @@ final class MacNativeTerminalTabs {
   private var nextGroup = 1
   private var knownShells: [String: MacTerminalTabSnapshot] = [:]
   private(set) var bindings: [Binding] = []
+  // Input belongs to a native control, independently of shell discovery. A
+  // finished shell in another window must not disable an otherwise valid caret.
+  private var inputBindings: [(window: AXUIElement, control: AXUIElement, id: String)] = []
   private let readAttribute: ((AXUIElement, String) throws -> CFTypeRef?)?
   private let now: () -> TimeInterval
   private var deadline: TimeInterval = .infinity
@@ -169,12 +172,50 @@ final class MacNativeTerminalTabs {
     guard result.reduce(0, { $0 + $1.tabs.count }) <= 128 else { throw failure("Terminal has too many open tabs to show.") }
     return result
   }
-  private func sameLayout(_ left: [ObservedWindow], _ right: [ObservedWindow]) -> Bool {
-    guard left.count == right.count else { return false }
-    return zip(left, right).allSatisfy { a, b in
-      CFEqual(a.window, b.window) && a.focused == b.focused && a.tabs.count == b.tabs.count &&
-        zip(a.tabs, b.tabs).allSatisfy { CFEqual($0.control, $1.control) && $0.selected == $1.selected }
+  private func sameFocusedSelection(_ left: [ObservedWindow], _ right: [ObservedWindow]) -> Bool {
+    let before = left.filter(\.focused), after = right.filter(\.focused)
+    if before.isEmpty && after.isEmpty { return true }
+    guard before.count == 1, after.count == 1,
+          CFEqual(before[0].window, after[0].window),
+          let a = before[0].tabs.first(where: \.selected),
+          let b = after[0].tabs.first(where: \.selected) else { return false }
+    return CFEqual(a.control, b.control)
+  }
+
+  /// Capture only the focused window. This identity never depends on scripting
+  /// window counts, TTY uniqueness, tab titles, or an unrelated window's health.
+  func inputIdentity(application: AXUIElement) throws -> String {
+    let previousDeadline = deadline
+    deadline = min(deadline, now() + 1)
+    defer { deadline = previousDeadline }
+    func selection() throws -> (window: AXUIElement, control: AXUIElement) {
+      guard let raw = try value(application, kAXFocusedWindowAttribute) ?? value(application, kAXMainWindowAttribute),
+            CFGetTypeID(raw) == AXUIElementGetTypeID() else {
+        throw failure("Terminal has not confirmed its focused input.")
+      }
+      let window = unsafeBitCast(raw, to: AXUIElement.self)
+      let layout = try structure(window)
+      guard layout.text else { throw failure("Choose an input in Terminal.") }
+      guard let strip = layout.strip else { return (window, window) }
+      let controls = try elements(strip, kAXTabsAttribute, required: true)
+      guard let selected = try value(strip, kAXValueAttribute, required: true),
+            let control = controls.first(where: { CFEqual($0, selected) }) else {
+        throw failure("Terminal has not confirmed its selected input.")
+      }
+      return (window, control)
     }
+    let original = try selection()
+    let confirmed = try selection()
+    guard CFEqual(original.window, confirmed.window), CFEqual(original.control, confirmed.control) else {
+      throw MacTerminalTabFailure(code: "selection_changed", message: "The Terminal input changed during capture.", state: nil)
+    }
+    if let known = inputBindings.first(where: {
+      CFEqual($0.window, original.window) && CFEqual($0.control, original.control)
+    }) { return known.id }
+    let id = UUID().uuidString.lowercased()
+    inputBindings.append((original.window, original.control, id))
+    if inputBindings.count > 128 { inputBindings.removeFirst() }
+    return id
   }
 
   func snapshots(application: AXUIElement, readShells: () throws -> [MacTerminalTabSnapshot]) throws -> [MacTerminalTabSnapshot] {
@@ -194,21 +235,30 @@ final class MacNativeTerminalTabs {
     let before = try observe(application: application)
     let shells = try readShells()
     let after = try observe(application: application)
-    guard sameLayout(before, after), after.reduce(0, { $0 + $1.tabs.count }) == shells.count,
-          Set(shells.map(\.tty)).count == shells.count else {
-      throw failure("Terminal's window layout is changing. Try again.")
+    guard sameFocusedSelection(before, after) else {
+      Logger(subsystem: "earth.frg.ClawDad", category: "Terminal").info("catalog_rejected=focused_selection_changed")
+      throw failure("The selected Terminal tab changed during discovery.")
     }
-    let focusedShell = shells.first { $0.windowIndex == 1 && $0.isSelectedInWindow }
-    guard shells.isEmpty || (focusedShell != nil && after.filter(\.focused).count == 1) else {
-      throw failure("Terminal has not confirmed its active window.")
+    // Native controls are the inventory. Scripting rows only enrich identities
+    // that can be proven. Closed tabs can lack a TTY or retain a reused TTY;
+    // neither case may invalidate every other window or identify a different agent.
+    let shellGroups = Dictionary(grouping: shells.filter { !$0.tty.isEmpty }, by: \.tty)
+    let liveShells = shellGroups.compactMapValues { $0.count == 1 ? $0.first : nil }
+    let nativeCount = after.reduce(0) { $0 + $1.tabs.count }
+    if nativeCount != shells.count || liveShells.count != shells.count {
+      Logger(subsystem: "earth.frg.ClawDad", category: "Terminal").info(
+        "catalog_metadata_partial native_tabs=\(nativeCount) shell_rows=\(shells.count) unique_shells=\(liveShells.count)"
+      )
     }
+    let selectedShells = shells.filter { $0.windowIndex == 1 && $0.isSelectedInWindow }
+    let focusedShell = selectedShells.count == 1 ? selectedShells.first.flatMap { liveShells[$0.tty] } : nil
     // Candidate registries stay local until the entire read is validated.
     var nextGroups = groups, candidateNextGroup = nextGroup, candidateShells = knownShells
     var candidate: [Binding] = [], usedGroups = Set<Int>()
     for window in after {
       let selectedShell = window.focused ? focusedShell : nil
       let selectedID = selectedShell.flatMap { shell in
-        knownShells.first { $0.value.tty == shell.tty && $0.value.windowID == shell.windowID }?.key
+        knownShells.first { $0.value.tty == shell.tty && $0.value.windowID == shell.windowID && $0.value.tabIndex == shell.tabIndex }?.key
       }
       let matchingIDs = bindings.filter { old in window.tabs.contains { CFEqual($0.control, old.control) } }.map(\.groupID)
       let selectedGroup = selectedID.flatMap { id in bindings.first { $0.id == id }?.groupID }
@@ -229,6 +279,7 @@ final class MacNativeTerminalTabs {
       for (index, tab) in window.tabs.enumerated() {
         let existing = bindings.first { CFEqual($0.control, tab.control) }?.id
         let id = existing ?? (tab.selected ? selectedID : nil) ?? UUID().uuidString.lowercased()
+        if tab.selected && window.focused { candidateShells.removeValue(forKey: id) }
         if tab.selected, let selectedShell {
           candidateShells = candidateShells.filter { identifier, shell in
             identifier == id || shell.tty != selectedShell.tty || shell.windowID != selectedShell.windowID
@@ -241,9 +292,10 @@ final class MacNativeTerminalTabs {
       }
     }
     guard Set(candidate.map(\.id)).count == candidate.count else { throw failure("Terminal's tab identities are changing. Try again.") }
-    let liveShells = Dictionary(uniqueKeysWithValues: shells.map { ($0.tty, $0) })
-    candidateShells = candidateShells.filter { _, shell in liveShells[shell.tty]?.windowID == shell.windowID }
-    let activity = MacTerminalActivityCandidates(nativeTitles: after.flatMap { $0.tabs.map(\.title) }, shells: shells)
+    candidateShells = candidateShells.filter { _, shell in
+      liveShells[shell.tty]?.windowID == shell.windowID && liveShells[shell.tty]?.tabIndex == shell.tabIndex
+    }
+    let activity = MacTerminalActivityCandidates(nativeTitles: after.flatMap { $0.tabs.map(\.title) }, shells: Array(liveShells.values))
     let previousTabs = before.flatMap(\.tabs)
     let snapshots = candidate.map { tab in
       let shell = candidateShells[tab.id].flatMap { liveShells[$0.tty] }
