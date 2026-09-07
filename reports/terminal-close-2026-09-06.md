@@ -1,8 +1,8 @@
 # Close Terminal tabs from iPhone
 
 iPhone 0.7.0 build 52 is available in ClawDad Internal TestFlight. Mac 0.7.0
-build 63 is signed, notarized, and ready for installation; the installed Mac
-remains on build 62 while Finder is in use. Both new builds are needed for Close.
+build 63 is installed, signed, notarized, and running with a healthy local
+service. Both new builds are needed for Close.
 
 ## Behavior
 
@@ -87,11 +87,14 @@ Apple notarization. The storage guard in the existing build wrapper is unchanged
 - The iPhone upload succeeded with the existing third-party WebRTC dSYM warning;
   this limits symbolication for that framework and did not block distribution.
 
-macOS rejected direct filesystem replacement of the installed app. Finder's
-foreground window changed during the GUI installation attempts; no replacement
-was confirmed. The existing signed build 62 was verified intact and reopened.
-Finish the normal Finder replacement with the ready build 63 app when Finder is
-available, then verify installed hashes, native capabilities, and service health.
+Finder replacement into `/Applications` is complete. The installed build 63
+executable matches the ready artifact, passes strict signature verification,
+and is accepted by Gatekeeper as Notarized Developer ID. ClawDad was reopened;
+authenticated `/healthz` reports healthy with Codex ready. The runtime marker
+matches the native capabilities response and the ready, installed, and active
+runtime copies. Source, installed, and active hashes match for `server.mjs`,
+`cloud-host-connector.mjs`, and `app-store-connect.mjs`. Evidence is retained in
+`mac-install-verification.json`, verified at `2026-09-07T03:57:26Z`.
 
 ## Workspace
 
@@ -102,6 +105,7 @@ to review and checkpoint separately: `.agents/skills/clawdad-release/SKILL.md`,
 `plugins/clawdad-codex-integration/.codex-plugin/plugin.json`,
 `plugins/clawdad-codex-integration/skills/clawdad-release/SKILL.md`,
 `assets/wordmark-explorations/`, and `marketing-site/`.
+The implementation checkpoint is `fa67677`; no unclassified dirty paths remain.
 
 Public npm, GitHub release assets, the public Mac appcast, external TestFlight,
 and App Store submission are outside this private native rollout.
