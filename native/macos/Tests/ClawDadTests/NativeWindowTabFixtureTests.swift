@@ -21,6 +21,40 @@ final class NativeWindowTabFixtureTests: XCTestCase {
   }
   private func tabs(_ strip: AnyObject) -> [AnyObject] { children(strip).filter { role($0) == .radioButton } }
 
+  func testNativeMenuActionClosesOnlySelectedTabAndRespectsWindowDelegate() throws {
+    _ = NSApplication.shared
+    let windows = (0..<3).map { _ in
+      let window = NSWindow(contentRect: NSRect(x: 180, y: 180, width: 480, height: 250),
+        styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+      window.isReleasedWhenClosed = false
+      window.animationBehavior = .none
+      window.title = "close-menu-fixture"
+      window.tabbingIdentifier = "clawdad-close-menu-fixture"
+      return window
+    }
+    Self.fixtureWindows += windows
+    for window in windows.dropFirst() { windows[0].addTabbedWindow(window, ordered: .above) }
+    windows[0].orderBack(nil)
+    let group = try XCTUnwrap(windows[0].tabGroup)
+    group.selectedWindow = windows[1]
+    let delegate = CloseMenuWindowDelegate()
+    windows[1].delegate = delegate
+    let menu = NSMenu(title: "Shell")
+    let close = NSMenuItem(title: "Close Tab", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+    close.keyEquivalentModifierMask = .command
+    close.target = windows[1]
+    menu.addItem(close)
+    let original = group.windows
+    menu.performActionForItem(at: 0)
+    XCTAssertEqual(delegate.requests, 1)
+    XCTAssertEqual(group.windows, original, "Native confirmation must be able to veto closure")
+    delegate.allowClose = true
+    menu.performActionForItem(at: 0)
+    XCTAssertEqual(delegate.requests, 2)
+    XCTAssertEqual(group.windows, original.filter { $0 !== windows[1] })
+    XCTAssertEqual(group.windows.count, 2)
+  }
+
   func testPhysicalGroupsAndTwentyDuplicateNativeTabsKeepIdentityAcrossFocus() throws {
     _ = NSApplication.shared
     var windows: [NSWindow] = []
@@ -129,5 +163,15 @@ final class NativeWindowTabFixtureTests: XCTestCase {
     windows[20].close()
     XCTAssertFalse(windows[20].isVisible)
     XCTAssertEqual(group.windows.count, 19)
+  }
+}
+
+@MainActor
+private final class CloseMenuWindowDelegate: NSObject, NSWindowDelegate {
+  var requests = 0
+  var allowClose = false
+  func windowShouldClose(_ sender: NSWindow) -> Bool {
+    requests += 1
+    return allowClose
   }
 }

@@ -1,5 +1,10 @@
 # Terminal close verification repair
 
+Follow-up: the physical iPhone check reproduced this error on build 64. See the
+[Terminal Close menu repair](terminal-close-menu-repair-2026-09-07.md) for the new
+logs, diagnosis, and replacement action. The installation evidence below remains
+the historical build 64 record.
+
 Mac build 64 is signed, notarized, installed, and running with the Terminal close
 repair. Its authenticated host health and runtime checks pass. The existing
 iPhone build 52 and close-message protocol are compatible; this repair requires

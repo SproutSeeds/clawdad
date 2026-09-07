@@ -321,8 +321,8 @@ final class MacNativeTerminalTabs {
       throw failure("The tabs changed. Refresh the picker before closing this tab.")
     }
     guard try sheets(originalTarget.window).isEmpty else { throw failure("Finish the existing Terminal dialog before closing this tab.") }
-    // Require the requested tab to own the active close control. AXPress delivery
-    // alone cannot establish closure. Resolve the control again after selection:
+    // Require the requested tab to own the active close command. AXPress delivery
+    // alone cannot establish closure. Resolve the window again after selection:
     // selecting a native tab can replace the visible AXWindow.
     if !originalTarget.focused || !originalTarget.selected { try focus(id, application: application) }
     let current = try capture(application: application)
@@ -332,24 +332,55 @@ final class MacNativeTerminalTabs {
       throw failure("The selected tab changed before closing. Check the refreshed picker.")
     }
     guard try sheets(target.window).isEmpty else { throw failure("Finish the existing Terminal dialog before closing this tab.") }
-    let group = current.filter { $0.groupID == target.groupID }
-    let button: AXUIElement
-    if CFEqual(target.control, target.window) {
-      guard group.count == 1, let close = try element(target.window, kAXCloseButtonAttribute) else {
-        throw failure("Terminal did not expose this tab’s close button.")
-      }
-      button = close
-    } else {
-      // AppKit exposes the tab's own close proxy beneath its radio button.
-      // Never fall back to the physical window's button for a multi-tab group.
-      let buttons = try descendants(target.control, depth: 2).filter { try role($0) == kAXButtonRole }
-      guard buttons.count == 1, let close = buttons.first else {
-        throw failure("Terminal did not expose a unique close button for this tab.")
-      }
-      button = close
+    // Terminal's tab-close AX proxy can acknowledge AXPress without doing
+    // anything, even on the selected tab. Use its native Command-W menu action
+    // directly. Modifier checks exclude Close Window, Close Others, and Close All;
+    // no keyboard event or second close action is sent as a fallback.
+    let command = try closeTabCommand(application: application)
+    let final = try capture(application: application)
+    guard final.count == current.count,
+          final.allSatisfy({ item in current.contains { $0.id == item.id && $0.groupID == item.groupID && $0.position == item.position } }),
+          let verifiedTarget = final.first(where: { $0.id == id }),
+          verifiedTarget.selected, verifiedTarget.focused,
+          CFEqual(verifiedTarget.window, target.window),
+          try sheets(verifiedTarget.window).isEmpty,
+          try value(application, kAXFrontmostAttribute, required: true) as? Bool == true else {
+      throw failure("The selected tab changed before closing. Check the refreshed picker.")
     }
-    try pressCloseButton(button)
-    return try waitForClose(target, application: application, allowPrompt: true)
+    try pressCloseButton(command, source: "tab_menu")
+    return try waitForClose(verifiedTarget, application: application, allowPrompt: true)
+  }
+
+  private func closeTabCommand(application: AXUIElement) throws -> AXUIElement {
+    guard let bar = try element(application, kAXMenuBarAttribute) else {
+      throw failure("Terminal’s Close Tab command is unavailable.")
+    }
+    var queue = [(bar, 0)], matches: [AXUIElement] = [], visited = 0
+    while !queue.isEmpty {
+      let (item, depth) = queue.removeFirst(); visited += 1
+      guard visited <= 512 else { throw failure("Terminal’s menu is temporarily unavailable.") }
+      let itemRole = try role(item)
+      if itemRole == kAXMenuItemRole,
+         (try value(item, kAXMenuItemCmdCharAttribute) as? String)?.lowercased() == "w",
+         let modifiers = try value(item, kAXMenuItemCmdModifiersAttribute) as? NSNumber,
+         modifiers.uint32Value == 0 {
+        // AX uses Command by default; zero excludes Shift, Option, Control, and
+        // the NoCommand bit. Matching the shortcut also supports localized titles.
+        matches.append(item)
+      }
+      // The close command is a direct item in Terminal's main menu. Avoid
+      // traversing Services, profile lists, and other unrelated nested menus.
+      if [kAXMenuBarRole, kAXMenuBarItemRole, kAXMenuRole].contains(itemRole) {
+        let children = try elements(item, kAXChildrenAttribute)
+        guard children.isEmpty || depth < 3 else { throw failure("Terminal’s menu is temporarily unavailable.") }
+        queue += children.map { ($0, depth + 1) }
+      }
+    }
+    guard matches.count == 1, let command = matches.first,
+          try value(command, kAXEnabledAttribute, required: true) as? Bool == true else {
+      throw failure("Terminal did not expose an enabled, unique Close Tab command. The tab was kept open.")
+    }
+    return command
   }
 
   func resolveClose(token: String, confirm: Bool) throws -> MacTerminalNativeCloseOutcome {
@@ -471,11 +502,11 @@ final class MacNativeTerminalTabs {
     return ClosePrompt(token: UUID().uuidString.lowercased(), application: application, target: target,
       sheet: sheet, cancel: cancel, accept: accept, text: text, label: label)
   }
-  private func pressCloseButton(_ button: AXUIElement) throws {
+  private func pressCloseButton(_ button: AXUIElement, source: String = "confirmation_button") throws {
     try prepare(button)
     guard try value(button, kAXEnabledAttribute) as? Bool != false else { throw failure("Terminal’s close button is disabled.") }
     let result = performAction?(button, kAXPressAction) ?? AXUIElementPerformAction(button, kAXPressAction as CFString)
-    Logger(subsystem: "earth.frg.ClawDad", category: "Terminal").info("native_close_button_action ax_result=\(result.rawValue)")
+    Logger(subsystem: "earth.frg.ClawDad", category: "Terminal").info("native_close_action source=\(source, privacy: .public) ax_result=\(result.rawValue)")
     // cannotComplete may mean the action succeeded but opened a modal sheet.
     guard result == .success || result == .cannotComplete else { throw failure("Terminal could not complete the close action.") }
   }
