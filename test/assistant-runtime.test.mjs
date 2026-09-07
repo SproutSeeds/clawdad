@@ -10,12 +10,15 @@ import {Readable, Writable} from 'node:stream';
 async function fixture(t){
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'clawdad-assistant-'));
   t.after(()=>fs.rm(root,{recursive:true,force:true}));
-  let time=Date.now();const runtime=new AssistantRuntime({root,clock:()=>time});
+  const calls=[];
+  const coordinator={prepare:async()=>({}),run:async request=>{calls.push(request);await request.onSession('01a07d6d-4359-7361-a94b-8a651ca9858b');},stop(){}};
+  let time=Date.now();const runtime=new AssistantRuntime({root,clock:()=>time,coordinator});
   await runtime.command({action:'start',requestId:'start'});
-  const claimed=await runtime.nativePoll({workerId:'worker-1'});
-  assert.equal(claimed.job.action,'start');
-  await runtime.nativeResult({id:'start',result:{coordinator:{tabId:'assistant'}}});
-  return {root,runtime,tick:()=>{time+=3000;}};
+  const claimed=await runtime.nativePoll({workerId:'worker-1',catalog:{revision:1,tabs:[]}});
+  assert.equal(claimed.job,null);
+  assert.equal((await runtime.job('start')).status,'completed');
+  t.after(()=>runtime.close());
+  return {root,runtime,coordinator,calls,tick:()=>{time+=3000;}};
 }
 
 test('a reconnected phone submits the same exact message only once',async t=>{
@@ -26,8 +29,8 @@ test('a reconnected phone submits the same exact message only once',async t=>{
   assert.equal(snapshot.messages.length,1);
   assert.equal(snapshot.tasks.filter(j=>j.id==='voice-1').length,1);
   await assert.rejects(runtime.command({...command,text:'Different task'}),/different action/);
-  const first=await runtime.nativePoll({workerId:'worker-1'});
-  assert.equal(first.job.id,'voice-1');
+  await runtime.drainTask;
+  assert.equal((await runtime.job('voice-1')).status,'completed');
   assert.equal((await runtime.nativePoll({workerId:'worker-1'})).job,null);
 });
 
@@ -37,20 +40,21 @@ test('busy project tabs preserve FIFO while the conversation remains responsive'
   assert.equal((await runtime.nativePoll({workerId:'worker-1'})).job.id,'work-1');
   await runtime.nativeResult({id:'work-1',deferred:true,error:'Agent working'});
   await runtime.command({action:'message',requestId:'conversation',text:'What is running?'});
-  assert.equal((await runtime.nativePoll({workerId:'worker-1'})).job.id,'conversation');
-  await runtime.nativeResult({id:'conversation',error:'Draft preserved'});
+  await runtime.nativePoll({workerId:'worker-1',catalog:{revision:1,tabs:[]}});
+  await runtime.drainTask;
+  assert.equal((await runtime.job('conversation')).status,'completed');
   assert.equal((await runtime.nativePoll({workerId:'worker-1'})).job,null);
   tick();assert.equal((await runtime.nativePoll({workerId:'worker-1'})).job.id,'work-1');
 });
 
 test('host and native-worker restart preserve uncertain delivery without replay',async t=>{
-  const {runtime,root}=await fixture(t);
-  await runtime.command({action:'message',requestId:'uncertain',text:'Continue the patch.'});
+  const {runtime,root,coordinator}=await fixture(t);
+  await runtime.command({action:'terminal.send',tabId:'target',requestId:'uncertain',text:'Continue the patch.'},{tool:true});
   await runtime.nativePoll({workerId:'worker-1'});
-  const restarted=new AssistantRuntime({root});
+  const restarted=new AssistantRuntime({root,coordinator});
   assert.equal((await restarted.nativePoll({workerId:'worker-2'})).job,null);
   assert.equal((await restarted.job('uncertain')).status,'attention');
-  await restarted.command({action:'message',requestId:'later',text:'Explain the current state.'});
+  await restarted.command({action:'terminal.send',tabId:'target',requestId:'later',text:'Explain the current state.'},{tool:true});
   assert.equal((await restarted.nativePoll({workerId:'worker-2'})).job.id,'later');
   assert.equal((await restarted.nativePoll({workerId:'worker-3'})).job,null);
   assert.equal((await restarted.job('later')).status,'attention');
@@ -68,7 +72,7 @@ test('a working task leaves its tab available for watching and inspection',async
 test('ordinary paired requests cannot call native-worker or desktop-tool actions',async t=>{
   const {runtime}=await fixture(t);
   for(const action of ['terminal.send','computer.input','native.poll','turn/start'])await assert.rejects(runtime.command({action,requestId:action,tabId:'x',text:'x'}),/Unsupported/);
-  await assert.rejects(runtime.command({action:'terminal.send',requestId:'loop',tabId:'assistant',text:'loop'},{tool:true}),/project tabs/);
+  await assert.rejects(runtime.command({action:'message',requestId:'loop',text:'loop'},{tool:true}),/Unsupported/);
 });
 
 test('completion belongs to the accepting tab and creates one visible coordinator update',async t=>{
@@ -101,8 +105,8 @@ test('final response items are retained when task_complete omits response text',
 
 test('a fast CLI completion before the native receipt is retained and never replayed',async t=>{
   const {runtime}=await fixture(t),file='/test/fast.jsonl';
-  await runtime.command({action:'message',requestId:'fast',text:'Hello'});
-  await runtime.command({action:'message',requestId:'next',text:'Hello'});
+  await runtime.command({action:'terminal.send',tabId:'target',requestId:'fast',text:'Hello'},{tool:true});
+  await runtime.command({action:'terminal.send',tabId:'target',requestId:'next',text:'Hello'},{tool:true});
   await runtime.nativePoll({workerId:'worker-1'});
   await runtime.nativePrepare({id:'fast',conversationPath:file,sessionId:'session',tabTitle:'Assistant'});
   const timestamp=new Date(Date.now()+1000).toISOString();
@@ -117,7 +121,7 @@ test('a fast CLI completion before the native receipt is retained and never repl
 
 test('current Codex response_item user records attribute completion to the accepting turn',async t=>{
   const {runtime}=await fixture(t),file='/test/current-cli.jsonl';
-  await runtime.command({action:'message',requestId:'current',text:'Check the patch.\n'});
+  await runtime.command({action:'terminal.send',tabId:'target',requestId:'current',text:'Check the patch.\n'},{tool:true});
   await runtime.nativePoll({workerId:'worker-1'});
   await runtime.nativePrepare({id:'current',conversationPath:file,sessionId:'session',tabTitle:'Assistant'});
   const timestamp=new Date(Date.now()+1000).toISOString(),target={coordinator:true};
@@ -142,12 +146,12 @@ test('screenshots remain transient and do not expand the durable conversation st
 
 test('paused control leaves pending jobs cancellable and preserves the conversation',async t=>{
   const {runtime}=await fixture(t);
-  await runtime.command({action:'message',requestId:'pending',text:'Please implement it.'});
+  await runtime.command({action:'terminal.send',tabId:'target',requestId:'pending',text:'Please implement it.'},{tool:true});
   await runtime.command({action:'pause',requestId:'pause',paused:true});
   assert.equal((await runtime.nativePoll({workerId:'worker-1'})).job,null);
   await runtime.command({action:'cancel',requestId:'cancel',jobId:'pending'});
   assert.equal((await runtime.job('pending')).status,'cancelled');
-  assert.equal((await runtime.command({action:'state'})).messages[0].text,'Please implement it.');
+  assert.equal((await runtime.job('pending')).args.text,'Please implement it.');
 });
 
 test('MCP sends the exact authorized prompt to the local Terminal queue and returns a durable receipt',async t=>{

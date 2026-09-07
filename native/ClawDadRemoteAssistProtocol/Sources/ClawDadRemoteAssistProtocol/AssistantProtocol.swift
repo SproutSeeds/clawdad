@@ -123,6 +123,8 @@ public struct AssistantTaskRecord: Codable, Identifiable, Equatable, Sendable {
 
 public struct AssistantSnapshot: Codable, Sendable {
   public let version: Int
+  public let conversationMode: String?
+  public var supportsBackgroundCalls: Bool { conversationMode == "background" }
   public let enabled: Bool
   public let paused: Bool
   public let nativeOnline: Bool

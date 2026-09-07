@@ -179,7 +179,11 @@ struct ContentView: View {
       .animation(reduceMotion ? nil : .easeInOut(duration: 0.38), value: session.startupLoading)
       .clawDadNavigationHidden()
       .safeAreaInset(edge: .bottom, spacing: 0) { ReadAloudBar(reader: session.readAloud) }
-      .safeAreaInset(edge: .bottom, spacing: 0) { AssistantCallBar(controller: assistant) { showingAssistant = true } }
+      .safeAreaInset(edge: .bottom, spacing: 0) {
+        if !showingRemoteAssist, !showingAssistant {
+          AssistantCallBar(controller: assistant) { showingAssistant = true }
+        }
+      }
       .sheet(isPresented: $showingAssistant) {
         AssistantView(controller: assistant, onClose: { showingAssistant = false }, onWatch: {
           showingAssistant = false
@@ -534,8 +538,8 @@ struct ContentView: View {
       HStack {
         Button {
           dismissKeyboard()
-          assistant.bind(session)
-          showingAssistant = true
+          if assistant.callVisible { showingAssistant = true }
+          else { assistant.startCall(session) }
         } label: {
           Image(systemName: "headphones").font(.system(size: 18, weight: .bold)).frame(width: 44, height: 44)
         }

@@ -934,7 +934,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     let assistantRuntime = MacAssistantRuntime(baseURL: baseURL, token: service.token)
     remoteAssistHost?.assistantRuntime = assistantRuntime
     assistantBridge?.stop()
-    assistantBridge = MacAssistantBridge(runtime: assistantRuntime, repoRoot: service.repoRoot)
+    assistantBridge = MacAssistantBridge(runtime: assistantRuntime)
     assistantBridge?.start()
     updateStatus("Opening ClawDad...")
     let configuration = WKWebViewConfiguration()

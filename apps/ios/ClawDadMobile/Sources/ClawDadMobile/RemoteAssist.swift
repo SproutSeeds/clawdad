@@ -3253,7 +3253,7 @@ struct RemoteAssistView: View {
     .statusBarHidden(true)
     .persistentSystemOverlays(.hidden)
     .safeAreaInset(edge: .top, spacing: 0) {
-      if let assistant { AssistantCallBar(controller: assistant) { showingAssistant = true } }
+      if let assistant, !showingAssistant { AssistantCallBar(controller: assistant) { showingAssistant = true } }
     }
     .sheet(isPresented: $showingAssistant) {
       if let assistant {
@@ -3501,7 +3501,10 @@ struct RemoteAssistView: View {
         RemoteImageButton(controller: controller, transfer: controller.imageTransfer)
 
         if let assistant {
-          Button { assistant.bind(session); showingAssistant = true } label: {
+          Button {
+            if assistant.callVisible { showingAssistant = true }
+            else { assistant.startCall(session) }
+          } label: {
             Image(systemName: "headphones").font(.system(size: 18, weight: .bold)).frame(width: 44, height: 44)
           }
           .buttonStyle(RemoteAssistOverlayButtonStyle())

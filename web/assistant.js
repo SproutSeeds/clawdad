@@ -3,7 +3,8 @@ const dialog = $('assistantDialog');
 if (dialog) {
   let snapshot=null, timer=null, voice=false, muted=false, capture=null, context=null, stream=null;
   let audio=null, speechEpoch=0, speechAbort=null, spoken=new Set(), uploadQueue=[], uploading=null, transcript=[];
-  let pendingMessage=null, sendTail=Promise.resolve(), voiceEpoch=0, startingVoice=false;
+  let pendingMessage=null, sendTail=Promise.resolve(), voiceEpoch=0, startingVoice=false, callVisible=false;
+  let speechQueue=[], speechRunner=null;
   const messageNodes=new Map(), taskNodes=new Map(), tabNodes=new Map();
   async function request(route, body, options={}) {
     const response=await fetch(route,{method:body?'POST':'GET',headers:body instanceof FormData?{}:{'content-type':'application/json'},body:body instanceof FormData?body:body?JSON.stringify(body):undefined,...options});
@@ -14,10 +15,11 @@ if (dialog) {
   async function command(action,args={},id=crypto.randomUUID()) {
     const result=await request('/v1/assistant/request',{...args,action,requestId:id});render(result);return result;
   }
-  async function ensureAssistant(){if(!snapshot?.coordinator&&!snapshot?.tasks?.some(t=>t.action==='start'&&['queued','running'].includes(t.status)))await command('start');}
+  async function ensureAssistant(){await refresh();if(snapshot?.conversationMode!=='background')throw new Error('Update ClawDad on your Mac to use Assistant calls.');await command('start');}
   function button(text,handler){const element=document.createElement('button');element.type='button';element.textContent=text;element.onclick=handler;return element;}
-  function open(){dialog.showModal();$('assistantCall').hidden=true;$('assistantDraft').focus();refresh();if(!timer)timer=setInterval(refresh,2500);}
-  function close(){dialog.close();$('assistantCall').hidden=!voice;$('assistantOpen').focus();}
+  function open(){if(!dialog.open)dialog.showModal();$('assistantCall').hidden=true;$('assistantDraft').focus();refresh();if(!timer)timer=setInterval(refresh,700);}
+  function close(){dialog.close();$('assistantCall').hidden=!callVisible;$('assistantOpen').focus();}
+  function goBack(){if(!$('assistantWorkspace').hidden){$('assistantWorkspace').hidden=true;$('assistantFeed').hidden=false;$('assistantWorkspaceToggle').setAttribute('aria-pressed','false');$('assistantWorkspaceToggle').focus();}else close();}
   async function watch(tabId){
     try{
       const id=crypto.randomUUID();let next=await command('terminal.focus',{tabId},id);
@@ -30,14 +32,14 @@ if (dialog) {
       throw new Error('Tab selection is still pending. Its status will update here.');
     }catch(e){error(e.message);}
   }
-  $('assistantOpen').onclick=open;$('assistantBack').onclick=close;$('assistantReturn').onclick=open;
-  dialog.addEventListener('cancel',event=>{event.preventDefault();close();});
+  $('assistantOpen').onclick=()=>callVisible?open():startVoice();$('assistantBack').onclick=goBack;$('assistantReturn').onclick=open;
+  dialog.addEventListener('cancel',event=>{event.preventDefault();goBack();});
   $('assistantWorkspaceToggle').onclick=()=>{const show=$('assistantWorkspace').hidden;$('assistantWorkspace').hidden=!show;$('assistantFeed').hidden=show;$('assistantWorkspaceToggle').setAttribute('aria-pressed',String(show));};
   $('assistantPause').onclick=()=>command('pause',{paused:!snapshot?.paused}).catch(e=>error(e.message));
   function render(next){
     snapshot=next;$('assistantPause').textContent=next.paused?'Resume control':'Pause control';
     $('assistantSend').disabled=!next.nativeOnline;$('assistantTalk').disabled=!voice&&!next.nativeOnline;$('assistantPause').disabled=!next.nativeOnline;
-    if(!voice)status(next.nativeOnline?'Your Mac is connected':'Waiting for the Mac app…');
+    if(!voice&&!startingVoice&&!callVisible)status(next.nativeOnline?'Your Mac is connected':'Waiting for the Mac app…');
     const feed=$('assistantFeed'), nearBottom=feed.scrollHeight-feed.scrollTop-feed.clientHeight<100;
     for(const message of next.messages||[]){
       if(messageNodes.has(message.id))continue;
@@ -72,8 +74,13 @@ if (dialog) {
       const before=$('assistantWorkspace').children[index];if(before!==node)$('assistantWorkspace').insertBefore(node,before||null);
     }
     if(nearBottom)feed.scrollTop=feed.scrollHeight;
-    const latest=next.messages?.filter(m=>m.role==='assistant').at(-1);
-    if(voice&&latest&&!spoken.has(latest.id)){spoken.add(latest.id);speak(latest).catch(e=>{if(e.name!=='AbortError')error(e.message);});}
+    if(voice){
+      for(const message of next.messages||[])if(message.role==='assistant'&&!spoken.has(message.id)){
+        spoken.add(message.id);speechQueue.push(message);
+      }
+      drainSpeech();
+    }
+    if($('assistantModel'))$('assistantModel').textContent=next.coordinator?.model?`${next.coordinator.model} · Quick conversation`:'';
   }
   async function refresh(){try{render(await request('/v1/assistant/state'));}catch(e){if(dialog.open||voice)error(e.message);}}
   function send(text,id=null,epoch=null){
@@ -86,9 +93,18 @@ if (dialog) {
   }
   $('assistantComposer').onsubmit=async(event)=>{event.preventDefault();const text=$('assistantDraft').value;if(await send(text)&&$('assistantDraft').value===text)$('assistantDraft').value='';};
   $('assistantDraft').onkeydown=event=>{if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();$('assistantComposer').requestSubmit();}};
-  function stopSpeech(){speechEpoch++;speechAbort?.abort();speechAbort=null;if(audio){audio.pause();audio.src='';audio=null;}if(voice)status(muted?'Microphone muted':'Listening…');}
+  function stopSpeech(){speechQueue=[];speechEpoch++;speechAbort?.abort();speechAbort=null;if(audio){audio.pause();audio.src='';audio=null;}if(voice)status(muted?'Microphone muted':'Listening…');}
+  function drainSpeech(){
+    if(speechRunner||!voice||!speechQueue.length)return;
+    speechRunner=(async()=>{
+      while(voice&&speechQueue.length){
+        const message=speechQueue.shift();
+        try{await speak(message);}catch(e){if(e.name!=='AbortError')error(e.message);}
+      }
+    })().finally(()=>{speechRunner=null;if(voice&&speechQueue.length)drainSpeech();});
+  }
   async function speak(message){
-    stopSpeech();const epoch=speechEpoch,abort=new AbortController();speechAbort=abort;
+    const epoch=speechEpoch,abort=new AbortController();speechAbort=abort;
     const settings=await request('/v1/tts/voices',null,{signal:abort.signal});
     let played=0,poll=false;const deadline=Date.now()+180_000;
     while(voice&&epoch===speechEpoch&&Date.now()<deadline){
@@ -137,10 +153,19 @@ if (dialog) {
     }finally{if(uploading===epoch)uploading=null;}
   }
   async function startVoice(){
-    if(voice||startingVoice)return;startingVoice=true;const epoch=++voiceEpoch;
+    if(voice||startingVoice)return;startingVoice=true;callVisible=true;const epoch=++voiceEpoch;
+    $('assistantCall').hidden=dialog.open;status('Connecting Assistant…');error();
+    if(!timer)timer=setInterval(refresh,700);
     try{
       if(!window.dispatchEvent(new Event('clawdad:assistant-will-start-voice',{cancelable:true})))throw new Error('Finish the current dictation before starting a conversation.');
-      await refresh();await ensureAssistant();spoken=new Set((snapshot?.messages||[]).map(m=>m.id));
+      await refresh();spoken=new Set((snapshot?.messages||[]).map(m=>m.id));await ensureAssistant();
+      const deadline=Date.now()+60_000;
+      while(!snapshot?.nativeOnline||!snapshot?.catalog){
+        if(voiceEpoch!==epoch)return;
+        if(Date.now()>deadline)throw new Error('Assistant is waiting for the Mac workspace. Your conversation is saved.');
+        await new Promise(resolve=>setTimeout(resolve,350));await refresh();
+      }
+      if(voiceEpoch!==epoch)return;
       const acquired=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
       if(voiceEpoch!==epoch){acquired.getTracks().forEach(t=>t.stop());return;}stream=acquired;
       context=new AudioContext();await context.audioWorklet.addModule('/assistant-audio-worklet.js');await context.resume();
@@ -156,9 +181,9 @@ if (dialog) {
       };
       voice=true;muted=false;error();status('Listening…');$('assistantCall').hidden=dialog.open;$('assistantMuteInline').hidden=false;$('assistantTalk').textContent='End conversation';
       window.dispatchEvent(new CustomEvent('clawdad:assistant-voice',{detail:{active:true}}));
-    }catch(e){if(voiceEpoch===epoch){endVoice();error(e.message);}}finally{startingVoice=false;}
+    }catch(e){if(voiceEpoch===epoch){endVoice();callVisible=true;$('assistantCall').hidden=dialog.open;error(e.message);status('Assistant could not connect. Open Messages to retry.');}}finally{if(voiceEpoch===epoch)startingVoice=false;}
   }
-  function endVoice(){voiceEpoch++;voice=false;stopSpeech();stream?.getTracks().forEach(t=>t.stop());stream=null;capture?.disconnect();capture=null;context?.close();context=null;uploadQueue=[];transcript=[];$('assistantCall').hidden=true;$('assistantMuteInline').hidden=true;$('assistantTalk').textContent='Start talking';status('Conversation saved');window.dispatchEvent(new CustomEvent('clawdad:assistant-voice',{detail:{active:false}}));}
+  function endVoice(){voiceEpoch++;voice=false;startingVoice=false;callVisible=false;stopSpeech();stream?.getTracks().forEach(t=>t.stop());stream=null;capture?.disconnect();capture=null;context?.close();context=null;uploadQueue=[];transcript=[];$('assistantCall').hidden=true;$('assistantMuteInline').hidden=true;$('assistantTalk').textContent='Call Assistant';status('Conversation saved');window.dispatchEvent(new CustomEvent('clawdad:assistant-voice',{detail:{active:false}}));}
   function setMuted(value){muted=value;capture?.port.postMessage({muted});for(const id of ['assistantMute','assistantMuteInline'])$(id).textContent=muted?'Unmute':'Mute';status(muted?'Microphone muted':'Listening…');}
   $('assistantTalk').onclick=()=>voice?endVoice():startVoice();$('assistantEnd').onclick=endVoice;
   $('assistantMute').onclick=()=>setMuted(!muted);

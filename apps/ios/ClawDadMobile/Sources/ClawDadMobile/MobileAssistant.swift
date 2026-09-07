@@ -12,6 +12,7 @@ final class MobileAssistantController: ObservableObject {
   @Published private(set) var error = ""
   @Published private(set) var sending = false
   @Published private(set) var startingVoice = false
+  @Published private(set) var callVisible = false
   private let connection = AssistantConnection()
   private let audio = AssistantAudio()
   private weak var session: CloudSession?
@@ -24,6 +25,7 @@ final class MobileAssistantController: ObservableObject {
   private var pendingMessage: (text: String, id: String)?
   private var voiceQueue: [(Data, Bool)] = []
   private var transcriptParts: [String] = []
+  private var speechQueue: [AssistantMessage] = []
   #if DEBUG
     private var preview: AssistantPreview?
   #endif
@@ -74,27 +76,34 @@ final class MobileAssistantController: ObservableObject {
         } else {
           do {
             try await refresh()
-            if !voiceActive {
+            if !voiceActive, !startingVoice {
               status =
                 snapshot?.nativeOnline == true
                 ? "Your Mac is connected" : "Waiting for the Mac app…"
             }
           } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
         }
-        try? await Task.sleep(nanoseconds: 2_000_000_000)
+        try? await Task.sleep(nanoseconds: voiceActive ? 700_000_000 : 2_000_000_000)
       }
     }
   }
   private func refresh() async throws {
+    #if DEBUG
+      if let preview {
+        snapshot = try preview.snapshot()
+        return
+      }
+    #endif
     let data = try await connection.request(.state)
     let next = try JSONDecoder().decode(AssistantSnapshot.self, from: data)
     snapshot = next
     error = next.tasks.last?.status == "attention" ? next.tasks.last?.error ?? "" : ""
-    if voiceActive, let message = next.messages.last(where: { $0.role == "assistant" }),
-      !spoken.contains(message.id)
-    {
-      spoken.insert(message.id)
-      speak(message)
+    if voiceActive {
+      for message in next.messages where message.role == "assistant" && !spoken.contains(message.id) {
+        spoken.insert(message.id)
+        speechQueue.append(message)
+      }
+      speakNext()
     }
   }
   func command(
@@ -139,20 +148,20 @@ final class MobileAssistantController: ObservableObject {
       } catch { self.error = error.localizedDescription }
     }
   }
-  func startAssistant() async {
-    do {
-      try await command("start")
-      error = ""
-    } catch { self.error = error.localizedDescription }
+  func startCall(_ session: CloudSession) {
+    bind(session)
+    open()
+    Task { await startVoice() }
   }
   private func ensureAssistant() async throws {
-    if snapshot?.coordinator == nil
-      && snapshot?.tasks.contains(where: {
-        $0.action == "start" && ["queued", "running"].contains($0.status)
-      }) != true
-    {
-      try await command("start")
+    // Check the current host before issuing start: an older Mac would open Terminal.
+    try await refresh()
+    guard snapshot?.supportsBackgroundCalls == true else {
+      throw NSError(domain: "Assistant", code: 1, userInfo: [
+        NSLocalizedDescriptionKey: "Update ClawDad on your Mac to use the new Assistant call."
+      ])
     }
+    try await command("start")
   }
   func perform(_ action: String, args: [String: AssistantValue] = [:]) {
     Task {
@@ -182,22 +191,43 @@ final class MobileAssistantController: ObservableObject {
     }
   }
   func startVoice() async {
-    guard connected, !voiceActive, !startingVoice else { return }
+    guard !voiceActive, !startingVoice else { return }
     startingVoice = true
-    defer { startingVoice = false }
+    callVisible = true
     let attempt = UUID()
     voiceEpoch = attempt
+    defer { if voiceEpoch == attempt { startingVoice = false } }
+    status = "Connecting Assistant…"
+    error = ""
+    open()
     #if DEBUG
       if preview != nil {
+        if ProcessInfo.processInfo.arguments.contains("--clawdad-assistant-delayed-start") {
+          try? await Task.sleep(nanoseconds: 3_000_000_000)
+          guard voiceEpoch == attempt else { return }
+        }
         voiceActive = true
         status = "Listening…"
         return
       }
     #endif
     do {
+      let deadline = Date().addingTimeInterval(60)
+      while !connected {
+        guard voiceEpoch == attempt else { return }
+        if Date() >= deadline { throw AssistantProtocolError.timedOut }
+        try await Task.sleep(nanoseconds: 250_000_000)
+      }
       try await refresh()
       spoken = Set(snapshot?.messages.map(\.id) ?? [])
       try await ensureAssistant()
+      status = "Connecting to your Terminal workspace…"
+      while snapshot?.nativeOnline != true || snapshot?.catalog == nil {
+        guard voiceEpoch == attempt else { return }
+        if Date() >= deadline { throw AssistantProtocolError.timedOut }
+        try await Task.sleep(nanoseconds: 350_000_000)
+        try await refresh()
+      }
       guard voiceEpoch == attempt else { return }
       try await audio.start()
       guard voiceEpoch == attempt else {
@@ -209,7 +239,12 @@ final class MobileAssistantController: ObservableObject {
       audio.muted = false
       status = "Listening…"
       error = ""
-    } catch { self.error = error.localizedDescription }
+    } catch {
+      if voiceEpoch == attempt {
+        self.error = error.localizedDescription
+        status = "Assistant couldn't connect. Tap to view."
+      }
+    }
   }
   func toggleMute() {
     if !muted { audio.finishUtterance() }
@@ -221,12 +256,15 @@ final class MobileAssistantController: ObservableObject {
   func interruptSpeech() {
     speech?.cancel()
     speech = nil
+    speechQueue = []
     audio.stopPlayback()
     if voiceActive { status = muted ? "Microphone muted" : "Listening…" }
   }
   func endVoice() {
     voiceEpoch = UUID()
     voiceActive = false
+    startingVoice = false
+    callVisible = false
     muted = false
     interruptSpeech()
     transcribing?.cancel()
@@ -293,11 +331,18 @@ final class MobileAssistantController: ObservableObject {
       if voiceEpoch == epoch { status = muted ? "Microphone muted" : "Listening…" }
     }
   }
-  private func speak(_ message: AssistantMessage) {
-    interruptSpeech()
+  private func speakNext() {
+    guard voiceActive, speech == nil, !speechQueue.isEmpty else { return }
+    let message = speechQueue.removeFirst()
     let epoch = voiceEpoch
     speech = Task { [weak self] in
       guard let self else { return }
+      defer {
+        if !Task.isCancelled, voiceEpoch == epoch {
+          speech = nil
+          speakNext()
+        }
+      }
       var played = 0
       var poll = false
       var voiceSelection: AssistantValue?
@@ -405,6 +450,9 @@ struct AssistantView: View {
                     Text("Speech uses your current ClawDad voice and transcription settings.").font(
                       .footnote
                     ).foregroundStyle(.secondary)
+                    if let model = controller.snapshot?.coordinator?["model"]?.string {
+                      Text("\(model) · Quick conversation").font(.footnote).foregroundStyle(.secondary)
+                    }
                   }.padding(.vertical, 28)
                 }
                 ForEach(controller.snapshot?.messages ?? []) { message in
@@ -449,9 +497,10 @@ struct AssistantView: View {
           Text(controller.error).font(.footnote).foregroundStyle(ClawDadTheme.gold).padding(
             .horizontal
           ).accessibilityIdentifier("clawdad.assistant.error")
-          Button("Reconnect Assistant") { Task { await controller.startAssistant() } }.font(
-            .footnote
-          ).disabled(!controller.connected)
+          if !controller.voiceActive {
+            Button("Retry connection") { Task { await controller.startVoice() } }.font(.footnote)
+              .disabled(controller.startingVoice)
+          }
         }
         HStack(alignment: .bottom) {
           TextField("Message Assistant", text: $draft, axis: .vertical).lineLimit(1...5)
@@ -468,16 +517,16 @@ struct AssistantView: View {
               || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
           ).accessibilityLabel("Send to Assistant")
         }.padding(.horizontal)
-        if controller.voiceActive {
+        if controller.callVisible {
           AssistantCallBar(controller: controller)
         } else {
           Button {
             Task { await controller.startVoice() }
           } label: {
-            Label("Start talking", systemImage: "headphones").frame(maxWidth: .infinity).padding(14)
+            Label(controller.startingVoice ? "Connecting…" : "Call Assistant", systemImage: "headphones").frame(maxWidth: .infinity).padding(14)
           }.buttonStyle(.plain).background(
             ClawDadTheme.gold, in: RoundedRectangle(cornerRadius: 14)
-          ).foregroundStyle(Color.black).disabled(!controller.connected).padding([
+          ).foregroundStyle(Color.black).disabled(controller.startingVoice).padding([
             .horizontal, .bottom,
           ]).accessibilityIdentifier("clawdad.assistant.start-voice")
         }
@@ -485,7 +534,9 @@ struct AssistantView: View {
       .foregroundStyle(ClawDadTheme.cream).background(Color.black).tint(ClawDadTheme.gold)
       .navigationTitle("Assistant").toolbar {
         ToolbarItem(placement: .cancellationAction) {
-          Button("Back", systemImage: "chevron.left", action: onClose).accessibilityIdentifier(
+          Button("Back", systemImage: "chevron.left") {
+            if showingWorkspace { showingWorkspace = false } else { onClose() }
+          }.keyboardShortcut(.cancelAction).accessibilityIdentifier(
             "clawdad.assistant.back")
         }
         ToolbarItem(placement: .primaryAction) {
@@ -504,11 +555,11 @@ struct AssistantCallBar: View {
   @ObservedObject var controller: MobileAssistantController
   var onOpen: (() -> Void)? = nil
   var body: some View {
-    if controller.voiceActive {
+    if controller.callVisible {
       HStack(spacing: 16) {
         if let onOpen {
           Button(action: onOpen) {
-            Label(controller.status, systemImage: "headphones").font(.subheadline).lineLimit(1)
+            Label(controller.status, systemImage: "keyboard").font(.subheadline).lineLimit(2)
           }.accessibilityIdentifier("clawdad.assistant.return")
         } else {
           Label(controller.status, systemImage: "headphones").font(.subheadline).lineLimit(1)
@@ -519,7 +570,7 @@ struct AssistantCallBar: View {
         } label: {
           Image(systemName: controller.muted ? "mic.slash.fill" : "mic.fill").frame(
             width: 36, height: 44)
-        }.accessibilityLabel(controller.muted ? "Unmute Assistant" : "Mute Assistant")
+        }.disabled(!controller.voiceActive).accessibilityLabel(controller.muted ? "Unmute Assistant" : "Mute Assistant")
         Button {
           controller.endVoice()
         } label: {

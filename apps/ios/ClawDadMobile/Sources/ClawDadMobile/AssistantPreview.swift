@@ -8,8 +8,8 @@
     private var state: [String: AssistantValue]
     init() {
       state = [
-        "version": .number(1), "enabled": .bool(true), "paused": .bool(false),
-        "nativeOnline": .bool(true), "coordinator": .object(["tabId": .string("assistant")]),
+        "version": .number(1), "conversationMode": .string("background"), "enabled": .bool(true), "paused": .bool(false),
+        "nativeOnline": .bool(true), "coordinator": .object(["mode": .string("background"), "model": .string("gpt-6-astra"), "status": .string("ready")]),
         "tasks": .array([]),
         "messages": .array([
           .object([

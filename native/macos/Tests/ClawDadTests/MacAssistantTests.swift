@@ -23,35 +23,6 @@ private final class AssistantHTTPFixture: URLProtocol, @unchecked Sendable {
 }
 
 final class MacAssistantTests: XCTestCase {
-  func testStaleAssistantTTYCannotAdoptAnotherProjectOrConversation() throws {
-    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let log = directory.appendingPathComponent("fixture.jsonl")
-    let conversation = MacCodexConversation(sessionId: "assistant-session", path: log)
-    func writeMetadata(cwd: String) throws {
-      var data = try JSONSerialization.data(withJSONObject: ["type": "session_meta", "payload": [
-        "id": conversation.sessionId, "source": "cli", "cwd": cwd,
-      ]])
-      data.append(10)
-      try data.write(to: log)
-    }
-    try writeMetadata(cwd: directory.path)
-    XCTAssertTrue(macAssistantConversationMatches(conversation, directory: directory, expectedSessionID: nil))
-    XCTAssertTrue(macAssistantConversationMatches(conversation, directory: directory, expectedSessionID: conversation.sessionId))
-    XCTAssertFalse(macAssistantConversationMatches(conversation, directory: directory, expectedSessionID: "different-session"))
-    try writeMetadata(cwd: "/tmp/different-project")
-    XCTAssertFalse(macAssistantConversationMatches(conversation, directory: directory, expectedSessionID: nil))
-  }
-  func testMCPLaunchPreservesPathsWithoutJSONOnlySlashEscapes() throws {
-    let node = "/Users/test/Library/Application Support/ClawDad/runtime/bin/node"
-    let mcp = "/Volumes/Code/test's \"quoted\" folder\\name/assistant-mcp.mjs"
-    let overrides = try macAssistantMCPOverrides(nodePath: node, mcpPath: mcp)
-    let values = overrides.map { String($0.split(separator: "=", maxSplits: 1)[1]) }
-    XCTAssertFalse(values.contains { $0.contains("\\/") })
-    XCTAssertEqual(try JSONDecoder().decode(String.self, from: Data(values[0].utf8)), node)
-    XCTAssertEqual(try JSONDecoder().decode([String].self, from: Data(values[1].utf8)), [mcp])
-  }
   func testNamedKeyboardShortcutsPreserveModifiersAndRejectUnknownKeys() {
     let key = assistantKeyStroke("tab", modifiers: ["command", "shift"])
     XCTAssertEqual(key?.keyCode, 48)

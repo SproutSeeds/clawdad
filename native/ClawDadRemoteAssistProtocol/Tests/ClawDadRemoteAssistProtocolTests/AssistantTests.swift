@@ -3,6 +3,18 @@ import XCTest
 @testable import ClawDadRemoteAssistProtocol
 
 final class AssistantTests: XCTestCase {
+  func testBackgroundCallSupportMustBeExplicitBeforeSendingStartToAnOlderMac() throws {
+    var value: [String: Any] = ["version": 1, "enabled": false, "paused": false,
+      "nativeOnline": true, "messages": [], "tasks": []]
+    func decode() throws -> AssistantSnapshot {
+      try JSONDecoder().decode(AssistantSnapshot.self, from: JSONSerialization.data(withJSONObject: value))
+    }
+    XCTAssertFalse(try decode().supportsBackgroundCalls)
+    value["conversationMode"] = "terminal"
+    XCTAssertFalse(try decode().supportsBackgroundCalls)
+    value["conversationMode"] = "background"
+    XCTAssertTrue(try decode().supportsBackgroundCalls)
+  }
   func testQuietRoomDoesNotCreateAnUtterance() {
     var detector = AssistantVoiceActivity(sampleRate: 16000)
     for _ in 0..<600 {
