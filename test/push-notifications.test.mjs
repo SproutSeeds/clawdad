@@ -13,9 +13,9 @@ function storage() {
   return {values,alarms,storage:{get:async key=>structuredClone(values.get(key)),put:async(key,value)=>values.set(key,structuredClone(value)),delete:async key=>values.delete(key),
     list:async({prefix})=>new Map([...values].filter(([key])=>key.startsWith(prefix)).map(([k,v])=>[k,structuredClone(v)])),setAlarm:async at=>alarms.push(at)},getWebSockets:()=>[]};
 }
-async function fixture({respond=()=>new Response(null,{status:200}),env=credentials()}={}) {
+async function fixture({respond=()=>new Response(null,{status:200}),env=credentials(),fetchImpl}={}) {
   const state=storage(); let now=at; const sent=[];
-  const dependencies={clock:()=>now,fetchImpl:async(url,options)=>{sent.push({url,options});return respond(url,options);}};
+  const dependencies={clock:()=>now,fetchImpl:fetchImpl || (async(url,options)=>{sent.push({url,options});return respond(url,options);})};
   const service=new PushNotificationService(state,env,dependencies);
   await state.storage.put('access:device:phone',{tokenHash:'trusted',revokedAt:''});
   await service.register('phone',{enabled:true,token:'b'.repeat(64),environment:'production',timeZone:'America/Chicago',locale:'en-US'});
@@ -57,6 +57,42 @@ test('transient APNs errors retry after restart and never resend to devices alre
   fail=false; f.advance(20_000); f.service=f.restart(); await f.service.alarm(); await f.service.alarm();
   assert.equal(f.sent.length,2); assert.equal(f.state.values.get('push:events')[0].targets.length,0);
 });
+test('APNs fetch preserves the standalone receiver required by the Workers runtime',async()=>{
+  let reachedApple=0;
+  const f=await fixture({fetchImpl:async function workerFetch() {
+    if (this !== undefined) throw new TypeError('Illegal invocation: function called with incorrect this reference');
+    reachedApple+=1;
+    return new Response(null,{status:200});
+  }});
+  f.advance(2000); await f.service.submit(completion,identity); await f.service.alarm();
+  assert.equal(reachedApple,1);
+  assert.equal(f.state.values.get('push:events')[0].targets.length,0);
+});
+test('delivery diagnostics distinguish relay queueing from Apple acceptance without exposing credentials',async()=>{
+  let fail=true;
+  const f=await fixture({respond:()=>fail?Response.json({reason:'InvalidProviderToken'},{status:403}):new Response(null,{status:200})});
+  f.advance(2000); await f.service.submit(completion,identity);
+  let status=await f.service.status();
+  assert.equal(status.registeredDevices,1); assert.equal(status.pendingEvents,1);
+  assert.equal(status.recentEvents[0].acceptedByApple,0); assert.equal(status.recentEvents[0].lastAttempt,null);
+  await f.service.alarm(); status=await f.service.status();
+  assert.equal(status.recentEvents[0].lastAttempt.reason,'InvalidProviderToken');
+  assert.equal(status.recentEvents[0].lastAttempt.outcome,'retrying');
+  fail=false; f.advance(20_000); await f.service.alarm(); status=await f.service.status();
+  assert.equal(status.pendingEvents,0); assert.equal(status.recentEvents[0].acceptedByApple,1);
+  assert.equal(status.recentEvents[0].lastAttempt.httpStatus,200);
+  assert.equal(status.recentEvents[0].nextAttemptAt,null);
+  const serialized=JSON.stringify(status);
+  assert.equal(serialized.includes('b'.repeat(64)),false);
+  assert.equal(serialized.includes(f.service.env.CLAWDAD_APNS_PRIVATE_KEY),false);
+});
+test('delivery diagnostics categorize thrown errors without leaking exception text',async()=>{
+  const f=await fixture({fetchImpl:async()=>{throw new Error('Illegal invocation: secret material must stay private');}});
+  f.advance(2000); await f.service.submit(completion,identity); await f.service.alarm();
+  const status=await f.service.status();
+  assert.equal(status.recentEvents[0].lastAttempt.reason,'FetchInvocationError');
+  assert.equal(JSON.stringify(status).includes('secret material'),false);
+});
 test('unregistered tokens are removed and device revocation/opt-out cancels pending alerts',async()=>{
   const f=await fixture({respond:()=>Response.json({reason:'Unregistered'},{status:410})});
   f.advance(2000); await f.service.submit(completion,identity); await f.service.alarm();
@@ -93,6 +129,10 @@ test('relay requires the paired device token to register and host credential to 
   const relay=new WorkspaceRelay(state,{});
   const request=(route,method,credential,body)=>new Request(`https://relay/workspaces/work${route}?accountId=account&deviceId=phone`,{
     method,headers:{authorization:`Bearer ${credential}`,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});
+  assert.equal((await relay.fetch(request('/notifications/status','GET','h'.repeat(40)))).status,200);
+  assert.equal((await relay.fetch(request('/notifications/status','GET','p'.repeat(40)))).status,401);
+  assert.equal((await relay.fetch(request('/notifications/status','GET','other-device'))).status,401);
+  assert.equal((await relay.fetch(request('/notifications/status','POST','h'.repeat(40),{}))).status,405);
   assert.equal((await relay.fetch(request('/notifications/device','PUT','h'.repeat(40),{enabled:false}))).status,401);
   assert.equal((await relay.fetch(request('/notifications/device','PUT','other-device',{enabled:false}))).status,401);
   assert.equal((await relay.fetch(request('/notifications/device','PUT','p'.repeat(40),{enabled:false}))).status,200);

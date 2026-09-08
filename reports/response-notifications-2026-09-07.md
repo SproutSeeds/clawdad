@@ -1,9 +1,10 @@
 # Terminal response notifications — 2026-09-07
 
-**Production push configuration is active.** Mac build 70 is installed and
-healthy, and iPhone build 55 is available in ClawDad Internal TestFlight.
-Physical iPhone delivery and notification-tap acceptance are still open. Enable
-**Agent response notifications** in ClawDad Settings and allow iOS alerts.
+**The relay repair is deployed and the user confirmed receiving an iPhone
+alert.** Apple accepted three queued alerts with HTTP 200. Mac build 70 is
+installed and healthy, and iPhone build 55 is available in ClawDad Internal
+TestFlight. This cloud-only repair requires no new native build. Notification-tap
+routing and the remaining acceptance scenarios below still need hands-on checks.
 
 ## Behavior
 
@@ -56,9 +57,9 @@ TURN controls, domains, and account access were preserved.
 | iPhone | Build 55, `8455f211-8c1d-40ab-adc8-369b54159fbc`, `VALID`, `IN_BETA_TESTING`, assigned to ClawDad Internal |
 | Signing | Distribution export verified with `aps-environment=production`, correct app/team identifiers, and `get-task-allow=false` |
 | App ID | `PUSH_NOTIFICATIONS` enabled for `earth.frg.clawdad.ios` only |
-| Relay | Deployment `f8491a7c` at 100% traffic, all three APNs secrets configured, existing three bindings retained, health and notification privacy disclosure return HTTP 200 |
+| Relay | Delivery repair `cb0f13c6` active at 100% traffic; all three APNs secrets configured, existing three bindings retained, health and notification privacy disclosure return HTTP 200 |
 | Apple key | `363GQMT73W`, ClawDad Production Push; production only, one topic: `earth.frg.clawdad.ios`; team `4QV4WR9G32` |
-| Rollback | Relay before push activation `2a5c74fb`; before notification code `24f79f55`; Mac builds 69 and 68 preserved in the candidate directory |
+| Rollback | Relay before delivery repair `f8491a7c`; before push activation `2a5c74fb`; before notification code `24f79f55`; Mac builds 69 and 68 preserved in the candidate directory |
 
 The deployed Worker was copied through the existing dashboard editor and compared
 with the repository baseline. It matched after normalizing generated filename
@@ -109,9 +110,8 @@ monitor files match the corrected source byte for byte (SHA-256
 
 ## Validation
 
-- 538 Node runtime tests passed, including 14 notification tests after the
-  completion timestamp repair. The 11 App Store Connect tests also passed after
-  the release-note update.
+- 541 Node runtime tests passed after the relay repair, including 17 notification
+  tests. The 11 App Store Connect tests also passed after the release-note update.
 - 105 iPhone package tests passed, including signed conversation routing,
   malformed payload rejection, unpaired alert handling, and stale-catalog checks.
 - Two iPhone simulator UI checks passed: notification opt-in/navigation and
@@ -131,11 +131,49 @@ the expected `400 BadDeviceToken` for an intentionally invalid device token.
 This establishes transport reachability, not real iPhone delivery or a successful
 Worker send. Screenshots verify layout, not physical receipt.
 
-The live monitor checkpoint is fresh and tracks 15 conversations. No new live
-completion had been recorded after the corrected host restarted at the final
-health check. Physical registration, receipt, and tap routing remain acceptance
-checks. Cloudflare Data Studio does not authorize inspection of its internal KV
-table schema, so it was not used to claim device registration or delivery.
+The live monitor checkpoint is fresh and tracks 15 conversations. It detected
+the user's test completion at `2026-09-08T00:40:56Z`; the relay accepted that
+event. This did not establish Apple delivery. Cloudflare Data Studio does not
+authorize inspection of its internal KV table schema, so it was not used to
+claim device registration or delivery.
+
+## Failed physical test and relay repair
+
+The user reported that no alert appeared. Mac discovery and the completion
+timestamp conversion worked for this test. An idempotent resubmission of the
+same event returned HTTP 202 with `duplicate: true`, establishing that the relay
+had queued the event for a registered device.
+
+`PushNotificationService` assigned the native Workers `fetch` function to an
+instance property and called it as a method. The service instance became its
+receiver, which Workers rejects with `Illegal invocation` before sending a
+request. Node's permissive native fetch and the original arrow-function fixture
+had hidden this defect. The repair wraps the function in an arrow that invokes
+the original fetch without rebinding its receiver. This matches the existing
+TURN analytics repair and the [Cloudflare receiver-requirement report](https://github.com/cloudflare/workerd/issues/6904).
+
+A regression fixture now enforces the Workers receiver requirement. It failed
+before the fix and passes after it. Delivery diagnostics are available only to
+the authenticated Mac host through `GET /notifications/status`. They distinguish
+queued recipients from APNs HTTP success, record a bounded error category and
+the next retry, and exclude device tokens, signing credentials, raw exceptions,
+full paths, and response content. Tests cover host-only access and sanitization.
+
+The live source matched the prior released bundle exactly. The replacement was
+copied back from the editor and matched the tested 76,644-byte bundle exactly
+before deployment. The new status endpoint reports configuration present, one
+registered device, and four pending events at the first check. Unauthenticated
+access returns HTTP 401. Existing cloud bindings and disabled persistent
+observability were retained. Queued events keep their existing retry schedule;
+the monitor cursor was not rewound and historical responses were not replayed.
+
+Production APNs returned HTTP 200 for three real queued events at
+`00:55:41.678Z`, `00:55:46.563Z`, and `00:56:36.459Z` on September 8 UTC. Each
+recipient was durably removed from its event after Apple's acknowledgement.
+The user then confirmed: "yes I received an alert!" This establishes physical
+receipt after the repair. The original `00:40:56Z` test event remains on its
+prior retry schedule, due `01:02:11.390Z` at the latest check; fresh completions
+start with the ordinary immediate send schedule.
 
 ## Physical iPhone acceptance
 

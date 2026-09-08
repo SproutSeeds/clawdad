@@ -1611,6 +1611,11 @@ export class WorkspaceRelay {
   async notifications(request, route) {
     const host = await this.hostAccess();
     if (!host) return json(401, {ok:false,error:'Pair a computer first'});
+    if (route.action === '/notifications/status') {
+      if (request.method !== 'GET') return json(405,{ok:false,error:'method not allowed'});
+      if (!await this.requestHasHostAccess(request, host)) return json(401,{ok:false,error:'host authorization required'});
+      return json(200,{ok:true,...await this.pushNotifications.status()});
+    }
     if (route.action === '/notifications/events') {
       if (request.method !== 'POST') return json(405,{ok:false,error:'method not allowed'});
       if (!await this.requestHasHostAccess(request, host)) return json(401,{ok:false,error:'host authorization required'});

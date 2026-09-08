@@ -45,8 +45,23 @@ export function completionPayload(event,registration,identity) {
       accountId:identity.accountId,workspaceId:identity.workspaceId,hostId:identity.hostId}};
 }
 export class PushNotificationService {
-  constructor(state,env,{fetchImpl=fetch,clock=Date.now}={}) { this.state=state; this.env=env; this.fetch=fetchImpl; this.clock=clock; this.pending=Promise.resolve(); }
+  constructor(state,env,{fetchImpl=fetch,clock=Date.now}={}) {
+    this.state=state; this.env=env; this.clock=clock; this.pending=Promise.resolve();
+    // Workers' global fetch rejects a service instance as its receiver.
+    this.fetch=(...args)=>fetchImpl(...args);
+  }
   exclusive(work) { const next=this.pending.then(work); this.pending=next.catch(()=>{}); return next; }
+  async status() {
+    return this.exclusive(async()=>{
+      const devices=await this.state.storage.list({prefix:registrationPrefix});
+      const events=(await this.state.storage.get(queueKey) || []).filter(event=>Date.parse(event.completedAt)>this.clock()-day);
+      return {configured:pushConfigured(this.env),registeredDevices:devices.size,
+        pendingEvents:events.filter(event=>event.targets.length).length,
+        recentEvents:events.slice(-10).map(event=>({id:event.id,completedAt:event.completedAt,
+          pendingDevices:event.targets.length,acceptedByApple:event.acceptedByApple || 0,attempts:event.attempt,
+          nextAttemptAt:event.targets.length?new Date(event.nextAt).toISOString():null,lastAttempt:event.lastAttempt || null}))};
+    });
+  }
   async register(deviceId,value) {
     return this.exclusive(async()=>{
       const key=registrationPrefix+deviceId;
@@ -96,21 +111,29 @@ export class PushNotificationService {
           if (!device || !access?.tokenHash || access.revokedAt || Date.parse(event.completedAt)<device.enabledSince) {
             event.targets=event.targets.filter(id=>id!==deviceId); continue;
           }
-          let delivered=false, invalid=false;
+          let delivered=false, invalid=false, httpStatus=0, reason='';
           try {
             const token=await providerToken(environmentConfig(this.env,device.environment),this.clock());
             const response=await this.fetch(`https://${device.environment==='development'?'api.sandbox.push.apple.com':'api.push.apple.com'}/3/device/${device.token}`,{
               method:'POST',headers:{authorization:`bearer ${token}`,'apns-topic':topic,'apns-push-type':'alert','apns-priority':'10',
                 'apns-expiration':String(Math.floor((Date.parse(event.completedAt)+day)/1000)),'apns-collapse-id':event.id,'content-type':'application/json'},
               body:JSON.stringify(completionPayload(event,device,event.identity)),signal:AbortSignal.timeout(10_000)});
-            delivered=response.ok;
-            const reason=delivered?'':(await response.json().catch(()=>({}))).reason;
+            delivered=response.ok; httpStatus=response.status;
+            const providerReason=delivered?'':(await response.json().catch(()=>({}))).reason;
+            reason=delivered?'':(/^[A-Za-z]{1,64}$/.test(providerReason || '')?providerReason:'ProviderError');
             invalid=response.status===410 || reason==='BadDeviceToken' || reason==='DeviceTokenNotForTopic';
             if (response.status===403) {
               const config = environmentConfig(this.env,device.environment);
               signingCache.delete(`${config.CLAWDAD_APNS_TEAM_ID}:${config.CLAWDAD_APNS_KEY_ID}`);
             }
-          } catch { /* The bounded durable alarm retries provider/network failures. */ }
+          } catch (error) {
+            // Keep only a bounded category, never raw exception text or tokens.
+            reason=String(error?.message || '').includes('Illegal invocation')?'FetchInvocationError'
+              :error?.name==='DataError' || error?.name==='OperationError'?'SigningError':'TransportError';
+          }
+          event.lastAttempt={at:new Date(this.clock()).toISOString(),httpStatus,reason,
+            outcome:delivered?'accepted_by_apple':invalid?'invalid_device':'retrying'};
+          if (delivered) event.acceptedByApple=(event.acceptedByApple || 0)+1;
           if (invalid) {
             const current=await this.state.storage.get(key);
             if (current?.token===device.token) await this.state.storage.delete(key);
