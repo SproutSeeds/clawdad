@@ -63,7 +63,7 @@ public enum AssistantValue: Codable, Equatable, Sendable {
 /// Native worker and MCP tool endpoints are deliberately absent.
 public struct AssistantWireRequest: Codable, Sendable {
   public enum Action: String, Codable, Sendable {
-    case state, command, transcribe, synthesize, audio
+    case state, command, transcribe, synthesize, audio, imageUpload
   }
   public let id: String
   public let action: Action
@@ -109,6 +109,7 @@ public struct AssistantMessage: Codable, Identifiable, Equatable, Sendable {
   public let role: String
   public let text: String
   public let createdAt: String
+  public var images: [RemoteImageUpload]? = nil
 }
 
 public struct AssistantTaskRecord: Codable, Identifiable, Equatable, Sendable {
@@ -124,6 +125,7 @@ public struct AssistantTaskRecord: Codable, Identifiable, Equatable, Sendable {
 public struct AssistantSnapshot: Codable, Sendable {
   public let version: Int
   public let conversationMode: String?
+  public var imageAttachments: Bool? = nil
   public var supportsBackgroundCalls: Bool { conversationMode == "background" }
   public let enabled: Bool
   public let paused: Bool

@@ -129,7 +129,7 @@ final class MacAssistantSession {
       }
       do {
         let data = try await runtime.respond(request,
-          queuedMs: (ProcessInfo.processInfo.systemUptime - queued.receivedAt) * 1000)
+          queuedMs: (ProcessInfo.processInfo.systemUptime - queued.receivedAt) * 1000, deviceId: deviceId)
         guard !stopped, trusted else { return }
         let size = 64 * 1024
         if data.isEmpty {

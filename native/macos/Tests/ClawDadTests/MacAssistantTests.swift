@@ -1,4 +1,5 @@
 import XCTest
+import ClawDadRemoteAssistProtocol
 
 @testable import ClawDad
 
@@ -6,6 +7,17 @@ private final class AssistantHTTPFixture: URLProtocol, @unchecked Sendable {
   override class func canInit(with request: URLRequest) -> Bool { true }
   override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
   override func startLoading() {
+    var body = request.httpBody ?? Data()
+    if body.isEmpty, let stream = request.httpBodyStream {
+      stream.open()
+      defer { stream.close() }
+      var buffer = [UInt8](repeating: 0, count: 4096)
+      while true {
+        let count = stream.read(&buffer, maxLength: 4096)
+        if count <= 0 { break }
+        body.append(contentsOf: buffer.prefix(count))
+      }
+    }
     let failed = request.url?.query == "failure"
     let response = HTTPURLResponse(
       url: request.url!, statusCode: failed ? 503 : 202, httpVersion: nil,
@@ -14,7 +26,8 @@ private final class AssistantHTTPFixture: URLProtocol, @unchecked Sendable {
     client?.urlProtocol(
       self,
       didLoad: Data(
-        (failed
+        (request.url?.path.hasPrefix("/v1/assistant/") == true
+          ? String(decoding: body, as: UTF8.self) : failed
           ? "{\"error\":\"Local model unavailable\"}" : "{\"audio\":{\"state\":\"generating\"}}")
           .utf8))
     client?.urlProtocolDidFinishLoading(self)
@@ -23,6 +36,25 @@ private final class AssistantHTTPFixture: URLProtocol, @unchecked Sendable {
 }
 
 final class MacAssistantTests: XCTestCase {
+  @MainActor func testImageBridgeUsesTheAuthenticatedDeviceInsteadOfClaimedOwners() async throws {
+    let config = URLSessionConfiguration.ephemeral
+    config.protocolClasses = [AssistantHTTPFixture.self]
+    var runtime = MacAssistantRuntime(baseURL: URL(string: "http://127.0.0.1:4487")!, token: "fixture")
+    runtime.session = URLSession(configuration: config)
+    defer { runtime.session.invalidateAndCancel() }
+    for (action, field) in [(AssistantWireRequest.Action.imageUpload, "owner"), (.command, "imageOwner")] {
+      let payload = try JSONEncoder().encode(AssistantValue.object([
+        "action": .string(action == .command ? "message" : "uploadBegin"),
+        "owner": .string("claimed-other-phone"), "imageOwner": .string("claimed-other-phone"), "images": .array([])
+      ]))
+      let request = AssistantWireRequest(action: action, payload: payload)
+      let response = try await runtime.respond(request, deviceId: "authenticated-phone")
+      let body = try JSONDecoder().decode([String: AssistantValue].self, from: response)
+      XCTAssertEqual(body[field]?.string, "authenticated-phone")
+      do { _ = try await runtime.respond(request); XCTFail("An unbound image request must be rejected") }
+      catch { XCTAssertTrue(error is AssistantProtocolError) }
+    }
+  }
   @MainActor func testDraftVerificationWaitsForRenderingAndInsertsOnlyOnce() async throws {
     var inserts = 0, reads = 0
     try await assistantInsertVerifiedDraft("hey Cody", insert: { inserts += 1; return true }, read: {

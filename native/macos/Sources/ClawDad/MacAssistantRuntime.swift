@@ -36,11 +36,23 @@ struct MacAssistantRuntime {
     return data
   }
 
-  func respond(_ request: AssistantWireRequest, queuedMs: Double = 0) async throws -> Data {
+  func respond(_ request: AssistantWireRequest, queuedMs: Double = 0, deviceId: String? = nil) async throws -> Data {
     try request.validate()
     switch request.action {
     case .state: return try await self.request("/v1/assistant/state")
-    case .command: return try await self.request("/v1/assistant/request", body: request.payload)
+    case .command:
+      var body = try JSONDecoder().decode([String: AssistantValue].self, from: request.payload)
+      body.removeValue(forKey: "imageOwner")
+      if body["action"]?.string == "message", body["images"] != nil {
+        guard let deviceId, !deviceId.isEmpty else { throw AssistantProtocolError.invalid }
+        body["imageOwner"] = .string(deviceId)
+      }
+      return try await self.request("/v1/assistant/request", body: JSONEncoder().encode(body))
+    case .imageUpload:
+      guard let deviceId, !deviceId.isEmpty else { throw AssistantProtocolError.invalid }
+      var body = try JSONDecoder().decode([String: AssistantValue].self, from: request.payload)
+      body["owner"] = .string(deviceId)
+      return try await self.request("/v1/assistant/image", body: JSONEncoder().encode(body))
     case .transcribe:
       let started = ProcessInfo.processInfo.systemUptime
       let boundary = UUID().uuidString

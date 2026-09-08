@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		06B20F27947BBF2559A2A982 /* AssistantPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D4E99AEE8642626D8FD9843 /* AssistantPreview.swift */; };
 		08A2F61153C0221F74B49988 /* RemoteTerminalReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B67F2E9259E05DBACEB7F04 /* RemoteTerminalReader.swift */; };
+		1022DB6F1FD8E58702E505B4 /* AssistantChatComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 193E817EE91878630342FBFE /* AssistantChatComposer.swift */; };
 		187E31F4AF200A700830399F /* RemoteTerminalWindowGroups.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4B71B55085B2C1EE623A070 /* RemoteTerminalWindowGroups.swift */; };
 		1A308337EBE5F90AF0C5DD19 /* ClawDadRemoteAssistProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = 3E041F6ED9B6E45F5F37F06A /* ClawDadRemoteAssistProtocol */; };
 		275FAABA58CF0436EC6D32FB /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 471CC1C676A805963BAF2F99 /* Assets.xcassets */; };
@@ -43,11 +44,13 @@
 		B099B7C46FB342BFB8A80C77 /* RemoteQuickChat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 061444F36751011C7753FD06 /* RemoteQuickChat.swift */; };
 		B1B8CC3DCD795B5AC6B1BC36 /* RemoteImageTransfer.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE33916CC85A1B24B0C5A55E /* RemoteImageTransfer.swift */; };
 		BF46A08D3F06D8FF71B9D210 /* MobileFiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33B53FE2D8E9ADBA82728DA2 /* MobileFiles.swift */; };
+		C3944C0556BE915A23DFD01D /* AssistantChatDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E624474D662739AE0389B11 /* AssistantChatDraft.swift */; };
 		C94E7212185A49D92DA02824 /* MobileAssistant.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9F3B8E8409978BFFE0C10D1 /* MobileAssistant.swift */; };
 		DA856C77B9663DCAB80C7092 /* AssistantAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3286351CBEADFC96A79F1EE4 /* AssistantAudio.swift */; };
 		EDA340FC5A4C8FDF0090ABB0 /* RemoteImagePreparation.swift in Sources */ = {isa = PBXBuildFile; fileRef = D70593B6087D12EBB653329D /* RemoteImagePreparation.swift */; };
 		F07EBA06FDF3D4509727718D /* RemoteDictationDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35C55DF601F5D3D9ABD04556 /* RemoteDictationDraft.swift */; };
 		F7211DC300102D784A05D5D1 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B8CED3140E0C0FA87EA0782 /* ContentView.swift */; };
+		F7A0CB9BD53C56989F8EA24A /* AssistantImageUpload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19EE4C738B3B5065E4CF4B99 /* AssistantImageUpload.swift */; };
 		FDBB6FDF3DE4BE0AA407E4F7 /* ClawDadMobileApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D668F2D2DA41C5EF31F820B0 /* ClawDadMobileApp.swift */; };
 		FDF87A63AB6BE997E8422599 /* PasskeyRequests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 930A750132AFE74E66A35E11 /* PasskeyRequests.swift */; };
 		FF0A3F9F33A94874E1F92846 /* AppAttestClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 147A8BFF03CEDB70896BAB51 /* AppAttestClient.swift */; };
@@ -71,6 +74,8 @@
 		10F1B258EA5FA2916837629C /* AssistantListeningInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantListeningInput.swift; sourceTree = "<group>"; };
 		11E193EDE43AF5D11AADF538 /* ClawDadMobileUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClawDadMobileUITests.swift; sourceTree = "<group>"; };
 		147A8BFF03CEDB70896BAB51 /* AppAttestClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppAttestClient.swift; sourceTree = "<group>"; };
+		193E817EE91878630342FBFE /* AssistantChatComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantChatComposer.swift; sourceTree = "<group>"; };
+		19EE4C738B3B5065E4CF4B99 /* AssistantImageUpload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantImageUpload.swift; sourceTree = "<group>"; };
 		1C8EA67C2D88980A87BDCFA9 /* ClawDadMobile.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = ClawDadMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1CBE9BB9E28B2AADC9243157 /* RemoteTerminalTabList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTerminalTabList.swift; sourceTree = "<group>"; };
 		21A33EE26BF9BD9F84918E9F /* FilesLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilesLibraryView.swift; sourceTree = "<group>"; };
@@ -91,6 +96,7 @@
 		8960C1531C592BD814505199 /* SubscriptionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionManager.swift; sourceTree = "<group>"; };
 		89C609AE055F4F4C09202552 /* RemoteSpeechControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteSpeechControls.swift; sourceTree = "<group>"; };
 		8AD474B9C5025C1E3B07688E /* RemoteTerminalCloseIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTerminalCloseIntent.swift; sourceTree = "<group>"; };
+		8E624474D662739AE0389B11 /* AssistantChatDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantChatDraft.swift; sourceTree = "<group>"; };
 		8F34770E78861322677F1C3C /* VoiceRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceRecorder.swift; sourceTree = "<group>"; };
 		930A750132AFE74E66A35E11 /* PasskeyRequests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PasskeyRequests.swift; sourceTree = "<group>"; };
 		97E3CAB4A99E84BAFA945FA2 /* MobileNotifications.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileNotifications.swift; sourceTree = "<group>"; };
@@ -144,7 +150,10 @@
 			children = (
 				147A8BFF03CEDB70896BAB51 /* AppAttestClient.swift */,
 				3286351CBEADFC96A79F1EE4 /* AssistantAudio.swift */,
+				193E817EE91878630342FBFE /* AssistantChatComposer.swift */,
+				8E624474D662739AE0389B11 /* AssistantChatDraft.swift */,
 				99C468715F6ABFF27CB4041C /* AssistantConnection.swift */,
+				19EE4C738B3B5065E4CF4B99 /* AssistantImageUpload.swift */,
 				10F1B258EA5FA2916837629C /* AssistantListeningInput.swift */,
 				9A6015610A23A073B93087F9 /* AssistantMessageLinks.swift */,
 				29F575EC9D8D541AD658DF6B /* AssistantMicrophoneState.swift */,
@@ -336,7 +345,10 @@
 			files = (
 				FF0A3F9F33A94874E1F92846 /* AppAttestClient.swift in Sources */,
 				DA856C77B9663DCAB80C7092 /* AssistantAudio.swift in Sources */,
+				1022DB6F1FD8E58702E505B4 /* AssistantChatComposer.swift in Sources */,
+				C3944C0556BE915A23DFD01D /* AssistantChatDraft.swift in Sources */,
 				7695559828A1EB5AFE19317C /* AssistantConnection.swift in Sources */,
+				F7A0CB9BD53C56989F8EA24A /* AssistantImageUpload.swift in Sources */,
 				92590FA64F260AD34017423B /* AssistantListeningInput.swift in Sources */,
 				3031C85399B84CB186BBF471 /* AssistantMessageLinks.swift in Sources */,
 				A16430EEB828FE766B76BAE1 /* AssistantMicrophoneState.swift in Sources */,
@@ -482,7 +494,7 @@
 				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 61;
+				CURRENT_PROJECT_VERSION = 63;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_NS_ASSERTIONS = NO;
@@ -561,7 +573,7 @@
 				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 61;
+				CURRENT_PROJECT_VERSION = 63;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -672,7 +684,7 @@
 				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 61;
+				CURRENT_PROJECT_VERSION = 63;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_NS_ASSERTIONS = NO;

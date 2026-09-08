@@ -340,7 +340,7 @@ final class MobileAssistantTurnTests: XCTestCase {
 }
 
 @MainActor
-private final class AssistantTestAudio: AssistantAudioIO {
+final class AssistantTestAudio: AssistantAudioIO {
   var onUtterance: ((Data, Bool) -> Void)?
   var onSpeechStarted: (() -> Void)?
   var onTranscriptPreview: ((Data) -> Void)?
@@ -353,8 +353,9 @@ private final class AssistantTestAudio: AssistantAudioIO {
   var played: [Data] = []
   var playbackStops = 0
   var finishData: Data?
+  var starts = 0
   private var clip: CheckedContinuation<Void, Error>?
-  func start() async throws { muted = false }
+  func start() async throws { starts += 1; muted = false }
   func setReplyActive(_ active: Bool) { replyActive = active }
   func play(_ data: Data) async throws {
     try await withCheckedThrowingContinuation { clip = $0; played.append(data) }
@@ -369,16 +370,20 @@ private final class AssistantTestAudio: AssistantAudioIO {
 }
 
 @MainActor
-private final class AssistantTestTransport: AssistantTransport {
+final class AssistantTestTransport: AssistantTransport {
   var onChange: (() -> Void)?
   var connected = true
   let requestID = UUID().uuidString.lowercased()
   var messages: [[String: Any]] = []
   var commands: [String] = []
   var sentTexts: [String] = []
+  var sentImages: [AssistantValue] = []
+  var uploadHandler: (([String: AssistantValue]) throws -> Data)?
   var messageIDs: [String] = []
   var timings: [[String: AssistantValue]] = []
   var failAfterAcceptance = false
+  var omitRecentMessages = false
+  var omitReceipt = false
   var stateReads = 0
   var transcriptions = 0
   var syntheses = 0
@@ -402,12 +407,17 @@ private final class AssistantTestTransport: AssistantTransport {
         messageIDs.append(id)
         if !messages.contains(where: { $0["id"] as? String == id }) {
           sentTexts.append(text)
+          sentImages.append(contentsOf: body["images"]?.array ?? [])
           messages.append(["id": id, "role": "user", "text": text, "createdAt": "2026-09-08T00:00:00Z"])
         }
         if failAfterAcceptance { failAfterAcceptance = false; throw AssistantProtocolError.disconnected }
       }
       if body["action"]?.string == "voice.timing", let value = body["metrics"]?.object { timings.append(value) }
-      return try snapshot()
+      var response = try JSONSerialization.jsonObject(with: snapshot()) as! [String: Any]
+      if body["action"]?.string == "message", !omitReceipt {
+        response["job"] = ["id": body["requestId"]!.string!, "action": "message", "status": "completed", "args": [:]] as [String: Any]
+      }
+      return try JSONSerialization.data(withJSONObject: response)
     case .transcribe:
       transcriptions += 1
       return try JSONSerialization.data(withJSONObject: ["text": await transcribe(payload)])
@@ -417,12 +427,15 @@ private final class AssistantTestTransport: AssistantTransport {
       if let synthesis { return try JSONSerialization.data(withJSONObject: synthesis()) }
       return try JSONSerialization.data(withJSONObject: ["audio": ["state": "ready", "parts": [["url": "one"], ["url": "two"]]]])
     case .audio: return payload
+    case .imageUpload:
+      guard let uploadHandler else { throw AssistantProtocolError.invalid }
+      return try uploadHandler(JSONDecoder().decode([String: AssistantValue].self, from: payload))
     }
   }
   private func snapshot() throws -> Data {
     try JSONSerialization.data(withJSONObject: [
-      "version": 1, "conversationMode": "background", "enabled": true, "paused": false,
-      "nativeOnline": true, "messages": messages, "tasks": [],
+      "version": 1, "conversationMode": "background", "imageAttachments": true, "enabled": true, "paused": false,
+      "nativeOnline": true, "messages": omitRecentMessages ? [] : messages, "tasks": [],
       "catalog": ["revision": 1, "tabs": []],
     ])
   }

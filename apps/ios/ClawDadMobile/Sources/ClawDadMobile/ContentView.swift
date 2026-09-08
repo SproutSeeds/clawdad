@@ -592,13 +592,22 @@ struct ContentView: View {
       HStack {
         Button {
           dismissKeyboard()
+          assistant.openChat(session)
+          showingAssistant = true
+        } label: {
+          Image(systemName: "bubble.left.and.bubble.right").font(.system(size: 18, weight: .bold)).frame(width: 44, height: 44)
+        }.buttonStyle(ClawDadGhostButtonStyle())
+          .accessibilityLabel("Message Assistant")
+          .accessibilityIdentifier("clawdad.assistant.chat")
+        Button {
+          dismissKeyboard()
           if assistant.callVisible { showingAssistant = true }
           else { assistant.startCall(session) }
         } label: {
           Image(systemName: "headphones").font(.system(size: 18, weight: .bold)).frame(width: 44, height: 44)
         }
         .buttonStyle(ClawDadGhostButtonStyle())
-        .accessibilityLabel("Open Assistant")
+        .accessibilityLabel("Call Assistant")
         .accessibilityIdentifier("clawdad.assistant.open")
         Button {
           dismissKeyboard()

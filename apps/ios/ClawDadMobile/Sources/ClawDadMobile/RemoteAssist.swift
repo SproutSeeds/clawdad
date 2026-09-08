@@ -3502,13 +3502,22 @@ struct RemoteAssistView: View {
 
         if let assistant {
           Button {
+            controller.dismissKeyboard()
+            assistant.openChat(session)
+            showingAssistant = true
+          } label: {
+            Image(systemName: "bubble.left.and.bubble.right").font(.system(size: 18, weight: .bold)).frame(width: 44, height: 44)
+          }.buttonStyle(RemoteAssistOverlayButtonStyle())
+            .accessibilityLabel("Message Assistant")
+            .accessibilityIdentifier("clawdad.remote.assistant.chat")
+          Button {
             if assistant.callVisible { showingAssistant = true }
             else { assistant.startCall(session) }
           } label: {
             Image(systemName: "headphones").font(.system(size: 18, weight: .bold)).frame(width: 44, height: 44)
           }
           .buttonStyle(RemoteAssistOverlayButtonStyle())
-          .accessibilityLabel("Open Assistant")
+          .accessibilityLabel("Call Assistant")
           .accessibilityIdentifier("clawdad.remote.assistant")
         }
 

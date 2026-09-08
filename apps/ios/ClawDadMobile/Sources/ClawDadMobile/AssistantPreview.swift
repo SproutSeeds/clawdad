@@ -1,14 +1,17 @@
 #if DEBUG
   import Foundation
   import ClawDadRemoteAssistProtocol
+  import CryptoKit
 
   /// UI acceptance fixtures never send keyboard events or connect to a real host.
   @MainActor
   final class AssistantPreview {
     private var state: [String: AssistantValue]
+    private var uploads: [String: Data] = [:]
+    private var failedSend = false
     init() {
       state = [
-        "version": .number(1), "conversationMode": .string("background"), "enabled": .bool(true), "paused": .bool(false),
+        "version": .number(1), "conversationMode": .string("background"), "imageAttachments": .bool(true), "enabled": .bool(true), "paused": .bool(false),
         "nativeOnline": .bool(true), "coordinator": .object(["mode": .string("background"), "model": .string("gpt-6-astra"), "status": .string("ready")]),
         "tasks": .array([]),
         "messages": .array([
@@ -49,14 +52,24 @@
       -> AssistantSnapshot
     {
       if action == "pause" { state["paused"] = args["paused"] }
-      if action == "message" {
+      if action == "message", !(state["messages"]?.array ?? []).contains(where: { $0.object?["id"]?.string == id }) {
+        let images = args["images"]?.array ?? []
+        for image in images {
+          guard let id = image.object?["id"]?.string, let data = uploads[id],
+            SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == image.object?["sha256"]?.string
+          else { throw AssistantProtocolError.invalid }
+        }
         var messages = state["messages"]?.array ?? []
         messages.append(
           .object([
             "id": .string(id), "role": .string("user"), "text": args["text"] ?? .string(""),
-            "createdAt": .string("2026-09-07T00:01:00Z"),
+            "createdAt": .string("2026-09-07T00:01:00Z"), "images": .array(images),
           ]))
         state["messages"] = .array(messages)
+        if ProcessInfo.processInfo.arguments.contains("--clawdad-assistant-failed-send"), !failedSend {
+          failedSend = true
+          throw AssistantProtocolError.disconnected
+        }
       }
       var tasks = state["tasks"]?.array ?? []
       tasks.append(
@@ -66,6 +79,21 @@
         ]))
       state["tasks"] = .array(tasks)
       return try snapshot()
+    }
+    func upload(_ body: [String: AssistantValue]) throws -> Data {
+      let upload = try JSONDecoder().decode(RemoteImageUpload.self, from: JSONEncoder().encode(body["upload"]))
+      try upload.validate()
+      var data = uploads[upload.id] ?? Data()
+      if body["action"]?.string == "uploadChunk" {
+        guard body["offset"]?.number == Double(data.count), let base64 = body["bytes"]?.string,
+          let chunk = Data(base64Encoded: base64), data.count + chunk.count <= upload.size else { throw AssistantProtocolError.invalid }
+        data.append(chunk)
+        uploads[upload.id] = data
+      }
+      return try JSONEncoder().encode(AssistantValue.object([
+        "uploadId": .string(upload.id), "offset": .number(Double(data.count)),
+        "complete": .bool(data.count == upload.size)
+      ]))
     }
   }
 #endif

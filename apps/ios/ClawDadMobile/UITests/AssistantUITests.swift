@@ -2,6 +2,83 @@ import XCTest
 
 @MainActor
 final class AssistantUITests: XCTestCase {
+  func testTextChatPhotosPreviewRemovalAndDraftSurviveCloseRestartAndFailedSend() {
+    let app = XCUIApplication()
+    app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-assistant-test",
+      "--clawdad-assistant-reset-draft", "--clawdad-assistant-failed-send"]
+    app.launch()
+    XCTAssertTrue(app.buttons["clawdad.assistant.chat"].waitForExistence(timeout: 20))
+    app.buttons["clawdad.assistant.chat"].tap()
+    XCTAssertTrue(app.buttons["clawdad.assistant.start-voice"].waitForExistence(timeout: 5))
+    XCTAssertFalse(app.buttons["End voice conversation"].exists)
+    let composer = app.descendants(matching: .any).matching(identifier: "clawdad.assistant.composer").firstMatch
+    composer.tap(); composer.typeText("Please inspect my attached screenshot.")
+    selectAssistantPhoto(app)
+    app.buttons["clawdad.assistant.image-preview"].firstMatch.tap()
+    XCTAssertTrue(app.buttons["clawdad.assistant.preview-back"].waitForExistence(timeout: 5))
+    saveScreenshot(app, "Assistant image preview before sending")
+    app.buttons["clawdad.assistant.preview-back"].tap()
+    app.buttons["clawdad.assistant.image-remove"].firstMatch.tap()
+    XCTAssertFalse(app.buttons["clawdad.assistant.image-preview"].exists)
+    XCTAssertEqual(composer.value as? String, "Please inspect my attached screenshot.")
+    selectAssistantPhoto(app)
+    app.buttons["clawdad.assistant.back"].tap()
+    app.buttons["clawdad.assistant.chat"].tap()
+    XCTAssertTrue(app.buttons["clawdad.assistant.image-preview"].waitForExistence(timeout: 5))
+    XCTAssertEqual(composer.value as? String, "Please inspect my attached screenshot.")
+    app.terminate()
+    app.launchArguments.removeAll { $0 == "--clawdad-assistant-reset-draft" }
+    app.launch()
+    XCTAssertTrue(app.buttons["clawdad.assistant.chat"].waitForExistence(timeout: 20))
+    app.buttons["clawdad.assistant.chat"].tap()
+    XCTAssertTrue(app.buttons["clawdad.assistant.image-preview"].waitForExistence(timeout: 5))
+    XCTAssertEqual(composer.value as? String, "Please inspect my attached screenshot.")
+    saveScreenshot(app, "Text conversation restores unsent text and photo after app restart")
+    app.buttons["clawdad.assistant.send-chat"].tap()
+    XCTAssertTrue(app.staticTexts["clawdad.assistant.error"].waitForExistence(timeout: 5))
+    XCTAssertEqual(composer.value as? String, "Please inspect my attached screenshot.")
+    XCTAssertTrue(app.buttons["clawdad.assistant.image-preview"].exists)
+    app.buttons["clawdad.assistant.send-chat"].tap()
+    let gone = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.buttons["clawdad.assistant.image-preview"])
+    wait(for: [gone], timeout: 5)
+    XCTAssertTrue(app.staticTexts["Please inspect my attached screenshot."].exists)
+    XCTAssertEqual(app.staticTexts.matching(identifier: "Please inspect my attached screenshot.").count, 1)
+    XCTAssertFalse(app.buttons["End voice conversation"].exists)
+    saveScreenshot(app, "Assistant photo message sent once and draft cleared after acceptance")
+  }
+  func testRemoteAssistTextEntryKeepsVoiceExplicitAndClearDraftIsDeliberate() {
+    let app = XCUIApplication()
+    app.launchArguments = ["--clawdad-app-store-preview", "terminal-reader", "--clawdad-assistant-test", "--clawdad-assistant-reset-draft"]
+    app.launch()
+    XCTAssertTrue(app.buttons["clawdad.remote.assistant.chat"].waitForExistence(timeout: 20))
+    app.buttons["clawdad.remote.assistant.chat"].tap()
+    XCTAssertTrue(app.buttons["clawdad.assistant.start-voice"].waitForExistence(timeout: 5))
+    XCTAssertFalse(app.buttons["End voice conversation"].exists)
+    let composer = app.descendants(matching: .any).matching(identifier: "clawdad.assistant.composer").firstMatch
+    composer.tap(); composer.typeText("A draft to explicitly delete")
+    app.buttons["clawdad.assistant.clear-draft"].tap()
+    app.buttons["Keep draft"].tap()
+    XCTAssertEqual(composer.value as? String, "A draft to explicitly delete")
+    app.buttons["clawdad.assistant.clear-draft"].tap()
+    app.buttons["Delete draft"].tap()
+    app.buttons["clawdad.assistant.back"].tap()
+    app.buttons["clawdad.remote.assistant.chat"].tap()
+    XCTAssertFalse(app.buttons["clawdad.assistant.clear-draft"].exists)
+    app.buttons["clawdad.assistant.start-voice"].tap()
+    XCTAssertTrue(app.buttons["End voice conversation"].waitForExistence(timeout: 5))
+  }
+  private func selectAssistantPhoto(_ app: XCUIApplication) {
+    app.buttons["clawdad.assistant.attach-image"].tap()
+    let photo = app.images.matching(identifier: "PXGGridLayout-Info").firstMatch
+    XCTAssertTrue(photo.waitForExistence(timeout: 8), app.debugDescription)
+    photo.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+    app.navigationBars["Photos"].buttons["Done"].tap()
+    XCTAssertTrue(app.buttons["clawdad.assistant.image-preview"].waitForExistence(timeout: 10), app.debugDescription)
+  }
+  private func saveScreenshot(_ app: XCUIApplication, _ name: String) {
+    let screenshot = XCTAttachment(screenshot: app.screenshot())
+    screenshot.name = name; screenshot.lifetime = .keepAlways; add(screenshot)
+  }
   func testResponsePhoneAndAddressLinksOpenTheirIntendedDestinations() {
     checkResponseLinks(googleInstalled: true)
   }

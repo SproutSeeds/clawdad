@@ -2,8 +2,13 @@ import ClawDadRemoteAssistProtocol
 import Foundation
 import SwiftUI
 
+private struct AssistantCommandReceipt: Decodable {
+  let job: AssistantTaskRecord?
+}
+
 @MainActor
 final class MobileAssistantController: ObservableObject {
+  let chatDraft: AssistantChatDraftStore
   @Published private(set) var snapshot: AssistantSnapshot?
   @Published private(set) var connected = false
   @Published private(set) var voiceActive = false
@@ -49,7 +54,8 @@ final class MobileAssistantController: ObservableObject {
 
   init(connection: any AssistantTransport = AssistantConnection(),
     audio: any AssistantAudioIO = AssistantAudio(), defaults: UserDefaults? = .standard,
-    automaticSendDelay: UInt64 = 1_200_000_000) {
+    automaticSendDelay: UInt64 = 1_200_000_000, chatDraft: AssistantChatDraftStore = AssistantChatDraftStore()) {
+    self.chatDraft = chatDraft
     self.connection = connection
     self.audio = audio
     self.defaults = defaults
@@ -100,12 +106,14 @@ final class MobileAssistantController: ObservableObject {
       spoken = []
       silencedReplies = []
       scope = next
+      chatDraft.bind(next)
     }
     self.session = session
     connection.bind(session)
     #if DEBUG
       if ProcessInfo.processInfo.arguments.contains("--clawdad-assistant-test") {
         if preview == nil {
+          if ProcessInfo.processInfo.arguments.contains("--clawdad-assistant-reset-draft") { chatDraft.clear() }
           preview = AssistantPreview()
           snapshot = try? preview?.snapshot()
         }
@@ -147,7 +155,9 @@ final class MobileAssistantController: ObservableObject {
         return
       }
     #endif
+    let requestedScope = scope
     let data = try await connection.request(.state)
+    guard requestedScope == scope else { throw CancellationError() }
     let next = try JSONDecoder().decode(AssistantSnapshot.self, from: data)
     snapshot = next
     assistantReady = next.supportsBackgroundCalls && next.enabled && next.nativeOnline && next.catalog != nil
@@ -164,21 +174,24 @@ final class MobileAssistantController: ObservableObject {
       speakNext()
     }
   }
-  func command(
+  @discardableResult func command(
     _ action: String, args: [String: AssistantValue] = [:],
     id: String = UUID().uuidString.lowercased()
-  ) async throws {
+  ) async throws -> AssistantTaskRecord? {
     #if DEBUG
       if let preview {
         snapshot = try preview.command(action, args: args, id: id)
-        return
+        return snapshot?.tasks.first { $0.id == id }
       }
     #endif
     var body = args
     body["action"] = .string(action)
     body["requestId"] = .string(id)
+    let requestedScope = scope
     let data = try await connection.request(.command, payload: JSONEncoder().encode(body))
+    guard requestedScope == scope else { throw CancellationError() }
     snapshot = try JSONDecoder().decode(AssistantSnapshot.self, from: data)
+    return try JSONDecoder().decode(AssistantCommandReceipt.self, from: data).job
   }
   func watch(tabId: String, onWatch: @escaping () -> Void) {
     Task {
@@ -228,8 +241,26 @@ final class MobileAssistantController: ObservableObject {
       do { try await command(action, args: args) } catch { self.error = error.localizedDescription }
     }
   }
-  @discardableResult func send(_ text: String, id: String? = nil) async -> Bool {
-    guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return true }
+  func openChat(_ session: CloudSession) { bind(session); open() }
+  func retryConnection() {
+    error = ""
+    open()
+    if !connected { connection.connect() }
+    else { Task { do { try await refresh() } catch { self.error = error.localizedDescription } } }
+  }
+  func sendDraft() async {
+    guard !sending, !chatDraft.importing, !chatDraft.value.isEmpty else { return }
+    let draft = chatDraft.value, target = scope
+    do {
+      let images = try draft.images.map { PreparedRemoteImage(upload: $0, data: try chatDraft.bytes($0, scope: target)) }
+      if await send(draft.text, id: draft.id, images: images) {
+        try chatDraft.complete(draft, scope: target)
+      }
+    } catch { self.error = error.localizedDescription }
+  }
+  @discardableResult func send(_ text: String, id: String? = nil, images: [PreparedRemoteImage] = []) async -> Bool {
+    guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty else { return true }
+    let target = scope
     while sending { do { try await Task.sleep(nanoseconds: 100_000_000) } catch { return false } }
     guard !Task.isCancelled else { return false }
     sending = true
@@ -239,9 +270,35 @@ final class MobileAssistantController: ObservableObject {
       ?? (pendingMessage?.text == text ? pendingMessage! : (text, UUID().uuidString.lowercased()))
     pendingMessage = pending
     do {
+      guard target == scope else { throw CancellationError() }
       try await ensureAssistant()
       try Task.checkCancellation()
-      try await command("message", args: ["text": .string(text)], id: pending.id)
+      guard target == scope else { throw CancellationError() }
+      if !images.isEmpty {
+        guard snapshot?.imageAttachments == true else {
+          throw RemoteImagePreparation.failure("Update ClawDad on your Mac to send chat images. Your draft is saved.")
+        }
+        if !replyAudioActive { status = "Sending images…" }
+        for image in images {
+          try await AssistantImageUpload.send(image.upload, data: image.data) { body in
+            guard self.scope == target else { throw CancellationError() }
+            #if DEBUG
+              if let preview = self.preview { return try preview.upload(body) }
+            #endif
+            return try await self.connection.request(.imageUpload, payload: JSONEncoder().encode(body))
+          }
+        }
+      }
+      guard target == scope else { throw CancellationError() }
+      var args: [String: AssistantValue] = ["text": .string(text)]
+      if !images.isEmpty { args["images"] = try .encode(images.map(\.upload)) }
+      let receipt = try await command("message", args: args, id: pending.id)
+      // The durable receipt remains available after a previously accepted message
+      // has aged out of the recent history returned to a reconnected phone.
+      guard (receipt?.id == pending.id && receipt?.action == "message")
+        || snapshot?.messages.contains(where: { $0.id == pending.id && $0.role == "user" }) == true else {
+        throw AssistantProtocolError.invalid
+      }
       pendingMessage = nil
       error = ""
       if !replyAudioActive { status = voiceActive ? "Thinking…" : "Message sent" }
@@ -665,7 +722,6 @@ struct AssistantView: View {
   @ObservedObject var controller: MobileAssistantController
   var onClose: () -> Void
   var onWatch: () -> Void
-  @State private var draft = ""
   @State private var showingWorkspace = false
   var body: some View {
     NavigationStack {
@@ -727,6 +783,9 @@ struct AssistantView: View {
                     } else {
                       Text(message.text).textSelection(.enabled)
                     }
+                    ForEach(message.images ?? [], id: \.id) { image in
+                      Label(image.fileName, systemImage: "photo").font(.footnote)
+                    }
                   }.frame(maxWidth: .infinity, alignment: .leading).id(message.id)
                 }
                 if controller.hearingSpeech || controller.transcribingSpeech || !controller.liveTranscript.isEmpty {
@@ -783,25 +842,14 @@ struct AssistantView: View {
             .horizontal
           ).accessibilityIdentifier("clawdad.assistant.error")
           if !controller.voiceActive {
-            Button(controller.status == "Microphone unavailable" ? "Retry microphone" : "Retry connection") { Task { await controller.startVoice() } }.font(.footnote)
+            Button(controller.callVisible ? "Retry microphone" : "Retry connection") {
+              if controller.callVisible { Task { await controller.startVoice() } }
+              else { controller.retryConnection() }
+            }.font(.footnote)
               .disabled(controller.startingVoice)
           }
         }
-        HStack(alignment: .bottom) {
-          TextField("Message Assistant", text: $draft, axis: .vertical).lineLimit(1...5)
-            .textFieldStyle(.plain).padding(12).background(
-              ClawDadTheme.cream.opacity(0.08), in: RoundedRectangle(cornerRadius: 12)
-            ).accessibilityIdentifier("clawdad.assistant.composer")
-          Button {
-            let text = draft
-            Task { if await controller.send(text), draft == text { draft = "" } }
-          } label: {
-            Image(systemName: "arrow.up.circle.fill").font(.system(size: 32))
-          }.disabled(
-            !controller.connected || controller.sending
-              || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-          ).accessibilityLabel("Send to Assistant")
-        }.padding(.horizontal)
+        AssistantChatComposer(controller: controller, draft: controller.chatDraft).padding(.horizontal)
         if controller.callVisible {
           AssistantCallBar(controller: controller)
         } else {
