@@ -11,6 +11,7 @@ protocol AssistantAudioIO: AnyObject {
   var onInputLevel: ((Float) -> Void)? { get set }
   var onCaptureRecovery: ((Bool) -> Void)? { get set }
   var onCaptureFailure: ((Error) -> Void)? { get set }
+  var onPlaybackStarted: (() -> Void)? { get set }
   var muted: Bool { get set }
   var lastSpeechAt: TimeInterval? { get }
   func start() async throws
@@ -19,11 +20,14 @@ protocol AssistantAudioIO: AnyObject {
   func stopPlayback()
   func resetUtterance()
   func finishUtterance()
+  func previewUtterance()
   func stop()
 }
 
 extension AssistantAudioIO {
   var lastSpeechAt: TimeInterval? { nil }
+  var onPlaybackStarted: (() -> Void)? { get { nil } set {} }
+  func previewUtterance() {}
 }
 
 @MainActor
@@ -36,6 +40,7 @@ final class AssistantAudio: AssistantAudioIO {
   var onInputLevel: ((Float) -> Void)?
   var onCaptureRecovery: ((Bool) -> Void)?
   var onCaptureFailure: ((Error) -> Void)?
+  var onPlaybackStarted: (() -> Void)?
   private var microphone = AssistantMicrophoneState()
   var muted: Bool {
     get { microphone.muted }
@@ -215,6 +220,7 @@ final class AssistantAudio: AssistantAudioIO {
             done?.resume()
           })
         player.play()
+        onPlaybackStarted?()
       }
     } onCancel: {
       Task { @MainActor [weak self] in
@@ -238,6 +244,11 @@ final class AssistantAudio: AssistantAudioIO {
   func finishUtterance() {
     if let samples = input.finish() {
       onUtterance?(assistantWAV(samples, sampleRate: input.sampleRate), true)
+    }
+  }
+  func previewUtterance() {
+    if let samples = input.preview() {
+      onTranscriptPreview?(assistantWAV(samples, sampleRate: input.sampleRate))
     }
   }
   func stop() {

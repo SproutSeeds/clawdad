@@ -167,12 +167,12 @@ final class AssistantUITests: XCTestCase {
     add(bar)
     app.buttons["clawdad.assistant.return"].tap()
     XCTAssertTrue(app.staticTexts["You · Draft"].waitForExistence(timeout: 5))
-    app.buttons["clawdad.assistant.voice-sending"].tap()
-    XCTAssertTrue(app.buttons["Wait for Send"].waitForExistence(timeout: 3))
-    XCTAssertTrue(app.buttons["Send after a pause"].exists)
-    app.buttons["Wait for Send"].tap()
+    let thinkAloud = app.switches["clawdad.assistant.think-aloud"]
+    XCTAssertTrue(thinkAloud.waitForExistence(timeout: 3))
+    XCTAssertEqual(thinkAloud.value as? String, "1")
+    XCTAssertTrue(app.staticTexts["Keep listening through pauses until you tap Send."].exists)
     let draft = XCTAttachment(screenshot: app.screenshot())
-    draft.name = "Assistant draft waits for Send"
+    draft.name = "Think aloud retains the speaking turn until Send"
     draft.lifetime = .keepAlways
     add(draft)
     app.buttons["clawdad.assistant.back"].tap()
@@ -183,8 +183,9 @@ final class AssistantUITests: XCTestCase {
     XCTAssertFalse(app.staticTexts["You · Draft"].exists)
     XCTAssertFalse(send.isEnabled)
     // Leave the fixture's persisted preference in the default mode.
-    app.buttons["clawdad.assistant.voice-sending"].tap()
-    app.buttons["Send after a pause"].tap()
+    thinkAloud.tap()
+    XCTAssertEqual(thinkAloud.value as? String, "0")
+    XCTAssertTrue(app.staticTexts["Automatically send after 4 seconds without new words."].exists)
   }
   func testReplyControlsAndMessagesStayAvailableAcrossNavigation() {
     let app = XCUIApplication()

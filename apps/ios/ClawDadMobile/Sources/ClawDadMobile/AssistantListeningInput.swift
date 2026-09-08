@@ -39,6 +39,7 @@ struct AssistantListeningInput {
     guard !muted, !replyActive else { return nil }
     return detector.finish()
   }
+  func preview() -> [Float]? { !muted && !replyActive ? detector.pendingSpeech : nil }
 
   mutating func consume(_ values: [Float], capturedAt time: TimeInterval) -> (
     started: Bool, utterance: [Float]?, final: Bool, preview: [Float]?

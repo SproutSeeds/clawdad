@@ -250,6 +250,10 @@ test('voice timing attaches only bounded numeric diagnostics to the accepted use
   await runtime.command({action:'message',requestId:'voice',text:'Original message'});
   await runtime.command({action:'voice.timing',requestId:'voice',metrics:{segments:2,transcriptionRoundTripMs:700,hostTranscriptionMs:600,manualSend:1}});
   assert.equal((await runtime.job('voice')).voiceTiming.segments,2);
+  await runtime.command({action:'voice.timing',requestId:'voice',metrics:{lastWordToSubmitMs:4010,submitToResponseObservedMs:5200,submitToPlaybackMs:6100,responseToPlaybackMs:900}});
+  await runtime.command({action:'voice.timing',requestId:'voice',metrics:{segments:2}});
+  assert.equal((await runtime.job('voice')).voiceTiming.submitToPlaybackMs,6100);
+  assert.equal((await runtime.job('voice')).voiceTiming.transcriptionRoundTripMs,700);
   assert.equal(runtime.state.messages.length,1);
   assert.equal(runtime.state.jobs.length,2);
   await assert.rejects(runtime.command({action:'voice.timing',requestId:'voice',metrics:{transcript:'private'}}),/Invalid voice timing/);

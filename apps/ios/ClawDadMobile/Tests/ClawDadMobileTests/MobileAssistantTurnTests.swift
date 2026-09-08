@@ -5,6 +5,105 @@ import XCTest
 
 @MainActor
 final class MobileAssistantTurnTests: XCTestCase {
+  func testAutomaticDefaultSubmitsFourSecondsAfterLastWordsAndKeepsCallConnected() async throws {
+    let transport = AssistantTestTransport(), audio = AssistantTestAudio()
+    transport.transcribe = { String(decoding: $0, as: UTF8.self) }
+    let controller = MobileAssistantController(connection: transport, audio: audio, defaults: nil)
+    defer { controller.stop() }
+    XCTAssertFalse(controller.waitForSend)
+    await controller.startVoice()
+    let lastWord = ProcessInfo.processInfo.systemUptime
+    audio.lastSpeechAt = lastWord
+    audio.onSpeechStarted?()
+    audio.onUtterance?(Data("Please respond now".utf8), true)
+    try await Task.sleep(for: .seconds(3.7))
+    XCTAssertTrue(transport.sentTexts.isEmpty)
+    await until { transport.sentTexts.count == 1 }
+    let latency = ProcessInfo.processInfo.systemUptime - lastWord
+    XCTAssertGreaterThanOrEqual(latency, 4)
+    XCTAssertLessThan(latency, 4.5)
+    XCTAssertTrue(controller.voiceActive)
+    XCTAssertEqual(transport.closes, 0)
+    XCTAssertEqual(transport.sentTexts, ["Please respond now"])
+  }
+
+  func testRepeatedPartialsAndNoiseCannotHoldTurnOpenOrSubmitThePreview() async throws {
+    let transport = AssistantTestTransport(), audio = AssistantTestAudio()
+    transport.transcribe = { data in
+      if data == Data([3]) { return "" } // Room noise after the recording was flushed.
+      return data == Data([1]) ? "Check this project" : "Check this project carefully"
+    }
+    let controller = MobileAssistantController(connection: transport, audio: audio, defaults: nil, automaticSendDelay: 150_000_000)
+    defer { controller.stop() }
+    await controller.startVoice()
+    audio.onSpeechStarted?()
+    audio.onTranscriptPreview?(Data([1]))
+    await until { controller.liveTranscript == "Check this project" }
+    audio.finishData = Data([2])
+    audio.previewData = Data([3])
+    for _ in 0..<40 where transport.sentTexts.isEmpty {
+      audio.onInputLevel?(0.8)
+      audio.onSpeechStarted?()
+      audio.onTranscriptPreview?(Data([1]))
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    await until { transport.sentTexts.count == 1 }
+    XCTAssertEqual(transport.sentTexts, ["Check this project carefully"])
+    XCTAssertTrue(controller.voiceActive)
+  }
+
+  func testStalledPreviewWhileSpeakingKeepsRecordingAndDelayedFinalWordsSubmitOnce() async throws {
+    let transport = AssistantTestTransport(), audio = AssistantTestAudio()
+    let controller = MobileAssistantController(connection: transport, audio: audio, defaults: nil, automaticSendDelay: 40_000_000)
+    defer { controller.stop() }
+    var preview: CheckedContinuation<String, Never>?
+    var final: CheckedContinuation<String, Never>?
+    transport.transcribe = { data in
+      await withCheckedContinuation { if data == Data([1]) { preview = $0 } else { final = $0 } }
+    }
+    await controller.startVoice()
+    audio.onSpeechStarted?()
+    audio.onTranscriptPreview?(Data([1]))
+    await until { preview != nil }
+    try await Task.sleep(for: .milliseconds(150))
+    XCTAssertEqual(audio.finishes, 0, "Active speech with a stalled recognizer must keep recording")
+    audio.onUtterance?(Data([2]), true)
+    await until { final != nil }
+    try await Task.sleep(for: .milliseconds(100))
+    XCTAssertTrue(transport.sentTexts.isEmpty)
+    final?.resume(returning: "Preserve all of my final words")
+    preview?.resume(returning: "Outdated partial")
+    await until { transport.sentTexts.count == 1 }
+    XCTAssertEqual(transport.sentTexts, ["Preserve all of my final words"])
+    XCTAssertEqual(Set(transport.messageIDs).count, 1)
+  }
+
+  func testThinkAloudStartsOffEvenWithTheOldPausePreference() {
+    let name = "assistant-mode-\(UUID().uuidString)", defaults = UserDefaults(suiteName: name)!
+    defer { defaults.removePersistentDomain(forName: name) }
+    defaults.set(true, forKey: "assistant.waitForSend")
+    let controller = MobileAssistantController(connection: AssistantTestTransport(), audio: AssistantTestAudio(), defaults: defaults)
+    XCTAssertFalse(controller.waitForSend)
+  }
+  func testFinalTranscriptionSetsTheDeadlineFromTheLastWordsInsteadOfSpeechOnset() async throws {
+    let transport = AssistantTestTransport(), audio = AssistantTestAudio()
+    let controller = MobileAssistantController(connection: transport, audio: audio, defaults: nil, automaticSendDelay: 200_000_000)
+    defer { controller.stop() }
+    var final: CheckedContinuation<String, Never>?
+    transport.transcribe = { _ in await withCheckedContinuation { final = $0 } }
+    await controller.startVoice()
+    audio.onSpeechStarted?()
+    try await Task.sleep(for: .milliseconds(180))
+    audio.lastSpeechAt = ProcessInfo.processInfo.systemUptime
+    audio.onUtterance?(Data([1]), true)
+    await until { final != nil }
+    try await Task.sleep(for: .milliseconds(60))
+    final?.resume(returning: "These are my last words")
+    try await Task.sleep(for: .milliseconds(50))
+    XCTAssertTrue(transport.sentTexts.isEmpty, "The old onset deadline has expired, but the last-word pause has not")
+    await until { transport.sentTexts.count == 1 }
+    XCTAssertEqual(transport.sentTexts, ["These are my last words"])
+  }
   func testCallRecoversAStaleConnectionBeforeStartingTheMicrophone() async throws {
     let transport = AssistantTestTransport(), audio = AssistantTestAudio()
     transport.failNextHealthCheck = true
@@ -324,7 +423,7 @@ final class MobileAssistantTurnTests: XCTestCase {
   func testTranscriptPreviewIsVisibleButOnlyFinalTextIsSent() async throws {
     let transport = AssistantTestTransport()
     let audio = AssistantTestAudio()
-    let controller = MobileAssistantController(connection: transport, audio: audio)
+    let controller = MobileAssistantController(connection: transport, audio: audio, automaticSendDelay: 30_000_000)
     defer { controller.stop() }
     await controller.startVoice()
     transport.transcribe = { data in data == Data([1]) ? "Could you check" : "Could you check the working tab?" }
@@ -342,7 +441,7 @@ final class MobileAssistantTurnTests: XCTestCase {
   func testLatePreviewCannotOverwriteFinalTextOrSubmitADuplicate() async throws {
     let transport = AssistantTestTransport()
     let audio = AssistantTestAudio()
-    let controller = MobileAssistantController(connection: transport, audio: audio)
+    let controller = MobileAssistantController(connection: transport, audio: audio, automaticSendDelay: 30_000_000)
     defer { controller.stop() }
     await controller.startVoice()
     var pending: CheckedContinuation<String, Never>?
@@ -367,7 +466,7 @@ final class MobileAssistantTurnTests: XCTestCase {
   func testReplyWaitsForAnExistingUtteranceToFinish() async throws {
     let transport = AssistantTestTransport()
     let audio = AssistantTestAudio()
-    let controller = MobileAssistantController(connection: transport, audio: audio)
+    let controller = MobileAssistantController(connection: transport, audio: audio, automaticSendDelay: 30_000_000)
     defer { controller.stop() }
     await controller.startVoice()
     audio.onSpeechStarted?()
@@ -395,22 +494,28 @@ final class AssistantTestAudio: AssistantAudioIO {
   var onInputLevel: ((Float) -> Void)?
   var onCaptureRecovery: ((Bool) -> Void)?
   var onCaptureFailure: ((Error) -> Void)?
+  var onPlaybackStarted: (() -> Void)?
+  var lastSpeechAt: TimeInterval?
   var muted = false
   var replyActive = false
   var played: [Data] = []
   var playbackStops = 0
   var finishData: Data?
+  var previewData: Data?
   var starts = 0
+  var finishes = 0
   private var clip: CheckedContinuation<Void, Error>?
   func start() async throws { starts += 1; muted = false }
   func setReplyActive(_ active: Bool) { replyActive = active }
   func play(_ data: Data) async throws {
-    try await withCheckedThrowingContinuation { clip = $0; played.append(data) }
+    try await withCheckedThrowingContinuation { clip = $0; played.append(data); onPlaybackStarted?() }
   }
   func completeClip() { let done = clip; clip = nil; done?.resume() }
   func stopPlayback() { playbackStops += 1; let done = clip; clip = nil; done?.resume(throwing: CancellationError()) }
   func resetUtterance() {}
+  func previewUtterance() { if let previewData { onTranscriptPreview?(previewData) } }
   func finishUtterance() {
+    finishes += 1
     if let data = finishData { finishData = nil; onUtterance?(data, true) }
   }
   func stop() { stopPlayback() }

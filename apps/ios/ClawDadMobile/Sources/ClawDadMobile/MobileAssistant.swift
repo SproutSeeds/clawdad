@@ -42,9 +42,10 @@ final class MobileAssistantController: ObservableObject {
   private var spoken = Set<String>()
   private var silencedReplies = Set<String>()
   private var pendingMessage: (text: String, id: String)?
-  private var voiceQueue: [(data: Data, turn: AssistantVoiceTurn, capturedAt: TimeInterval)] = []
+  private var voiceQueue: [(data: Data, turn: AssistantVoiceTurn, capturedAt: TimeInterval, speechAt: TimeInterval)] = []
   private var voiceTurns: [AssistantVoiceTurn] = []
   private var draftTurn: AssistantVoiceTurn?
+  private var deliveredVoiceTurns: [String: AssistantVoiceTurn] = [:]
   private var speechQueue: [AssistantMessage] = []
   private var activeReplyRequest: String?
   private var taskError = ""
@@ -55,13 +56,13 @@ final class MobileAssistantController: ObservableObject {
 
   init(connection: any AssistantTransport = AssistantConnection(),
     audio: any AssistantAudioIO = AssistantAudio(), defaults: UserDefaults? = .standard,
-    automaticSendDelay: UInt64 = 1_200_000_000, chatDraft: AssistantChatDraftStore = AssistantChatDraftStore()) {
+    automaticSendDelay: UInt64 = 4_000_000_000, chatDraft: AssistantChatDraftStore = AssistantChatDraftStore()) {
     self.chatDraft = chatDraft
     self.connection = connection
     self.audio = audio
     self.defaults = defaults
     self.automaticSendDelay = automaticSendDelay
-    waitForSend = defaults?.bool(forKey: "assistant.waitForSend") ?? false
+    waitForSend = defaults?.bool(forKey: "assistant.thinkAloud") ?? false
     connected = connection.connected
     connection.onChange = { [weak self] in
       guard let self else { return }
@@ -80,9 +81,9 @@ final class MobileAssistantController: ObservableObject {
     }
     audio.onSpeechStarted = { [weak self] in
       guard let self, voiceActive, !muted, !replyAudioActive else { return }
-      automaticSend?.cancel()
-      automaticSend = nil
-      _ = currentVoiceTurn()
+      let turn = currentVoiceTurn()
+      turn.ending.speechStarted(at: ProcessInfo.processInfo.systemUptime)
+      scheduleVoiceSend(turn)
       draftTurn?.endpointAt = nil
       hearingSpeech = true
       canSendVoice = true
@@ -107,6 +108,15 @@ final class MobileAssistantController: ObservableObject {
     audio.onUtterance = { [weak self] in self?.transcribe($0, final: $1) }
     audio.onTranscriptPreview = { [weak self] in self?.previewTranscription($0) }
     audio.onReplaced = { [weak self] in self?.endVoice() }
+    audio.onPlaybackStarted = { [weak self] in
+      guard let self, let id = activeReplyRequest, let turn = deliveredVoiceTurns[id],
+        turn.metrics["submitToPlaybackMs"] == nil, let submitted = turn.submittedAt else { return }
+      let now = ProcessInfo.processInfo.systemUptime
+      turn.metrics["submitToPlaybackMs"] = max(0, (now - submitted) * 1000)
+      if let response = turn.responseObservedAt { turn.metrics["responseToPlaybackMs"] = max(0, (now - response) * 1000) }
+      if let preparing = turn.playbackPreparationAt { turn.metrics["playbackPreparationMs"] = max(0, (now - preparing) * 1000) }
+      recordVoiceTiming(turn)
+    }
   }
   func bind(_ session: CloudSession) {
     let next = "\(session.accountId)/\(session.workspaceId)/\(session.hostId)"
@@ -178,6 +188,14 @@ final class MobileAssistantController: ObservableObject {
     if voiceActive {
       for message in next.messages where message.role == "assistant" && !spoken.contains(message.id) {
         spoken.insert(message.id)
+        let parts = message.id.split(separator: ":", maxSplits: 2)
+        if parts.count == 3, let turn = deliveredVoiceTurns[String(parts[1])],
+          turn.responseObservedAt == nil, let submitted = turn.submittedAt {
+          let now = ProcessInfo.processInfo.systemUptime
+          turn.responseObservedAt = now
+          turn.metrics["submitToResponseObservedMs"] = max(0, (now - submitted) * 1000)
+          recordVoiceTiming(turn)
+        }
         if !silencedReplies.contains(where: { message.id.hasPrefix("assistant:\($0):") }) {
           speechQueue.append(message)
         }
@@ -472,6 +490,7 @@ final class MobileAssistantController: ObservableObject {
     transcribing = nil
     voiceQueue = []
     voiceTurns = []
+    deliveredVoiceTurns = [:]
     draftTurn = nil
     automaticSend?.cancel()
     automaticSend = nil
@@ -499,10 +518,10 @@ final class MobileAssistantController: ObservableObject {
   }
   func setWaitForSend(_ enabled: Bool) {
     waitForSend = enabled
-    defaults?.set(enabled, forKey: "assistant.waitForSend")
+    defaults?.set(enabled, forKey: "assistant.thinkAloud")
     automaticSend?.cancel()
     automaticSend = nil
-    if !enabled, !hearingSpeech, let draftTurn { scheduleVoiceSend(draftTurn) }
+    if !enabled, let draftTurn { scheduleVoiceSend(draftTurn) }
     updateVoiceDraft()
   }
   func sendVoiceNow() {
@@ -514,14 +533,34 @@ final class MobileAssistantController: ObservableObject {
     if let draftTurn { sealVoiceTurn(draftTurn, manual: true) }
   }
   private func scheduleVoiceSend(_ turn: AssistantVoiceTurn) {
-    automaticSend?.cancel()
-    guard !waitForSend else { return }
+    guard !waitForSend, automaticSend == nil else { return }
     let epoch = voiceEpoch
     automaticSend = Task { [weak self] in
-      do { try await Task.sleep(nanoseconds: self?.automaticSendDelay ?? 0) } catch { return }
-      guard let self, voiceEpoch == epoch, draftTurn === turn, !hearingSpeech,
-        !waitForSend, !Task.isCancelled else { return }
-      sealVoiceTurn(turn, manual: false)
+      while !Task.isCancelled {
+        guard let self, voiceEpoch == epoch, draftTurn === turn, !waitForSend else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        let active = hearingSpeech && (audio.lastSpeechAt.map { now - $0 < 0.8 } ?? true)
+        if turn.ending.shouldFinish(at: now, pause: Double(automaticSendDelay) / 1_000_000_000,
+          thinkAloud: waitForSend, activeSpeech: active,
+          transcriptionPending: turn.pendingSegments > 0 || transcriptionPreview != nil) {
+          // Flush the actual recording and wait for its final words before
+          // sealing the turn. The call itself stays open.
+          audio.finishUtterance()
+          hearingSpeech = false
+          if turn.pendingSegments == 0 {
+            sealVoiceTurn(turn, manual: false)
+            return
+          }
+        }
+        if active, transcriptionPreview == nil, turn.pendingSegments == 0,
+          let deadline = turn.ending.deadline(pause: Double(automaticSendDelay) / 1_000_000_000), now >= deadline {
+          // Energy can remain high because of room noise. Ask for a fresh word
+          // checkpoint before overriding it; never infer silence from a stalled
+          // recognizer or from an old partial while someone may still be talking.
+          audio.previewUtterance()
+        }
+        do { try await Task.sleep(nanoseconds: min(100_000_000, automaticSendDelay)) } catch { return }
+      }
     }
   }
   private func sealVoiceTurn(_ turn: AssistantVoiceTurn, manual: Bool) {
@@ -544,21 +583,26 @@ final class MobileAssistantController: ObservableObject {
     liveTranscript = (draftTurn ?? voiceTurns.last)?.text ?? ""
     guard voiceActive, !replyAudioActive else { return }
     if hearingSpeech { status = "Hearing you…" }
-    else if transcribingSpeech { status = "Transcribing…" }
-    else if draftTurn != nil { status = waitForSend ? "Ready when you are · Tap Send" : "Continue or tap Send" }
+    else if transcribingSpeech { status = voiceTurns.first?.sealed == true ? "Finishing your words…" : "Transcribing…" }
+    else if draftTurn != nil { status = waitForSend ? "Think aloud · Tap Send when ready" : "Replying after a 4-second pause" }
     else if !voiceTurns.isEmpty { status = "Sending…" }
+    else if deliveredVoiceTurns.values.contains(where: { $0.responseObservedAt == nil }) { status = "Thinking…" }
     else { status = muted ? "Microphone muted" : "Listening…" }
   }
   private func transcribe(_ data: Data, final: Bool) {
     guard voiceActive, !muted, !replyAudioActive else { return }
+    guard !data.isEmpty || draftTurn != nil else { return }
     cancelTranscriptionPreview()
     if final { hearingSpeech = false }
     let turn = currentVoiceTurn()
     let now = ProcessInfo.processInfo.systemUptime
+    let speechAt = audio.lastSpeechAt ?? now
+    turn.lastSpeechAt = max(turn.lastSpeechAt ?? speechAt, speechAt)
+    turn.ending.speechStarted(at: speechAt)
     if !data.isEmpty {
       turn.pendingSegments += 1
       turn.lastAudioAt = now
-      voiceQueue.append((data, turn, now))
+      voiceQueue.append((data, turn, now, speechAt))
     }
     if final {
       turn.endpointAt = now
@@ -593,6 +637,19 @@ final class MobileAssistantController: ObservableObject {
           let started = ProcessInfo.processInfo.systemUptime
           let text = turn.text
           if !text.isEmpty {
+            turn.submittedAt = started
+            if let lastWord = turn.ending.lastWordAt {
+              turn.metrics["lastWordToSubmitMs"] = max(0, (started - lastWord) * 1000)
+            }
+            if let lastSpeech = turn.lastSpeechAt {
+              turn.metrics["lastSpeechToSubmitMs"] = max(0, (started - lastSpeech) * 1000)
+            }
+            if let received = turn.ending.lastTranscriptAt {
+              turn.metrics["lastNewTranscriptToSubmitMs"] = max(0, (started - received) * 1000)
+            }
+            if let finalized = turn.finalizedAt {
+              turn.metrics["finalizationToSubmitMs"] = max(0, (started - finalized) * 1000)
+            }
             turn.metrics["finalAudioToSendMs"] = max(0, (started - turn.lastAudioAt) * 1000)
             while voiceEpoch == epoch, !Task.isCancelled {
               if await send(text, id: turn.id) { break }
@@ -603,6 +660,13 @@ final class MobileAssistantController: ObservableObject {
           guard voiceEpoch == epoch, !Task.isCancelled else { return }
           turn.metrics["sendRoundTripMs"] = (ProcessInfo.processInfo.systemUptime - started) * 1000
           voiceTurns.removeFirst()
+          if !text.isEmpty {
+            deliveredVoiceTurns[turn.id] = turn
+            if deliveredVoiceTurns.count > 20,
+              let oldest = deliveredVoiceTurns.min(by: { ($0.value.submittedAt ?? 0) < ($1.value.submittedAt ?? 0) })?.key {
+              deliveredVoiceTurns.removeValue(forKey: oldest)
+            }
+          }
           updateVoiceDraft()
           if !text.isEmpty { recordVoiceTiming(turn) }
           continue
@@ -617,6 +681,12 @@ final class MobileAssistantController: ObservableObject {
           if let text = value["text"]?.string,
             !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             turn.parts.append(text)
+          }
+          let finalized = ProcessInfo.processInfo.systemUptime
+          turn.finalizedAt = finalized
+          turn.ending.transcript(turn.text, capturedAt: segment.speechAt, receivedAt: finalized)
+          if let lastWord = turn.ending.lastWordAt {
+            turn.metrics["lastWordToFinalizationMs"] = max(0, (finalized - lastWord) * 1000)
           }
           turn.add("segments", 1)
           turn.add("transcriptionQueueMs", (started - segment.capturedAt) * 1000)
@@ -660,6 +730,7 @@ final class MobileAssistantController: ObservableObject {
     let epoch = previewEpoch
     let call = voiceEpoch
     let turn = currentVoiceTurn()
+    let capturedAt = audio.lastSpeechAt ?? ProcessInfo.processInfo.systemUptime
     transcriptionPreview = Task { [weak self] in
       guard let self else { return }
       defer { if previewEpoch == epoch { transcriptionPreview = nil } }
@@ -668,8 +739,12 @@ final class MobileAssistantController: ObservableObject {
         guard !Task.isCancelled, voiceEpoch == call, previewEpoch == epoch,
           voiceActive, !replyAudioActive, draftTurn === turn else { return }
         let result = try JSONDecoder().decode([String: AssistantValue].self, from: data)
-        if let text = result["text"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
-          liveTranscript = (turn.parts + [text]).joined(separator: " ")
+        if let text = result["text"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines) {
+          let combined = (turn.parts + [text]).joined(separator: " ").trimmingCharacters(in: .whitespaces)
+          if !combined.isEmpty { liveTranscript = combined }
+          turn.ending.transcript(combined, capturedAt: capturedAt,
+            receivedAt: ProcessInfo.processInfo.systemUptime)
+          scheduleVoiceSend(turn)
         }
       } catch { /* The authoritative final transcription retains its normal retry. */ }
     }
@@ -683,6 +758,7 @@ final class MobileAssistantController: ObservableObject {
     let identity = message.id.split(separator: ":", maxSplits: 2)
     activeReplyRequest = identity.count == 3 && identity[0] == "assistant"
       && UUID(uuidString: String(identity[1])) != nil ? String(identity[1]) : nil
+    if let id = activeReplyRequest { deliveredVoiceTurns[id]?.playbackPreparationAt = ProcessInfo.processInfo.systemUptime }
     let epoch = voiceEpoch
     speech = Task { [weak self] in
       guard let self else { return }
@@ -883,6 +959,18 @@ struct AssistantView: View {
               .disabled(controller.startingVoice)
           }
         }
+        if controller.callVisible {
+          HStack {
+            VStack(alignment: .leading, spacing: 3) {
+              Text("Think aloud").font(.subheadline)
+              Text(controller.waitForSend ? "Keep listening through pauses until you tap Send." : "Automatically send after 4 seconds without new words.")
+                .font(.caption).foregroundStyle(ClawDadTheme.cream.opacity(0.65))
+            }
+            Spacer(minLength: 12)
+            Toggle("Think aloud", isOn: Binding(get: { controller.waitForSend }, set: { controller.setWaitForSend($0) }))
+              .labelsHidden().accessibilityIdentifier("clawdad.assistant.think-aloud")
+          }.padding(.horizontal)
+        }
         AssistantChatComposer(controller: controller, draft: controller.chatDraft).padding(.horizontal)
         if controller.callVisible {
           AssistantCallBar(controller: controller)
@@ -905,22 +993,6 @@ struct AssistantView: View {
             if showingWorkspace { showingWorkspace = false } else { onClose() }
           }.keyboardShortcut(.cancelAction).accessibilityIdentifier(
             "clawdad.assistant.back")
-        }
-        ToolbarItem(placement: .primaryAction) {
-          Menu {
-            Button {
-              controller.setWaitForSend(false)
-            } label: {
-              Label("Send after a pause", systemImage: controller.waitForSend ? "circle" : "checkmark.circle.fill")
-            }
-            Button {
-              controller.setWaitForSend(true)
-            } label: {
-              Label("Wait for Send", systemImage: controller.waitForSend ? "checkmark.circle.fill" : "circle")
-            }
-          } label: { Image(systemName: "slider.horizontal.3") }
-            .accessibilityLabel("Voice sending")
-            .accessibilityIdentifier("clawdad.assistant.voice-sending")
         }
         ToolbarItem(placement: .primaryAction) {
           Button(controller.snapshot?.paused == true ? "Resume control" : "Pause control") {
