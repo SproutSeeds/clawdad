@@ -22,3 +22,9 @@ The shell:
 Packaged apps run from their bundled runtime. Set
 `CLAWDAD_ROOT=/path/to/clawdad` only when intentionally running against a
 development checkout.
+
+The macOS app icon uses `assets/clawdad-app-icon-1024.png`, the same approved
+baby-in-a-claw artwork and opaque burgundy background as the iPhone icon.
+Regenerate the shared and iPhone icon sizes with `swift bin/clawdad-app-icons.swift`
+before building when that artwork changes. `build-app.sh` packages the shared
+1024-pixel asset into all macOS icon sizes.

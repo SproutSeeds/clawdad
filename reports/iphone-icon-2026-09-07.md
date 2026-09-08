@@ -86,11 +86,10 @@ later reports still describe the issue. Renaming the icon catalog or uploading
 another build has not been established as a remedy, so neither was presented
 as a complete fix. No notification history, pairing, or credentials were reset.
 
-The user was asked to restart the iPhone once, reopen ClawDad, and retest a fresh
-notification. That physical result is pending. If it persists, collect the
-iOS version and Home Screen appearance mode and prepare the minimal Apple
-reproduction described in the linked thread; any support submission or device
-diagnostic upload is a separate action.
+The user restarted the iPhone and confirmed: "I restarted my iphone and it
+cleared it up you were right." This closes the physical notification-icon
+check for build 56. The installed Home Screen icon and notification icon now
+show the approved artwork. No additional iPhone build was needed.
 
 Evidence: `apps/ios/ClawDadMobile/build/icon-notification-audit/` contains the
 fresh asset compilation, generated icon plist, and
@@ -101,5 +100,5 @@ fresh asset compilation, generated icon plist, and
 The nine pre-existing dirty groups listed in the notification report remain
 preserved for their existing review and artifact-retention actions. This patch
 contains only the icon files/converter, iPhone build number, release metadata and
-fixtures, and the two release reports. Physical Home Screen and notification
-icon appearance can be confirmed after installing build 56.
+fixtures, and the release reports. The user has confirmed the updated Home
+Screen and notification icons on the physical iPhone with build 56.
