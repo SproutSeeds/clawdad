@@ -7,9 +7,20 @@ final class AssistantAudio {
   var onUtterance: ((Data, Bool) -> Void)?
   var onSpeechStarted: (() -> Void)?
   var onReplaced: (() -> Void)?
-  var muted = false
-  private let engine = AVAudioEngine()
-  private let player = AVAudioPlayerNode()
+  var onInputLevel: ((Float) -> Void)?
+  var onCaptureRecovery: ((Bool) -> Void)?
+  var onCaptureFailure: ((Error) -> Void)?
+  private var microphone = AssistantMicrophoneState()
+  var muted: Bool {
+    get { microphone.muted }
+    set { microphone.muted = newValue }
+  }
+  private var engine = AVAudioEngine()
+  private var player = AVAudioPlayerNode()
+  private var playbackFormat: AVAudioFormat?
+  private var captureMonitor: Task<Void, Never>?
+  private var recoveryAttempts = 0
+  private var lastMeterAt: TimeInterval = 0
   private var detector = AssistantVoiceActivity(sampleRate: 48000)
   private var owner: UUID?
   private var generation = UUID()
@@ -50,54 +61,118 @@ final class AssistantAudio {
       self?.onReplaced?()
     }
     do {
-      try engine.inputNode.setVoiceProcessingEnabled(true)
-      let format = engine.inputNode.outputFormat(forBus: 0)
-      guard format.sampleRate > 0, format.channelCount > 0 else {
-        throw VoiceRecorderError.couldNotStart
-      }
-      detector = AssistantVoiceActivity(sampleRate: format.sampleRate)
-      engine.attach(player)
-      engine.connect(player, to: engine.mainMixerNode, format: nil)
-      let generation = UUID()
-      self.generation = generation
-      engine.inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) {
-        [weak self] buffer, _ in
-        guard let channel = buffer.floatChannelData?[0] else { return }
-        let values = Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength)))
-        Task { @MainActor [weak self] in
-          guard let self, self.generation == generation, !muted else { return }
-          let event = detector.consume(values)
-          if event.started { onSpeechStarted?() }
-          if let samples = event.utterance {
-            onUtterance?(assistantWAV(samples, sampleRate: format.sampleRate), event.final)
-          }
+      // A new call starts unmuted even if the previous call ended while muted.
+      microphone.begin(at: ProcessInfo.processInfo.systemUptime)
+      recoveryAttempts = 0
+      for retry in 0..<2 {
+        do {
+          try configureCapture()
+          try await waitForInput(attempt: attempt)
+          break
+        } catch {
+          guard startAttempt == attempt, owner != nil else { throw CancellationError() }
+          guard retry == 0 else { throw error }
+          tearDownEngine()
+          if let owner { try MobileAudioSession.shared.reactivateConversation(owner) }
         }
       }
-      tapInstalled = true
-      engine.prepare()
-      try engine.start()
+      monitorCapture(attempt: attempt)
     } catch {
       stop()
       throw error
     }
   }
+  private func configureCapture() throws {
+    engine = AVAudioEngine()
+    player = AVAudioPlayerNode()
+    try engine.inputNode.setVoiceProcessingEnabled(true)
+    engine.inputNode.isVoiceProcessingInputMuted = false
+    engine.inputNode.isVoiceProcessingAGCEnabled = true
+    let format = engine.inputNode.outputFormat(forBus: 0)
+    guard format.sampleRate > 0, format.channelCount > 0,
+      let playbackFormat = AVAudioFormat(standardFormatWithSampleRate: format.sampleRate, channels: 1)
+    else { throw VoiceRecorderError.couldNotStart }
+    self.playbackFormat = playbackFormat
+    let sampleRate = format.sampleRate
+    detector = AssistantVoiceActivity(sampleRate: sampleRate)
+    let wasMuted = muted
+    microphone.begin(at: ProcessInfo.processInfo.systemUptime)
+    muted = wasMuted
+    engine.attach(player)
+    engine.connect(player, to: engine.mainMixerNode, format: playbackFormat)
+    let generation = UUID()
+    self.generation = generation
+    engine.inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) {
+      [weak self] buffer, _ in
+      guard buffer.frameLength > 0, let channel = buffer.floatChannelData?[0] else { return }
+      let values = (0..<Int(buffer.frameLength)).map { channel[$0 * buffer.stride] }
+      Task { @MainActor [weak self] in
+        guard let self, self.generation == generation, owner != nil else { return }
+        let time = ProcessInfo.processInfo.systemUptime
+        microphone.receivedBuffer(at: time)
+        if time - lastMeterAt >= 0.1 {
+          lastMeterAt = time
+          let rms = sqrt(values.reduce(0.0) { $0 + ($1.isFinite ? Double($1) * Double($1) : 0) } / Double(values.count))
+          onInputLevel?(muted ? 0 : Float(max(0, min(1, (20 * log10(max(rms, 0.000_001)) + 60) / 35))))
+        }
+        guard !muted else { return }
+        let event = detector.consume(values)
+        if event.started { onSpeechStarted?() }
+        if let samples = event.utterance {
+          onUtterance?(assistantWAV(samples, sampleRate: sampleRate), event.final)
+        }
+      }
+    }
+    tapInstalled = true
+    engine.prepare()
+    try engine.start()
+  }
+  private func waitForInput(attempt: UUID) async throws {
+    let deadline = ProcessInfo.processInfo.systemUptime + 4
+    while !microphone.receiving(at: ProcessInfo.processInfo.systemUptime) {
+      try Task.checkCancellation()
+      guard startAttempt == attempt, owner != nil else { throw CancellationError() }
+      guard ProcessInfo.processInfo.systemUptime < deadline else { throw AssistantMicrophoneError.noInput }
+      try await Task.sleep(nanoseconds: 50_000_000)
+    }
+  }
+  private func monitorCapture(attempt: UUID) {
+    captureMonitor?.cancel()
+    captureMonitor = Task { [weak self] in
+      while !Task.isCancelled {
+        do { try await Task.sleep(nanoseconds: 500_000_000) } catch { return }
+        guard let self, startAttempt == attempt, let owner else { return }
+        guard microphone.needsRecovery(at: ProcessInfo.processInfo.systemUptime,
+          engineRunning: engine.isRunning) else { continue }
+        // Hardware route changes can stop AVAudioEngine without throwing.
+        // Retain recognized speech, rebuild the graph, and bound automatic retries.
+        onCaptureRecovery?(true)
+        finishUtterance()
+        tearDownEngine()
+        do {
+          guard recoveryAttempts < 2 else { throw AssistantMicrophoneError.noInput }
+          recoveryAttempts += 1
+          try MobileAudioSession.shared.reactivateConversation(owner)
+          try configureCapture()
+          try await waitForInput(attempt: attempt)
+          onCaptureRecovery?(false)
+        } catch {
+          guard startAttempt == attempt else { return }
+          stop()
+          onCaptureFailure?(error)
+          return
+        }
+      }
+    }
+  }
   func play(_ data: Data) async throws {
-    guard owner != nil else { throw CancellationError() }
-    let url = FileManager.default.temporaryDirectory.appendingPathComponent(
-      "assistant-\(UUID().uuidString).wav")
-    try data.write(to: url, options: .atomic)
-    defer { try? FileManager.default.removeItem(at: url) }
-    let file = try AVAudioFile(forReading: url)
-    guard file.length > 0, file.length < 10_000_000,
-      let buffer = AVAudioPCMBuffer(
-        pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length))
-    else { throw AssistantProtocolError.invalid }
-    try file.read(into: buffer)
+    guard owner != nil, let playbackFormat else { throw CancellationError() }
+    let buffer = try assistantPlaybackBuffer(data, format: playbackFormat)
     stopPlayback()
     let playbackGeneration = UUID()
     self.playbackGeneration = playbackGeneration
-    engine.disconnectNodeOutput(player)
-    engine.connect(player, to: engine.mainMixerNode, format: buffer.format)
+    // Convert each clip into the established call format. Reconnecting this
+    // graph per TTS clip can stop microphone capture during the conversation.
     try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { continuation in
         playing = continuation
@@ -133,6 +208,18 @@ final class AssistantAudio {
   }
   func stop() {
     startAttempt = UUID()
+    captureMonitor?.cancel()
+    captureMonitor = nil
+    tearDownEngine()
+    if let owner {
+      self.owner = nil
+      MobileAudioSession.shared.release(owner)
+    }
+    microphone.end()
+    onInputLevel?(0)
+    detector.reset()
+  }
+  private func tearDownEngine() {
     generation = UUID()
     stopPlayback()
     if tapInstalled {
@@ -141,10 +228,54 @@ final class AssistantAudio {
     }
     engine.stop()
     if engine.attachedNodes.contains(player) { engine.detach(player) }
-    if let owner {
-      self.owner = nil
-      MobileAudioSession.shared.release(owner)
-    }
-    detector.reset()
+    playbackFormat = nil
+  }
+}
+
+enum AssistantMicrophoneError: LocalizedError {
+  case noInput
+  var errorDescription: String? {
+    "The iPhone microphone stopped delivering audio. End the call and tap the headset to reconnect."
+  }
+}
+
+func assistantPlaybackBuffer(_ data: Data, format: AVAudioFormat) throws -> AVAudioPCMBuffer {
+  let url = FileManager.default.temporaryDirectory.appendingPathComponent("assistant-\(UUID().uuidString).wav")
+  try data.write(to: url, options: .atomic)
+  defer { try? FileManager.default.removeItem(at: url) }
+  let file = try AVAudioFile(forReading: url)
+  guard file.length > 0, file.length < 10_000_000,
+    let input = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length))
+  else { throw AssistantProtocolError.invalid }
+  try file.read(into: input)
+  if input.format == format { return input }
+  let frames = ceil(Double(input.frameLength) * format.sampleRate / input.format.sampleRate) + 32
+  guard frames > 0, frames < 10_000_000,
+    let output = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frames)),
+    let converter = AVAudioConverter(from: input.format, to: format)
+  else { throw AssistantProtocolError.invalid }
+  let source = AssistantConversionInput(input)
+  var error: NSError?
+  let result = converter.convert(to: output, error: &error) { _, status in
+    source.take(status: status)
+  }
+  if let error { throw error }
+  guard result != .error, output.frameLength > 0 else { throw AssistantProtocolError.invalid }
+  return output
+}
+
+/// Supplies one immutable buffer. The lock protects transfer through the
+/// converter's Sendable callback; no audio buffer is mutated after publication.
+private final class AssistantConversionInput: @unchecked Sendable {
+  private let lock = NSLock()
+  private var buffer: AVAudioPCMBuffer?
+  init(_ buffer: AVAudioPCMBuffer) { self.buffer = buffer }
+  func take(status: UnsafeMutablePointer<AVAudioConverterInputStatus>) -> AVAudioBuffer? {
+    lock.lock()
+    defer { lock.unlock() }
+    guard let buffer else { status.pointee = .endOfStream; return nil }
+    self.buffer = nil
+    status.pointee = .haveData
+    return buffer
   }
 }

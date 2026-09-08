@@ -65,6 +65,12 @@ final class MobileAudioSession {
     owner?.active = true
   }
 
+  func reactivateConversation(_ id: UUID) throws {
+    guard owner?.id == id, owner?.use == .conversation else { throw AudioError.expired }
+    try activate(.conversation)
+    owner?.active = true
+  }
+
   func release(_ id: UUID) {
     guard owner?.id == id else { return }
     // Normal completion does not invoke the replacement callback.

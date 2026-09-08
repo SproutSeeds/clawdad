@@ -13,6 +13,7 @@ final class MobileAssistantController: ObservableObject {
   @Published private(set) var sending = false
   @Published private(set) var startingVoice = false
   @Published private(set) var callVisible = false
+  @Published private(set) var inputLevel: Float = 0
   private let connection = AssistantConnection()
   private let audio = AssistantAudio()
   private weak var session: CloudSession?
@@ -26,6 +27,7 @@ final class MobileAssistantController: ObservableObject {
   private var voiceQueue: [(Data, Bool)] = []
   private var transcriptParts: [String] = []
   private var speechQueue: [AssistantMessage] = []
+  private var taskError = ""
   #if DEBUG
     private var preview: AssistantPreview?
   #endif
@@ -57,7 +59,27 @@ final class MobileAssistantController: ObservableObject {
       connected = connection.connected
       if !connected { status = "Reconnecting to your Mac…" }
     }
-    audio.onSpeechStarted = { [weak self] in self?.interruptSpeech() }
+    audio.onSpeechStarted = { [weak self] in
+      guard let self, voiceActive else { return }
+      interruptSpeech()
+      status = "Hearing you…"
+    }
+    audio.onInputLevel = { [weak self] level in
+      guard let self, abs(inputLevel - level) >= 0.03 else { return }
+      inputLevel = level
+    }
+    audio.onCaptureRecovery = { [weak self] recovering in
+      guard let self, voiceActive else { return }
+      if recovering { status = "Reconnecting microphone…" }
+      else if status == "Reconnecting microphone…" { status = muted ? "Microphone muted" : "Listening…" }
+    }
+    audio.onCaptureFailure = { [weak self] failure in
+      guard let self else { return }
+      endVoice()
+      callVisible = true
+      error = failure.localizedDescription
+      status = "Microphone unavailable"
+    }
     audio.onUtterance = { [weak self] in self?.transcribe($0, final: $1) }
     audio.onReplaced = { [weak self] in self?.endVoice() }
   }
@@ -76,7 +98,7 @@ final class MobileAssistantController: ObservableObject {
         } else {
           do {
             try await refresh()
-            if !voiceActive, !startingVoice {
+            if !voiceActive, !startingVoice, !callVisible {
               status =
                 snapshot?.nativeOnline == true
                 ? "Your Mac is connected" : "Waiting for the Mac app…"
@@ -97,7 +119,9 @@ final class MobileAssistantController: ObservableObject {
     let data = try await connection.request(.state)
     let next = try JSONDecoder().decode(AssistantSnapshot.self, from: data)
     snapshot = next
-    error = next.tasks.last?.status == "attention" ? next.tasks.last?.error ?? "" : ""
+    let nextTaskError = next.tasks.last?.status == "attention" ? next.tasks.last?.error ?? "" : ""
+    if error.isEmpty || error == taskError { error = nextTaskError }
+    taskError = nextTaskError
     if voiceActive {
       for message in next.messages where message.role == "assistant" && !spoken.contains(message.id) {
         spoken.insert(message.id)
@@ -229,6 +253,7 @@ final class MobileAssistantController: ObservableObject {
         try await refresh()
       }
       guard voiceEpoch == attempt else { return }
+      status = "Starting microphone…"
       try await audio.start()
       guard voiceEpoch == attempt else {
         audio.stop()
@@ -266,6 +291,7 @@ final class MobileAssistantController: ObservableObject {
     startingVoice = false
     callVisible = false
     muted = false
+    inputLevel = 0
     interruptSpeech()
     transcribing?.cancel()
     transcribing = nil
@@ -570,6 +596,8 @@ struct AssistantCallBar: View {
         } label: {
           Image(systemName: controller.muted ? "mic.slash.fill" : "mic.fill").frame(
             width: 36, height: 44)
+            .foregroundStyle(controller.inputLevel > 0.15 && !controller.muted ? Color.green : ClawDadTheme.cream)
+            .scaleEffect(controller.muted ? 1 : 1 + CGFloat(controller.inputLevel) * 0.12)
         }.disabled(!controller.voiceActive).accessibilityLabel(controller.muted ? "Unmute Assistant" : "Mute Assistant")
         Button {
           controller.endVoice()

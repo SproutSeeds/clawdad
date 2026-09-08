@@ -10,6 +10,8 @@ public struct AssistantVoiceActivity: Sendable {
   private var silence: Double = 0
   private var voiced: Double = 0
   private var onset: Double = 0
+  private var onsetGap: Double = 0
+  private var noiseFloor: Double = 0.0006
   private var segmented = false
   public init(sampleRate: Double) { self.sampleRate = sampleRate }
   public mutating func reset() {
@@ -19,10 +21,11 @@ public struct AssistantVoiceActivity: Sendable {
     silence = 0
     voiced = 0
     onset = 0
+    onsetGap = 0
     segmented = false
   }
   public mutating func finish() -> [Float]? {
-    let result = voiced >= 0.25 ? samples : (segmented ? [] : nil)
+    let result = voiced >= 0.18 || (segmented && !samples.isEmpty) ? samples : (segmented ? [] : nil)
     reset()
     return result
   }
@@ -30,15 +33,30 @@ public struct AssistantVoiceActivity: Sendable {
     started: Bool, utterance: [Float]?, final: Bool
   ) {
     guard sampleRate.isFinite, sampleRate > 0, !values.isEmpty else { return (false, nil, false) }
-    let energy = sqrt(values.reduce(0.0) { $0 + Double($1 * $1) } / Double(values.count))
+    let energy = sqrt(values.reduce(0.0) {
+      let value = $1.isFinite ? Double($1) : 0
+      return $0 + value * value
+    } / Double(values.count))
     let duration = Double(values.count) / sampleRate
-    let loud = energy > 0.012
+    // Voice processing and normal microphone distance can put speech well below
+    // the former fixed -38 dB gate. Track quiet input without learning speech
+    // as room noise, and retain a floor that rejects low ambient hiss.
+    let threshold = max(0.0005, min(0.012, noiseFloor * 2.5))
+    let loud = energy > threshold
     var started = false
     if !speaking {
       preRoll.append(contentsOf: values)
       let limit = Int(sampleRate * 0.3)
       if preRoll.count > limit { preRoll.removeFirst(preRoll.count - limit) }
-      onset = loud ? onset + duration : 0
+      if loud {
+        onset += duration
+        onsetGap = 0
+      } else {
+        noiseFloor += (energy - noiseFloor) * min(1, duration / 0.5)
+        onsetGap += duration
+        // Brief unvoiced consonants and syllable gaps are part of a sentence.
+        if onsetGap >= 0.1 { onset = 0 }
+      }
       if onset >= 0.12 {
         speaking = true
         started = true
@@ -56,7 +74,7 @@ public struct AssistantVoiceActivity: Sendable {
         silence += duration
       }
       if silence >= 0.8 {
-        let utterance = voiced >= 0.25 ? samples : (segmented ? [] : nil)
+        let utterance = voiced >= 0.18 || (segmented && !samples.isEmpty) ? samples : (segmented ? [] : nil)
         reset()
         return (started, utterance, true)
       }
@@ -84,7 +102,8 @@ public func assistantWAV(_ samples: [Float], sampleRate: Double) -> Data {
     let left = min(samples.count - 1, Int(position))
     let right = min(samples.count - 1, left + 1)
     let fraction = Float(position - Double(left))
-    let value = samples[left] * (1 - fraction) + samples[right] * fraction
+    let interpolated = samples[left] * (1 - fraction) + samples[right] * fraction
+    let value = interpolated.isFinite ? interpolated : 0
     var sample = Int16(max(-1, min(1, value)) * 32767).littleEndian
     withUnsafeBytes(of: &sample) { pcm.append(contentsOf: $0) }
   }

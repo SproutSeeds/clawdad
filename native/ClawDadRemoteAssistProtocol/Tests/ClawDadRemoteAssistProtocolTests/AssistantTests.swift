@@ -23,6 +23,44 @@ final class AssistantTests: XCTestCase {
       XCTAssertNil(event.utterance)
     }
   }
+  func testQuietProcessedSpeechIsSubmittedAfterTheSpeakerPauses() {
+    var detector = AssistantVoiceActivity(sampleRate: 16000)
+    var utterances = 0
+    for frame in 0..<130 {
+      let amplitude: Float = (20..<80).contains(frame) ? 0.004 : 0.0003
+      let samples = (0..<320).map { $0.isMultiple(of: 2) ? amplitude : -amplitude }
+      let event = detector.consume(samples)
+      if let speech = event.utterance {
+        XCTAssertTrue(event.final)
+        XCTAssertGreaterThan(speech.count, 16000)
+        utterances += 1
+      }
+    }
+    XCTAssertEqual(utterances, 1)
+  }
+  func testNaturalSyllableGapsDoNotDiscardTheWholeSentence() {
+    var detector = AssistantVoiceActivity(sampleRate: 16000)
+    var utterances = 0
+    for frame in 0..<150 {
+      // Three voiced frames followed by a brief consonant/syllable gap.
+      let amplitude: Float = frame < 100 && frame % 4 != 3 ? 0.03 : 0.0003
+      let event = detector.consume((0..<320).map { $0.isMultiple(of: 2) ? amplitude : -amplitude })
+      if event.utterance != nil { utterances += 1 }
+    }
+    XCTAssertEqual(utterances, 1)
+  }
+  func testFinalShortTailAfterAnUploadSegmentIsPreserved() {
+    var detector = AssistantVoiceActivity(sampleRate: 16000)
+    var segmented = false
+    while !segmented {
+      let event = detector.consume([Float](repeating: 0.1, count: 320))
+      segmented = event.utterance != nil && !event.final
+    }
+    _ = detector.consume([Float](repeating: 0.1, count: 1600))
+    let tail = detector.finish()
+    XCTAssertEqual(tail?.count, 1600)
+    XCTAssertNil(detector.finish())
+  }
   func testPreRollSpeechAndSilenceProduceOneCompleteUtterance() {
     var detector = AssistantVoiceActivity(sampleRate: 16000)
     var starts = 0
