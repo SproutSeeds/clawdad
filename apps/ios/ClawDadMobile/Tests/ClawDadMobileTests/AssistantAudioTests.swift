@@ -14,8 +14,9 @@ final class AssistantAudioTests: XCTestCase {
         buffer.floatChannelData![0][0] = 0.2
         buffer.floatChannelData![0][1] = -0.4
         buffer.floatChannelData![0][2] = 0.6
-        let callback = assistantInputTap { values in
+        let callback = assistantInputTap { values, capturedAt in
           MainActor.preconditionIsolated()
+          XCTAssertGreaterThan(capturedAt, 0)
           finished.resume(returning: values)
         }
         callback(buffer, AVAudioTime(sampleTime: 0, atRate: 48000))

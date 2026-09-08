@@ -3,9 +3,29 @@ import ClawDadRemoteAssistProtocol
 import Foundation
 
 @MainActor
-final class AssistantAudio {
+protocol AssistantAudioIO: AnyObject {
+  var onUtterance: ((Data, Bool) -> Void)? { get set }
+  var onSpeechStarted: (() -> Void)? { get set }
+  var onTranscriptPreview: ((Data) -> Void)? { get set }
+  var onReplaced: (() -> Void)? { get set }
+  var onInputLevel: ((Float) -> Void)? { get set }
+  var onCaptureRecovery: ((Bool) -> Void)? { get set }
+  var onCaptureFailure: ((Error) -> Void)? { get set }
+  var muted: Bool { get set }
+  func start() async throws
+  func setReplyActive(_ active: Bool)
+  func play(_ data: Data) async throws
+  func stopPlayback()
+  func resetUtterance()
+  func finishUtterance()
+  func stop()
+}
+
+@MainActor
+final class AssistantAudio: AssistantAudioIO {
   var onUtterance: ((Data, Bool) -> Void)?
   var onSpeechStarted: (() -> Void)?
+  var onTranscriptPreview: ((Data) -> Void)?
   var onReplaced: (() -> Void)?
   var onInputLevel: ((Float) -> Void)?
   var onCaptureRecovery: ((Bool) -> Void)?
@@ -13,7 +33,7 @@ final class AssistantAudio {
   private var microphone = AssistantMicrophoneState()
   var muted: Bool {
     get { microphone.muted }
-    set { microphone.muted = newValue }
+    set { microphone.muted = newValue; input.muted = newValue }
   }
   private var engine = AVAudioEngine()
   private var player = AVAudioPlayerNode()
@@ -21,7 +41,7 @@ final class AssistantAudio {
   private var captureMonitor: Task<Void, Never>?
   private var recoveryAttempts = 0
   private var lastMeterAt: TimeInterval = 0
-  private var detector = AssistantVoiceActivity(sampleRate: 48000)
+  private var input = AssistantListeningInput(sampleRate: 48000)
   private var owner: UUID?
   private var generation = UUID()
   private var playing: CheckedContinuation<Void, Error>?
@@ -63,6 +83,7 @@ final class AssistantAudio {
     do {
       // A new call starts unmuted even if the previous call ended while muted.
       microphone.begin(at: ProcessInfo.processInfo.systemUptime)
+      input = AssistantListeningInput(sampleRate: 48000)
       recoveryAttempts = 0
       for retry in 0..<2 {
         do {
@@ -94,7 +115,7 @@ final class AssistantAudio {
     else { throw VoiceRecorderError.couldNotStart }
     self.playbackFormat = playbackFormat
     let sampleRate = format.sampleRate
-    detector = AssistantVoiceActivity(sampleRate: sampleRate)
+    input.configure(sampleRate: sampleRate)
     let wasMuted = muted
     microphone.begin(at: ProcessInfo.processInfo.systemUptime)
     muted = wasMuted
@@ -106,20 +127,25 @@ final class AssistantAudio {
     let generation = UUID()
     self.generation = generation
     engine.inputNode.installTap(onBus: 0, bufferSize: 1024, format: format,
-      block: assistantInputTap { [weak self] values in
+      block: assistantInputTap { [weak self] values, capturedAt in
         guard let self, self.generation == generation, owner != nil else { return }
         let time = ProcessInfo.processInfo.systemUptime
         microphone.receivedBuffer(at: time)
         if time - lastMeterAt >= 0.1 {
           lastMeterAt = time
           let rms = sqrt(values.reduce(0.0) { $0 + ($1.isFinite ? Double($1) * Double($1) : 0) } / Double(values.count))
-          onInputLevel?(muted ? 0 : Float(max(0, min(1, (20 * log10(max(rms, 0.000_001)) + 60) / 35))))
+          onInputLevel?(input.acceptsInput(capturedAt: capturedAt)
+            ? Float(max(0, min(1, (20 * log10(max(rms, 0.000_001)) + 60) / 35))) : 0)
         }
-        guard !muted else { return }
-        let event = detector.consume(values)
+        let event = input.consume(values, capturedAt: capturedAt)
         if event.started { onSpeechStarted?() }
         if let samples = event.utterance {
           onUtterance?(assistantWAV(samples, sampleRate: sampleRate), event.final)
+        } else if event.final {
+          onUtterance?(Data(), true)
+        }
+        if let preview = event.preview {
+          onTranscriptPreview?(assistantWAV(preview, sampleRate: sampleRate))
         }
       })
     tapInstalled = true
@@ -198,10 +224,14 @@ final class AssistantAudio {
     player.stop()
     done?.resume(throwing: CancellationError())
   }
-  func resetUtterance() { detector.reset() }
+  func setReplyActive(_ active: Bool) {
+    input.setReplyActive(active, at: ProcessInfo.processInfo.systemUptime)
+    onInputLevel?(0)
+  }
+  func resetUtterance() { input.reset() }
   func finishUtterance() {
-    if let samples = detector.finish() {
-      onUtterance?(assistantWAV(samples, sampleRate: detector.sampleRate), true)
+    if let samples = input.finish() {
+      onUtterance?(assistantWAV(samples, sampleRate: input.sampleRate), true)
     }
   }
   func stop() {
@@ -215,7 +245,7 @@ final class AssistantAudio {
     }
     microphone.end()
     onInputLevel?(0)
-    detector.reset()
+    input = AssistantListeningInput(sampleRate: 48000)
   }
   private func tearDownEngine() {
     generation = UUID()
@@ -234,12 +264,13 @@ final class AssistantAudio {
 // @MainActor method gives it UI-actor isolation and traps on the audio thread
 // in Swift 6. Copy samples here, then explicitly deliver them to the UI actor.
 nonisolated func assistantInputTap(
-  receive: @escaping @MainActor @Sendable ([Float]) -> Void
+  receive: @escaping @MainActor @Sendable ([Float], TimeInterval) -> Void
 ) -> @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void {
   { buffer, _ in
     guard buffer.frameLength > 0, let channel = buffer.floatChannelData?[0] else { return }
+    let capturedAt = ProcessInfo.processInfo.systemUptime
     let values = (0..<Int(buffer.frameLength)).map { channel[$0 * buffer.stride] }
-    Task { @MainActor in receive(values) }
+    Task { @MainActor in receive(values, capturedAt) }
   }
 }
 

@@ -3,7 +3,23 @@ import ClawDadRemoteAssistProtocol
 import Foundation
 
 @MainActor
-final class AssistantConnection {
+protocol AssistantTransport: AnyObject {
+  var onChange: (() -> Void)? { get set }
+  var connected: Bool { get }
+  func bind(_ session: CloudSession)
+  func connect()
+  func request(_ action: AssistantWireRequest.Action, payload: Data) async throws -> Data
+  func close()
+}
+
+extension AssistantTransport {
+  func request(_ action: AssistantWireRequest.Action) async throws -> Data {
+    try await request(action, payload: Data())
+  }
+}
+
+@MainActor
+final class AssistantConnection: AssistantTransport {
   var onChange: (() -> Void)?
   private(set) var connected = false
   private(set) var connecting = false

@@ -2,6 +2,69 @@ import XCTest
 
 @MainActor
 final class AssistantUITests: XCTestCase {
+  func testReplyControlsAndMessagesStayAvailableAcrossNavigation() {
+    let app = XCUIApplication()
+    app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-assistant-test", "--clawdad-assistant-speaking"]
+    app.launch()
+    XCTAssertTrue(app.buttons["clawdad.assistant.open"].waitForExistence(timeout: 20))
+    app.buttons["clawdad.assistant.open"].tap()
+    let messages = app.buttons["clawdad.assistant.return"]
+    XCTAssertTrue(messages.waitForExistence(timeout: 5))
+    XCTAssertEqual(messages.label, "Assistant messages")
+    XCTAssertTrue(app.buttons["clawdad.assistant.interject"].isHittable)
+    let bar = XCTAttachment(screenshot: app.screenshot())
+    bar.name = "Assistant call with messages and Interject"
+    bar.lifetime = .keepAlways
+    add(bar)
+    messages.tap()
+    XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "RoomWave is working")).firstMatch.waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["clawdad.assistant.interject"].isHittable)
+    app.buttons["clawdad.assistant.back"].tap()
+    XCTAssertTrue(messages.waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["clawdad.assistant.interject"].isHittable)
+    app.buttons["clawdad.assistant.interject"].tap()
+    XCTAssertTrue(app.staticTexts["Listening…"].exists)
+    XCTAssertFalse(app.buttons["clawdad.assistant.interject"].exists)
+    XCTAssertTrue(app.buttons["End voice conversation"].exists)
+    messages.tap()
+    XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "RoomWave is working")).firstMatch.waitForExistence(timeout: 5))
+  }
+
+  func testVoiceTranscriptionUpdatesInsideTheMessageThread() {
+    let app = XCUIApplication()
+    app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-assistant-test", "--clawdad-assistant-transcript-test"]
+    app.launch()
+    XCTAssertTrue(app.buttons["clawdad.assistant.open"].waitForExistence(timeout: 20))
+    app.buttons["clawdad.assistant.open"].tap()
+    app.buttons["clawdad.assistant.return"].tap()
+    XCTAssertTrue(app.staticTexts["Could you check which Terminal tab is working?"].waitForExistence(timeout: 8))
+    let thread = XCTAttachment(screenshot: app.screenshot())
+    thread.name = "Assistant conversation with live voice transcription"
+    thread.lifetime = .keepAlways
+    add(thread)
+    app.buttons["clawdad.assistant.back"].tap()
+    app.buttons["clawdad.assistant.return"].tap()
+    XCTAssertTrue(app.staticTexts["Could you check which Terminal tab is working?"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["End voice conversation"].exists)
+  }
+
+  func testMessagesCanBeOpenedFromSettingsWithoutEndingTheReply() {
+    let app = XCUIApplication()
+    app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-assistant-test", "--clawdad-assistant-speaking"]
+    app.launch()
+    XCTAssertTrue(app.buttons["clawdad.assistant.open"].waitForExistence(timeout: 20))
+    app.buttons["clawdad.assistant.open"].tap()
+    app.buttons["Settings"].tap()
+    let messages = app.buttons["clawdad.assistant.return"].firstMatch
+    XCTAssertTrue(messages.waitForExistence(timeout: 5))
+    messages.tap()
+    XCTAssertTrue(app.buttons["clawdad.assistant.back"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["clawdad.assistant.interject"].isHittable)
+    app.buttons["clawdad.assistant.back"].tap()
+    XCTAssertTrue(app.buttons["clawdad.assistant.return"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["clawdad.assistant.interject"].isHittable)
+  }
+
   func testAssistantLivesInsideTheAppAndConversationSurvivesBack() {
     let app = XCUIApplication()
     app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-assistant-test"]

@@ -155,6 +155,14 @@ struct ContentView: View {
       (!message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !imageAttachments.isEmpty)
   }
 
+  private func openAssistantMessages(dismiss: () -> Void) {
+    dismiss()
+    Task { @MainActor in
+      try? await Task.sleep(nanoseconds: 350_000_000)
+      showingAssistant = true
+    }
+  }
+
   var body: some View {
     NavigationStack {
       ZStack {
@@ -204,7 +212,9 @@ struct ContentView: View {
         .environmentObject(session)
         .environmentObject(subscription)
         .safeAreaInset(edge: .bottom, spacing: 0) { ReadAloudBar(reader: session.readAloud) }
-        .safeAreaInset(edge: .bottom, spacing: 0) { AssistantCallBar(controller: assistant) }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+          AssistantCallBar(controller: assistant) { openAssistantMessages { showingSettings = false } }
+        }
       }
       .sheet(isPresented: $showingTools) {
         ClawToolsSheet(
@@ -215,14 +225,18 @@ struct ContentView: View {
         .environmentObject(session)
         .presentationDetents([.large])
         .safeAreaInset(edge: .bottom, spacing: 0) { ReadAloudBar(reader: session.readAloud) }
-        .safeAreaInset(edge: .bottom, spacing: 0) { AssistantCallBar(controller: assistant) }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+          AssistantCallBar(controller: assistant) { openAssistantMessages { showingTools = false } }
+        }
       }
 #if os(iOS)
       .sheet(isPresented: $showingFiles) {
         FilesLibraryView(controller: files) { showingFiles = false }
           .environmentObject(session)
           .safeAreaInset(edge: .bottom, spacing: 0) { ReadAloudBar(reader: session.readAloud) }
-          .safeAreaInset(edge: .bottom, spacing: 0) { AssistantCallBar(controller: assistant) }
+          .safeAreaInset(edge: .bottom, spacing: 0) {
+            AssistantCallBar(controller: assistant) { openAssistantMessages { showingFiles = false } }
+          }
       }
 #endif
       .sheet(isPresented: $showingProjectPicker) {
@@ -233,7 +247,9 @@ struct ContentView: View {
           }
         )
         .presentationDetents([.large])
-        .safeAreaInset(edge: .bottom, spacing: 0) { AssistantCallBar(controller: assistant) }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+          AssistantCallBar(controller: assistant) { openAssistantMessages { showingProjectPicker = false } }
+        }
       }
       .sheet(item: $selectedThreadSelection) { selection in
         let thread = resolveMobileThreadSelection(

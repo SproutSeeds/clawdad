@@ -14,6 +14,9 @@ public struct AssistantVoiceActivity: Sendable {
   private var noiseFloor: Double = 0.0006
   private var segmented = false
   public init(sampleRate: Double) { self.sampleRate = sampleRate }
+  /// A provisional transcription must leave endpoint detection and the final
+  /// recording intact. Callers throttle previews and replace them with final STT.
+  public var pendingSpeech: [Float]? { speaking && voiced >= 0.18 ? samples : nil }
   public mutating func reset() {
     speaking = false
     samples = []
