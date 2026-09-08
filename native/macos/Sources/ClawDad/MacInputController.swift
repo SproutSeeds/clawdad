@@ -375,6 +375,23 @@ final class MacInputController {
     return postKeyStroke(key, targetPID: target.input.pid)
   }
 
+  /// Queue only in the captured native Terminal input. The caller checks the
+  /// active Codex turn, complete draft and live Tab hint immediately before this.
+  func queueAssistantDraft(targetToken token: String,
+                           isAllowed: @MainActor () -> Bool,
+                           terminalIdentity: @MainActor () async throws -> String?) async -> Bool {
+    if let inputProcessingTask { await inputProcessingTask.value }
+    if let clipboardCopyTask { await clipboardCopyTask.value }
+    await waitForImagePaste()
+    let identity = await recoverTerminalIdentity(for: dictationTargets.capture(for: token), read: terminalIdentity)
+    guard !Task.isCancelled, isAllowed(), !speechSelectionInProgress,
+      let target = dictationTargets.resolve(token: token, generation: inputGeneration,
+        terminalIdentity: identity, isCurrent: targetIsCurrent),
+      target.input.bundleIdentifier == "com.apple.Terminal" else { return false }
+    defer { invalidateDictationTarget() }
+    return pressKey("tab", targetPID: target.input.pid)
+  }
+
   func sendQuickChat(_ request: RemoteQuickChatMessage,
                     isAllowed: @MainActor () -> Bool = { true },
                     terminalIdentity: @MainActor () async throws -> String?) async -> RemoteQuickChatMessage {

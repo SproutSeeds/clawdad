@@ -2,6 +2,45 @@ import XCTest
 
 @MainActor
 final class AssistantUITests: XCTestCase {
+  func testGroupedRemoteControlsHaveDistinctLabelsBackNavigationAndExplicitVoice() {
+    let app = XCUIApplication()
+    app.launchArguments = ["--clawdad-app-store-preview", "terminal-reader", "--clawdad-assistant-test", "--clawdad-assistant-reset-draft"]
+    app.launch()
+    XCTAssertTrue(app.buttons["clawdad.remote.assistant.chat"].waitForExistence(timeout: 20))
+    for label in ["Assistant", "Mac input", "Workspace", "Chat", "Call", "Presets", "Photo to Terminal", "Copy to iPhone", "Paste to Mac"] {
+      XCTAssertTrue(app.staticTexts[label].exists, label)
+    }
+    XCTAssertFalse(app.buttons["End voice conversation"].exists)
+    saveScreenshot(app, "Grouped Remote Assist controls in portrait")
+    for button in ["clawdad.remote.quickChat", "Special commands", "Choose Terminal tab"] {
+      app.buttons[button].tap()
+      let back = app.buttons["Back to Remote Assist controls"]
+      XCTAssertTrue(back.waitForExistence(timeout: 4))
+      back.tap()
+      XCTAssertTrue(app.buttons["clawdad.remote.assistant.chat"].waitForExistence(timeout: 4))
+    }
+    app.buttons["clawdad.remote.assistant.chat"].tap()
+    XCTAssertTrue(app.buttons["clawdad.assistant.attach-image"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["clawdad.assistant.start-voice"].exists)
+    XCTAssertFalse(app.buttons["End voice conversation"].exists)
+    app.buttons["clawdad.assistant.back"].tap()
+    XCUIDevice.shared.orientation = .landscapeLeft
+    let rotated = expectation(for: NSPredicate { _, _ in app.frame.width > app.frame.height }, evaluatedWith: app)
+    wait(for: [rotated], timeout: 8)
+    Thread.sleep(forTimeInterval: 1)
+    let panel = app.scrollViews["clawdad.remote.groupedControls"]
+    XCTAssertTrue(panel.waitForExistence(timeout: 5))
+    panel.swipeUp()
+    XCTAssertTrue(app.buttons["Close Remote Assist"].isHittable)
+    let landscapeImage = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+    landscapeImage.name = "Grouped controls scroll in landscape"; landscapeImage.lifetime = .keepAlways
+    add(landscapeImage)
+    XCUIDevice.shared.orientation = .portrait
+    let upright = expectation(for: NSPredicate { _, _ in app.frame.height > app.frame.width }, evaluatedWith: app)
+    wait(for: [upright], timeout: 8)
+    app.buttons["Close Remote Assist controls"].tap()
+    XCTAssertTrue(app.buttons["Open Remote Assist controls"].waitForExistence(timeout: 3))
+  }
   func testTextChatPhotosPreviewRemovalAndDraftSurviveCloseRestartAndFailedSend() {
     let app = XCUIApplication()
     app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-assistant-test",

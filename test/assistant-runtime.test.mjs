@@ -7,6 +7,108 @@ import {AssistantRuntime} from '../lib/assistant-runtime.mjs';
 import {runAssistantMCP} from '../lib/assistant-mcp.mjs';
 import {Readable, Writable} from 'node:stream';
 
+const queueSession='01a0817d-c8ca-7aa3-9153-74c69e51841d';
+const queueRequest=(id='queue-1')=>({action:'terminal.queue',requestId:id,tabId:'target',sessionId:queueSession,text:'Authorized follow-up'});
+async function prepareQueue(runtime,id='queue-1') {
+  await runtime.command(queueRequest(id),{tool:true});
+  assert.equal((await runtime.nativePoll({workerId:'worker-1'})).job.id,id);
+  await runtime.nativePrepare({id,conversationPath:'/test/queue.jsonl',sessionId:queueSession,tabTitle:'code',priorTurnId:'original-turn'});
+}
+async function acceptQueue(runtime,id='queue-1') {
+  await runtime.nativeResult({id,result:{queueAccepted:true,verification:'rendered-agent-queue',tabId:'target',sessionId:queueSession}});
+}
+
+test('native Tab queue requires agent identity, a plain message and stable request IDs',async t=>{
+  const {runtime}=await fixture(t);
+  await assert.rejects(runtime.command(queueRequest()),/Unsupported/);
+  for(const args of [{sessionId:''},{sessionId:'unknown'},{text:'/clear'},{text:' !rm file'},{text:'hello\tescape'},{text:'hello\u001b'}]) {
+    await assert.rejects(runtime.command({...queueRequest(),...args},{tool:true}));
+  }
+  await runtime.command(queueRequest(),{tool:true});
+  await runtime.command(Object.fromEntries(Object.entries(queueRequest()).reverse()),{tool:true});
+  await assert.rejects(runtime.command({...queueRequest(),tabId:'unrelated'},{tool:true}),/different action/);
+  assert.equal(runtime.state.jobs.filter(j=>j.action==='terminal.queue').length,1);
+});
+
+test('Assistant MCP exposes native Tab delivery with the inspected session and unchanged message',async t=>{
+  const {root}=await fixture(t);await fs.mkdir(path.join(root,'Assistant'));
+  await fs.writeFile(path.join(root,'Assistant/connection.json'),JSON.stringify({baseURL:'http://127.0.0.1:4487/'}));
+  await fs.writeFile(path.join(root,'native-server.token'),'fixture-token');
+  const {action,...args}=queueRequest();const lines=[],requests=[];
+  await runAssistantMCP({root,input:Readable.from([
+    JSON.stringify({id:1,method:'tools/list'})+'\n',
+    JSON.stringify({id:2,method:'tools/call',params:{name:'queue_in_tab',arguments:args}})+'\n']),
+    output:new Writable({write(chunk,_encoding,done){lines.push(JSON.parse(chunk));done();}}),
+    fetchImpl:async(url,options)=>{requests.push({url:url.href,body:JSON.parse(options.body)});return {ok:true,json:async()=>({job:{id:args.requestId,status:'agent_queued'}})};}});
+  const tool=lines[0].result.tools.find(t=>t.name==='queue_in_tab');
+  assert.ok(tool.inputSchema.required.includes('sessionId'));assert.match(tool.description,/pressing Tab once/);
+  assert.deepEqual(requests,[{url:'http://127.0.0.1:4487/v1/assistant/tool',body:queueRequest()}]);
+  assert.equal(JSON.parse(lines[1].result.content[0].text).job.status,'agent_queued');
+});
+
+test('Tab follow-ups reach working agents and distinguish native queue acceptance from each own turn',async t=>{
+  const {runtime}=await fixture(t),file='/test/queue.jsonl',target={coordinator:false};
+  await runtime.command({action:'terminal.send',requestId:'original',tabId:'target',text:'Original task'},{tool:true});
+  await runtime.nativePoll({workerId:'worker-1'});await runtime.nativeResult({id:'original',result:{conversationPath:file}});
+  const event=(type,fields={})=>({type:'event_msg',timestamp:new Date(Date.now()+1000).toISOString(),payload:{type,...fields}});
+  runtime.consumeRecord(event('user_message',{message:'Original task'}),file,target);
+  await prepareQueue(runtime);await acceptQueue(runtime);
+  assert.equal((await runtime.job('queue-1')).status,'agent_queued');
+  assert.equal((await runtime.job('queue-1')).completedAt,undefined);
+  await assert.rejects(runtime.command({action:'cancel',requestId:'cancel',jobId:'queue-1'}),/already reached Terminal/);
+  await prepareQueue(runtime,'queue-2');await acceptQueue(runtime,'queue-2');
+  runtime.consumeRecord(event('task_complete',{turn_id:'original-turn',last_agent_message:'Original finished'}),file,target);
+  assert.equal((await runtime.job('queue-1')).status,'agent_queued');
+  for(const [id,turn] of [['queue-1','follow-up-1'],['queue-2','follow-up-2']]) {
+    runtime.consumeRecord(event('task_started',{turn_id:turn}),file,target);
+    runtime.consumeRecord(event('user_message',{message:'Authorized follow-up'}),file,target);
+    // CLI emits both event_msg and response_item for one user input.
+    runtime.consumeRecord({type:'response_item',timestamp:event('').timestamp,payload:{type:'message',role:'user',content:[{type:'input_text',text:'Authorized follow-up'}]}},file,target);
+    assert.equal((await runtime.job(id)).status,'working');assert.ok((await runtime.job(id)).submittedAt);
+    if(id==='queue-1') assert.equal((await runtime.job('queue-2')).status,'agent_queued');
+    runtime.consumeRecord(event('task_complete',{turn_id:'wrong-turn',last_agent_message:'Unrelated'}),file,target);
+    assert.equal((await runtime.job(id)).status,'working');
+    runtime.consumeRecord(event('task_complete',{turn_id:turn,last_agent_message:'Follow-up done'}),file,target);
+    assert.equal((await runtime.job(id)).status,'completed');assert.equal((await runtime.job(id)).response,'Follow-up done');
+  }
+});
+
+test('uncertain native queue delivery survives restart without replay and follows late acceptance',async t=>{
+  const {runtime,root,coordinator}=await fixture(t);await prepareQueue(runtime);
+  const restarted=new AssistantRuntime({root,coordinator});t.after(()=>restarted.close());
+  assert.equal((await restarted.nativePoll({workerId:'worker-2'})).job,null);
+  assert.equal((await restarted.job('queue-1')).status,'attention');
+  await restarted.command(queueRequest(),{tool:true});assert.equal((await restarted.nativePoll({workerId:'worker-2'})).job,null);
+  const timestamp=new Date(Date.now()+2000).toISOString(),file='/test/queue.jsonl',target={coordinator:false};
+  const event=payload=>({type:'event_msg',timestamp,payload});
+  restarted.consumeRecord(event({type:'task_started',turn_id:'original-turn'}),file,target);
+  restarted.consumeRecord(event({type:'user_message',message:'Authorized follow-up'}),file,target);
+  assert.equal((await restarted.job('queue-1')).status,'attention');
+  restarted.consumeRecord(event({type:'task_started',turn_id:'follow-up'}),file,target);
+  restarted.consumeRecord(event({type:'user_message',message:'Authorized follow-up'}),file,target);
+  assert.equal((await restarted.job('queue-1')).status,'working');
+  await restarted.nativeResult({id:'queue-1',error:'Late native timeout'});
+  restarted.consumeRecord(event({type:'task_complete',turn_id:'follow-up',last_agent_message:'Done'}),file,target);
+  await restarted.nativeResult({id:'queue-1',result:{queueAccepted:true}});
+  assert.equal((await restarted.job('queue-1')).status,'completed');assert.equal((await restarted.job('queue-1')).error,null);
+});
+
+test('posted Tab or empty composer alone never marks a message queued or completed',async t=>{
+  const {runtime}=await fixture(t);await prepareQueue(runtime);
+  await assert.rejects(runtime.nativePrepare({id:'queue-1',conversationPath:'/test/queue.jsonl',sessionId:queueSession,priorTurnId:'original-turn'}),/already prepared/);
+  await runtime.nativeResult({id:'queue-1',result:{tabPosted:true,draftEmpty:true}});
+  const j=await runtime.job('queue-1');assert.equal(j.status,'attention');assert.equal(j.completedAt,undefined);
+  await runtime.command(queueRequest(),{tool:true});assert.equal((await runtime.nativePoll({workerId:'worker-1'})).job,null);
+});
+
+test('an accepted queue whose tab closes becomes uncertain without automatic redelivery',async t=>{
+  const {runtime}=await fixture(t);await prepareQueue(runtime);await acceptQueue(runtime);
+  await runtime.nativePoll({workerId:'worker-1',catalog:{tabs:[]}});
+  assert.equal((await runtime.job('queue-1')).status,'attention');
+  assert.match((await runtime.job('queue-1')).error,/tab closed/);
+  await runtime.command(queueRequest(),{tool:true});assert.equal((await runtime.nativePoll({workerId:'worker-1'})).job,null);
+});
+
 async function fixture(t){
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'clawdad-assistant-'));
   t.after(()=>fs.rm(root,{recursive:true,force:true}));

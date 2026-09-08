@@ -193,6 +193,7 @@ final class MacAssistantBridge {
       let screen = try focusedTerminalText()
       let draft = await inspectDraft(tabId: tabID, conversation: conversation, screen: screen,
         busy: tab.isBusy, ticket: ticket)
+      let queueVersion = try? await Task.detached { try MacTerminalResponseReader().queueCLIVersion(tty: target.tty) }.value
       return [
         "tabId": .string(tabID), "tabTitle": .string(tab.title), "detail": .string(tab.detail),
         "terminalTitle": .string(target.customTitle),
@@ -200,11 +201,22 @@ final class MacAssistantBridge {
         "conversationPath": .string(conversation.path.path),
         "latestResponse": response.map { .string($0.text) } ?? .null,
         "screenText": .string(screen), "draft": .object(draft),
+        "queue": .object([
+          "supported": .bool(MacAssistantAgentQueueSnapshot.supports(version: queueVersion)),
+          "ready": .bool(MacAssistantAgentQueueSnapshot.supports(version: queueVersion)
+            && MacAssistantAgentQueueSnapshot.read(screen)?.draft == ""),
+          "cliVersion": queueVersion.map(AssistantValue.string) ?? .null,
+          "requires": .string("A working Codex agent with an empty, fully readable composer. Use this sessionId with queue_in_tab."),
+        ]),
       ]
     }
     let conversation = try await Task.detached {
       try MacTerminalResponseReader().resolve(tty: target.tty)
     }.value
+    if action == "terminal.queue" {
+      return try await queueInAgent(id: id, args: args, tabId: tabID, tabTitle: tab.title,
+        tty: target.tty, conversation: conversation, ticket: ticket, input: input)
+    }
     if editing, let draftInspection {
       guard draftInspection.sessionId == conversation.sessionId,
         try await tabs.inputIdentity() == draftInspection.identity,
@@ -302,6 +314,72 @@ final class MacAssistantBridge {
       "conversationPath": .string(conversation.path.path),
       "sessionId": .string(conversation.sessionId),
     ]
+  }
+
+  private func queueInAgent(id: String, args: [String: AssistantValue], tabId: String, tabTitle: String,
+    tty: String, conversation: MacCodexConversation, ticket: UInt64, input: MacInputController
+  ) async throws -> [String: AssistantValue] {
+    guard args["sessionId"]?.string == conversation.sessionId else {
+      throw MacAssistantError("The agent in this tab changed. Inspect it again; no message was inserted.")
+    }
+    let queueVersion = try await Task.detached { try MacTerminalResponseReader().queueCLIVersion(tty: tty) }.value
+    guard MacAssistantAgentQueueSnapshot.supports(version: queueVersion) else {
+      throw MacAssistantError("Native Tab queue is unsupported for this agent version. This tool has been verified with Codex 0.153.4; the input was preserved.")
+    }
+    guard let text = args["text"]?.string, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+      text.utf8.count <= 16 * 1024,
+      text.range(of: #"^\s*[!/]"#, options: .regularExpression) == nil,
+      !text.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) && $0 != "\n" }) else {
+      throw MacAssistantError("Native queue accepts authorized plain-text messages. Commands and control characters are unsupported.")
+    }
+    var activity = MacCodexRequestActivityLog()
+    guard try activity.read(conversation.path), let priorTurnId = activity.turnId else {
+      throw MacAssistantError("This agent is idle. Native queue requires a working agent; use send_to_tab only if the user authorized immediate submission.")
+    }
+    let identity = try await tabs.inputIdentity()
+    func allowed(_ expected: String, requireTab: Bool = false) -> Bool {
+      var log = MacCodexRequestActivityLog()
+      guard interaction.isCurrent(ticket), !MacConsoleSessionState.isLocked(), AXIsProcessTrusted(),
+        (try? log.read(conversation.path)) == true, log.turnId == priorTurnId,
+        let current = (try? focusedTerminalText()).flatMap(MacAssistantAgentQueueSnapshot.read),
+        assistantEditableDraftMatches(current.draft, expected: expected) else { return false }
+      return !requireTab || current.tabQueues
+    }
+    func capture() async throws -> String {
+      let capture = await input.captureDictationTarget(.request(.captureTarget, requestId: UUID().uuidString)) {
+        [tabs] in try await tabs.inputIdentity()
+      }
+      guard capture.ok == true, let token = capture.token else { throw MacAssistantError("The exact Terminal input could not be captured.") }
+      return token
+    }
+    defer { input.invalidateDictationTarget() }
+    let token = try await capture()
+    try await assistantQueueVerifiedMessage(text, read: { [self] in
+      guard interaction.isCurrent(ticket), !MacConsoleSessionState.isLocked(), AXIsProcessTrusted(),
+        try await tabs.inputIdentity() == identity else {
+        throw MacAssistantError("The targeted input changed. Inspect this request; its input will not be repeated.")
+      }
+      let owner = try await Task.detached { try MacTerminalResponseReader().resolve(tty: tty) }.value
+      guard owner == conversation else { throw MacAssistantError("The agent changed during queue delivery. Inspect the tab and receipt.") }
+      return MacAssistantAgentQueueSnapshot.read(try focusedTerminalText())
+    }, insert: {
+      await input.insertAssistantDraft(text, targetToken: token, isAllowed: { allowed("") }) {
+        [tabs] in try await tabs.inputIdentity()
+      }
+    }, prepare: { [runtime] in
+      guard allowed(text, requireTab: true) else { throw MacAssistantError("The agent finished or the draft changed. Tab was not sent; inspect the inserted draft.") }
+      _ = try await runtime.json("/v1/assistant/native/prepare", ["id": .string(id),
+        "conversationPath": .string(conversation.path.path), "sessionId": .string(conversation.sessionId),
+        "tabTitle": .string(tabTitle), "priorTurnId": .string(priorTurnId)])
+    }, pressTab: {
+      guard let token = try? await capture() else { return false }
+      return await input.queueAssistantDraft(targetToken: token, isAllowed: { allowed(text, requireTab: true) }) {
+        [tabs] in try await tabs.inputIdentity()
+      }
+    })
+    return ["tabId": .string(tabId), "tabTitle": .string(tabTitle), "sessionId": .string(conversation.sessionId),
+      "conversationPath": .string(conversation.path.path), "queueAccepted": .bool(true),
+      "submitted": .bool(false), "verification": .string("rendered-agent-queue")]
   }
 
   private func inspectDraft(tabId: String, conversation: MacCodexConversation, screen: String,

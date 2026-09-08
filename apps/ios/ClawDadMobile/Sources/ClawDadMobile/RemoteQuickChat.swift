@@ -93,10 +93,10 @@ struct RemoteQuickChatPanel: View {
             .frame(width: 36, height: 36)
         }
         .buttonStyle(RemoteAssistOverlayButtonStyle())
-        .accessibilityLabel("Back")
+        .accessibilityLabel(draft != nil || managing ? "Back to presets" : "Back to Remote Assist controls")
         .accessibilityIdentifier("clawdad.quickChat.back")
         .keyboardShortcut(.escape, modifiers: [])
-        Text(draft != nil ? "Edit preset" : "Quick Chat")
+        Text(draft != nil ? "Edit preset" : "Presets")
           .font(.subheadline.weight(.bold))
           .accessibilityAddTraits(.isHeader)
           .accessibilityFocused($headingFocused)

@@ -47,6 +47,9 @@ test('upgrades refresh only the owned Terminal tool guidance and preserve worksp
   const updated=await fs.readFile(path.join(root,'AGENTS.md'),'utf8');
   assert.ok(updated.startsWith(custom));
   assert.match(updated,/insert_in_tab/);
+  assert.match(updated,/queue_in_tab/);
+  assert.match(updated,/agent_queued confirms the native queue entry/);
+  assert.match(updated,/never substitute Enter or generic Computer Use/);
   assert.match(updated,/without submitting/);
   assert.equal(assistantWorkspaceInstructions(updated),updated);
   assert.match(assistantWorkspaceInstructions(updated.replace('insert_in_tab','obsolete_insert')),/insert_in_tab/);

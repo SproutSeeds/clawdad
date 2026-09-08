@@ -800,7 +800,7 @@ test("iPhone Remote Assist keeps one keyboard-safe launcher in the corner and ne
   assert.match(remoteAssistSource, /\.frame\(width: 44, height: 44\)/u);
   assert.match(remoteAssistSource, /RemoteAssistLauncherButtonStyle/u);
   assert.match(remoteAssistSource, /\.frame\(width: 36, height: 36\)/u);
-  assert.match(remoteAssistSource, /mainControlPanelWidth: CGFloat = 148/u);
+  assert.match(remoteAssistSource, /mainControlPanelWidth: CGFloat = 244/u);
   assert.match(remoteAssistSource, /shortcutControlPanelWidth: CGFloat = 196/u);
   assert.match(
     remoteAssistSource,
@@ -819,7 +819,7 @@ test("iPhone Remote Assist keeps one keyboard-safe launcher in the corner and ne
     /if controlsExpanded \{\s*collapseControls\(\)\s*\} else \{\s*controller\.rememberDictationTarget\(\)\s*controller\.dismissKeyboard\(\)\s*controlPage = \.primary\s*controlsExpanded = true/u,
   );
   assert.match(remoteAssistSource, /"Open Remote Assist controls"/u);
-  assert.match(remoteAssistSource, /Image\(systemName: "keyboard\.badge\.ellipsis"\)/u);
+  assert.match(remoteAssistSource, /RemoteControlCaption\("Special keys", systemImage: "keyboard\.badge\.ellipsis"\)/u);
   assert.match(remoteAssistSource, /controlPage = \.shortcuts/u);
   assert.match(remoteAssistSource, /Text\("Special Commands"\)/u);
   assert.match(remoteAssistSource, /accessibilityLabel\("Back to Remote Assist controls"\)/u);
@@ -990,7 +990,7 @@ test("iPhone Remote Assist supports local pinch zoom with accurate controls", as
   assert.match(remoteAssistSource, /UIPinchGestureRecognizer/u);
   assert.match(remoteAssistSource, /handleDoubleTap/u);
   assert.match(remoteAssistSource, /if viewport\.isZoomed[\s\S]*viewport\.pan/u);
-  assert.match(remoteAssistSource, /Text\("1x"\)/u);
+  assert.match(remoteAssistSource, /RemoteControlCaption\("Fit screen"/u);
   assert.match(remoteAssistSource, /viewport\.normalizedPoint/u);
   assert.match(remoteAssistSource, /sizeChanged[\s\S]*resetViewport/u);
 });

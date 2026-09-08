@@ -798,10 +798,10 @@ struct AssistantView: View {
                     .id("live-transcript")
                     .accessibilityIdentifier("clawdad.assistant.transcript")
                 }
-                ForEach((controller.snapshot?.tasks ?? []).filter { ["terminal.send", "terminal.insert", "terminal.clear", "terminal.replace"].contains($0.action) })
+                ForEach((controller.snapshot?.tasks ?? []).filter { ["terminal.send", "terminal.queue", "terminal.insert", "terminal.clear", "terminal.replace"].contains($0.action) })
                 { task in
                   VStack(alignment: .leading, spacing: 6) {
-                    Text("\(task.tabTitle ?? "Terminal task") · \(task.status)").font(
+                    Text("\(task.tabTitle ?? "Terminal task") · \(task.displayStatus)").font(
                       .subheadline.bold())
                     Text(task.action == "terminal.clear" ? "Clear draft input" : task.args["text"]?.string ?? "")
                       .font(.footnote).textSelection(.enabled)

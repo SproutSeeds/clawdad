@@ -5,6 +5,7 @@ struct RemoteDictationButton: View {
   @ObservedObject var controller: RemoteAssistController
   @ObservedObject var draft: RemoteDictationDraft
   @ObservedObject var recorder: VoiceRecorder
+  var labelled = false
 
   private var active: Bool { controller.inlineDictationActive || recorder.state != .idle }
   private var busy: Bool { draft.transcribing || draft.sending || recorder.state == .requestingPermission }
@@ -12,43 +13,56 @@ struct RemoteDictationButton: View {
 
   var body: some View {
     Button { controller.toggleInlineDictation() } label: {
-      ZStack {
-        Image(systemName: active ? "stop.fill" : (retry ? "arrow.clockwise" : "mic.fill"))
-          .font(.system(size: 18, weight: .bold))
-        if busy { ProgressView().controlSize(.mini).offset(x: 14, y: -14) }
-      }
-      .frame(width: 44, height: 44)
-      .background(recorder.state == .recording ? Color.red.opacity(0.3) : Color.clear, in: Circle())
-      .contentShape(Circle())
+      if labelled {
+        RemoteControlCaption(active ? "Stop dictation" : (retry ? "Retry dictation" : "Dictate")) { recordingIcon }
+      } else { recordingIcon.frame(width: 44, height: 44) }
     }
-    .buttonStyle(RemoteAssistOverlayButtonStyle())
-    .clipShape(Circle())
+    .buttonStyle(RemoteAssistOverlayButtonStyle(grouped: labelled))
+    .clipShape(RoundedRectangle(cornerRadius: labelled ? 10 : 22))
     .disabled(draft.sending)
     .accessibilityLabel(recorder.state == .recording ? "Stop recording and insert text" :
       (active ? "Cancel dictation" : (retry ? "Retry dictation" : "Dictate text")))
     .accessibilityHint("Inserts into the remembered Mac input, or copies to the clipboard for Paste")
     .accessibilityIdentifier("clawdad.remote.dictation")
   }
+
+  private var recordingIcon: some View {
+      ZStack {
+        Image(systemName: active ? "stop.fill" : (retry ? "arrow.clockwise" : "mic.fill"))
+          .font(.system(size: 18, weight: .bold))
+        if busy { ProgressView().controlSize(.mini).offset(x: 14, y: -14) }
+      }
+      .frame(width: labelled ? 28 : 44, height: labelled ? 28 : 44)
+      .background(recorder.state == .recording ? Color.red.opacity(0.3) : Color.clear, in: Circle())
+      .contentShape(Circle())
+  }
 }
 
 struct RemoteSpeakerButton: View {
   @ObservedObject var controller: RemoteAssistController
   @ObservedObject var reader: RemoteTerminalReader
+  var labelled = false
   @EnvironmentObject private var audio: MobileReadAloudController
   private var active: Bool { reader.loading || [.preparing, .playing, .paused].contains(audio.phase(for: reader.playbackKey)) }
 
   var body: some View {
     Button { controller.toggleInlineReadAloud() } label: {
+      if labelled {
+        RemoteControlCaption(active ? "Stop reading" : "Read aloud") { speakerIcon }
+      } else { speakerIcon }
+    }
+    .buttonStyle(RemoteAssistOverlayButtonStyle(grouped: labelled))
+    .disabled(controller.inlineDictationActive)
+    .accessibilityLabel(active ? "Stop Read Aloud" : "Read selected text or latest Terminal response")
+    .accessibilityIdentifier("clawdad.remote.reader")
+  }
+
+  private var speakerIcon: some View {
       ZStack {
         Image(systemName: active ? "stop.fill" : "speaker.wave.2.fill")
           .font(.system(size: 18, weight: .bold))
         if reader.loading || audio.phase(for: reader.playbackKey) == .preparing { ProgressView().controlSize(.mini).offset(x: 14, y: -14) }
-      }.frame(width: 44, height: 44)
-    }
-    .buttonStyle(RemoteAssistOverlayButtonStyle())
-    .disabled(controller.inlineDictationActive)
-    .accessibilityLabel(active ? "Stop Read Aloud" : "Read selected text or latest Terminal response")
-    .accessibilityIdentifier("clawdad.remote.reader")
+      }.frame(width: labelled ? 28 : 44, height: labelled ? 28 : 44)
   }
 }
 

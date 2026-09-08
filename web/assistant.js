@@ -50,7 +50,7 @@ if (dialog) {
     $('assistantWelcome').hidden=Boolean(next.messages?.length);
     const liveMessages=new Set((next.messages||[]).map(m=>m.id));
     for(const [id,node] of messageNodes)if(!liveMessages.has(id)){node.remove();messageNodes.delete(id);}
-    for(const task of (next.tasks||[]).filter(t=>t.action==='terminal.send'||t.status==='attention')){
+    for(const task of (next.tasks||[]).filter(t=>['terminal.send','terminal.queue'].includes(t.action)||t.status==='attention')){
       let entry=taskNodes.get(task.id);
       if(!entry){
         const element=document.createElement('section');element.className='assistant-task';
@@ -60,7 +60,8 @@ if (dialog) {
         const cancel=button('Cancel queued task',()=>command('cancel',{jobId:task.id}).catch(e=>error(e.message)));element.append(cancel);
         $('assistantTasks').append(element);entry={element,heading,prompt,detail,cancel};taskNodes.set(task.id,entry);
       }
-      entry.heading.textContent=`${task.tabTitle||'Terminal task'} · ${task.status}`;
+      const label={queued:'Waiting for Mac',running:'Delivering',agent_queued:'Queued in agent',submitted:'Submitted',working:'Working',completed:'Completed',attention:'Needs attention'}[task.status]||task.status;
+      entry.heading.textContent=`${task.tabTitle||'Terminal task'} · ${label}`;
       entry.prompt.textContent=task.args.text||'';entry.detail.textContent=task.error||'';entry.cancel.hidden=task.status!=='queued';
     }
     const visibleTasks=new Set((next.tasks||[]).map(t=>t.id));

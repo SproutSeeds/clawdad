@@ -4,11 +4,13 @@ import Foundation
 /// Only a fully readable, ordinary Codex composer can grant an edit token.
 /// Keep its rendered whitespace for the compare-before-edit check. Opaque paste
 /// and image placeholders cannot establish what would be deleted.
-func assistantEditableDraft(_ screen: String) -> String? {
+func assistantEditableDraft(_ screen: String) -> String? { assistantEditableDraft(screen, allowQueueFooter: false) }
+
+func assistantEditableDraft(_ screen: String, allowQueueFooter: Bool) -> String? {
   let lines = screen.components(separatedBy: .newlines)
   guard let start = lines.lastIndex(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix("›") }),
-    let end = lines.indices.first(where: { $0 > start && assistantComposerFooter(lines[$0]) }),
-    lines.dropFirst(end).allSatisfy({ $0.trimmingCharacters(in: .whitespaces).isEmpty || assistantComposerFooter($0) })
+    let end = lines.indices.first(where: { $0 > start && assistantComposerFooter(lines[$0], allowQueue: allowQueueFooter) }),
+    lines.dropFirst(end).allSatisfy({ $0.trimmingCharacters(in: .whitespaces).isEmpty || assistantComposerFooter($0, allowQueue: allowQueueFooter) })
   else { return nil }
   var body = [String(lines[start].trimmingCharacters(in: .whitespaces).dropFirst())]
   if body[0].hasPrefix(" ") { body[0].removeFirst() }
@@ -29,8 +31,9 @@ func assistantEditableDraft(_ screen: String) -> String? {
   return value
 }
 
-private func assistantComposerFooter(_ line: String) -> Bool {
+private func assistantComposerFooter(_ line: String, allowQueue: Bool) -> Bool {
   let value = line.trimmingCharacters(in: .whitespaces)
+  if allowQueue, value.range(of: #"^[a-z+ ⇧←]+ to queue message\b"#, options: .regularExpression) != nil { return true }
   return value.range(of: #"^(?:gpt[-\s]|\d+% context left\b|\? for shortcuts\b|(?:press )?ctrl\+c again to (?:quit|exit)\b)"#,
     options: [.regularExpression, .caseInsensitive]) != nil
 }

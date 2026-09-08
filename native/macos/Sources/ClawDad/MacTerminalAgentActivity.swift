@@ -48,11 +48,13 @@ struct MacTerminalActivityCandidates {
 struct MacCodexRequestActivityLog {
   private struct Activity {
     let startedAt: Date?
-    init(startedAt: Date? = nil) { self.startedAt = startedAt }
+    let turnId: String?
+    init(startedAt: Date? = nil, turnId: String? = nil) { self.startedAt = startedAt; self.turnId = turnId }
   }
   private var state = Activity()
   var isBusy: Bool { state.startedAt != nil }
   var startedAt: Date? { state.startedAt }
+  var turnId: String? { state.turnId }
   private var offset: UInt64 = 0
   private var fileIdentity = ""
   private var modifiedAt: Date?
@@ -76,7 +78,7 @@ struct MacCodexRequestActivityLog {
       formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
       let fractional = formatter.date(from: timestamp)
       formatter.formatOptions = [.withInternetDateTime]
-      return Activity(startedAt: fractional ?? formatter.date(from: timestamp))
+      return Activity(startedAt: fractional ?? formatter.date(from: timestamp), turnId: payload["turn_id"] as? String)
     case "task_complete", "turn_aborted": return Activity()
     default: return nil
     }

@@ -4,6 +4,19 @@ import XCTest
 @testable import ClawDad
 
 final class MacTerminalResponseReaderTests: XCTestCase {
+  func testQueueVersionUsesTheExactRunningExecutableAndRejectsAmbiguousOwners() throws {
+    let reader = MacTerminalResponseReader(run: { executable, args in
+      if executable == "/bin/ps" { return "10 /opt/codex-verified/codex\n11 /bin/zsh\n" }
+      XCTAssertEqual(executable, "/opt/codex-verified/codex"); XCTAssertEqual(args, ["--version"])
+      return "codex-cli 0.153.4\n"
+    })
+    XCTAssertEqual(try reader.queueCLIVersion(tty: "/dev/ttys001"), "0.153.4")
+    XCTAssertNil(try reader.queueCLIVersion(tty: "/dev/ttys001; echo"))
+    let ambiguous = MacTerminalResponseReader(run: { executable, _ in
+      XCTAssertEqual(executable, "/bin/ps"); return "10 /opt/one/codex\n11 /opt/two/codex\n"
+    })
+    XCTAssertNil(try ambiguous.queueCLIVersion(tty: "/dev/ttys001"))
+  }
   private let sessionId = "11111111-1111-4111-8111-111111111111"
 
   func testLatestCompletedTurnPreservesExactTextAndIgnoresCommentary() throws {

@@ -9,6 +9,7 @@ struct MacTerminalResponseFailure: LocalizedError {
 struct MacCodexConversation: Equatable, Sendable {
   let sessionId: String
   let path: URL
+  var cliVersion: String? = nil
 
   static func load(path: URL, sessionRoot: URL) throws -> Self? {
     let url = path.resolvingSymlinksInPath()
@@ -25,7 +26,7 @@ struct MacCodexConversation: Equatable, Sendable {
           payload["source"] as? String == "cli",
           let id = payload["id"] as? String, UUID(uuidString: id) != nil,
           url.lastPathComponent.hasSuffix("\(id).jsonl") else { return nil }
-    return Self(sessionId: id, path: url)
+    return Self(sessionId: id, path: url, cliVersion: payload["cli_version"] as? String)
   }
 }
 
@@ -70,6 +71,23 @@ struct MacTerminalResponseReader: Sendable {
         : "This tab has more than one agent conversation. Select text to choose exactly what to read.")
     }
     return conversation
+  }
+
+  /// A resumed rollout can retain an older cli_version. Verify the executable
+  /// actually owning this TTY before relying on a version-specific key binding.
+  func queueCLIVersion(tty: String) throws -> String? {
+    guard tty.range(of: "^/dev/tty[A-Za-z0-9]+$", options: .regularExpression) != nil else { return nil }
+    let rows = try run("/bin/ps", ["-t", String(tty.dropFirst(5)), "-o", "pid=,comm="])
+    let binaries = rows.split(separator: "\n").compactMap { line -> String? in
+      let parts = line.split(maxSplits: 1, whereSeparator: \.isWhitespace)
+      guard parts.count == 2, Int(parts[0]) != nil, parts[1].hasPrefix("/"),
+        URL(fileURLWithPath: String(parts[1])).lastPathComponent == "codex" else { return nil }
+      return String(parts[1])
+    }
+    guard binaries.count == 1, let binary = binaries.first else { return nil }
+    let output = try run(binary, ["--version"]).trimmingCharacters(in: .whitespacesAndNewlines)
+    guard output.hasPrefix("codex-cli ") else { return nil }
+    return String(output.dropFirst("codex-cli ".count))
   }
 }
 

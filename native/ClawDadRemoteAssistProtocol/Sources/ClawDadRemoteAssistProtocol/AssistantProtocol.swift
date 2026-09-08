@@ -120,6 +120,20 @@ public struct AssistantTaskRecord: Codable, Identifiable, Equatable, Sendable {
   public let tabTitle: String?
   public let error: String?
   public let response: String?
+  public var displayStatus: String {
+    switch status {
+    case "queued": "Waiting for Mac"
+    case "running": "Delivering"
+    case "agent_queued": "Queued in agent"
+    case "submitted": "Submitted"
+    case "working": "Working"
+    case "completed": "Completed"
+    case "attention": "Needs attention"
+    case "interrupted": "Interrupted"
+    case "cancelled": "Cancelled"
+    default: status
+    }
+  }
 }
 
 public struct AssistantSnapshot: Codable, Sendable {

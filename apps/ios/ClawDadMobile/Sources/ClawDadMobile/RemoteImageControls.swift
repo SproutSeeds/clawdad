@@ -8,6 +8,7 @@ import ClawDadRemoteAssistProtocol
 struct RemoteImageButton: View {
   @ObservedObject var controller: RemoteAssistController
   @ObservedObject var transfer: RemoteImageTransfer
+  var labelled = false
   @State private var showPhotos = false
   @State private var showFiles = false
   @State private var selectedPhotos: [PhotosPickerItem] = []
@@ -31,12 +32,12 @@ struct RemoteImageButton: View {
         }
       }
     } label: {
-      Image(systemName: "photo.badge.plus")
-        .font(.system(size: 19, weight: .bold))
-        .frame(width: 44, height: 44)
-        .overlay { if importing { ProgressView().tint(ClawDadTheme.gold) } }
+      Group {
+        if labelled { RemoteControlCaption("Photo to Terminal", systemImage: "photo.badge.plus") }
+        else { Image(systemName: "photo.badge.plus").font(.system(size: 19, weight: .bold)).frame(width: 44, height: 44) }
+      }.overlay { if importing { ProgressView().tint(ClawDadTheme.gold) } }
     }
-    .buttonStyle(RemoteAssistOverlayButtonStyle())
+    .buttonStyle(RemoteAssistOverlayButtonStyle(grouped: labelled))
     .disabled(importing || transfer.busy || transfer.attaching || controller.phase != .connected || controller.remoteScreenLocked || controller.remoteInputSuppressed || controller.sessionCapabilities.imageAttachments != true)
     .accessibilityLabel("Attach photos to Terminal")
     .accessibilityIdentifier("clawdad.remote.images")
