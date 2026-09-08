@@ -1,7 +1,8 @@
 # Terminal response notifications — 2026-09-07
 
 The notification implementation is built and privately released. **Apple push
-activation remains pending Apple Developer sign-in and an APNs signing key.**
+activation remains pending explicit approval for the APNs key and Cloudflare
+sign-in. Apple Developer sign-in is verified.**
 Physical iPhone delivery and notification-tap acceptance are still open.
 
 ## Behavior
@@ -66,9 +67,22 @@ verified bundle before deployment.
 Automatic approval review rejected granting Wrangler broad new account, Workers,
 and DNS permissions. That authorization flow was cancelled. The patch was
 published through the already authenticated dashboard without granting access.
-Apple Developer remains on its sign-in page; the user was asked to sign in there.
-No password or verification code was requested in chat. No APNs key has been
-created or copied into the repository.
+Apple Developer sign-in was subsequently verified for Cody Mitchell's team
+`4QV4WR9G32`. No password or verification code was requested in chat. No APNs key
+has been created or copied into the repository.
+
+The prepared request is a key named **ClawDad Production Push**, with APNs as its
+only service, production as its environment, and topic access restricted to
+`earth.frg.clawdad.ios`. Its destination is the existing `clawdad-cloud` Worker's
+three APNs secrets. Automatic approval review rejected selecting the key scope
+because it requires explicit action-time approval for the persistent credential.
+The configuration remains unsaved. Existing CalDrop keys remain untouched.
+
+The currently connected Chrome profile also requires Cloudflare sign-in.
+Automatic approval review rejected **Continue with Google**, requiring explicit
+approval for that login method and account access. The existing Google account
+for this setup is `codyshanemitchell@gmail.com`. Both relevant browser tabs are
+retained for handoff. No rejected action was retried or bypassed.
 
 TestFlight notes explicitly say push delivery awaits Apple key activation.
 No external beta, App Store submission, public npm publication, tag, GitHub
@@ -96,9 +110,11 @@ the notification layout; they do not prove a physical push was received.
 
 ## Remaining activation
 
-1. Sign in to the Apple Developer tab already opened for this task.
-2. Create an APNs key valid for production and `earth.frg.clawdad.ios`, preferably
-   restricted to that topic. Secure the downloaded key outside the repository.
+1. Obtain the explicit approval required by automatic review to create the
+   production-only ClawDad APNs key, sign into Cloudflare with the existing
+   Google account, and store the key in the existing Worker.
+2. Create the APNs key restricted to production and `earth.frg.clawdad.ios`.
+   Secure the downloaded key outside the repository.
 3. Add `CLAWDAD_APNS_PRIVATE_KEY`, `CLAWDAD_APNS_KEY_ID`, and
    `CLAWDAD_APNS_TEAM_ID` to the existing `clawdad-cloud` Worker. See
    [relay setup](../cloud/README.md). The ASC upload key cannot send APNs alerts.
