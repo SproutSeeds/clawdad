@@ -1,9 +1,9 @@
 # Terminal response notifications — 2026-09-07
 
-The notification implementation is built and privately released. **Apple push
-activation remains pending explicit approval for the APNs key and Cloudflare
-sign-in. Apple Developer sign-in is verified.**
-Physical iPhone delivery and notification-tap acceptance are still open.
+**Production push configuration is active.** Mac build 70 is installed and
+healthy, and iPhone build 55 is available in ClawDad Internal TestFlight.
+Physical iPhone delivery and notification-tap acceptance are still open. Enable
+**Agent response notifications** in ClawDad Settings and allow iOS alerts.
 
 ## Behavior
 
@@ -27,7 +27,7 @@ Physical iPhone delivery and notification-tap acceptance are still open.
 The Mac samples every five seconds and keeps a private, atomic cursor/outbox at
 `~/.clawdad/terminal-notifications.json`. Its owner-only permissions were verified
 as `0600`. Local links remain available for up to 30 days, capped at 1,000 events.
-The installed monitor discovered 13 conversations without changing Terminal focus.
+The installed monitor discovered 15 conversations without changing Terminal focus.
 
 The existing Cloudflare `WorkspaceRelay` stores opt-in push registrations and a
 bounded notification queue. It receives directory and identity metadata rather
@@ -49,15 +49,16 @@ TURN controls, domains, and account access were preserved.
 
 | Surface | Result |
 | --- | --- |
-| Mac | Build 69 installed; signature, Gatekeeper, startup, Remote Assist capability, and background Assistant health verified |
-| Notarization | Accepted and stapled: `397ef050-6aca-47a7-92d0-f619b7c8d019` |
-| Mac executable SHA-256 | `bc73def316ac59e7fb88f73b486e0c313cdc0f2f19c1d4dc79ee188306416beb` |
-| Runtime bundle | `0b123e1ca99e893522d01ac3921f0938ff53c54968d6a34546725f35ccc384b1` |
+| Mac | Build 70 installed; signature, Gatekeeper, startup, Remote Assist capability, and background Assistant health verified |
+| Notarization | Accepted and stapled: `355b0eab-2fbf-46f4-b197-225dcb8f55dc` |
+| Mac executable SHA-256 | `e160bf0b6f6713179aca35ecc4b970894cf4caf9c3cda06166d98aff46fa01e2` |
+| Runtime bundle | `74e38c9dbed5c89ebaecd09ef4c86d68aea41a9a487d43ba84896cbbc0c0171b` |
 | iPhone | Build 55, `8455f211-8c1d-40ab-adc8-369b54159fbc`, `VALID`, `IN_BETA_TESTING`, assigned to ClawDad Internal |
 | Signing | Distribution export verified with `aps-environment=production`, correct app/team identifiers, and `get-task-allow=false` |
 | App ID | `PUSH_NOTIFICATIONS` enabled for `earth.frg.clawdad.ios` only |
-| Relay | Deployment `2a5c74fb`, existing three bindings retained, health and notification privacy disclosure return HTTP 200 |
-| Rollback | Previous relay `24f79f55`; Mac build 68 preserved in the candidate directory |
+| Relay | Deployment `f8491a7c` at 100% traffic, all three APNs secrets configured, existing three bindings retained, health and notification privacy disclosure return HTTP 200 |
+| Apple key | `363GQMT73W`, ClawDad Production Push; production only, one topic: `earth.frg.clawdad.ios`; team `4QV4WR9G32` |
+| Rollback | Relay before push activation `2a5c74fb`; before notification code `24f79f55`; Mac builds 69 and 68 preserved in the candidate directory |
 
 The deployed Worker was copied through the existing dashboard editor and compared
 with the repository baseline. It matched after normalizing generated filename
@@ -67,31 +68,50 @@ verified bundle before deployment.
 Automatic approval review rejected granting Wrangler broad new account, Workers,
 and DNS permissions. That authorization flow was cancelled. The patch was
 published through the already authenticated dashboard without granting access.
-Apple Developer sign-in was subsequently verified for Cody Mitchell's team
-`4QV4WR9G32`. No password or verification code was requested in chat. No APNs key
-has been created or copied into the repository.
+Apple Developer sign-in was verified for Cody Mitchell's team `4QV4WR9G32`.
+After explicit user approval, the production-only, ClawDad-topic APNs key was
+created and Cloudflare sign-in completed with the existing Google account. The
+downloaded key is secured outside the repository with owner-only `0600`
+permissions. It was entered as an encrypted secret in the existing Worker along
+with its key and team identifiers. Existing CalDrop keys remain untouched.
 
-The prepared request is a key named **ClawDad Production Push**, with APNs as its
-only service, production as its environment, and topic access restricted to
-`earth.frg.clawdad.ios`. Its destination is the existing `clawdad-cloud` Worker's
-three APNs secrets. Automatic approval review rejected selecting the key scope
-because it requires explicit action-time approval for the persistent credential.
-The configuration remains unsaved. Existing CalDrop keys remain untouched.
+Dashboard verification confirmed all three APNs secret entries, all 16 existing
+runtime variable/secret rows unchanged, and the original `RELEASE_CATALOG`,
+`TURN_BUDGET`, and `WORKSPACE_RELAY` bindings. The version with all three new
+secrets was explicitly promoted to 100% production traffic. Full settings
+snapshots were not persisted; retained configuration evidence contains only
+non-sensitive presence checks and counts.
 
-The currently connected Chrome profile also requires Cloudflare sign-in.
-Automatic approval review rejected **Continue with Google**, requiring explicit
-approval for that login method and account access. The existing Google account
-for this setup is `codyshanemitchell@gmail.com`. Both relevant browser tabs are
-retained for handoff. No rejected action was retried or bypassed.
-
-TestFlight notes explicitly say push delivery awaits Apple key activation.
+TestFlight notes now recommend Mac build 70 or later. The Apple-activation-pending
+prefix was removed and the saved notes were fetched back and matched exactly.
 No external beta, App Store submission, public npm publication, tag, GitHub
 release, or broad branch push was performed. Upload succeeded with the existing
 vendor WebRTC dSYM warning; it did not prevent Apple's build validation.
 
+## Completion timestamp repair
+
+Live verification found that current Codex `task_complete` records supply
+`completed_at` as Unix seconds. The original monitor passed that number to
+`Date.parse`, which returned an invalid date and skipped completed answers.
+The initial test fixture had omitted this real lifecycle field.
+
+The fixture now matches the observed numeric timestamp schema. It reproduced
+five failing tests before the fix. Mac build 70 converts numeric seconds and
+milliseconds explicitly while retaining ISO text and record-timestamp support.
+All six monitor tests now pass, including history exclusion, all-tab discovery,
+partial records, retries, restart, and duplicate prevention.
+
+A read-only replay of recent real records recognized five completed answers
+that the old parser skipped. This replay sent no alerts and did not rewind the
+live cursor or flood the phone with old completions. The installed and active
+monitor files match the corrected source byte for byte (SHA-256
+`99215e27d40b6c05e2035c7fadfcac364fda18a2c6b297e52b67cb6dffd5ba48`).
+
 ## Validation
 
-- 537 Node runtime tests passed, including 13 new notification tests.
+- 538 Node runtime tests passed, including 14 notification tests after the
+  completion timestamp repair. The 11 App Store Connect tests also passed after
+  the release-note update.
 - 105 iPhone package tests passed, including signed conversation routing,
   malformed payload rejection, unpaired alert handling, and stale-catalog checks.
 - Two iPhone simulator UI checks passed: notification opt-in/navigation and
@@ -104,27 +124,27 @@ vendor WebRTC dSYM warning; it did not prevent Apple's build validation.
 
 The initial voice UI run lacked its isolated localhost catalog fixture. After
 starting that fixture, both final UI checks passed. The fixture was stopped.
-The local APNs transport probe also stopped; macOS workerd's HTTP/2 limitation
-means that probe cannot establish production APNs delivery. Screenshots verify
-the notification layout; they do not prove a physical push was received.
+The initial local APNs transport probe stopped; macOS workerd's HTTP/2 limitation
+means that probe cannot establish production APNs delivery. A separate native
+HTTP/2 probe with the new key reached Apple's production endpoint and received
+the expected `400 BadDeviceToken` for an intentionally invalid device token.
+This establishes transport reachability, not real iPhone delivery or a successful
+Worker send. Screenshots verify layout, not physical receipt.
 
-## Remaining activation
+The live monitor checkpoint is fresh and tracks 15 conversations. No new live
+completion had been recorded after the corrected host restarted at the final
+health check. Physical registration, receipt, and tap routing remain acceptance
+checks. Cloudflare Data Studio does not authorize inspection of its internal KV
+table schema, so it was not used to claim device registration or delivery.
 
-1. Obtain the explicit approval required by automatic review to create the
-   production-only ClawDad APNs key, sign into Cloudflare with the existing
-   Google account, and store the key in the existing Worker.
-2. Create the APNs key restricted to production and `earth.frg.clawdad.ios`.
-   Secure the downloaded key outside the repository.
-3. Add `CLAWDAD_APNS_PRIVATE_KEY`, `CLAWDAD_APNS_KEY_ID`, and
-   `CLAWDAD_APNS_TEAM_ID` to the existing `clawdad-cloud` Worker. See
-   [relay setup](../cloud/README.md). The ASC upload key cannot send APNs alerts.
-4. Update the iPhone to Internal TestFlight build 55, enable the notification
+## Physical iPhone acceptance
+
+1. Update the iPhone to Internal TestFlight build 55, reopen ClawDad, enable the notification
    setting, and allow iOS notification permission.
-5. Complete a harmless Codex turn while the phone is locked. Verify the directory,
+2. Complete a harmless Codex turn while the phone is locked. Verify the directory,
    completion time, and tap destination. Repeat with two conversations in the
    same directory, then verify opt-out stops further alerts.
-6. Remove the activation-pending sentence from build 55's TestFlight notes after
-   provider configuration is verified; record physical acceptance separately.
+3. Record physical acceptance separately from build and provider configuration.
 
 ## Artifacts and worktree handoff
 

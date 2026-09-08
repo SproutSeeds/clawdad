@@ -7,7 +7,7 @@ import {TerminalNotificationMonitor,discoverTerminalConversations,resolveTermina
 
 const first='11111111-1111-4111-8111-111111111111', second='22222222-2222-4222-8222-222222222222';
 const timestamp=Date.parse('2026-09-07T12:00:00.000Z');
-const event=(type,text='',time=timestamp+1000,turn='turn-1')=>({type:'event_msg',timestamp:new Date(time).toISOString(),payload:{type,turn_id:turn,last_agent_message:text}});
+const event=(type,text='',time=timestamp+1000,turn='turn-1')=>({type:'event_msg',timestamp:new Date(time).toISOString(),payload:{type,turn_id:turn,last_agent_message:text,completed_at:Math.floor(time/1000)}});
 async function fixture(t) {
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'clawdad-notification-test-'));
   t.after(()=>fs.rm(root,{recursive:true,force:true}));
@@ -50,6 +50,20 @@ test('all discovered tabs notify without visits and same-directory conversations
   assert.equal(f.received.length,2); assert.notEqual(f.received[0].id,f.received[1].id);
   const target=await resolveTerminalNotification({configPath:path.join(f.root,'cloud.json')},f.received[1].id);
   assert.equal(target.sessionId,second); assert.equal(target.projectPath,'/projects/code');
+});
+test('completion time accepts Codex Unix seconds, milliseconds, ISO timestamps and record timestamp fallback',async t=>{
+  const f=await fixture(t), file=await f.create(first);
+  await f.monitor.tick(); f.advance(5000);
+  const expected='2026-09-07T12:00:01.000Z';
+  const formats=[(timestamp+1000)/1000,timestamp+1000,expected,undefined];
+  for (const [index,completedAt] of formats.entries()) {
+    const record=event('task_complete','Done',timestamp+1000,`format-${index}`);
+    record.payload.completed_at=completedAt;
+    await f.append(file,record);
+  }
+  await f.monitor.tick();
+  assert.equal(f.received.length,formats.length);
+  assert.ok(f.received.every(value=>value.completedAt===expected));
 });
 test('partial records wait for newline, final-answer fallback works, retry and restart do not lose a completion',async t=>{
   const f=await fixture(t), file=await f.create(first);
