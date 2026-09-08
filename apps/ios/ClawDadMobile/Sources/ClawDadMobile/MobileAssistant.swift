@@ -235,6 +235,7 @@ final class MobileAssistantController: ObservableObject {
         return
       }
     #endif
+    var microphoneStartup = false
     do {
       let deadline = Date().addingTimeInterval(60)
       while !connected {
@@ -254,6 +255,7 @@ final class MobileAssistantController: ObservableObject {
       }
       guard voiceEpoch == attempt else { return }
       status = "Starting microphone…"
+      microphoneStartup = true
       try await audio.start()
       guard voiceEpoch == attempt else {
         audio.stop()
@@ -267,7 +269,7 @@ final class MobileAssistantController: ObservableObject {
     } catch {
       if voiceEpoch == attempt {
         self.error = error.localizedDescription
-        status = "Assistant couldn't connect. Tap to view."
+        status = microphoneStartup ? "Microphone unavailable" : "Assistant couldn't connect. Tap to view."
       }
     }
   }
@@ -524,7 +526,7 @@ struct AssistantView: View {
             .horizontal
           ).accessibilityIdentifier("clawdad.assistant.error")
           if !controller.voiceActive {
-            Button("Retry connection") { Task { await controller.startVoice() } }.font(.footnote)
+            Button(controller.status == "Microphone unavailable" ? "Retry microphone" : "Retry connection") { Task { await controller.startVoice() } }.font(.footnote)
               .disabled(controller.startingVoice)
           }
         }

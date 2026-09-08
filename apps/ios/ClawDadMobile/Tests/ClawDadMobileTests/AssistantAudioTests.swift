@@ -5,6 +5,38 @@ import XCTest
 
 @MainActor
 final class AssistantAudioTests: XCTestCase {
+  func testAudioThreadTapCopiesSamplesAndDeliversOnMainActor() async {
+    let samples: [Float] = await withCheckedContinuation { finished in
+      Task.detached {
+        let format = AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 1)!
+        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 3)!
+        buffer.frameLength = 3
+        buffer.floatChannelData![0][0] = 0.2
+        buffer.floatChannelData![0][1] = -0.4
+        buffer.floatChannelData![0][2] = 0.6
+        let callback = assistantInputTap { values in
+          MainActor.preconditionIsolated()
+          finished.resume(returning: values)
+        }
+        callback(buffer, AVAudioTime(sampleTime: 0, atRate: 48000))
+      }
+    }
+    XCTAssertEqual(samples, [0.2, -0.4, 0.6])
+  }
+
+  func testAudioThreadPlaybackCompletionReturnsToMainActor() async {
+    let completed: Bool = await withCheckedContinuation { finished in
+      Task.detached {
+        let callback = assistantPlaybackCompletion {
+          MainActor.preconditionIsolated()
+          finished.resume(returning: true)
+        }
+        callback(.dataPlayedBack)
+      }
+    }
+    XCTAssertTrue(completed)
+  }
+
   func testNewCallDoesNotInheritPreviousMute() {
     var microphone = AssistantMicrophoneState()
     microphone.begin(at: 1)

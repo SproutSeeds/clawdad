@@ -100,13 +100,13 @@ final class AssistantAudio {
     muted = wasMuted
     engine.attach(player)
     engine.connect(player, to: engine.mainMixerNode, format: playbackFormat)
+    // VoiceProcessingIO requires matching input/output client formats. The
+    // implicit mixer output can retain a stale stereo/44.1 kHz device format.
+    engine.connect(engine.mainMixerNode, to: engine.outputNode, format: format)
     let generation = UUID()
     self.generation = generation
-    engine.inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) {
-      [weak self] buffer, _ in
-      guard buffer.frameLength > 0, let channel = buffer.floatChannelData?[0] else { return }
-      let values = (0..<Int(buffer.frameLength)).map { channel[$0 * buffer.stride] }
-      Task { @MainActor [weak self] in
+    engine.inputNode.installTap(onBus: 0, bufferSize: 1024, format: format,
+      block: assistantInputTap { [weak self] values in
         guard let self, self.generation == generation, owner != nil else { return }
         let time = ProcessInfo.processInfo.systemUptime
         microphone.receivedBuffer(at: time)
@@ -121,8 +121,7 @@ final class AssistantAudio {
         if let samples = event.utterance {
           onUtterance?(assistantWAV(samples, sampleRate: sampleRate), event.final)
         }
-      }
-    }
+      })
     tapInstalled = true
     engine.prepare()
     try engine.start()
@@ -176,14 +175,13 @@ final class AssistantAudio {
     try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { continuation in
         playing = continuation
-        player.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
-          Task { @MainActor [weak self] in
+        player.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack,
+          completionHandler: assistantPlaybackCompletion { [weak self] in
             guard let self, self.playbackGeneration == playbackGeneration else { return }
             let done = playing
             playing = nil
             done?.resume()
-          }
-        }
+          })
         player.play()
       }
     } onCancel: {
@@ -232,10 +230,29 @@ final class AssistantAudio {
   }
 }
 
+// AVAudioNodeTapBlock is not annotated Sendable by AVFAudio. Creating it in an
+// @MainActor method gives it UI-actor isolation and traps on the audio thread
+// in Swift 6. Copy samples here, then explicitly deliver them to the UI actor.
+nonisolated func assistantInputTap(
+  receive: @escaping @MainActor @Sendable ([Float]) -> Void
+) -> @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void {
+  { buffer, _ in
+    guard buffer.frameLength > 0, let channel = buffer.floatChannelData?[0] else { return }
+    let values = (0..<Int(buffer.frameLength)).map { channel[$0 * buffer.stride] }
+    Task { @MainActor in receive(values) }
+  }
+}
+
+nonisolated func assistantPlaybackCompletion(
+  finish: @escaping @MainActor @Sendable () -> Void
+) -> @Sendable (AVAudioPlayerNodeCompletionCallbackType) -> Void {
+  { _ in Task { @MainActor in finish() } }
+}
+
 enum AssistantMicrophoneError: LocalizedError {
   case noInput
   var errorDescription: String? {
-    "The iPhone microphone stopped delivering audio. End the call and tap the headset to reconnect."
+    "ClawDad couldn't receive audio from the iPhone microphone. Tap Retry microphone to try again."
   }
 }
 
