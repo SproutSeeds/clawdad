@@ -75,16 +75,42 @@ struct MacTerminalResponseReader: Sendable {
 
   /// A resumed rollout can retain an older cli_version. Verify the executable
   /// actually owning this TTY before relying on a version-specific key binding.
-  func queueCLIVersion(tty: String) throws -> String? {
+  func queueCLIVersion(tty: String, conversation: MacCodexConversation? = nil) throws -> String? {
     guard tty.range(of: "^/dev/tty[A-Za-z0-9]+$", options: .regularExpression) != nil else { return nil }
     let rows = try run("/bin/ps", ["-t", String(tty.dropFirst(5)), "-o", "pid=,comm="])
-    let binaries = rows.split(separator: "\n").compactMap { line -> String? in
+    let processes = rows.split(separator: "\n").compactMap { line -> (pid: String, binary: String)? in
       let parts = line.split(maxSplits: 1, whereSeparator: \.isWhitespace)
       guard parts.count == 2, Int(parts[0]) != nil, parts[1].hasPrefix("/"),
         URL(fileURLWithPath: String(parts[1])).lastPathComponent == "codex" else { return nil }
-      return String(parts[1])
+      return (String(parts[0]), String(parts[1]))
     }
-    guard binaries.count == 1, let binary = binaries.first else { return nil }
+    guard !processes.isEmpty else { return nil }
+    var owners = processes
+    if let conversation {
+      let files = try run("/usr/sbin/lsof", ["-a", "-p", processes.map(\.pid).joined(separator: ","), "-Fn"])
+      var pid = "", owningPIDs = Set<String>()
+      for line in files.split(separator: "\n") {
+        if line.hasPrefix("p") { pid = String(line.dropFirst()) }
+        if line.hasPrefix("n"), URL(fileURLWithPath: String(line.dropFirst())).resolvingSymlinksInPath() == conversation.path {
+          owningPIDs.insert(pid)
+        }
+      }
+      owners = processes.filter { owningPIDs.contains($0.pid) }
+    }
+    // Helpers may inherit the TTY. Only the process holding this exact rollout
+    // owns its input; never pick the first binary or use an old session version.
+    guard owners.count == 1, let owner = owners.first else { return nil }
+    var binary = owner.binary
+    if conversation != nil {
+      // A package update can retarget /opt/homebrew/bin/codex while this agent
+      // keeps running. Read its mapped executable, rather than the new symlink.
+      let mappings = try run("/usr/sbin/lsof", ["-a", "-p", owner.pid, "-d", "txt", "-Fn"])
+      let executables = Set(mappings.split(separator: "\n").filter { $0.hasPrefix("n/") }
+        .map { URL(fileURLWithPath: String($0.dropFirst())).resolvingSymlinksInPath() }
+        .filter { $0.lastPathComponent == "codex" })
+      guard executables.count == 1, let executable = executables.first else { return nil }
+      binary = executable.path
+    }
     let output = try run(binary, ["--version"]).trimmingCharacters(in: .whitespacesAndNewlines)
     guard output.hasPrefix("codex-cli ") else { return nil }
     return String(output.dropFirst("codex-cli ".count))

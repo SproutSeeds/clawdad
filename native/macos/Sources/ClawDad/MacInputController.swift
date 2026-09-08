@@ -344,6 +344,7 @@ final class MacInputController {
   /// Assistant job owns replay protection; verification never repeats this paste.
   func insertAssistantDraft(_ text: String, targetToken token: String,
                             isAllowed: @MainActor () -> Bool,
+                            verifyPaste: (@MainActor () async -> Bool)? = nil,
                             terminalIdentity: @MainActor () async throws -> String?) async -> Bool {
     if let inputProcessingTask { await inputProcessingTask.value }
     if let clipboardCopyTask { await clipboardCopyTask.value }
@@ -353,6 +354,9 @@ final class MacInputController {
           let target = dictationTargets.resolve(token: token, generation: inputGeneration,
             terminalIdentity: identity, isCurrent: targetIsCurrent) else { return false }
     defer { invalidateDictationTarget() }
+    if target.input.bundleIdentifier == "com.apple.Terminal", let verifyPaste {
+      return await pasteTextPreservingClipboard(text, targetPID: target.input.pid, verify: verifyPaste)
+    }
     return await insertText(text, into: target.input)
   }
 
@@ -1285,7 +1289,8 @@ final class MacInputController {
 
   private func pasteTextPreservingClipboard(
     _ text: String,
-    targetPID: pid_t
+    targetPID: pid_t,
+    verify: (@MainActor () async -> Bool)? = nil
   ) async -> Bool {
     let pasteboard = NSPasteboard.general
     let snapshot = PasteboardSnapshot(pasteboard)
@@ -1295,16 +1300,26 @@ final class MacInputController {
       return false
     }
     let injectedChangeCount = pasteboard.changeCount
+    guard pasteboard.string(forType: .string) == text else { snapshot.restore(to: pasteboard); return false }
     guard pressCommandShortcut(keyCode: 9, targetPID: targetPID) else {
       snapshot.restore(to: pasteboard)
       return false
     }
 
-    try? await Task.sleep(nanoseconds: 80_000_000)
+    var verified = verify == nil
+    if let verify {
+      for _ in 0..<24 {
+        guard !Task.isCancelled, pasteboard.changeCount == injectedChangeCount,
+          pasteboard.string(forType: .string) == text else { break }
+        if await verify(), pasteboard.changeCount == injectedChangeCount,
+          pasteboard.string(forType: .string) == text { verified = true; break }
+        try? await Task.sleep(nanoseconds: 100_000_000)
+      }
+    } else { try? await Task.sleep(nanoseconds: 80_000_000) }
     if pasteboard.changeCount == injectedChangeCount {
       snapshot.restore(to: pasteboard)
     }
-    return true
+    return verified
   }
 
   private func pressKey(_ key: String, targetPID: pid_t) -> Bool {

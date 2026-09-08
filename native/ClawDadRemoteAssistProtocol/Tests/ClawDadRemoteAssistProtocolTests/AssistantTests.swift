@@ -4,7 +4,7 @@ import XCTest
 
 final class AssistantTests: XCTestCase {
   func testQueuedSubmittedWorkingAndCompletedHaveDistinctPhoneLabels() throws {
-    for (status, label) in [("queued", "Waiting for Mac"), ("agent_queued", "Queued in agent"),
+    for (status, label) in [("queued", "Waiting for delivery"), ("inserted", "Draft inserted"), ("agent_queued", "Queued in agent"),
       ("submitted", "Submitted"), ("working", "Working"), ("completed", "Completed"), ("attention", "Needs attention")] {
       let record = try JSONDecoder().decode(AssistantTaskRecord.self,
         from: JSONSerialization.data(withJSONObject: ["id": "request", "action": "terminal.queue", "args": [:], "status": status]))

@@ -7,6 +7,10 @@ import Foundation
 func assistantEditableDraft(_ screen: String) -> String? { assistantEditableDraft(screen, allowQueueFooter: false) }
 
 func assistantEditableDraft(_ screen: String, allowQueueFooter: Bool) -> String? {
+  assistantEditableDraft(screen, allowQueueFooter: allowQueueFooter, allowCollapsedPaste: false)
+}
+
+func assistantEditableDraft(_ screen: String, allowQueueFooter: Bool, allowCollapsedPaste: Bool) -> String? {
   let lines = screen.components(separatedBy: .newlines)
   guard let start = lines.lastIndex(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix("›") }),
     let end = lines.indices.first(where: { $0 > start && assistantComposerFooter(lines[$0], allowQueue: allowQueueFooter) }),
@@ -25,7 +29,7 @@ func assistantEditableDraft(_ screen: String, allowQueueFooter: Bool) -> String?
   let value = body.joined(separator: "\n")
   let nearby = lines[max(0, start - 2)..<end].joined(separator: "\n")
   guard value.utf8.count <= 16 * 1024,
-    nearby.range(of: #"\[(?:Image\s*#?\d|Pasted (?:Content|content|text))|[↑↓]"#, options: .regularExpression) == nil,
+    nearby.range(of: allowCollapsedPaste ? #"\[Image\s*#?\d|[↑↓]"# : #"\[(?:Image\s*#?\d|Pasted (?:Content|content|text))|[↑↓]"#, options: .regularExpression) == nil,
     !value.contains("›") else { return nil }
   if ["Ask Codex to do anything", "Ask Codex to do anything.", "Ask anything"].contains(value) { return "" }
   return value

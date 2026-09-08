@@ -44,7 +44,7 @@ test('chat images reach the coordinator as verified local bytes, with exact text
   assert.ok(calls[0].images[0].startsWith(path.join(root,'Images','received')));
   const state=await runtime.command({action:'state'});
   assert.deepEqual(state.messages[0].images,[image]);
-  assert.equal(state.tasks.find(j=>j.id===request.requestId).status,'completed');
+  assert.equal((await runtime.job(request.requestId)).status,'completed');
   assert.equal(JSON.stringify(state).includes(root),false);
   assert.equal(JSON.stringify(state).includes('phone-a'),false);
   await assert.rejects(runtime.command({...request,images:[await upload()]}),/different action/);
@@ -52,8 +52,9 @@ test('chat images reach the coordinator as verified local bytes, with exact text
 test('saved request fingerprints from earlier builds accept reordered equivalent retries',async t=>{
   const {runtime}=await fixture(t);
   const request={action:'terminal.insert',requestId:'legacy-draft',tabId:'exact-tab',text:'Original text'};
-  await runtime.command(request,{tool:true});
-  const job=runtime.state.jobs.find(j=>j.id===request.requestId);
+  // Simulate a receipt persisted by the build before session-bound insertion.
+  const job={id:request.requestId,action:request.action,args:{tabId:request.tabId,text:request.text},status:'completed'};
+  runtime.state.jobs.push(job);
   job.fingerprint=JSON.stringify({action:request.action,args:{tabId:request.tabId,text:request.text}});
   const replay=await runtime.command({text:request.text,tabId:request.tabId,action:request.action,requestId:request.requestId},{tool:true});
   assert.equal(replay.job.id,job.id);

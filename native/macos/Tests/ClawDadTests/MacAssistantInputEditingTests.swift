@@ -3,6 +3,18 @@ import XCTest
 @testable import ClawDad
 
 final class MacAssistantInputEditingTests: XCTestCase {
+  func testBusyDraftReadbackAndCollapsedPasteReceiptsAreDistinct() {
+    let busy = "• Working (3s • esc to interrupt)\n› Review this draft\n tab to queue message\n"
+    XCTAssertEqual(assistantEditableDraft(busy, allowQueueFooter: true), "Review this draft")
+    XCTAssertTrue(assistantDraftMatches(busy, expected: "Review this draft"))
+    let long = String(repeating: "e\u{301} 🦞 exact text ", count: 130)
+    let collapsed = "• Working (3s • esc to interrupt)\n› [Pasted Content \(long.unicodeScalars.count) chars]\n tab to queue message\n"
+    XCTAssertNil(assistantEditableDraft(collapsed), "Unknown existing collapsed drafts must be preserved")
+    XCTAssertFalse(assistantDraftMatches(collapsed, expected: long), "A placeholder is not full text readback")
+    XCTAssertTrue(assistantCollapsedPasteMatches(collapsed, payload: long))
+    XCTAssertFalse(assistantCollapsedPasteMatches(collapsed, payload: long + "x"))
+    XCTAssertFalse(assistantCollapsedPasteMatches(collapsed.replacingOccurrences(of: "› ", with: "› unrelated "), payload: long))
+  }
   func testDraftInspectionPreservesRenderedWhitespaceAndRejectsOpaqueInputs() {
     XCTAssertEqual(assistantEditableDraft("Answer\n\n› First  line\n  Second line\n\n  gpt-6-astra max"), "First  line\nSecond line")
     XCTAssertEqual(assistantEditableDraft("› Ask Codex to do anything\n  gpt-6-astra max"), "")

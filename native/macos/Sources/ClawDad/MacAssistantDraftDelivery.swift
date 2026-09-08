@@ -19,17 +19,15 @@ func assistantInsertVerifiedDraft(_ text: String,
 }
 
 func assistantDraftMatches(_ screen: String, expected: String) -> Bool {
-  let lines = screen.components(separatedBy: .newlines)
-  guard let start = lines.lastIndex(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix("›") }) else { return false }
-  var draft = [String(lines[start].trimmingCharacters(in: .whitespaces).dropFirst())]
-  for line in lines.dropFirst(start + 1) {
-    let value = line.trimmingCharacters(in: .whitespaces)
-    if value.range(of: #"^(?:gpt[-\s]|\d+% context left\b|\? for shortcuts\b)"#, options: .regularExpression) != nil { break }
-    if !value.isEmpty, value.allSatisfy({ "─━╌┄┈═".contains($0) }) { break }
-    draft.append(value)
-  }
-  // Terminal wraps long lines to the current window width. Compare the full
-  // composer, allowing that visual whitespace while rejecting additional text.
-  func normalized(_ value: String) -> String { value.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
-  return !expected.isEmpty && normalized(draft.joined(separator: "\n")) == normalized(expected)
+  guard !expected.isEmpty, let draft = assistantEditableDraft(screen, allowQueueFooter: true) else { return false }
+  return assistantEditableDraftMatches(draft, expected: expected)
+}
+
+/// This is a rendering receipt, not expanded text readback. It is valid only
+/// immediately after our sole paste into a verified empty composer, while the
+/// exact payload is still held on the clipboard and the target stays unchanged.
+func assistantCollapsedPasteMatches(_ screen: String, payload: String) -> Bool {
+  guard payload.unicodeScalars.count > 1000,
+    let draft = assistantEditableDraft(screen, allowQueueFooter: true, allowCollapsedPaste: true) else { return false }
+  return draft == "[Pasted Content \(payload.unicodeScalars.count) chars]"
 }

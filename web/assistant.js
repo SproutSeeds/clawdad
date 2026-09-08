@@ -17,6 +17,13 @@ if (dialog) {
   }
   async function ensureAssistant(){await refresh();if(snapshot?.conversationMode!=='background')throw new Error('Update ClawDad on your Mac to use Assistant calls.');await command('start');}
   function button(text,handler){const element=document.createElement('button');element.type='button';element.textContent=text;element.onclick=handler;return element;}
+  function copyButton(readText,label){
+    const node=button('⧉',async()=>{
+      try{await navigator.clipboard.writeText(readText());node.textContent='Copied';setTimeout(()=>{node.textContent='⧉';},1500);}
+      catch{error('Copy could not finish. Select the message text to copy it.');}
+    });
+    node.className='assistant-copy';node.title=label;node.setAttribute('aria-label',label);return node;
+  }
   function open(){if(!dialog.open)dialog.showModal();$('assistantCall').hidden=true;$('assistantDraft').focus();refresh();if(!timer)timer=setInterval(refresh,700);}
   function close(){dialog.close();$('assistantCall').hidden=!callVisible;$('assistantOpen').focus();}
   function goBack(){if(!$('assistantWorkspace').hidden){$('assistantWorkspace').hidden=true;$('assistantFeed').hidden=false;$('assistantWorkspaceToggle').setAttribute('aria-pressed','false');$('assistantWorkspaceToggle').focus();}else close();}
@@ -24,7 +31,7 @@ if (dialog) {
     try{
       const id=crypto.randomUUID();let next=await command('terminal.focus',{tabId},id);
       for(let attempt=0;attempt<30;attempt++){
-        const task=next.tasks?.find(t=>t.id===id);
+        const task=[...(next.operations||[]),...(next.tasks||[])].find(t=>t.id===id);
         if(task?.status==='completed'){close();return;}
         if(task?.status==='attention')throw new Error(task.error||'The tab could not be selected');
         await new Promise(resolve=>setTimeout(resolve,500));next=await request('/v1/assistant/state');render(next);
@@ -42,27 +49,34 @@ if (dialog) {
     if(!voice&&!startingVoice&&!callVisible)status(next.nativeOnline?'Your Mac is connected':'Waiting for the Mac app…');
     const feed=$('assistantFeed'), nearBottom=feed.scrollHeight-feed.scrollTop-feed.clientHeight<100;
     for(const message of next.messages||[]){
-      if(messageNodes.has(message.id))continue;
-      const element=document.createElement('div');element.className='assistant-message';
-      const label=document.createElement('strong');label.textContent=message.role==='user'?'You':'Assistant';
-      element.append(label,document.createTextNode(message.text));feed.append(element);messageNodes.set(message.id,element);
+      let entry=messageNodes.get(message.id);
+      if(!entry){
+        const element=document.createElement('div');element.className='assistant-message';
+        const label=document.createElement('strong'),body=document.createElement('span');
+        const copy=copyButton(()=>body.textContent,`Copy ${message.role} message`);
+        element.append(label,copy,body);feed.append(element);entry={element,label,body};messageNodes.set(message.id,entry);
+      }
+      entry.label.textContent=message.role==='user'?'You':'Assistant';
+      if(entry.body.textContent!==message.text)entry.body.textContent=message.text;
     }
     $('assistantWelcome').hidden=Boolean(next.messages?.length);
     const liveMessages=new Set((next.messages||[]).map(m=>m.id));
-    for(const [id,node] of messageNodes)if(!liveMessages.has(id)){node.remove();messageNodes.delete(id);}
-    for(const task of (next.tasks||[]).filter(t=>['terminal.send','terminal.queue'].includes(t.action)||t.status==='attention')){
+    for(const [id,node] of messageNodes)if(!liveMessages.has(id)){node.element.remove();messageNodes.delete(id);}
+    for(const task of next.tasks||[]){
       let entry=taskNodes.get(task.id);
       if(!entry){
         const element=document.createElement('section');element.className='assistant-task';
-        const heading=document.createElement('strong'),prompt=document.createElement('p'),detail=document.createElement('p');
-        element.append(heading,prompt,detail);
+        const heading=document.createElement('strong'),prompt=document.createElement('p'),detail=document.createElement('p'),response=document.createElement('p');
+        const copy=copyButton(()=>prompt.textContent,'Copy task request'),resultCopy=copyButton(()=>response.textContent,'Copy Assistant result');
+        element.append(heading,copy,prompt,detail,response,resultCopy);
         if(task.args.tabId)element.append(button('Watch in Terminal',()=>watch(task.args.tabId)));
         const cancel=button('Cancel queued task',()=>command('cancel',{jobId:task.id}).catch(e=>error(e.message)));element.append(cancel);
-        $('assistantTasks').append(element);entry={element,heading,prompt,detail,cancel};taskNodes.set(task.id,entry);
+        $('assistantTasks').append(element);entry={element,heading,prompt,detail,cancel,response,resultCopy};taskNodes.set(task.id,entry);
       }
-      const label={queued:'Waiting for Mac',running:'Delivering',agent_queued:'Queued in agent',submitted:'Submitted',working:'Working',completed:'Completed',attention:'Needs attention'}[task.status]||task.status;
-      entry.heading.textContent=`${task.tabTitle||'Terminal task'} · ${label}`;
-      entry.prompt.textContent=task.args.text||'';entry.detail.textContent=task.error||'';entry.cancel.hidden=task.status!=='queued';
+      const label={queued:'Waiting for delivery',inserted:'Draft inserted',running:'Delivering',agent_queued:'Queued in agent',submitted:'Submitted',working:'Working',completed:'Completed',attention:'Needs attention'}[task.status]||task.status;
+      entry.heading.textContent=`${task.displayName||'Terminal agent'} · ${label}`;
+      entry.prompt.textContent=task.requestText||task.args.text||'';entry.detail.textContent=task.error||'';entry.cancel.hidden=task.status!=='queued';
+      entry.response.textContent=task.response||'';entry.resultCopy.hidden=!task.response;
     }
     const visibleTasks=new Set((next.tasks||[]).map(t=>t.id));
     for(const [id,entry] of taskNodes)if(!visibleTasks.has(id)){entry.element.remove();taskNodes.delete(id);}
@@ -76,7 +90,7 @@ if (dialog) {
     }
     if(nearBottom)feed.scrollTop=feed.scrollHeight;
     if(voice){
-      for(const message of next.messages||[])if(message.role==='assistant'&&!spoken.has(message.id)){
+      for(const message of [...(next.messages||[]),...(next.taskUpdates||[])])if(message.role==='assistant'&&!spoken.has(message.id)){
         spoken.add(message.id);speechQueue.push(message);
       }
       drainSpeech();
@@ -159,7 +173,7 @@ if (dialog) {
     if(!timer)timer=setInterval(refresh,700);
     try{
       if(!window.dispatchEvent(new Event('clawdad:assistant-will-start-voice',{cancelable:true})))throw new Error('Finish the current dictation before starting a conversation.');
-      await refresh();spoken=new Set((snapshot?.messages||[]).map(m=>m.id));await ensureAssistant();
+      await refresh();spoken=new Set([...(snapshot?.messages||[]),...(snapshot?.taskUpdates||[])].map(m=>m.id));await ensureAssistant();
       const deadline=Date.now()+60_000;
       while(!snapshot?.nativeOnline||!snapshot?.catalog){
         if(voiceEpoch!==epoch)return;

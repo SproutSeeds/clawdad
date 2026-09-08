@@ -48,7 +48,6 @@ final class MobileAssistantController: ObservableObject {
   private var deliveredVoiceTurns: [String: AssistantVoiceTurn] = [:]
   private var speechQueue: [AssistantMessage] = []
   private var activeReplyRequest: String?
-  private var taskError = ""
   private var connectionError = ""
   #if DEBUG
     private var preview: AssistantPreview?
@@ -182,11 +181,8 @@ final class MobileAssistantController: ObservableObject {
     let next = try JSONDecoder().decode(AssistantSnapshot.self, from: data)
     snapshot = next
     assistantReady = next.supportsBackgroundCalls && next.enabled && next.nativeOnline && next.catalog != nil
-    let nextTaskError = next.tasks.last?.status == "attention" ? next.tasks.last?.error ?? "" : ""
-    if error.isEmpty || error == taskError { error = nextTaskError }
-    taskError = nextTaskError
     if voiceActive {
-      for message in next.messages where message.role == "assistant" && !spoken.contains(message.id) {
+      for message in next.messages + (next.taskUpdates ?? []) where message.role == "assistant" && !spoken.contains(message.id) {
         spoken.insert(message.id)
         let parts = message.id.split(separator: ":", maxSplits: 2)
         if parts.count == 3, let turn = deliveredVoiceTurns[String(parts[1])],
@@ -228,7 +224,7 @@ final class MobileAssistantController: ObservableObject {
         let id = UUID().uuidString.lowercased()
         try await command("terminal.focus", args: ["tabId": .string(tabId)], id: id)
         for _ in 0..<20 {
-          if let task = snapshot?.tasks.first(where: { $0.id == id }) {
+          if let task = ((snapshot?.operations ?? []) + (snapshot?.tasks ?? [])).first(where: { $0.id == id }) {
             if task.status == "completed" {
               onWatch()
               return
@@ -421,7 +417,7 @@ final class MobileAssistantController: ObservableObject {
     do {
       let deadline = Date().addingTimeInterval(60)
       try await awaitAssistant(until: deadline, voiceAttempt: attempt)
-      spoken = Set(snapshot?.messages.map(\.id) ?? [])
+      spoken = Set(((snapshot?.messages ?? []) + (snapshot?.taskUpdates ?? [])).map(\.id))
       guard voiceEpoch == attempt else { return }
       status = "Starting microphone…"
       microphoneStartup = true
@@ -884,20 +880,9 @@ struct AssistantView: View {
                     }
                   }.padding(.vertical, 28)
                 }
-                ForEach(controller.snapshot?.messages ?? []) { message in
-                  VStack(alignment: .leading, spacing: 5) {
-                    Text(message.role == "user" ? "You" : "Assistant").font(.caption.bold())
-                      .foregroundStyle(ClawDadTheme.gold)
-                    if message.role == "assistant" {
-                      AssistantResponseText(text: message.text)
-                    } else {
-                      Text(message.text).textSelection(.enabled)
-                    }
-                    ForEach(message.images ?? [], id: \.id) { image in
-                      Label(image.fileName, systemImage: "photo").font(.footnote)
-                    }
-                  }.frame(maxWidth: .infinity, alignment: .leading).id(message.id)
-                }
+                AssistantChatHistory(snapshot: controller.snapshot,
+                  watch: { controller.watch(tabId: $0, onWatch: onWatch) },
+                  cancel: { controller.perform("cancel", args: ["jobId": .string($0)]) })
                 if controller.hearingSpeech || controller.transcribingSpeech || !controller.liveTranscript.isEmpty {
                   VStack(alignment: .leading, spacing: 5) {
                     Text(controller.hearingSpeech ? "You · Speaking" : controller.transcribingSpeech ? "You · Transcribing…" : "You · Draft")
@@ -907,31 +892,6 @@ struct AssistantView: View {
                   }.frame(maxWidth: .infinity, alignment: .leading)
                     .id("live-transcript")
                     .accessibilityIdentifier("clawdad.assistant.transcript")
-                }
-                ForEach((controller.snapshot?.tasks ?? []).filter { ["terminal.send", "terminal.queue", "terminal.insert", "terminal.clear", "terminal.replace"].contains($0.action) })
-                { task in
-                  VStack(alignment: .leading, spacing: 6) {
-                    Text("\(task.tabTitle ?? "Terminal task") · \(task.displayStatus)").font(
-                      .subheadline.bold())
-                    Text(task.action == "terminal.clear" ? "Clear draft input" : task.args["text"]?.string ?? "")
-                      .font(.footnote).textSelection(.enabled)
-                    if let error = task.error {
-                      Text(error).foregroundStyle(ClawDadTheme.gold).font(.footnote)
-                    }
-                    HStack {
-                      if let tab = task.args["tabId"]?.string {
-                        Button("Watch in Terminal") {
-                          controller.watch(tabId: tab, onWatch: onWatch)
-                        }
-                      }
-                      if task.status == "queued" {
-                        Button("Cancel") {
-                          controller.perform("cancel", args: ["jobId": .string(task.id)])
-                        }
-                      }
-                    }.font(.footnote)
-                  }.padding(12).background(
-                    ClawDadTheme.cream.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
                 }
               }.padding()
             }

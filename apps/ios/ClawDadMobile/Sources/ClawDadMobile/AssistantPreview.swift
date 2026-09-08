@@ -30,6 +30,19 @@
           "createdAt": .string("2026-09-08T00:00:00Z")
         ])])
       }
+      if ProcessInfo.processInfo.arguments.contains("--clawdad-assistant-history-test") {
+        state["messages"] = .array([
+          .object(["id": .string("copy-user"), "role": .string("user"),
+            "text": .string("Please inspect this request.\nKeep both lines 🦞."), "createdAt": .string("2026-09-08T00:00:00Z")]),
+          .object(["id": .string("copy-assistant"), "role": .string("assistant"),
+            "text": .string("I’ll inspect the ClawDad tab and keep your draft."), "createdAt": .string("2026-09-08T00:00:01Z")])
+        ])
+        state["tasks"] = .array([.object([
+          "id": .string("history-task"), "action": .string("terminal.send"), "status": .string("working"),
+          "displayName": .string("ClawDad"), "requestText": .string("Repair playback and preserve my draft."),
+          "args": .object(["tabId": .string("code-one")]), "createdAt": .string("2026-09-08T00:00:02Z")
+        ])])
+      }
       let catalog = RemoteTerminalTabState(
         revision: 1, selectedTabId: "code-one",
         tabs: [
@@ -52,6 +65,14 @@
       -> AssistantSnapshot
     {
       if action == "pause" { state["paused"] = args["paused"] }
+      if action == "pause", ProcessInfo.processInfo.arguments.contains("--clawdad-assistant-history-test") {
+        state["tasks"] = .array((state["tasks"]?.array ?? []).map { value in
+          guard var task = value.object, task["id"]?.string == "history-task" else { return value }
+          task["status"] = .string("completed")
+          task["response"] = .string("Playback is repaired. Your draft is preserved.")
+          return .object(task)
+        })
+      }
       if action == "message", !(state["messages"]?.array ?? []).contains(where: { $0.object?["id"]?.string == id }) {
         let images = args["images"]?.array ?? []
         for image in images {

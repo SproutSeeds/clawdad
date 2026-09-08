@@ -129,7 +129,8 @@ test('a reconnected phone submits the same exact message only once',async t=>{
   await Promise.all([runtime.command(command),runtime.command(command)]);
   const snapshot=await runtime.command({action:'state'});
   assert.equal(snapshot.messages.length,1);
-  assert.equal(snapshot.tasks.filter(j=>j.id==='voice-1').length,1);
+  assert.equal(snapshot.messages.filter(j=>j.id==='voice-1').length,1);
+  assert.equal(runtime.state.jobs.filter(j=>j.id==='voice-1').length,1);
   await assert.rejects(runtime.command({...command,text:'Different task'}),/different action/);
   await runtime.drainTask;
   assert.equal((await runtime.job('voice-1')).status,'completed');
@@ -179,13 +180,14 @@ test('ordinary paired requests cannot call native-worker or desktop-tool actions
 
 test('draft insertion has a durable verified receipt without submitting or replaying',async t=>{
   const {runtime}=await fixture(t);
-  const request={action:'terminal.insert',requestId:'draft',tabId:'third',text:'hey Cody'};
+  const request={action:'terminal.insert',sessionId:queueSession,requestId:'draft',tabId:'third',text:'hey Cody'};
   await runtime.command(request,{tool:true});
   await runtime.command(request,{tool:true});
   assert.equal((await runtime.nativePoll({workerId:'worker-1'})).job.id,'draft');
-  await runtime.nativeResult({id:'draft',result:{tabId:'third',tabTitle:'contract-work-search',draftVerified:true,submitted:false}});
+  await runtime.nativePrepare({id:'draft',conversationPath:'/test/draft.jsonl',sessionId:queueSession,tabTitle:'contract-work-search'});
+  await runtime.nativeResult({id:'draft',result:{tabId:'third',sessionId:queueSession,tabTitle:'contract-work-search',draftVerified:true,submitted:false}});
   const job=await runtime.job('draft');
-  assert.equal(job.status,'completed');assert.equal(job.result.submitted,false);
+  assert.equal(job.status,'inserted');assert.equal(job.result.submitted,false);
   await runtime.command(request,{tool:true});
   assert.equal((await runtime.nativePoll({workerId:'worker-1'})).job,null);
   assert.equal(runtime.state.jobs.length,2);
@@ -194,7 +196,7 @@ test('draft insertion has a durable verified receipt without submitting or repla
 
 test('draft and submit requests keep their order while a busy tab is deferred',async t=>{
   const {runtime,tick}=await fixture(t);
-  await runtime.command({action:'terminal.insert',requestId:'draft',tabId:'tab',text:'Leave this here'},{tool:true});
+  await runtime.command({action:'terminal.insert',sessionId:queueSession,requestId:'draft',tabId:'tab',text:'Leave this here'},{tool:true});
   await runtime.command({action:'terminal.send',requestId:'send',tabId:'tab',text:'A later task'},{tool:true});
   assert.equal((await runtime.nativePoll({workerId:'worker-1'})).job.id,'draft');
   await runtime.nativeResult({id:'draft',deferred:true,error:'Agent is working'});
@@ -224,7 +226,7 @@ test('clear and replace require an inspected input and preserve exact whitespace
 
 test('draft edits share tab ordering and uncertain edits survive restart without replay',async t=>{
   const {runtime,root,coordinator,tick}=await fixture(t);
-  const requests=[{action:'terminal.insert',requestId:'first',tabId:'tab',text:'Draft'},
+  const requests=[{action:'terminal.insert',sessionId:queueSession,requestId:'first',tabId:'tab',text:'Draft'},
     {action:'terminal.clear',requestId:'clear',tabId:'tab',token:'inspected',expectedText:'Draft'},
     {action:'terminal.replace',requestId:'replace',tabId:'tab',token:'new-inspection',expectedText:'',text:'Replacement'}];
   for(const request of requests) await runtime.command(request,{tool:true});
@@ -350,7 +352,7 @@ test('MCP sends the exact authorized prompt to the local Terminal queue and retu
   await fs.writeFile(path.join(root,'native-server.token'),'fixture-token');
   const frames=[{id:1,method:'initialize'},{id:2,method:'tools/list'},
     {id:3,method:'tools/call',params:{name:'send_to_tab',arguments:{tabId:'tab-two',text:'Please review the existing patch.',requestId:'stable-request'}}},
-    {id:4,method:'tools/call',params:{name:'insert_in_tab',arguments:{tabId:'tab-three',text:'hey Cody',requestId:'stable-draft'}}},
+    {id:4,method:'tools/call',params:{name:'insert_in_tab',arguments:{tabId:'tab-three',sessionId:queueSession,text:'hey Cody',requestId:'stable-draft'}}},
     ...['clear_tab_input','replace_tab_input','clear_input','replace_input'].map((name,i)=>({id:5+i,method:'tools/call',params:{name,arguments:{
       token:'fresh-input',expectedText:'Original  draft',requestId:name,...(name.includes('tab')?{tabId:'tab-three'}:{}),
       ...(name.startsWith('replace')?{text:'Replacement\n🦞'}:{})}}}))];
@@ -368,8 +370,60 @@ test('MCP sends the exact authorized prompt to the local Terminal queue and retu
     assert.match(tool.description,/WITHOUT Enter/);
   }
   assert.deepEqual(requests,[{url:'http://127.0.0.1:4487/v1/assistant/tool',body:{tabId:'tab-two',text:'Please review the existing patch.',requestId:'stable-request',action:'terminal.send'}},
-    {url:'http://127.0.0.1:4487/v1/assistant/tool',body:{tabId:'tab-three',text:'hey Cody',requestId:'stable-draft',action:'terminal.insert'}},
+    {url:'http://127.0.0.1:4487/v1/assistant/tool',body:{tabId:'tab-three',sessionId:queueSession,text:'hey Cody',requestId:'stable-draft',action:'terminal.insert'}},
     ...['terminal.clear','terminal.replace','computer.clear','computer.replace'].map((action,i)=>({url:'http://127.0.0.1:4487/v1/assistant/tool',body:{...frames[4+i].params.arguments,action}}))]);
   assert.equal(JSON.parse(lines[2].result.content[0].text).job.id,'stable-request');
   assert.equal(JSON.parse(lines[3].result.content[0].text).job.id,'stable-draft');
+});
+
+test('busy draft insertion reaches the Mac immediately and follows a later manual Tab exactly once',async t=>{
+  const {runtime,root,coordinator}=await fixture(t),file='/test/busy-draft.jsonl',target={coordinator:false};
+  await runtime.command({action:'terminal.send',requestId:'working',tabId:'target',text:'Ongoing task'},{tool:true});
+  await runtime.nativePoll({workerId:'worker-1'});
+  await runtime.nativeResult({id:'working',result:{conversationPath:file}});
+  let stamp=Date.now()+1000;
+  const event=(type,fields={})=>({type:'event_msg',timestamp:new Date(stamp++).toISOString(),payload:{type,...fields}});
+  runtime.consumeRecord(event('task_started',{turn_id:'original'}),file,target);
+  runtime.consumeRecord(event('user_message',{message:'Ongoing task'}),file,target);
+  const text='Please review this entire long draft.\n'+ 'Unicode 🦞 é and exact spaces  '.repeat(80);
+  const request={action:'terminal.insert',requestId:'review',tabId:'target',sessionId:queueSession,text};
+  await runtime.command(request,{tool:true});
+  assert.equal((await runtime.nativePoll({workerId:'worker-1'})).job.id,'review');
+  await runtime.nativePrepare({id:'review',conversationPath:file,sessionId:queueSession,priorTurnId:'original'});
+  await runtime.nativeResult({id:'review',result:{tabId:'target',sessionId:queueSession,draftVerified:true,submitted:false,expandedTextReadBack:false}});
+  assert.equal((await runtime.job('review')).status,'inserted');
+  assert.equal((await runtime.job('working')).status,'working');
+  assert.equal((await runtime.job('review')).submittedAt,undefined);
+  await runtime.command(request,{tool:true});assert.equal((await runtime.nativePoll({workerId:'worker-1'})).job,null);
+  const restarted=new AssistantRuntime({root,coordinator});t.after(()=>restarted.close());await restarted.load();
+  assert.equal((await restarted.job('review')).status,'inserted');
+  restarted.consumeRecord(event('task_started',{turn_id:'manual-tab-turn'}),file,target);
+  restarted.consumeRecord(event('user_message',{message:text}),file,target);
+  restarted.consumeRecord(event('user_message',{message:text}),file,target);
+  assert.equal((await restarted.job('review')).status,'working');
+  restarted.consumeRecord(event('task_complete',{turn_id:'manual-tab-turn',last_agent_message:'Reviewed.'}),file,target);
+  restarted.consumeRecord(event('task_complete',{turn_id:'manual-tab-turn',last_agent_message:'Reviewed.'}),file,target);
+  assert.equal((await restarted.job('review')).status,'completed');
+  assert.equal(restarted.state.jobs.filter(j=>j.id==='update:review').length,1);
+});
+
+test('an unverified draft receipt cannot claim insertion and never retries automatically',async t=>{
+  const {runtime}=await fixture(t);
+  const request={action:'terminal.insert',requestId:'uncertain-draft',tabId:'target',sessionId:queueSession,text:'Preserve this'};
+  await runtime.command(request,{tool:true});await runtime.nativePoll({workerId:'worker-1'});
+  await runtime.nativeResult({id:request.requestId,result:{submitted:false}});
+  assert.equal((await runtime.job(request.requestId)).status,'attention');
+  await runtime.command(request,{tool:true});assert.equal((await runtime.nativePoll({workerId:'worker-1'})).job,null);
+});
+
+test('diagnostic delivery has durable receipts without creating visible tasks or completion announcements',async t=>{
+  const {runtime}=await fixture(t),file='/test/diagnostic.jsonl';
+  await runtime.command({action:'terminal.send',requestId:'fixture',tabId:'target',text:'Internal fixture only',diagnostic:true},{tool:true});
+  await runtime.nativePoll({workerId:'worker-1'});await runtime.nativeResult({id:'fixture',result:{conversationPath:file}});
+  const event=(type,fields={})=>({type:'event_msg',timestamp:new Date(Date.now()+1000).toISOString(),payload:{type,...fields}});
+  runtime.consumeRecord(event('user_message',{message:'Internal fixture only'}),file,{coordinator:false});
+  runtime.consumeRecord(event('task_complete',{last_agent_message:'Internal result'}),file,{coordinator:false});
+  assert.equal((await runtime.job('fixture')).status,'completed');
+  assert.equal(runtime.state.jobs.some(j=>j.id==='update:fixture'),false);
+  assert.equal(runtime.snapshot().tasks.length,0);assert.equal(runtime.snapshot().messages.length,0);
 });

@@ -45,9 +45,8 @@ final class AssistantVoiceLiveTests: XCTestCase {
     XCTAssertGreaterThanOrEqual(submitted - lastWord, 3)
     XCTAssertLessThan(submitted - lastWord, 5.1)
     XCTAssertTrue(controller.voiceActive)
-    let state = try await transport.json("/v1/assistant/state")
     let id = try XCTUnwrap(transport.deliveredIDs.first)
-    let task = state["tasks"]?.array?.compactMap(\.object).first { $0["id"]?.string == id }
+    let task = try await transport.json("/v1/assistant/job?id=\(id)")["job"]?.object
     let proof: [String: AssistantValue] = [
       "kind": .string("Recorded speech through real controller and local services; playback-ready PCM, not physical iPhone audio"),
       "requestId": .string(id), "lastSpeechToSubmitMs": .number((submitted - lastWord) * 1000),
@@ -107,22 +106,31 @@ private final class AssistantLiveTransport: AssistantTransport {
   func request(_ action: AssistantWireRequest.Action, payload: Data) async throws -> Data {
     switch action {
     case .state:
-      let data = try await http("/v1/assistant/state")
+      var value = try await json("/v1/assistant/state")
+      // The live probe observes only its own diagnostic replies. They stay out of Cody's chat.
+      let diagnostics = try await json("/v1/assistant/diagnostics")
+      let ownMessages = (diagnostics["messages"]?.array ?? []).filter { message in
+        guard let id = message.object?["id"]?.string else { return false }
+        return deliveredIDs.contains(id) || deliveredIDs.contains(where: { id.hasPrefix("assistant:\($0):") })
+      }
+      value["messages"] = .array((value["messages"]?.array ?? []) + ownMessages)
+      let data = try JSONEncoder().encode(value)
       let state = try JSONDecoder().decode(AssistantSnapshot.self, from: data)
       if responseAt == nil, state.messages.contains(where: { message in deliveredIDs.contains(where: { message.id.hasPrefix("assistant:\($0):") }) }) {
         responseAt = ProcessInfo.processInfo.systemUptime
       }
       return data
     case .command:
-      let body = try JSONDecoder().decode([String: AssistantValue].self, from: payload)
+      var body = try JSONDecoder().decode([String: AssistantValue].self, from: payload)
       if body["action"]?.string == "message", let id = body["requestId"]?.string {
+        body["diagnostic"] = .bool(true)
         sendAttempts += 1
         submittedAt = submittedAt ?? ProcessInfo.processInfo.systemUptime
         deliveredIDs.insert(id)
       }
       if body["action"]?.string == "voice.timing", let id = body["requestId"]?.string,
         deliveredIDs.contains(id), let metrics = body["metrics"]?.object { voiceMetrics.merge(metrics) { _, new in new } }
-      return try await http("/v1/assistant/request", body: payload)
+      return try await http("/v1/assistant/request", body: JSONEncoder().encode(body))
     case .transcribe:
       let boundary = UUID().uuidString
       var data = Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"audio\"; filename=\"assistant.wav\"\r\nContent-Type: audio/wav\r\n\r\n".utf8)

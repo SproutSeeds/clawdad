@@ -2,6 +2,34 @@ import XCTest
 
 @MainActor
 final class AssistantUITests: XCTestCase {
+  func testCopyMessagesAndUpdatingTaskHistoryKeepOneOriginalCard() {
+    let app = XCUIApplication()
+    app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-assistant-test", "--clawdad-assistant-history-test", "--clawdad-assistant-reset-draft"]
+    app.launch()
+    XCTAssertTrue(app.buttons["clawdad.assistant.chat"].waitForExistence(timeout: 20))
+    app.buttons["clawdad.assistant.chat"].tap()
+    XCTAssertTrue(app.staticTexts["ClawDad · Working"].waitForExistence(timeout: 5))
+    let userCopy = app.buttons["clawdad.assistant.copy.copy-user"]
+    userCopy.tap()
+    XCTAssertEqual(userCopy.label, "Copied")
+    let composer = app.descendants(matching: .any).matching(identifier: "clawdad.assistant.composer").firstMatch
+    composer.tap(); composer.press(forDuration: 1.2)
+    let paste = app.menuItems["Paste"].exists ? app.menuItems["Paste"] : app.buttons["Paste"]
+    XCTAssertTrue(paste.waitForExistence(timeout: 3), app.debugDescription); paste.tap()
+    XCTAssertEqual(composer.value as? String, "Please inspect this request.\nKeep both lines 🦞.")
+    app.buttons["clawdad.assistant.back"].tap()
+    app.buttons["clawdad.assistant.chat"].tap()
+    XCTAssertEqual(composer.value as? String, "Please inspect this request.\nKeep both lines 🦞.")
+    app.buttons["clawdad.assistant.copy.copy-assistant"].tap()
+    XCTAssertEqual(app.buttons["clawdad.assistant.copy.copy-assistant"].label, "Copied")
+    app.buttons["Pause control"].tap()
+    XCTAssertTrue(app.staticTexts["ClawDad · Completed"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.staticTexts["Playback is repaired. Your draft is preserved."].exists)
+    app.buttons["Resume control"].tap()
+    XCTAssertEqual(app.staticTexts.matching(identifier: "Repair playback and preserve my draft.").count, 1)
+    XCTAssertTrue(app.buttons["clawdad.assistant.copy.result.history-task"].exists)
+    saveScreenshot(app, "Readable task result stays with original request and copy preserves draft")
+  }
   func testGroupedRemoteControlsHaveDistinctLabelsBackNavigationAndExplicitVoice() {
     let app = XCUIApplication()
     app.launchArguments = ["--clawdad-app-store-preview", "terminal-reader", "--clawdad-assistant-test", "--clawdad-assistant-reset-draft"]

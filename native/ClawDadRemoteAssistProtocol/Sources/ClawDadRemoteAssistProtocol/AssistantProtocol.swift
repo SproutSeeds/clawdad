@@ -120,10 +120,16 @@ public struct AssistantTaskRecord: Codable, Identifiable, Equatable, Sendable {
   public let tabTitle: String?
   public let error: String?
   public let response: String?
+  public var displayName: String? = nil
+  public var requestText: String? = nil
+  public var createdAt: String? = nil
   public var displayStatus: String {
     switch status {
-    case "queued": "Waiting for Mac"
+    case "queued": "Waiting for delivery"
     case "running": "Delivering"
+    case "inserted": "Draft inserted"
+    case "cleared": "Draft cleared"
+    case "replaced": "Draft replaced"
     case "agent_queued": "Queued in agent"
     case "submitted": "Submitted"
     case "working": "Working"
@@ -148,4 +154,6 @@ public struct AssistantSnapshot: Codable, Sendable {
   public let catalog: RemoteTerminalTabState?
   public let messages: [AssistantMessage]
   public let tasks: [AssistantTaskRecord]
+  public var operations: [AssistantTaskRecord]? = nil
+  public var taskUpdates: [AssistantMessage]? = nil
 }
