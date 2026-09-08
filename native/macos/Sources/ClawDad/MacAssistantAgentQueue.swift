@@ -34,7 +34,7 @@ struct MacAssistantAgentQueueSnapshot: Equatable {
 }
 
 @MainActor
-func assistantQueueVerifiedMessage(_ text: String,
+func assistantQueueVerifiedMessage(_ text: String, useExistingDraft: Bool = false,
   read: () async throws -> MacAssistantAgentQueueSnapshot?,
   insert: () async -> Bool, prepare: () async throws -> Void, pressTab: () async -> Bool,
   wait: () async throws -> Void = { try await Task.sleep(nanoseconds: 150_000_000) }
@@ -46,10 +46,12 @@ func assistantQueueVerifiedMessage(_ text: String,
     if let observed = try await read() { initial = observed; break }
     if attempt < 7 { try await wait() }
   }
-  guard let before = initial, before.draft.isEmpty else {
+  guard let before = initial, useExistingDraft ? before.draft == text : before.draft.isEmpty else {
     throw MacAssistantError("Native queue unsupported in this input state. Its draft and pending messages were preserved. Inspect the working Codex tab.")
   }
-  guard await insert() else { throw MacAssistantError("The input changed before insertion. The message was not queued.") }
+  if !useExistingDraft {
+    guard await insert() else { throw MacAssistantError("The input changed before insertion. The message was not queued.") }
+  }
   var verified = false
   for attempt in 0..<12 {
     if let current = try await read(), current.messages == before.messages,

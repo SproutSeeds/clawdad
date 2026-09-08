@@ -403,9 +403,30 @@ final class MacNativeTerminalTabs {
     return try waitForClose(verifiedTarget, application: application, allowPrompt: true)
   }
 
-  private func closeTabCommand(application: AXUIElement) throws -> AXUIElement {
+  /// Invoke the same New Tab command as Remote Assist's Command-T. Identity
+  /// verification is completed by the controller; this command is never retried.
+  func openTab(_ id: String, application: AXUIElement) throws {
+    deadline = now() + 2
+    defer { deadline = .infinity }
+    guard closePrompt == nil else { throw failure("Finish the Terminal confirmation first.") }
+    let before = try capture(application: application)
+    guard let target = before.first(where: { $0.id == id }), target.selected, target.focused,
+      try sheets(target.window).isEmpty else { throw failure("Focus the intended Terminal window before opening a tab.") }
+    let command = try closeTabCommand(application: application, shortcut: "t")
+    let current = try capture(application: application)
+    guard try value(application, kAXFrontmostAttribute) as? Bool == true,
+      current.map(\.id) == before.map(\.id),
+      current.first(where: { $0.focused && $0.selected })?.id == id else {
+      throw failure("The Terminal window changed before creating the tab.")
+    }
+    let result = performAction?(command, kAXPressAction) ?? AXUIElementPerformAction(command, kAXPressAction as CFString)
+    guard result == .success else { throw failure("New Tab was requested once, but Terminal did not acknowledge it. Inspect the inventory before retrying.") }
+  }
+
+  private func closeTabCommand(application: AXUIElement, shortcut: String = "w") throws -> AXUIElement {
+    let commandName = shortcut == "t" ? "New Tab" : "Close Tab"
     guard let bar = try element(application, kAXMenuBarAttribute) else {
-      throw failure("Terminal’s Close Tab command is unavailable.")
+      throw failure("Terminal’s \(commandName) command is unavailable.")
     }
     var queue = [(bar, 0)], matches: [AXUIElement] = [], visited = 0
     while !queue.isEmpty {
@@ -413,7 +434,7 @@ final class MacNativeTerminalTabs {
       guard visited <= 512 else { throw failure("Terminal’s menu is temporarily unavailable.") }
       let itemRole = try role(item)
       if itemRole == kAXMenuItemRole,
-         (try value(item, kAXMenuItemCmdCharAttribute) as? String)?.lowercased() == "w",
+         (try value(item, kAXMenuItemCmdCharAttribute) as? String)?.lowercased() == shortcut,
          let modifiers = try value(item, kAXMenuItemCmdModifiersAttribute) as? NSNumber,
          modifiers.uint32Value == 0 {
         // AX uses Command by default; zero excludes Shift, Option, Control, and
@@ -422,15 +443,15 @@ final class MacNativeTerminalTabs {
       }
       // The close command is a direct item in Terminal's main menu. Avoid
       // traversing Services, profile lists, and other unrelated nested menus.
-      if [kAXMenuBarRole, kAXMenuBarItemRole, kAXMenuRole].contains(itemRole) {
+      if [kAXMenuBarRole, kAXMenuBarItemRole, kAXMenuRole].contains(itemRole) || (shortcut == "t" && itemRole == kAXMenuItemRole && depth < 5) {
         let children = try elements(item, kAXChildrenAttribute)
-        guard children.isEmpty || depth < 3 else { throw failure("Terminal’s menu is temporarily unavailable.") }
+        guard children.isEmpty || depth < (shortcut == "t" ? 5 : 3) else { throw failure("Terminal’s menu is temporarily unavailable.") }
         queue += children.map { ($0, depth + 1) }
       }
     }
     guard matches.count == 1, let command = matches.first,
           try value(command, kAXEnabledAttribute, required: true) as? Bool == true else {
-      throw failure("Terminal did not expose an enabled, unique Close Tab command. The tab was kept open.")
+      throw failure("Terminal did not expose an enabled, unique \(commandName) command. No command was sent.")
     }
     return command
   }

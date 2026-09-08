@@ -77,6 +77,7 @@ struct MacTerminalTabFailure: LocalizedError {
 }
 
 protocol MacTerminalAutomating: AnyObject {
+  @MainActor func openTab(in snapshot: MacTerminalTabSnapshot) async throws
   @MainActor func closeTab(_ snapshot: MacTerminalTabSnapshot) async throws -> MacTerminalNativeCloseOutcome
   @MainActor func resolveTabClose(token: String, confirm: Bool) async throws -> MacTerminalNativeCloseOutcome
   @MainActor func cancelTabClose() async
@@ -95,6 +96,9 @@ protocol MacTerminalAutomating: AnyObject {
 }
 
 extension MacTerminalAutomating {
+  @MainActor func openTab(in snapshot: MacTerminalTabSnapshot) async throws {
+    throw MacTerminalTabFailure(code: "create_unavailable", message: "This Terminal interface cannot create a verified tab.", state: nil)
+  }
   @MainActor func inputIdentity() async throws -> String? {
     let selected = try await readTabs().filter { $0.windowIndex == 1 && $0.isSelectedInWindow }
     guard selected.count == 1, let tab = selected.first else { return nil }
@@ -169,6 +173,20 @@ final class MacTerminalTabController {
     return matches.count == 1 ? matches.first?.key : nil
   }
   func inputIdentity() async throws -> String? { try await automation.inputIdentity() }
+
+  func createTab(anchorId: String, expectedRevision: Int) async throws -> (RemoteTerminalTabDescriptor, RemoteTerminalTabState) {
+    let before = try await focus(tabID: anchorId, expectedRevision: expectedRevision)
+    guard let anchor = snapshotsByIdentifier[anchorId], !anchor.tty.isEmpty else {
+      throw MacAssistantError("Inspect the intended Terminal tab to identify its window first.")
+    }
+    try await automation.openTab(in: anchor)
+    let after = try await catalog()
+    let created = try assistantCreatedTerminalTab(before: before, after: after, anchorId: anchorId)
+    guard let snapshot = snapshotsByIdentifier[created.id], !snapshot.tty.isEmpty else {
+      throw MacAssistantError("The new tab exists, but its shell identity is unresolved. Inspect the inventory; do not create another tab.")
+    }
+    return (created, after)
+  }
   lazy var closing = MacTerminalTabCloseController(automation: automation,
     catalog: { [unowned self] in try await self.catalog() },
     snapshot: { [unowned self] in self.snapshotsByIdentifier[$0] })
@@ -493,6 +511,36 @@ final class MacTerminalAutomation: MacTerminalAutomating, @unchecked Sendable {
     label: "earth.frg.ClawDad.remote-assist.terminal",
     qos: .userInitiated
   )
+
+  @MainActor func openTab(in snapshot: MacTerminalTabSnapshot) async throws {
+    guard let nativeId = snapshot.nativeTabID,
+      let app = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Terminal").first,
+      app.isActive, AXIsProcessTrusted(), !MacConsoleSessionState.isLocked() else { throw AssistantProtocolError.invalid }
+    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+      queue.async { continuation.resume(with: Result {
+        let before = try Self.parseCatalog(Self.execute(Self.catalogScript))
+        try self.nativeTabs.openTab(nativeId, application: AXUIElementCreateApplication(app.processIdentifier))
+        var created: MacTerminalTabSnapshot?
+        for _ in 0..<30 {
+          Thread.sleep(forTimeInterval: 0.1)
+          let after = try Self.parseCatalog(Self.execute(Self.catalogScript))
+          let additions = after.filter { row in !row.tty.isEmpty && !before.contains(where: { $0.tty == row.tty }) }
+          if additions.count == 1, after.count == before.count + 1,
+            before.allSatisfy({ old in after.contains { $0.tty == old.tty } }),
+            let tab = additions.first, tab.windowIndex == 1, tab.isSelectedInWindow { created = tab; break }
+          if additions.count > 1 { break }
+        }
+        guard let created else { throw MacAssistantError("New Tab was requested once, but its identity is uncertain. Inspect the inventory before another request.") }
+        // Terminal turns a standalone window into a tab group. Re-observe the
+        // known TTY first so its original ID survives that native conversion.
+        _ = try Self.execute(Self.focusScript(windowID: snapshot.windowID, tabIndex: snapshot.tabIndex, tty: snapshot.tty))
+        _ = try self.nativeTabs.snapshots(application: AXUIElementCreateApplication(app.processIdentifier)) {
+          try Self.parseCatalog(Self.execute(Self.catalogScript))
+        }
+        _ = try Self.execute(Self.focusScript(windowID: created.windowID, tabIndex: created.tabIndex, tty: created.tty))
+      }) }
+    }
+  }
 
   @MainActor func closeTab(_ snapshot: MacTerminalTabSnapshot) async throws -> MacTerminalNativeCloseOutcome {
     guard let id = snapshot.nativeTabID else {

@@ -13,7 +13,7 @@ final class MacAssistantBridge {
   private var loop: Task<Void, Never>?
   private var inventoryRequested = false
   private var inspection:
-    (token: String, pid: pid_t, element: AXUIElement, window: CFTypeRef?, launch: Date?, generation: UInt64, expires: Date)?
+    (token: String, pid: pid_t, element: AXUIElement, window: CFTypeRef?, launch: Date?, generation: UInt64, expires: Date, display: CGDirectDisplayID)?
   private struct DraftInspection {
     let tabId: String
     let sessionId: String
@@ -25,6 +25,7 @@ final class MacAssistantBridge {
   private var draftInspections: [String: DraftInspection] = [:]
   private let workerId = UUID().uuidString
   private let interaction = MacAssistantInteractionGate.shared
+  private let nativeInput = MacAssistantTerminalInput()
 
   init(runtime: MacAssistantRuntime) {
     self.runtime = runtime
@@ -106,6 +107,38 @@ final class MacAssistantBridge {
       throw MacAssistantError("Update ClawDad to use the background Assistant conversation.")
     }
     if action.hasPrefix("computer.") { return try await computer(action, args: args) }
+    if action.hasPrefix("files.") { return try await assistantFiles(action, args: args, runtime: runtime) }
+    if action == "remote.clipboard" {
+      switch args["operation"]?.string {
+      case "read": return ["text": .string(NSPasteboard.general.string(forType: .string) ?? ""), "device": .string("Mac")]
+      case "write":
+        guard let text = args["text"]?.string, text.utf8.count <= 64 * 1024, !text.contains("\0") else { throw AssistantProtocolError.invalid }
+        NSPasteboard.general.clearContents()
+        guard NSPasteboard.general.setString(text, forType: .string), NSPasteboard.general.string(forType: .string) == text else { throw MacAssistantError("The Mac clipboard write could not be verified.") }
+        return ["copied": .bool(true), "text": .string(text), "device": .string("Mac")]
+      case "selection":
+        let selection = await input.readSpeechSelection(.request(.selection, requestId: id))
+        guard selection.ok == true else { throw MacAssistantError(selection.error ?? "The selected text could not be read.") }
+        return ["text": .string(selection.text ?? ""), "device": .string("Mac"),
+          "bundleId": .string(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "")]
+      default: throw AssistantProtocolError.invalid
+      }
+    }
+    if action == "terminal.native.inspect" {
+      guard let tabId = args["tabId"]?.string else { throw AssistantProtocolError.invalid }
+      return try await nativeInput.inspect(tabId: tabId, input: input, ticket: ticket)
+    }
+    if ["terminal.native.type", "terminal.key", "terminal.images", "terminal.pointer", "terminal.context"].contains(action) {
+      return try await nativeInput.execute(action, args: args, input: input)
+    }
+    if action == "terminal.new" {
+      guard let anchor = args["tabId"]?.string, let revision = args["expectedRevision"]?.number,
+        interaction.isCurrent(ticket) else { throw AssistantProtocolError.invalid }
+      let (created, catalog) = try await tabs.createTab(anchorId: anchor, expectedRevision: Int(revision))
+      return ["created": .bool(true), "tabId": .string(created.id), "tab": try .encode(created),
+        "catalog": try .encode(catalog), "verification": .string("native-window-and-new-tty"),
+        "input": (try? await nativeInput.inspect(tabId: created.id, input: input, ticket: ticket)).map(AssistantValue.object) ?? .null]
+    }
     let editing = ["terminal.clear", "terminal.replace"].contains(action)
     let editToken = args["token"]?.string ?? ""
     let draftInspection = editing ? draftInspections.removeValue(forKey: editToken) : nil
@@ -378,6 +411,14 @@ final class MacAssistantBridge {
       throw MacAssistantError("This agent is idle. Native queue requires a working agent; use send_to_tab only if the user authorized immediate submission.")
     }
     let identity = try await tabs.inputIdentity()
+    let useExisting = args["useExistingDraft"]?.bool == true
+    if useExisting {
+      guard let token = args["token"]?.string, let inspected = draftInspections.removeValue(forKey: token),
+        inspected.expires > Date(), inspected.tabId == tabId, inspected.sessionId == conversation.sessionId,
+        inspected.identity == identity, inspected.text == text, interaction.isCurrent(inspected.generation) else {
+        throw MacAssistantError("Inspect the existing draft before queuing it. The input was preserved.")
+      }
+    }
     func allowed(_ expected: String, requireTab: Bool = false) -> Bool {
       var log = MacCodexRequestActivityLog()
       guard interaction.isCurrent(ticket), !MacConsoleSessionState.isLocked(), AXIsProcessTrusted(),
@@ -395,7 +436,7 @@ final class MacAssistantBridge {
     }
     defer { input.invalidateDictationTarget() }
     let token = try await capture()
-    try await assistantQueueVerifiedMessage(text, read: { [self] in
+    try await assistantQueueVerifiedMessage(text, useExistingDraft: useExisting, read: { [self] in
       guard interaction.isCurrent(ticket), !MacConsoleSessionState.isLocked(), AXIsProcessTrusted(),
         try await tabs.inputIdentity() == identity else {
         throw MacAssistantError("The targeted input changed. Inspect this request; its input will not be repeated.")
@@ -473,6 +514,17 @@ final class MacAssistantBridge {
   private func computer(_ action: String, args: [String: AssistantValue]) async throws -> [String:
     AssistantValue]
   {
+    if action == "computer.displays" {
+      var count: UInt32 = 0
+      guard CGGetActiveDisplayList(0, nil, &count) == .success else { throw AssistantProtocolError.invalid }
+      var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+      guard CGGetActiveDisplayList(count, &ids, &count) == .success else { throw AssistantProtocolError.invalid }
+      return ["displays": .array(ids.map { id in
+        let bounds = CGDisplayBounds(id)
+        return .object(["id": .number(Double(id)), "main": .bool(id == CGMainDisplayID()),
+          "width": .number(bounds.width), "height": .number(bounds.height)])
+      })]
+    }
     if action == "computer.open" {
       guard let bundle = args["bundleId"]?.string,
         let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle)
@@ -484,19 +536,24 @@ final class MacAssistantBridge {
     }
     let (app, element) = try focusedElement()
     if action == "computer.inspect" || action == "computer.capture" {
+      let requested = args["displayId"]?.number ?? Double(CGMainDisplayID())
+      guard requested >= 0, requested <= Double(UInt32.max), requested.rounded() == requested,
+        CGDisplayIsActive(UInt32(requested)) != 0 else { throw MacAssistantError("Choose an available display from computer displays.") }
+      let display = UInt32(requested)
       let token = UUID().uuidString
       inspection = (
         token, app.processIdentifier, element, ax(element, kAXWindowAttribute), app.launchDate,
-        interaction.generation, Date().addingTimeInterval(30)
+        interaction.generation, Date().addingTimeInterval(30), display
       )
       var result: [String: AssistantValue] = [
         "token": .string(token), "application": .string(app.localizedName ?? "Application"),
         "bundleId": .string(app.bundleIdentifier ?? ""),
         "text": .string(String((ax(element, kAXValueAttribute) as? String ?? "").suffix(24_000))),
         "canEditText": .bool(canEditInput(app, element)),
+        "displayId": .number(Double(display)),
       ]
       if action == "computer.capture" {
-        guard CGPreflightScreenCaptureAccess(), let image = CGDisplayCreateImage(CGMainDisplayID())
+        guard CGPreflightScreenCaptureAccess(), let image = CGDisplayCreateImage(display)
         else { throw MacAssistantError("Allow ClawDad Screen Recording to inspect the display.") }
         let bitmap = NSBitmapImageRep(cgImage: image)
         guard let data = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.5]),
@@ -507,6 +564,18 @@ final class MacAssistantBridge {
         result["height"] = .number(Double(image.height))
       }
       return result
+    }
+    guard app.bundleIdentifier != "com.apple.Terminal" else {
+      throw MacAssistantError("Use the dedicated native Terminal tools for this tab. General desktop input does not bypass Terminal draft, queue or confirmation checks.")
+    }
+    if action == "computer.shortcut" {
+      guard let captured = inspection, args["token"]?.string == captured.token, Date() < captured.expires,
+        app.processIdentifier == captured.pid, CFEqual(element, captured.element),
+        interaction.isCurrent(captured.generation), let raw = args["shortcut"]?.string,
+        let shortcut = RemoteShortcut(rawValue: raw), let input else { throw AssistantProtocolError.invalid }
+      inspection = nil
+      guard input.sendAssistantShortcut(shortcut, targetPID: captured.pid) else { throw MacAssistantError("The special command could not be delivered.") }
+      return ["keySent": .bool(true), "verification": .string("native-shortcut-dispatched-reinspect-required")]
     }
     if ["computer.clear", "computer.replace"].contains(action) {
       guard let captured = inspection, args["token"]?.string == captured.token,
@@ -571,8 +640,19 @@ final class MacAssistantBridge {
     if type == "pointer" {
       guard let x = object["x"]?.number, let y = object["y"]?.number, (0...1).contains(x),
         (0...1).contains(y),
-        ["click", "move"].contains(object["action"]?.string ?? "")
+        ["click", "move", "drag"].contains(object["action"]?.string ?? "")
       else { throw AssistantProtocolError.invalid }
+      if object["action"]?.string == "drag" {
+        guard let toX = object["toX"]?.number, let toY = object["toY"]?.number,
+          (0...1).contains(toX), (0...1).contains(toY) else { throw AssistantProtocolError.invalid }
+        input.commitDisplayTransition(to: captured.display)
+        var down = object; down["action"] = .string("down")
+        input.handle(try JSONEncoder().encode(down), respondClipboard: { _ in }, respondInput: { _ in })
+        defer { input.finishAssistantPointer() }
+        var end = object; end["action"] = .string("drag"); end["x"] = .number(toX); end["y"] = .number(toY)
+        input.handle(try JSONEncoder().encode(end), respondClipboard: { _ in }, respondInput: { _ in })
+        return ["inputRequested": .bool(true), "verification": .string("native-drag-dispatched-reinspect-required")]
+      }
     }
     if type == "scroll" {
       for name in ["deltaX", "deltaY"] {
@@ -581,6 +661,8 @@ final class MacAssistantBridge {
         }
       }
     }
+    guard CGDisplayIsActive(captured.display) != 0 else { throw MacAssistantError("The inspected display disconnected.") }
+    input.commitDisplayTransition(to: captured.display)
     input.handle(
       try JSONEncoder().encode(object), respondClipboard: { _ in }, respondInput: { _ in })
     return ["inputRequested": .bool(true)]

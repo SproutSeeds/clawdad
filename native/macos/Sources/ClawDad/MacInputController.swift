@@ -181,6 +181,49 @@ final class MacInputController {
     return postKeyStroke(stroke, targetPID: targetPID)
   }
 
+  /// Uses the same approved shortcut plans as the phone's Special Commands.
+  func sendAssistantRemoteKey(_ command: MacAssistantTerminalKey, targetPID: pid_t) -> Bool {
+    guard AXIsProcessTrusted(), !MacConsoleSessionState.isLocked(),
+      NSWorkspace.shared.frontmostApplication?.processIdentifier == targetPID else { return false }
+    if let shortcut = command.shortcut { return pressRemoteShortcut(shortcut, targetPID: targetPID) }
+    return pressKey(command.key ?? "", targetPID: targetPID)
+  }
+
+  func sendAssistantShortcut(_ shortcut: RemoteShortcut, targetPID: pid_t) -> Bool {
+    guard AXIsProcessTrusted(), !MacConsoleSessionState.isLocked(),
+      NSWorkspace.shared.frontmostApplication?.processIdentifier == targetPID else { return false }
+    return pressRemoteShortcut(shortcut, targetPID: targetPID)
+  }
+
+  func finishAssistantPointer() { releaseRemoteInputState() }
+
+  /// Targeted Terminal gestures use the same native mouse/scroll dispatch as
+  /// Remote Assist, bounded by the inspected Terminal text area's rectangle.
+  func sendAssistantTerminalPointer(action: String, point: CGPoint, end: CGPoint?,
+    deltaX: Double, deltaY: Double, right: Bool, targetPID: pid_t) -> Bool {
+    guard AXIsProcessTrusted(), !MacConsoleSessionState.isLocked(), pointerInputEnabled,
+      NSWorkspace.shared.frontmostApplication?.processIdentifier == targetPID else { return false }
+    var hit: AXUIElement?
+    guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &hit) == .success,
+      let hit else { return false }
+    var pid: pid_t = 0
+    guard AXUIElementGetPid(hit, &pid) == .success, pid == targetPID else { return false }
+    let button: CGMouseButton = right ? .right : .left
+    establishTarget(at: point)
+    postMouseEvent(type: .mouseMoved, point: point, button: button)
+    switch action {
+    case "move": return true
+    case "scroll": handleScroll(["deltaX": deltaX, "deltaY": deltaY]); return true
+    case "click", "drag":
+      postMouseEvent(type: right ? .rightMouseDown : .leftMouseDown, point: point, button: button)
+      let destination = end ?? point
+      if action == "drag" { postMouseEvent(type: right ? .rightMouseDragged : .leftMouseDragged, point: destination, button: button) }
+      postMouseEvent(type: right ? .rightMouseUp : .leftMouseUp, point: destination, button: button)
+      return true
+    default: return false
+    }
+  }
+
   func sendAssistantText(_ text: String, isAllowed: () -> Bool) async -> Bool {
     guard let target = eligibleDictationTarget(), isAllowed(), !MacConsoleSessionState.isLocked() else { return false }
     return await insertText(text, into: target)
@@ -274,10 +317,11 @@ final class MacInputController {
   }
 
   func deliverImages(_ images: MacPreparedImages, request: RemoteImageAttachmentMessage,
+                     isAllowed: @MainActor () -> Bool = { true },
                      terminalIdentity: @MainActor () async throws -> String?) async -> RemoteImageAttachmentMessage {
     if let inputProcessingTask { await inputProcessingTask.value }
     if let clipboardCopyTask { await clipboardCopyTask.value }
-    guard !speechSelectionInProgress, !MacConsoleSessionState.isLocked(), pointerInputEnabled else {
+    guard isAllowed(), !speechSelectionInProgress, !MacConsoleSessionState.isLocked(), pointerInputEnabled else {
       return request.result(error: "Unlock the Mac and finish the current input operation, then retry your saved images.")
     }
     guard !Task.isCancelled, !MacConsoleSessionState.isLocked() else { return request.result(error: "The image is saved on the Mac. Reconnect to paste it.") }
@@ -293,7 +337,7 @@ final class MacInputController {
     for index in images.urls.indices {
       guard !Task.isCancelled, let capture = dictationTargets.capture(for: token), capture.generation == inputGeneration else { break }
       let identity = await recoverTerminalIdentity(for: capture, read: terminalIdentity)
-      guard !Task.isCancelled, !MacConsoleSessionState.isLocked(), pointerInputEnabled,
+      guard !Task.isCancelled, isAllowed(), !MacConsoleSessionState.isLocked(), pointerInputEnabled,
             let target = dictationTargets.resolve(token: token, generation: inputGeneration,
               terminalIdentity: identity, isCurrent: targetIsCurrent),
             target.input.bundleIdentifier == "com.apple.Terminal",

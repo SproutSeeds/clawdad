@@ -8,6 +8,133 @@ import {runAssistantMCP} from '../lib/assistant-mcp.mjs';
 import {Readable, Writable} from 'node:stream';
 
 const queueSession='01a0817d-c8ca-7aa3-9153-74c69e51841d';
+test('native shell drafts and new tabs require exact identities and survive duplicate/restart without replay',async t=>{
+  const {runtime,root,coordinator}=await fixture(t);
+  const draft={action:'terminal.native.type',requestId:'native-draft',tabId:'shell-tab',inputToken:'inspection',inputSessionId:'native-process',mode:'insert',expectedText:'',text:'draft only'};
+  await assert.rejects(runtime.command(draft),/Unsupported/);
+  for(const changes of [{inputToken:''},{inputSessionId:''},{text:'echo hello\n'},{text:'hello\t'},{expectedText:'existing'},{mode:'clear'}]) {
+    await assert.rejects(runtime.command({...draft,...changes},{tool:true}));
+  }
+  await runtime.command(draft,{tool:true});
+  assert.equal((await runtime.nativePoll({workerId:'one'})).job.id,draft.requestId);
+  await runtime.nativeResult({id:draft.requestId,result:{tabId:draft.tabId,inputSessionId:draft.inputSessionId,text:draft.text,draftVerified:true,submitted:false}});
+  assert.equal((await runtime.job(draft.requestId)).status,'inserted');
+  await runtime.command(draft,{tool:true});
+  assert.equal((await runtime.nativePoll({workerId:'one'})).job,null);
+  await assert.rejects(runtime.command({...draft,text:'different'},{tool:true}),/different action/);
+  const create={action:'terminal.new',tabId:'anchor',expectedRevision:7,requestId:'new-tab'};
+  await runtime.command(create,{tool:true});
+  await runtime.nativePoll({workerId:'one'});
+  const restarted=new AssistantRuntime({root,coordinator});t.after(()=>restarted.close());
+  assert.equal((await restarted.nativePoll({workerId:'two'})).job,null);
+  assert.equal((await restarted.command(create,{tool:true})).job.status,'attention');
+  assert.equal((await restarted.nativePoll({workerId:'two'})).job,null);
+});
+
+test('native create and typing receipts require observed identity and text before claiming success',async t=>{
+  const {runtime}=await fixture(t);
+  await runtime.command({action:'terminal.new',tabId:'anchor',expectedRevision:1,requestId:'new'},{tool:true});
+  await runtime.nativePoll({workerId:'one'});
+  await runtime.nativeResult({id:'new',result:{created:true}});
+  assert.equal((await runtime.job('new')).status,'attention');
+  await runtime.command({action:'terminal.native.type',tabId:'shell',inputToken:'t',inputSessionId:'native-p',requestId:'typed',mode:'insert',expectedText:'',text:'hello'},{tool:true});
+  await runtime.nativePoll({workerId:'one'});
+  await runtime.nativeResult({id:'typed',result:{tabId:'shell',inputSessionId:'wrong',text:'hello',draftVerified:true,submitted:false}});
+  assert.equal((await runtime.job('typed')).status,'attention');
+});
+
+test('verified tab creation is immediately discoverable before the next inventory poll',async t=>{
+  const {runtime}=await fixture(t);
+  const before={revision:1,selectedTabId:'anchor',tabs:[{id:'anchor'}]};
+  await runtime.command({action:'terminal.new',tabId:'anchor',expectedRevision:1,requestId:'create'},{tool:true});
+  await runtime.nativePoll({workerId:'one',catalog:before});
+  const catalog={revision:2,selectedTabId:'created',tabs:[...before.tabs,{id:'created'}]};
+  await runtime.nativeResult({id:'create',result:{created:true,tabId:'created',tab:{id:'created'},catalog,verification:'native-window-and-new-tty'}});
+  assert.deepEqual((await runtime.command({action:'state'})).catalog,catalog);
+  assert.equal((await runtime.command({action:'terminal.new',tabId:'anchor',expectedRevision:1,requestId:'create'},{tool:true})).job.status,'completed');
+  assert.equal((await runtime.command({action:'state'})).catalog.tabs.length,2);
+});
+
+test('native close publishes its refreshed catalog and reports refusal or confirmation accurately',async t=>{
+  const {runtime}=await fixture(t);
+  const state={revision:3,selectedTabId:'target',tabs:[{id:'target'},{id:'other'}]};
+  await runtime.command({action:'terminal.close',tabId:'target',expectedRevision:2,requestId:'stale-close'},{tool:true});
+  await runtime.nativePoll({workerId:'one',catalog:{...state,revision:2}});
+  await runtime.nativeResult({id:'stale-close',result:{close:{tabId:'target',outcome:'failed',errorCode:'stale_catalog',prompt:'The tabs changed. Check the refreshed picker.',state}}});
+  assert.equal((await runtime.job('stale-close')).status,'attention');
+  assert.deepEqual(runtime.snapshot().catalog,state);
+  assert.equal(runtime.snapshot().tasks[0].requestText,'Close the requested Terminal tab');
+  await runtime.command({action:'terminal.close',tabId:'target',expectedRevision:3,requestId:'confirm-close'},{tool:true});
+  await runtime.nativePoll({workerId:'one',catalog:state});
+  await runtime.nativeResult({id:'confirm-close',result:{close:{tabId:'target',outcome:'confirmationRequired',prompt:'Terminate running processes?',confirmationToken:'close-token',state}}});
+  assert.equal((await runtime.job('confirm-close')).status,'attention');
+  assert.equal((await runtime.nativePoll({workerId:'one',catalog:state})).job,null);
+  await runtime.command({action:'terminal.close.resolve',tabId:'target',token:'close-token',confirm:false,requestId:'cancel-close'},{tool:true});
+  await runtime.nativePoll({workerId:'one',catalog:state});
+  await runtime.nativeResult({id:'cancel-close',result:{close:{tabId:'target',outcome:'cancelled',state}}});
+  assert.equal((await runtime.job('confirm-close')).status,'completed');
+  assert.equal((await runtime.job('confirm-close')).error,null);
+  assert.deepEqual(runtime.snapshot().catalog.tabs,state.tabs);
+});
+
+test('existing-draft queue uses the original text and token without a second insertion',async t=>{
+  const {runtime}=await fixture(t);
+  const request={action:'terminal.queue',tabId:'target',sessionId:queueSession,text:'Reviewed draft',requestId:'existing-queue',useExistingDraft:true,token:'fresh-draft-token'};
+  await assert.rejects(runtime.command({...request,token:''},{tool:true}),/inspection/);
+  await runtime.command(request,{tool:true});
+  const observed=await runtime.nativePoll({workerId:'one'});
+  assert.equal(observed.job.args.useExistingDraft,true);
+  await runtime.nativePrepare({id:request.requestId,conversationPath:'/fixture/cli.jsonl',sessionId:queueSession,priorTurnId:'turn-before'});
+  await runtime.nativeResult({id:request.requestId,result:{tabId:'target',sessionId:queueSession,queueAccepted:true,verification:'rendered-agent-queue'}});
+  assert.equal((await runtime.command(request,{tool:true})).job.status,'agent_queued');
+  assert.equal((await runtime.nativePoll({workerId:'one'})).job,null);
+});
+
+test('queuing an inserted draft follows one native turn and keeps one original task card',async t=>{
+  const {runtime}=await fixture(t),file='/fixture/existing-draft.jsonl';
+  const draft={action:'terminal.insert',requestId:'original-draft',tabId:'target',sessionId:queueSession,text:'Reviewed draft'};
+  await runtime.command(draft,{tool:true});await runtime.nativePoll({workerId:'one'});
+  await runtime.nativePrepare({id:draft.requestId,conversationPath:file,sessionId:queueSession,priorTurnId:'original-turn'});
+  await runtime.nativeResult({id:draft.requestId,result:{tabId:'target',sessionId:queueSession,draftVerified:true,submitted:false}});
+  const queued={action:'terminal.queue',requestId:'queue-draft',tabId:'target',sessionId:queueSession,text:draft.text,useExistingDraft:true,token:'fresh'};
+  await runtime.command(queued,{tool:true});await runtime.nativePoll({workerId:'one'});
+  await runtime.nativePrepare({id:queued.requestId,conversationPath:file,sessionId:queueSession,priorTurnId:'original-turn'});
+  await runtime.nativeResult({id:queued.requestId,result:{tabId:'target',sessionId:queueSession,queueAccepted:true,verification:'rendered-agent-queue'}});
+  assert.equal((await runtime.job(draft.requestId)).status,'agent_queued');
+  assert.deepEqual(runtime.snapshot().tasks.map(t=>t.id),[draft.requestId]);
+  const timestamp=new Date(Date.now()+1000).toISOString();
+  for (const payload of [{type:'task_started',turn_id:'own-turn'},{type:'user_message',message:draft.text},{type:'task_complete',turn_id:'own-turn',last_agent_message:'Completed original request'}]) {
+    runtime.consumeRecord({type:'event_msg',timestamp,payload},file,{coordinator:false});
+  }
+  await runtime.save();
+  assert.equal((await runtime.job(queued.requestId)).status,'completed');
+  assert.equal((await runtime.job(draft.requestId)).status,'completed');
+  assert.equal(runtime.snapshot().tasks.length,1);
+  assert.equal(runtime.snapshot().tasks[0].response,'Completed original request');
+  assert.equal(runtime.state.jobs.find(j=>j.source==='task-update')?.parentTaskId,draft.requestId);
+});
+
+test('MCP covers native inputs, new tabs, special commands, existing queue, local Files and clipboard',async t=>{
+  const {root}=await fixture(t);await fs.mkdir(path.join(root,'Assistant'));
+  await fs.writeFile(path.join(root,'Assistant/connection.json'),JSON.stringify({baseURL:'http://127.0.0.1:4487/'}));
+  await fs.writeFile(path.join(root,'native-server.token'),'fixture-token');
+  const calls=[['new_terminal_tab',{tabId:'anchor',expectedRevision:1,requestId:'new'},'terminal.new'],
+    ['type_terminal_input',{tabId:'shell',inputToken:'token',inputSessionId:'process',expectedText:'',text:'draft',mode:'insert',requestId:'type'},'terminal.native.type'],
+    ['press_terminal_key',{tabId:'shell',inputToken:'token2',inputSessionId:'process',shortcut:'control_l',intent:'navigation',requestId:'key'},'terminal.key'],
+    ['queue_tab_draft',{tabId:'agent',sessionId:queueSession,token:'draft',text:'reviewed',requestId:'queue'},'terminal.queue'],
+    ['files',{action:'list',query:'requested deliverable',requestId:'files'},'files.list'],
+    ['clipboard',{operation:'read',requestId:'clipboard'},'remote.clipboard']];
+  const lines=[],requests=[];
+  await runAssistantMCP({root,input:Readable.from([JSON.stringify({id:1,method:'tools/list'})+'\n',...calls.map(([name,args],i)=>JSON.stringify({id:i+2,method:'tools/call',params:{name,arguments:args}})+'\n')]),
+    output:new Writable({write(chunk,_encoding,done){lines.push(JSON.parse(chunk));done();}}),
+    fetchImpl:async(url,options)=>{requests.push(JSON.parse(options.body));return {ok:true,json:async()=>({job:{id:'fixture',status:'completed'}})};}});
+  for (const [name,args,action] of calls) {
+    assert.ok(lines[0].result.tools.some(t=>t.name===name));
+    const {action:_,...payload}=args;
+    assert.ok(requests.some(r=>r.action===action&&r.requestId===args.requestId));
+    assert.deepEqual(requests[calls.findIndex(c=>c[0]===name)],{...payload,action,...(name==='queue_tab_draft'?{useExistingDraft:true}:{})});
+  }
+});
 const queueRequest=(id='queue-1')=>({action:'terminal.queue',requestId:id,tabId:'target',sessionId:queueSession,text:'Authorized follow-up'});
 async function prepareQueue(runtime,id='queue-1') {
   await runtime.command(queueRequest(id),{tool:true});

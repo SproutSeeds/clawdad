@@ -4,6 +4,28 @@ import XCTest
 @testable import ClawDad
 
 final class MacNativeTerminalCloseTests: XCTestCase {
+  func testNewTabUsesUniqueCommandTOnlyAfterNativeFocusVerification() throws {
+    let graph = CloseGraph(); graph.shortcut = "t"
+    let reader = MacNativeTerminalTabs(readAttribute: graph.read); reader.performAction = graph.press
+    let rows = try reader.snapshots(application: graph.app) { graph.shells }
+    try reader.openTab(rows[0].nativeTabID!, application: graph.app)
+    XCTAssertEqual(graph.menuPressed,1); XCTAssertEqual(graph.otherMenuPressed,0)
+  }
+
+  func testNewTabNeverUsesAnAmbiguousDisabledMenuOrAChangedWindow() throws {
+    for mode in ["missing", "disabled", "duplicate", "shift"] {
+      let graph = CloseGraph(); graph.shortcut = "t"; graph.menuMode = mode
+      let reader = MacNativeTerminalTabs(readAttribute: graph.read); reader.performAction = graph.press
+      let rows = try reader.snapshots(application: graph.app) { graph.shells }
+      XCTAssertThrowsError(try reader.openTab(rows[0].nativeTabID!, application: graph.app))
+      XCTAssertEqual(graph.menuPressed,0)
+    }
+    let graph = CloseGraph(); graph.shortcut = "t"; graph.changeDuringMenuRead = "selection"
+    let reader = MacNativeTerminalTabs(readAttribute: graph.read); reader.performAction = graph.press
+    let rows = try reader.snapshots(application: graph.app) { graph.shells }
+    XCTAssertThrowsError(try reader.openTab(rows[0].nativeTabID!, application: graph.app))
+    XCTAssertEqual(graph.menuPressed,0)
+  }
   func testInertTabCloseProxyUsesTheSingleTabMenuCommand() throws {
     let graph = CloseGraph()
     graph.ignoreTabProxy = true

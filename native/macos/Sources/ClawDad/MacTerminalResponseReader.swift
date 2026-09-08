@@ -201,7 +201,7 @@ struct MacCodexResponseParser {
 }
 
 /// Bounded background-only process execution. Arguments never pass through a shell.
-private func macTerminalResponseCommand(_ executable: String, _ arguments: [String]) throws -> String {
+func macTerminalResponseCommand(_ executable: String, _ arguments: [String]) throws -> String {
   let process = Process()
   let output = Pipe()
   process.executableURL = URL(fileURLWithPath: executable)
