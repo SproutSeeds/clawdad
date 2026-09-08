@@ -13,6 +13,7 @@
 		1A308337EBE5F90AF0C5DD19 /* ClawDadRemoteAssistProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = 3E041F6ED9B6E45F5F37F06A /* ClawDadRemoteAssistProtocol */; };
 		275FAABA58CF0436EC6D32FB /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 471CC1C676A805963BAF2F99 /* Assets.xcassets */; };
 		2EFAB0BA46EC3D36BAF2E9A0 /* MobileNotifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97E3CAB4A99E84BAFA945FA2 /* MobileNotifications.swift */; };
+		3031C85399B84CB186BBF471 /* AssistantMessageLinks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A6015610A23A073B93087F9 /* AssistantMessageLinks.swift */; };
 		39F7EDBB4973CC068AC0E2F3 /* RemoteSpeechControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89C609AE055F4F4C09202552 /* RemoteSpeechControls.swift */; };
 		3B51519C1804A2B28C237997 /* CloudModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 395E23F4DD2363BA0762CE4C /* CloudModels.swift */; };
 		3CA091886654915398868F62 /* CloudClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD8DD24D34A3F29E43308A65 /* CloudClient.swift */; };
@@ -94,6 +95,7 @@
 		930A750132AFE74E66A35E11 /* PasskeyRequests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PasskeyRequests.swift; sourceTree = "<group>"; };
 		97E3CAB4A99E84BAFA945FA2 /* MobileNotifications.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileNotifications.swift; sourceTree = "<group>"; };
 		99C468715F6ABFF27CB4041C /* AssistantConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantConnection.swift; sourceTree = "<group>"; };
+		9A6015610A23A073B93087F9 /* AssistantMessageLinks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantMessageLinks.swift; sourceTree = "<group>"; };
 		9D4E99AEE8642626D8FD9843 /* AssistantPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantPreview.swift; sourceTree = "<group>"; };
 		9EF3E28FFA532EBF14FEAF8B /* DeviceIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceIdentity.swift; sourceTree = "<group>"; };
 		A01E4E35032819166F419843 /* MobileFilesPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileFilesPreview.swift; sourceTree = "<group>"; };
@@ -144,6 +146,7 @@
 				3286351CBEADFC96A79F1EE4 /* AssistantAudio.swift */,
 				99C468715F6ABFF27CB4041C /* AssistantConnection.swift */,
 				10F1B258EA5FA2916837629C /* AssistantListeningInput.swift */,
+				9A6015610A23A073B93087F9 /* AssistantMessageLinks.swift */,
 				29F575EC9D8D541AD658DF6B /* AssistantMicrophoneState.swift */,
 				9D4E99AEE8642626D8FD9843 /* AssistantPreview.swift */,
 				D9A446032B25104E6A1BFFEB /* AssistantVoiceTurn.swift */,
@@ -335,6 +338,7 @@
 				DA856C77B9663DCAB80C7092 /* AssistantAudio.swift in Sources */,
 				7695559828A1EB5AFE19317C /* AssistantConnection.swift in Sources */,
 				92590FA64F260AD34017423B /* AssistantListeningInput.swift in Sources */,
+				3031C85399B84CB186BBF471 /* AssistantMessageLinks.swift in Sources */,
 				A16430EEB828FE766B76BAE1 /* AssistantMicrophoneState.swift in Sources */,
 				06B20F27947BBF2559A2A982 /* AssistantPreview.swift in Sources */,
 				717EF4B47E469AB10F5D1E58 /* AssistantVoiceTurn.swift in Sources */,
@@ -478,7 +482,7 @@
 				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 60;
+				CURRENT_PROJECT_VERSION = 61;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_NS_ASSERTIONS = NO;
@@ -557,7 +561,7 @@
 				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 60;
+				CURRENT_PROJECT_VERSION = 61;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -668,7 +672,7 @@
 				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 60;
+				CURRENT_PROJECT_VERSION = 61;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_NS_ASSERTIONS = NO;

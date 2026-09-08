@@ -2,6 +2,40 @@ import XCTest
 
 @MainActor
 final class AssistantUITests: XCTestCase {
+  func testResponsePhoneAndAddressLinksOpenTheirIntendedDestinations() {
+    checkResponseLinks(googleInstalled: true)
+  }
+  func testResponseAddressFallsBackToAppleMaps() {
+    checkResponseLinks(googleInstalled: false)
+  }
+  private func checkResponseLinks(googleInstalled: Bool) {
+    let app = XCUIApplication()
+    app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-assistant-test", "--clawdad-assistant-links-test"]
+      + (googleInstalled ? [] : ["--clawdad-assistant-no-google"])
+    app.launch()
+    XCTAssertTrue(app.buttons["clawdad.assistant.open"].waitForExistence(timeout: 20))
+    app.buttons["clawdad.assistant.open"].tap()
+    app.buttons["clawdad.assistant.return"].tap()
+    let phone = app.links["(415) 555-0100"]
+    XCTAssertTrue(phone.waitForExistence(timeout: 5))
+    phone.tap()
+    let destination = app.staticTexts["clawdad.assistant.link-destination"]
+    XCTAssertTrue(destination.waitForExistence(timeout: 3))
+    XCTAssertTrue(destination.label.hasPrefix("tel:"))
+    let address = app.links["123 Main Street, San Francisco, CA 94105"]
+    XCTAssertTrue(address.exists)
+    address.tap()
+    let prefix = googleInstalled ? "comgooglemaps:" : "https://maps.apple.com/"
+    let opened = expectation(for: NSPredicate(format: "label BEGINSWITH %@", prefix), evaluatedWith: destination)
+    wait(for: [opened], timeout: 3)
+    let screenshot = XCTAttachment(screenshot: app.screenshot())
+    screenshot.name = googleInstalled ? "Assistant tappable business contact" : "Assistant map fallback"
+    screenshot.lifetime = .keepAlways
+    add(screenshot)
+    app.buttons["clawdad.assistant.back"].tap()
+    XCTAssertTrue(app.buttons["clawdad.assistant.return"].exists)
+  }
+
   func testSendNowAndPausePreferenceAreAvailableWithoutLeavingTheCall() {
     let app = XCUIApplication()
     app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-assistant-test", "--clawdad-assistant-send-test"]

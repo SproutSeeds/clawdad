@@ -722,7 +722,11 @@ struct AssistantView: View {
                   VStack(alignment: .leading, spacing: 5) {
                     Text(message.role == "user" ? "You" : "Assistant").font(.caption.bold())
                       .foregroundStyle(ClawDadTheme.gold)
-                    Text(message.text).textSelection(.enabled)
+                    if message.role == "assistant" {
+                      AssistantResponseText(text: message.text)
+                    } else {
+                      Text(message.text).textSelection(.enabled)
+                    }
                   }.frame(maxWidth: .infinity, alignment: .leading).id(message.id)
                 }
                 if controller.hearingSpeech || controller.transcribingSpeech || !controller.liveTranscript.isEmpty {
@@ -735,12 +739,13 @@ struct AssistantView: View {
                     .id("live-transcript")
                     .accessibilityIdentifier("clawdad.assistant.transcript")
                 }
-                ForEach((controller.snapshot?.tasks ?? []).filter { ["terminal.send", "terminal.insert"].contains($0.action) })
+                ForEach((controller.snapshot?.tasks ?? []).filter { ["terminal.send", "terminal.insert", "terminal.clear", "terminal.replace"].contains($0.action) })
                 { task in
                   VStack(alignment: .leading, spacing: 6) {
                     Text("\(task.tabTitle ?? "Terminal task") · \(task.status)").font(
                       .subheadline.bold())
-                    Text(task.args["text"]?.string ?? "").font(.footnote).textSelection(.enabled)
+                    Text(task.action == "terminal.clear" ? "Clear draft input" : task.args["text"]?.string ?? "")
+                      .font(.footnote).textSelection(.enabled)
                     if let error = task.error {
                       Text(error).foregroundStyle(ClawDadTheme.gold).font(.footnote)
                     }

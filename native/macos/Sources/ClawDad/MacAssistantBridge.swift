@@ -13,7 +13,16 @@ final class MacAssistantBridge {
   private var loop: Task<Void, Never>?
   private var inventoryRequested = false
   private var inspection:
-    (token: String, pid: pid_t, element: AXUIElement, generation: UInt64, expires: Date)?
+    (token: String, pid: pid_t, element: AXUIElement, window: CFTypeRef?, launch: Date?, generation: UInt64, expires: Date)?
+  private struct DraftInspection {
+    let tabId: String
+    let sessionId: String
+    let identity: String
+    let generation: UInt64
+    let text: String
+    let expires: Date
+  }
+  private var draftInspections: [String: DraftInspection] = [:]
   private let workerId = UUID().uuidString
   private let interaction = MacAssistantInteractionGate.shared
 
@@ -75,6 +84,7 @@ final class MacAssistantBridge {
     loop = nil
     input?.cancelPendingOperations()
     inspection = nil
+    draftInspections.removeAll()
   }
 
   private func save(_ value: [String: AssistantValue], to name: String) throws {
@@ -96,6 +106,17 @@ final class MacAssistantBridge {
       throw MacAssistantError("Update ClawDad to use the background Assistant conversation.")
     }
     if action.hasPrefix("computer.") { return try await computer(action, args: args) }
+    let editing = ["terminal.clear", "terminal.replace"].contains(action)
+    let editToken = args["token"]?.string ?? ""
+    let draftInspection = editing ? draftInspections.removeValue(forKey: editToken) : nil
+    if editing {
+      guard let draftInspection, draftInspection.expires > Date(),
+        draftInspection.tabId == args["tabId"]?.string,
+        draftInspection.text == args["expectedText"]?.string,
+        interaction.isCurrent(draftInspection.generation) else {
+        throw MacAssistantError("The draft inspection expired or changed. Inspect the intended tab again; its draft was preserved.")
+      }
+    }
     var state = try await tabs.catalog()
     let tabID = args["tabId"]?.string
     guard let tabID, let tab = state.tabs.first(where: { $0.id == tabID }) else {
@@ -137,6 +158,9 @@ final class MacAssistantBridge {
       }
       return ["close": try .encode(await tabs.closing.handle(request))]
     }
+    if editing, tab.isBusy {
+      throw MacAssistantError("This agent is working. Its draft was preserved. Inspect it again when idle.")
+    }
     if ["terminal.send", "terminal.insert"].contains(action), tab.isBusy {
       throw MacAssistantDeferred(message: "Waiting for \(tab.title)'s agent to finish.")
     }
@@ -160,23 +184,67 @@ final class MacAssistantBridge {
           "tabId": .string(tabID), "tabTitle": .string(tab.title), "detail": .string(tab.detail),
           "terminalTitle": .string(target.customTitle),
           "screenText": .string(try focusedTerminalText()), "agentAvailable": .bool(false),
+          "draft": .object(["editable": .bool(false), "reason": .string("A supported idle Codex input is required.")]),
         ]
       }
       let response = try? await Task.detached {
         try MacCodexResponseParser.read(conversation: conversation)
       }.value
+      let screen = try focusedTerminalText()
+      let draft = await inspectDraft(tabId: tabID, conversation: conversation, screen: screen,
+        busy: tab.isBusy, ticket: ticket)
       return [
         "tabId": .string(tabID), "tabTitle": .string(tab.title), "detail": .string(tab.detail),
         "terminalTitle": .string(target.customTitle),
         "sessionId": .string(conversation.sessionId),
         "conversationPath": .string(conversation.path.path),
         "latestResponse": response.map { .string($0.text) } ?? .null,
-        "screenText": .string(try focusedTerminalText()),
+        "screenText": .string(screen), "draft": .object(draft),
       ]
     }
     let conversation = try await Task.detached {
       try MacTerminalResponseReader().resolve(tty: target.tty)
     }.value
+    if editing, let draftInspection {
+      guard draftInspection.sessionId == conversation.sessionId,
+        try await tabs.inputIdentity() == draftInspection.identity,
+        let expected = args["expectedText"]?.string,
+        let replacement = action == "terminal.clear" ? "" : args["text"]?.string,
+        expected.utf8.count <= 16 * 1024, replacement.utf8.count <= 16 * 1024,
+        !replacement.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) && $0 != "\n" && $0 != "\t" })
+      else { throw MacAssistantError("The Terminal input identity changed or the edit is invalid. Inspect it again.") }
+      defer { input.invalidateDictationTarget() }
+      func allowed(_ value: String) -> Bool {
+        var activity = MacCodexRequestActivityLog()
+        return interaction.isCurrent(draftInspection.generation)
+          && !MacConsoleSessionState.isLocked() && AXIsProcessTrusted()
+          && (try? activity.read(conversation.path)) == false
+          && (try? focusedTerminalText()).flatMap(assistantEditableDraft) == value
+      }
+      try await assistantEditVerifiedDraft(expected: expected, replacement: replacement, read: { [self] in
+        guard interaction.isCurrent(draftInspection.generation),
+          !MacConsoleSessionState.isLocked(), AXIsProcessTrusted(),
+          try await tabs.inputIdentity() == draftInspection.identity else {
+          throw MacAssistantError("The targeted input changed during editing. Inspect the tab; Enter was not sent.")
+        }
+        var activity = MacCodexRequestActivityLog()
+        guard try !activity.read(conversation.path) else {
+          throw MacAssistantError("The agent started working. Inspect its draft before another edit.")
+        }
+        return assistantEditableDraft(try focusedTerminalText())
+      }, clear: {
+        await input.clearAssistantDraft(targetToken: editToken, isAllowed: { !expected.isEmpty && allowed(expected) }) {
+          [tabs] in try await tabs.inputIdentity()
+        }
+      }, insert: { text in
+        await input.insertAssistantDraft(text, targetToken: editToken, isAllowed: { allowed("") }) {
+          [tabs] in try await tabs.inputIdentity()
+        }
+      })
+      return ["tabId": .string(tabID), "tabTitle": .string(tab.title),
+        "draftVerified": .bool(true), "submitted": .bool(false), "text": .string(replacement),
+        "verification": .string("rendered-composer")]
+    }
     guard ["terminal.send", "terminal.insert"].contains(action), let text = args["text"]?.string,
       !text.isEmpty, text.utf8.count <= 32_000
     else { throw AssistantProtocolError.invalid }
@@ -236,6 +304,29 @@ final class MacAssistantBridge {
     ]
   }
 
+  private func inspectDraft(tabId: String, conversation: MacCodexConversation, screen: String,
+    busy: Bool, ticket: UInt64) async -> [String: AssistantValue] {
+    let unavailable: [String: AssistantValue] = ["editable": .bool(false),
+      "reason": .string("Inspect an idle, fully visible text draft. Attachments, collapsed pastes and unresolved prompts are preserved.")]
+    var activity = MacCodexRequestActivityLog()
+    guard !busy, (try? activity.read(conversation.path)) == false,
+      let text = assistantEditableDraft(screen), let input,
+      let identity = try? await tabs.inputIdentity() else { return unavailable }
+    let token = UUID().uuidString
+    let capture = await input.captureDictationTarget(.request(.captureTarget, requestId: token)) {
+      [tabs] in try await tabs.inputIdentity()
+    }
+    guard capture.ok == true, interaction.isCurrent(ticket),
+      (try? await tabs.inputIdentity()) == identity,
+      (try? focusedTerminalText()).flatMap(assistantEditableDraft) == text else { return unavailable }
+    draftInspections = draftInspections.filter { $0.value.expires > Date() }
+    if draftInspections.count >= 20 { draftInspections.removeAll() }
+    draftInspections[token] = DraftInspection(tabId: tabId, sessionId: conversation.sessionId,
+      identity: identity, generation: ticket, text: text, expires: Date().addingTimeInterval(45))
+    return ["editable": .bool(true), "text": .string(text), "token": .string(token),
+      "expiresInSeconds": .number(45)]
+  }
+
   private func ax(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
     var value: CFTypeRef?
     return AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success
@@ -276,12 +367,14 @@ final class MacAssistantBridge {
     if action == "computer.inspect" || action == "computer.capture" {
       let token = UUID().uuidString
       inspection = (
-        token, app.processIdentifier, element, interaction.generation, Date().addingTimeInterval(30)
+        token, app.processIdentifier, element, ax(element, kAXWindowAttribute), app.launchDate,
+        interaction.generation, Date().addingTimeInterval(30)
       )
       var result: [String: AssistantValue] = [
         "token": .string(token), "application": .string(app.localizedName ?? "Application"),
         "bundleId": .string(app.bundleIdentifier ?? ""),
         "text": .string(String((ax(element, kAXValueAttribute) as? String ?? "").suffix(24_000))),
+        "canEditText": .bool(canEditInput(app, element)),
       ]
       if action == "computer.capture" {
         guard CGPreflightScreenCaptureAccess(), let image = CGDisplayCreateImage(CGMainDisplayID())
@@ -295,6 +388,34 @@ final class MacAssistantBridge {
         result["height"] = .number(Double(image.height))
       }
       return result
+    }
+    if ["computer.clear", "computer.replace"].contains(action) {
+      guard let captured = inspection, args["token"]?.string == captured.token,
+        let expected = args["expectedText"]?.string,
+        let replacement = action == "computer.clear" ? "" : args["text"]?.string,
+        expected.utf8.count <= 16 * 1024, replacement.utf8.count <= 16 * 1024,
+        !replacement.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) && $0 != "\n" && $0 != "\t" })
+      else { throw MacAssistantError("Inspect the intended input before editing it.") }
+      inspection = nil
+      func read() throws -> String {
+        let (current, focused) = try focusedElement()
+        guard Date() < captured.expires, !MacConsoleSessionState.isLocked(), AXIsProcessTrusted(),
+          interaction.isCurrent(captured.generation), current.processIdentifier == captured.pid,
+          current.launchDate == captured.launch, CFEqual(focused, captured.element),
+          let window = captured.window, let currentWindow = ax(focused, kAXWindowAttribute),
+          CFEqual(window, currentWindow), canEditInput(current, focused),
+          let text = ax(focused, kAXValueAttribute) as? String else {
+          throw MacAssistantError("This input changed or does not support verified text editing. Inspect it again; use the dedicated tab tools for Terminal.")
+        }
+        return text
+      }
+      try await assistantReplaceVerifiedInput(expected: expected, replacement: replacement, read: read,
+        write: { text in
+          guard (try? read()) == expected else { return false }
+          return AXUIElementSetAttributeValue(captured.element, kAXValueAttribute as CFString, text as CFString) == .success
+        })
+      return ["inputVerified": .bool(true), "submitted": .bool(false), "text": .string(replacement),
+        "bundleId": .string(app.bundleIdentifier ?? "")]
     }
     guard action == "computer.input", let captured = inspection,
       args["token"]?.string == captured.token, Date() < captured.expires,
@@ -344,6 +465,16 @@ final class MacAssistantBridge {
     input.handle(
       try JSONEncoder().encode(object), respondClipboard: { _ in }, respondInput: { _ in })
     return ["inputRequested": .bool(true)]
+  }
+
+  private func canEditInput(_ app: NSRunningApplication, _ element: AXUIElement) -> Bool {
+    var settable = DarwinBoolean(false)
+    guard AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable) == .success else { return false }
+    return MacAssistantInputEditPolicy.permits(bundleIdentifier: app.bundleIdentifier,
+      role: ax(element, kAXRoleAttribute) as? String ?? "", subrole: ax(element, kAXSubroleAttribute) as? String,
+      editable: ax(element, kAXIsEditableAttribute as String) as? Bool,
+      enabled: ax(element, kAXEnabledAttribute) as? Bool, focused: ax(element, kAXFocusedAttribute) as? Bool,
+      valueSettable: settable.boolValue, text: ax(element, kAXValueAttribute) as? String)
   }
 }
 

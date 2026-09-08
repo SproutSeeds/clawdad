@@ -71,7 +71,7 @@ test('a working task leaves its tab available for watching and inspection',async
 
 test('ordinary paired requests cannot call native-worker or desktop-tool actions',async t=>{
   const {runtime}=await fixture(t);
-  for(const action of ['terminal.send','terminal.insert','computer.input','native.poll','turn/start'])await assert.rejects(runtime.command({action,requestId:action,tabId:'x',text:'x'}),/Unsupported/);
+  for(const action of ['terminal.send','terminal.insert','terminal.clear','terminal.replace','computer.clear','computer.replace','computer.input','native.poll','turn/start'])await assert.rejects(runtime.command({action,requestId:action,tabId:'x',text:'x'}),/Unsupported/);
   await assert.rejects(runtime.command({action:'message',requestId:'loop',text:'loop'},{tool:true}),/Unsupported/);
 });
 
@@ -98,6 +98,49 @@ test('draft and submit requests keep their order while a busy tab is deferred',a
   await runtime.nativeResult({id:'draft',deferred:true,error:'Agent is working'});
   assert.equal((await runtime.nativePoll({workerId:'worker-1'})).job,null);
   tick();assert.equal((await runtime.nativePoll({workerId:'worker-1'})).job.id,'draft');
+});
+
+test('clear and replace require an inspected input and preserve exact whitespace',async t=>{
+  const {runtime}=await fixture(t);
+  for(const action of ['terminal.clear','terminal.replace','computer.clear','computer.replace']) {
+    const request={action,requestId:action,tabId:'tab',token:'inspection',expectedText:'Keep  spaces\n🦞',...(action.endsWith('.replace')?{text:'New  draft\nNo Enter'}:{})};
+    for(const malformed of [{...request,token:''},{...request,expectedText:null},{...request,expectedText:'x'.repeat(17000)},
+      {...request,expectedText:'x\u001b[A'},...(action.endsWith('.replace')?[{...request,text:'text\0'}, {...request,text:undefined}]:[{...request,text:'must not insert'}])]) {
+      await assert.rejects(runtime.command(malformed,{tool:true}),/Invalid|does not accept/);
+    }
+    await runtime.command(request,{tool:true});
+    assert.equal((await runtime.nativePoll({workerId:'worker-1'})).job.id,action);
+    await runtime.nativeResult({id:action,result:{submitted:false,inputVerified:true,text:request.text??''}});
+    const job=await runtime.job(action);
+    assert.equal(job.args.expectedText,'Keep  spaces\n🦞');
+    assert.equal(job.status,'completed'); assert.equal(job.result.submitted,false);
+    await runtime.command(request,{tool:true});
+    assert.equal((await runtime.nativePoll({workerId:'worker-1'})).job,null);
+    await assert.rejects(runtime.command({...request,expectedText:'Different draft'},{tool:true}),/different action/);
+  }
+});
+
+test('draft edits share tab ordering and uncertain edits survive restart without replay',async t=>{
+  const {runtime,root,coordinator,tick}=await fixture(t);
+  const requests=[{action:'terminal.insert',requestId:'first',tabId:'tab',text:'Draft'},
+    {action:'terminal.clear',requestId:'clear',tabId:'tab',token:'inspected',expectedText:'Draft'},
+    {action:'terminal.replace',requestId:'replace',tabId:'tab',token:'new-inspection',expectedText:'',text:'Replacement'}];
+  for(const request of requests) await runtime.command(request,{tool:true});
+  assert.equal((await runtime.nativePoll({workerId:'worker-1'})).job.id,'first');
+  await runtime.nativeResult({id:'first',deferred:true,error:'Busy'});
+  assert.equal((await runtime.nativePoll({workerId:'worker-1'})).job,null);
+  tick(); await runtime.nativePoll({workerId:'worker-1'});
+  await runtime.nativeResult({id:'first',result:{draftVerified:true,submitted:false}});
+  assert.equal((await runtime.nativePoll({workerId:'worker-1'})).job.id,'clear');
+  const restarted=new AssistantRuntime({root,coordinator});
+  t.after(()=>restarted.close());
+  const next=await restarted.nativePoll({workerId:'worker-2'});
+  assert.equal((await restarted.job('clear')).status,'attention');
+  assert.equal(next.job.id,'replace');
+  await restarted.nativeResult({id:'replace',error:'Inspection expired'});
+  await restarted.command(requests[1],{tool:true});
+  assert.equal((await restarted.nativePoll({workerId:'worker-2'})).job,null);
+  assert.equal((await restarted.job('clear')).status,'attention');
 });
 
 test('voice timing attaches only bounded numeric diagnostics to the accepted user message',async t=>{
@@ -201,7 +244,10 @@ test('MCP sends the exact authorized prompt to the local Terminal queue and retu
   await fs.writeFile(path.join(root,'native-server.token'),'fixture-token');
   const frames=[{id:1,method:'initialize'},{id:2,method:'tools/list'},
     {id:3,method:'tools/call',params:{name:'send_to_tab',arguments:{tabId:'tab-two',text:'Please review the existing patch.',requestId:'stable-request'}}},
-    {id:4,method:'tools/call',params:{name:'insert_in_tab',arguments:{tabId:'tab-three',text:'hey Cody',requestId:'stable-draft'}}}];
+    {id:4,method:'tools/call',params:{name:'insert_in_tab',arguments:{tabId:'tab-three',text:'hey Cody',requestId:'stable-draft'}}},
+    ...['clear_tab_input','replace_tab_input','clear_input','replace_input'].map((name,i)=>({id:5+i,method:'tools/call',params:{name,arguments:{
+      token:'fresh-input',expectedText:'Original  draft',requestId:name,...(name.includes('tab')?{tabId:'tab-three'}:{}),
+      ...(name.startsWith('replace')?{text:'Replacement\n🦞'}:{})}}}))];
   const requests=[],lines=[];
   await runAssistantMCP({root,input:Readable.from(frames.map(f=>JSON.stringify(f)+'\n')),
     output:new Writable({write(chunk,_encoding,done){lines.push(JSON.parse(chunk));done();}}),
@@ -209,8 +255,15 @@ test('MCP sends the exact authorized prompt to the local Terminal queue and retu
   assert.equal(lines[0].result.serverInfo.name,'clawdad-assistant');
   assert.ok(lines[1].result.tools.some(t=>t.name==='inspect_tab'));
   assert.ok(lines[1].result.tools.some(t=>t.name==='insert_in_tab'));
+  for(const name of ['clear_tab_input','replace_tab_input','clear_input','replace_input']) {
+    const tool=lines[1].result.tools.find(t=>t.name===name);
+    assert.ok(tool.inputSchema.required.includes('expectedText'));
+    assert.ok(tool.inputSchema.required.includes('token'));
+    assert.match(tool.description,/WITHOUT Enter/);
+  }
   assert.deepEqual(requests,[{url:'http://127.0.0.1:4487/v1/assistant/tool',body:{tabId:'tab-two',text:'Please review the existing patch.',requestId:'stable-request',action:'terminal.send'}},
-    {url:'http://127.0.0.1:4487/v1/assistant/tool',body:{tabId:'tab-three',text:'hey Cody',requestId:'stable-draft',action:'terminal.insert'}}]);
+    {url:'http://127.0.0.1:4487/v1/assistant/tool',body:{tabId:'tab-three',text:'hey Cody',requestId:'stable-draft',action:'terminal.insert'}},
+    ...['terminal.clear','terminal.replace','computer.clear','computer.replace'].map((action,i)=>({url:'http://127.0.0.1:4487/v1/assistant/tool',body:{...frames[4+i].params.arguments,action}}))]);
   assert.equal(JSON.parse(lines[2].result.content[0].text).job.id,'stable-request');
   assert.equal(JSON.parse(lines[3].result.content[0].text).job.id,'stable-draft');
 });

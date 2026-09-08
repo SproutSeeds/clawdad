@@ -20,6 +20,13 @@
           ])
         ]),
       ]
+      if ProcessInfo.processInfo.arguments.contains("--clawdad-assistant-links-test") {
+        state["messages"] = .array([.object([
+          "id": .string("contact"), "role": .string("assistant"),
+          "text": .string("Example business\nPhone: (415) 555-0100\nAddress: 123 Main Street, San Francisco, CA 94105\nTap the number to call or the address to view the map."),
+          "createdAt": .string("2026-09-08T00:00:00Z")
+        ])])
+      }
       let catalog = RemoteTerminalTabState(
         revision: 1, selectedTabId: "code-one",
         tabs: [

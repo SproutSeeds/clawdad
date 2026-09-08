@@ -20,6 +20,10 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>comgooglemaps</string>
+	</array>
 	<key>ClawDadCloudURL</key>
 	<string>$(CLAWDAD_CLOUD_URL)</string>
 	<key>ClawDadPushEnvironment</key>
