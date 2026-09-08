@@ -10,6 +10,11 @@ Apple's processed marketing icon was downloaded through the build-icons API
 and visually confirmed to show the updated baby-in-a-claw artwork. Install the
 update from TestFlight to replace the iPhone's installed system icons.
 
+**Physical follow-up:** the user confirmed the Home Screen shows the updated
+icon, but fresh notifications still show the old one. The packaged artwork is
+verified; notification-icon acceptance remains open pending the iPhone restart
+and retest described below.
+
 ## Artwork and scope
 
 Source: `apps/ios/ClawDadMobile/Resources/Assets.xcassets/ClawDadMascot.imageset/clawdad-mascot.png`.
@@ -59,6 +64,37 @@ The user confirmed physical iPhone receipt after the relay repair. All four
 previously queued events, including the original test, received APNs HTTP 200;
 the queue was empty at the final check. See
 `reports/response-notifications-2026-09-07.md` for the repair and delivery proof.
+
+## Notification icon follow-up — September 8 UTC
+
+After confirming successful push receipt, the user reported that the Home
+Screen has the new icon while the notification header retains the old icon.
+App Store Connect still reports build 56 `VALID` and `IN_BETA_TESTING`.
+
+A fresh `actool` compilation in an isolated artifact directory was compared
+against build 56's archived `Assets.car`. All ten compiled icon renditions
+match by digest, including the 40-pixel and 60-pixel notification renditions.
+The app uses the generated primary `AppIcon` declaration; there are no alternate
+icon overrides or custom notification-header icons in the application code.
+This rules out stale notification-sized assets in the shipped archive.
+
+The remaining behavior matches an [Apple-acknowledged notification icon cache
+issue](https://developer.apple.com/forums/thread/775787). Apple's engineer
+recommends a device restart and an Apple bug report if the mismatch persists.
+There is no verified application-side cache refresh workaround in that thread;
+later reports still describe the issue. Renaming the icon catalog or uploading
+another build has not been established as a remedy, so neither was presented
+as a complete fix. No notification history, pairing, or credentials were reset.
+
+The user was asked to restart the iPhone once, reopen ClawDad, and retest a fresh
+notification. That physical result is pending. If it persists, collect the
+iOS version and Home Screen appearance mode and prepare the minimal Apple
+reproduction described in the linked thread; any support submission or device
+diagnostic upload is a separate action.
+
+Evidence: `apps/ios/ClawDadMobile/build/icon-notification-audit/` contains the
+fresh asset compilation, generated icon plist, and
+`shipped-icon-comparison.json`. No new native build was cut for this audit.
 
 ## Worktree handoff
 
