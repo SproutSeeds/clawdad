@@ -1,7 +1,7 @@
 # Terminal response notifications — 2026-09-07
 
 **The relay repair is deployed and the user confirmed receiving an iPhone
-alert.** Apple accepted three queued alerts with HTTP 200. Mac build 70 is
+alert.** Apple accepted all four queued alerts with HTTP 200. Mac build 70 is
 installed and healthy, and iPhone build 55 is available in ClawDad Internal
 TestFlight. This cloud-only repair requires no new native build. Notification-tap
 routing and the remaining acceptance scenarios below still need hands-on checks.
@@ -171,9 +171,10 @@ Production APNs returned HTTP 200 for three real queued events at
 `00:55:41.678Z`, `00:55:46.563Z`, and `00:56:36.459Z` on September 8 UTC. Each
 recipient was durably removed from its event after Apple's acknowledgement.
 The user then confirmed: "yes I received an alert!" This establishes physical
-receipt after the repair. The original `00:40:56Z` test event remains on its
-prior retry schedule, due `01:02:11.390Z` at the latest check; fresh completions
-start with the ordinary immediate send schedule.
+receipt after the repair. The original `00:40:56Z` test event then succeeded on
+its scheduled retry at `01:02:11.576Z`, also HTTP 200. The final queue check at
+`01:04:55Z` confirms zero pending events and four acknowledged alerts. Fresh
+completions start with the ordinary immediate send schedule.
 
 ## Physical iPhone acceptance
 

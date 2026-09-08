@@ -1,5 +1,13 @@
 App icon source:
 
-The app icon is a square close-up crop of the existing Clawdad crawfish face asset:
+The iPhone, notification, Settings, TestFlight/App Store, and web app icons use
+the approved baby-in-a-claw mascot:
 
-assets/clawdad-header-27.jpg
+apps/ios/ClawDadMobile/Resources/Assets.xcassets/ClawDadMascot.imageset/clawdad-mascot.png
+
+The artwork is preserved, transparent padding is trimmed, and the complete
+mascot is fitted onto an opaque square matching the app's LaunchBackground.
+
+Regenerate all 13 icon renditions from the repository root:
+
+swift bin/clawdad-app-icons.swift
