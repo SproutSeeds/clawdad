@@ -48,6 +48,7 @@ final class MobileAssistantController: ObservableObject {
   private var speechQueue: [AssistantMessage] = []
   private var activeReplyRequest: String?
   private var taskError = ""
+  private var connectionError = ""
   #if DEBUG
     private var preview: AssistantPreview?
   #endif
@@ -65,7 +66,17 @@ final class MobileAssistantController: ObservableObject {
     connection.onChange = { [weak self] in
       guard let self else { return }
       connected = self.connection.connected
-      if !connected { assistantReady = false; status = "Reconnecting to your Mac…" }
+      if !connected {
+        assistantReady = false
+        status = "Reconnecting to your Mac…"
+        if let failure = self.connection.lastFailure {
+          connectionError = failure
+          error = failure
+        }
+      } else if error == connectionError {
+        error = ""
+        connectionError = ""
+      }
     }
     audio.onSpeechStarted = { [weak self] in
       guard let self, voiceActive, !muted, !replyAudioActive else { return }
@@ -236,6 +247,31 @@ final class MobileAssistantController: ObservableObject {
     if snapshot?.enabled != true { try await command("start") }
     assistantReady = snapshot?.enabled == true && snapshot?.nativeOnline == true && snapshot?.catalog != nil
   }
+  private func awaitAssistant(until deadline: Date, voiceAttempt: UUID? = nil) async throws {
+    let requestedScope = scope
+    while true {
+      try Task.checkCancellation()
+      guard scope == requestedScope, voiceAttempt == nil || voiceEpoch == voiceAttempt else {
+        throw CancellationError()
+      }
+      guard Date() < deadline else { throw AssistantProtocolError.timedOut }
+      if !connected {
+        connection.connect()
+      } else {
+        do {
+          // A call checks liveness even when an earlier message marked the link ready.
+          if voiceAttempt != nil { try await refresh() }
+          try await ensureAssistant()
+          if assistantReady { return }
+        } catch {
+          if connected { throw error }
+          // Transport failures invalidate the old peer. Keep this same operation
+          // pending while its replacement connects; microphone capture stays off.
+        }
+      }
+      try await Task.sleep(nanoseconds: 150_000_000)
+    }
+  }
   func perform(_ action: String, args: [String: AssistantValue] = [:]) {
     Task {
       do { try await command(action, args: args) } catch { self.error = error.localizedDescription }
@@ -244,9 +280,11 @@ final class MobileAssistantController: ObservableObject {
   func openChat(_ session: CloudSession) { bind(session); open() }
   func retryConnection() {
     error = ""
+    connectionError = ""
+    connection.close()
+    assistantReady = false
     open()
-    if !connected { connection.connect() }
-    else { Task { do { try await refresh() } catch { self.error = error.localizedDescription } } }
+    connection.connect()
   }
   func sendDraft() async {
     guard !sending, !chatDraft.importing, !chatDraft.value.isEmpty else { return }
@@ -269,45 +307,54 @@ final class MobileAssistantController: ObservableObject {
       id.map { (text, $0) }
       ?? (pendingMessage?.text == text ? pendingMessage! : (text, UUID().uuidString.lowercased()))
     pendingMessage = pending
-    do {
-      guard target == scope else { throw CancellationError() }
-      try await ensureAssistant()
-      try Task.checkCancellation()
-      guard target == scope else { throw CancellationError() }
-      if !images.isEmpty {
-        guard snapshot?.imageAttachments == true else {
-          throw RemoteImagePreparation.failure("Update ClawDad on your Mac to send chat images. Your draft is saved.")
-        }
-        if !replyAudioActive { status = "Sending images…" }
-        for image in images {
-          try await AssistantImageUpload.send(image.upload, data: image.data) { body in
-            guard self.scope == target else { throw CancellationError() }
-            #if DEBUG
-              if let preview = self.preview { return try preview.upload(body) }
-            #endif
-            return try await self.connection.request(.imageUpload, payload: JSONEncoder().encode(body))
+    let deadline = Date().addingTimeInterval(60)
+    for attempt in 0..<2 {
+      do {
+        guard target == scope else { throw CancellationError() }
+        try await awaitAssistant(until: deadline)
+        try Task.checkCancellation()
+        guard target == scope else { throw CancellationError() }
+        if !images.isEmpty {
+          guard snapshot?.imageAttachments == true else {
+            throw RemoteImagePreparation.failure("Update ClawDad on your Mac to send chat images. Your draft is saved.")
+          }
+          if !replyAudioActive { status = "Sending images…" }
+          for image in images {
+            try await AssistantImageUpload.send(image.upload, data: image.data) { body in
+              guard self.scope == target else { throw CancellationError() }
+              #if DEBUG
+                if let preview = self.preview { return try preview.upload(body) }
+              #endif
+              return try await self.connection.request(.imageUpload, payload: JSONEncoder().encode(body))
+            }
           }
         }
+        guard target == scope else { throw CancellationError() }
+        var args: [String: AssistantValue] = ["text": .string(text)]
+        if !images.isEmpty { args["images"] = try .encode(images.map(\.upload)) }
+        let receipt = try await command("message", args: args, id: pending.id)
+        // The durable receipt remains available after a previously accepted message
+        // has aged out of the recent history returned to a reconnected phone.
+        guard (receipt?.id == pending.id && receipt?.action == "message")
+          || snapshot?.messages.contains(where: { $0.id == pending.id && $0.role == "user" }) == true else {
+          throw AssistantProtocolError.invalid
+        }
+        pendingMessage = nil
+        error = ""
+        if !replyAudioActive { status = voiceActive ? "Thinking…" : "Message sent" }
+        return true
+      } catch {
+        assistantReady = false
+        if attempt == 0, !connected, !Task.isCancelled, target == scope, Date() < deadline {
+          // Recover an uncertain send using its original durable ID. The Mac
+          // receipt prevents a second delivery if it accepted the first attempt.
+          continue
+        }
+        self.error = error.localizedDescription
+        return false
       }
-      guard target == scope else { throw CancellationError() }
-      var args: [String: AssistantValue] = ["text": .string(text)]
-      if !images.isEmpty { args["images"] = try .encode(images.map(\.upload)) }
-      let receipt = try await command("message", args: args, id: pending.id)
-      // The durable receipt remains available after a previously accepted message
-      // has aged out of the recent history returned to a reconnected phone.
-      guard (receipt?.id == pending.id && receipt?.action == "message")
-        || snapshot?.messages.contains(where: { $0.id == pending.id && $0.role == "user" }) == true else {
-        throw AssistantProtocolError.invalid
-      }
-      pendingMessage = nil
-      error = ""
-      if !replyAudioActive { status = voiceActive ? "Thinking…" : "Message sent" }
-      return true
-    } catch {
-      assistantReady = false
-      self.error = error.localizedDescription
-      return false
     }
+    return false
   }
   func startVoice() async {
     guard !voiceActive, !startingVoice else { return }
@@ -355,21 +402,8 @@ final class MobileAssistantController: ObservableObject {
     var microphoneStartup = false
     do {
       let deadline = Date().addingTimeInterval(60)
-      while !connected {
-        guard voiceEpoch == attempt else { return }
-        if Date() >= deadline { throw AssistantProtocolError.timedOut }
-        try await Task.sleep(nanoseconds: 250_000_000)
-      }
-      try await refresh()
+      try await awaitAssistant(until: deadline, voiceAttempt: attempt)
       spoken = Set(snapshot?.messages.map(\.id) ?? [])
-      try await ensureAssistant()
-      status = "Connecting to your Terminal workspace…"
-      while snapshot?.nativeOnline != true || snapshot?.catalog == nil {
-        guard voiceEpoch == attempt else { return }
-        if Date() >= deadline { throw AssistantProtocolError.timedOut }
-        try await Task.sleep(nanoseconds: 350_000_000)
-        try await refresh()
-      }
       guard voiceEpoch == attempt else { return }
       status = "Starting microphone…"
       microphoneStartup = true

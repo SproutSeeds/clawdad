@@ -6,6 +6,38 @@ import ClawDadRemoteAssistProtocol
 
 @MainActor
 final class PairedFilePeerTests: XCTestCase {
+  func testConcurrentAssistantRepliesSurviveDataChannelBackpressure() {
+    let finished = expectation(description: "Concurrent replies arrive")
+    Task { @MainActor in
+      defer { finished.fulfill() }
+      let host = PairedFilePeer(), phone = PairedFilePeer()
+      defer { host.stop(); phone.stop() }
+      var opened = false
+      var received: [Data] = []
+      host.onCandidate = { sdp, mid, index in Task { await phone.addCandidate(sdp: sdp, mid: mid, index: index) } }
+      phone.onCandidate = { sdp, mid, index in Task { await host.addCandidate(sdp: sdp, mid: mid, index: index) } }
+      phone.onOpen = { opened = true }
+      phone.onMessage = { received.append($0) }
+      do {
+        let answer = try await phone.acceptOffer(host.createOffer())
+        try await host.acceptAnswer(answer)
+        let deadline = Date().addingTimeInterval(12)
+        while !opened, Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertTrue(opened)
+        let audio = Data(repeating: 31, count: 900_000)
+        let state = Data(repeating: 47, count: 34_000)
+        async let speechReply: Void = host.send(audio)
+        async let stateReply: Void = host.send(state)
+        _ = try await (speechReply, stateReply)
+        while received.count < 2, Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertEqual(received.count, 2)
+        XCTAssertTrue(received.contains(audio))
+        XCTAssertTrue(received.contains(state))
+      } catch { XCTFail("Concurrent Assistant replies were lost: \(error.localizedDescription)") }
+    }
+    wait(for: [finished], timeout: 16)
+  }
+
   func testFilesRejectMediaAndRelayUnlessExplicitlyEnabledAndEnforceByteLimit() async throws {
     let direct = PairedFilePeer()
     defer { direct.stop() }

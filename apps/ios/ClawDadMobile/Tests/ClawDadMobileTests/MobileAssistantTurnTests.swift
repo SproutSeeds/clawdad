@@ -5,6 +5,53 @@ import XCTest
 
 @MainActor
 final class MobileAssistantTurnTests: XCTestCase {
+  func testCallRecoversAStaleConnectionBeforeStartingTheMicrophone() async throws {
+    let transport = AssistantTestTransport(), audio = AssistantTestAudio()
+    transport.failNextHealthCheck = true
+    transport.onReconnect = { transport.connected = true; transport.onChange?() }
+    let controller = MobileAssistantController(connection: transport, audio: audio, defaults: nil)
+    defer { controller.stop() }
+    await controller.startVoice()
+    XCTAssertTrue(controller.voiceActive)
+    XCTAssertEqual(audio.starts, 1)
+    XCTAssertEqual(transport.connects, 1)
+    XCTAssertGreaterThanOrEqual(transport.stateReads, 2)
+    XCTAssertTrue(transport.sentTexts.isEmpty)
+  }
+
+  func testTextSendRecoversLostReceiptUsingTheSameIDWithoutStartingACall() async throws {
+    let transport = AssistantTestTransport(), audio = AssistantTestAudio()
+    transport.failAfterAcceptance = true
+    transport.disconnectOnFailure = true
+    transport.onReconnect = { transport.connected = true; transport.onChange?() }
+    let controller = MobileAssistantController(connection: transport, audio: audio, defaults: nil)
+    defer { controller.stop() }
+    let id = UUID().uuidString
+    let sent = await controller.send("Keep this exact message once", id: id)
+    XCTAssertTrue(sent)
+    XCTAssertEqual(transport.messageIDs, [id, id])
+    XCTAssertEqual(transport.sentTexts, ["Keep this exact message once"])
+    XCTAssertEqual(audio.starts, 0)
+    XCTAssertFalse(controller.callVisible)
+  }
+
+  func testExplicitRetryReplacesTheConnectionAndPreservesTheDraft() throws {
+    let transport = AssistantTestTransport(), audio = AssistantTestAudio()
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("assistant-retry-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let draft = AssistantChatDraftStore(root: root)
+    draft.bind("test-retry")
+    let controller = MobileAssistantController(connection: transport, audio: audio, defaults: nil, chatDraft: draft)
+    defer { controller.stop() }
+    controller.chatDraft.setText("Unsent text remains here")
+    let before = controller.chatDraft.value
+    controller.retryConnection()
+    XCTAssertEqual(transport.closes, 1)
+    XCTAssertEqual(transport.connects, 1)
+    XCTAssertEqual(controller.chatDraft.value, before)
+    XCTAssertEqual(audio.starts, 0)
+  }
+
   func testShortPauseKeepsBothSegmentsInOneThought() async throws {
     let transport = AssistantTestTransport(), audio = AssistantTestAudio()
     let controller = MobileAssistantController(connection: transport, audio: audio, defaults: nil,
@@ -382,6 +429,11 @@ final class AssistantTestTransport: AssistantTransport {
   var messageIDs: [String] = []
   var timings: [[String: AssistantValue]] = []
   var failAfterAcceptance = false
+  var disconnectOnFailure = false
+  var failNextHealthCheck = false
+  var onReconnect: (() -> Void)?
+  var connects = 0
+  var closes = 0
   var omitRecentMessages = false
   var omitReceipt = false
   var stateReads = 0
@@ -391,14 +443,20 @@ final class AssistantTestTransport: AssistantTransport {
   var synthesis: (() -> [String: Any])?
   var transcribe: (Data) async -> String = { _ in "" }
   func bind(_ session: CloudSession) {}
-  func connect() {}
-  func close() { connected = false }
+  func connect() { connects += 1; onReconnect?() }
+  func close() { closes += 1; connected = false; onChange?() }
   func addReply(_ text: String, item: String = "answer") {
     messages.append(["id": "assistant:\(requestID):\(item)", "role": "assistant", "text": text, "createdAt": "2026-09-08T00:00:00Z"])
   }
   func request(_ action: AssistantWireRequest.Action, payload: Data) async throws -> Data {
     switch action {
-    case .state: stateReads += 1; return try snapshot()
+    case .state:
+      stateReads += 1
+      if failNextHealthCheck {
+        failNextHealthCheck = false; connected = false; onChange?()
+        throw AssistantProtocolError.timedOut
+      }
+      return try snapshot()
     case .command:
       let body = try JSONDecoder().decode([String: AssistantValue].self, from: payload)
       commands.append(body["action"]?.string ?? "")
@@ -410,7 +468,11 @@ final class AssistantTestTransport: AssistantTransport {
           sentImages.append(contentsOf: body["images"]?.array ?? [])
           messages.append(["id": id, "role": "user", "text": text, "createdAt": "2026-09-08T00:00:00Z"])
         }
-        if failAfterAcceptance { failAfterAcceptance = false; throw AssistantProtocolError.disconnected }
+        if failAfterAcceptance {
+          failAfterAcceptance = false
+          if disconnectOnFailure { connected = false; onChange?() }
+          throw AssistantProtocolError.disconnected
+        }
       }
       if body["action"]?.string == "voice.timing", let value = body["metrics"]?.object { timings.append(value) }
       var response = try JSONSerialization.jsonObject(with: snapshot()) as! [String: Any]

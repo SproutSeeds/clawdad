@@ -25,6 +25,7 @@ public final class PairedFilePeer: NSObject {
   private var candidates: [RTCIceCandidate] = []
   private var assembler = RemoteFileAssembler()
   private var sending = false
+  private var generation = UUID()
   private var permitsRelay = false
   private var servers: [FileIceServer] = []
   private var byteLimit: Int?
@@ -145,18 +146,28 @@ public final class PairedFilePeer: NSObject {
   }
 
   public func send(_ data: Data) async throws {
-    guard !sending else { throw RemoteFileError.invalidMessage }
+    let generation = self.generation
+    let deadline = Date().addingTimeInterval(15)
+    // Assistant status, text and speech replies can finish together. Wait for
+    // the current framed message instead of rejecting a valid second response.
+    while sending {
+      try Task.checkCancellation()
+      guard self.generation == generation, isOpen else { throw RemoteFileError.disconnected }
+      guard Date() < deadline else { throw RemoteFileError.timedOut }
+      try await Task.sleep(nanoseconds: 20_000_000)
+    }
+    try Task.checkCancellation()
+    guard self.generation == generation else { throw RemoteFileError.disconnected }
     sending = true
     defer { sending = false }
     let frames = try RemoteFileFrame.split(data)
-    let deadline = Date().addingTimeInterval(15)
     for frame in frames {
       let encoded = try JSONEncoder().encode(frame)
       guard account(encoded.count) else { throw RemoteFileError.tooLarge }
       let buffer = RTCDataBuffer(data: encoded, isBinary: true)
       while true {
         try Task.checkCancellation()
-        guard let channel, channel.readyState == .open else { throw RemoteFileError.disconnected }
+        guard self.generation == generation, let channel, channel.readyState == .open else { throw RemoteFileError.disconnected }
         guard Date() < deadline else { throw RemoteFileError.timedOut }
         if channel.bufferedAmount < 128 * 1024, channel.sendData(buffer) { break }
         try await Task.sleep(nanoseconds: 20_000_000)
@@ -165,6 +176,7 @@ public final class PairedFilePeer: NSObject {
   }
 
   public func stop() {
+    generation = UUID()
     channel?.delegate = nil; channel?.close(); channel = nil
     peer?.delegate = nil; peer?.close(); peer = nil
     candidates = []; assembler = RemoteFileAssembler()
@@ -181,18 +193,23 @@ extension PairedFilePeer: RTCPeerConnectionDelegate {
   nonisolated public func peerConnection(_ peerConnection: RTCPeerConnection, didRemove candidates: [RTCIceCandidate]) {}
   nonisolated public func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
     let sdp = candidate.sdp, mid = candidate.sdpMid, index = candidate.sdpMLineIndex
-    Task { @MainActor [weak self] in self?.onCandidate?(sdp, mid, index) }
+    Task { @MainActor [weak self] in
+      guard let self, self.peer === peerConnection else { return }
+      self.onCandidate?(sdp, mid, index)
+    }
   }
   nonisolated public func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {
     Task { @MainActor [weak self] in
-      guard let self, dataChannel.label == "clawdad-files", self.channel == nil else { return }
+      guard let self, self.peer === peerConnection,
+        dataChannel.label == "clawdad-files", self.channel == nil else { return }
       self.channel = dataChannel; dataChannel.delegate = self
       if dataChannel.readyState == .open { self.onOpen?() }
     }
   }
   nonisolated public func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCPeerConnectionState) {
     Task { @MainActor [weak self] in
-      if newState == .failed || newState == .closed { self?.onFailure?(RemoteFileError.disconnected) }
+      guard let self, self.peer === peerConnection else { return }
+      if newState == .failed || newState == .closed { self.onFailure?(RemoteFileError.disconnected) }
     }
   }
 }
@@ -200,8 +217,9 @@ extension PairedFilePeer: RTCPeerConnectionDelegate {
 extension PairedFilePeer: RTCDataChannelDelegate {
   nonisolated public func dataChannelDidChangeState(_ dataChannel: RTCDataChannel) {
     Task { @MainActor [weak self] in
-      if dataChannel.readyState == .open { self?.onOpen?() }
-      if dataChannel.readyState == .closed { self?.onFailure?(RemoteFileError.disconnected) }
+      guard let self, self.channel === dataChannel else { return }
+      if dataChannel.readyState == .open { self.onOpen?() }
+      if dataChannel.readyState == .closed { self.onFailure?(RemoteFileError.disconnected) }
     }
   }
   nonisolated public func dataChannel(_ dataChannel: RTCDataChannel, didReceiveMessageWith buffer: RTCDataBuffer) {
