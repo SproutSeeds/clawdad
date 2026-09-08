@@ -23,6 +23,40 @@ private final class AssistantHTTPFixture: URLProtocol, @unchecked Sendable {
 }
 
 final class MacAssistantTests: XCTestCase {
+  @MainActor func testDraftVerificationWaitsForRenderingAndInsertsOnlyOnce() async throws {
+    var inserts = 0, reads = 0
+    try await assistantInsertVerifiedDraft("hey Cody", insert: { inserts += 1; return true }, read: {
+      reads += 1
+      return reads < 3 ? "› Ask Codex to do anything\n gpt-6-astra" : "› hey Cody\n gpt-6-astra"
+    }, wait: {})
+    XCTAssertEqual(inserts, 1)
+    XCTAssertEqual(reads, 3)
+  }
+  @MainActor func testUncertainDraftIsNotPastedAgainAndEnterIsNeverInvolved() async {
+    var inserts = 0
+    do {
+      try await assistantInsertVerifiedDraft("hey Cody", insert: { inserts += 1; return true },
+        read: { "› Existing unrelated draft\n gpt-6-astra" }, wait: {})
+      XCTFail("An unobserved insertion must not claim success")
+    } catch { XCTAssertTrue(error.localizedDescription.contains("Enter was not sent")) }
+    XCTAssertEqual(inserts, 1)
+  }
+  @MainActor func testChangedTargetStopsVerificationWithoutAnotherPaste() async {
+    var inserts = 0
+    do {
+      try await assistantInsertVerifiedDraft("hey Cody", insert: { inserts += 1; return true },
+        read: { throw MacAssistantError("Target changed") }, wait: {})
+      XCTFail("A changed tab must stop verification")
+    } catch { XCTAssertEqual(error.localizedDescription, "Target changed") }
+    XCTAssertEqual(inserts, 1)
+  }
+  func testDraftMatcherRequiresTheEntireCurrentComposer() {
+    XCTAssertTrue(assistantDraftMatches("Earlier hey Cody\n› hey Cody\n gpt-6-astra", expected: "hey Cody"))
+    XCTAssertTrue(assistantDraftMatches("› Please check\n  the second tab\n gpt-6-astra", expected: "Please check the second tab"))
+    XCTAssertFalse(assistantDraftMatches("Earlier hey Cody\n› Ask Codex to do anything\n gpt-6-astra", expected: "hey Cody"))
+    XCTAssertFalse(assistantDraftMatches("› hey Cody additional text\n gpt-6-astra", expected: "hey Cody"))
+    XCTAssertFalse(assistantDraftMatches("user@mac $ hey Cody", expected: "hey Cody"))
+  }
   func testNamedKeyboardShortcutsPreserveModifiersAndRejectUnknownKeys() {
     let key = assistantKeyStroke("tab", modifiers: ["command", "shift"])
     XCTAssertEqual(key?.keyCode, 48)

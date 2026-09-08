@@ -5,6 +5,7 @@ import Foundation
 public struct AssistantVoiceActivity: Sendable {
   public var sampleRate: Double
   public private(set) var speaking = false
+  public var trailingSilenceDuration: Double { silence }
   private var samples: [Float] = []
   private var preRoll: [Float] = []
   private var silence: Double = 0

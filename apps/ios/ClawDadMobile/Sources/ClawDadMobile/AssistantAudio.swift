@@ -12,6 +12,7 @@ protocol AssistantAudioIO: AnyObject {
   var onCaptureRecovery: ((Bool) -> Void)? { get set }
   var onCaptureFailure: ((Error) -> Void)? { get set }
   var muted: Bool { get set }
+  var lastSpeechAt: TimeInterval? { get }
   func start() async throws
   func setReplyActive(_ active: Bool)
   func play(_ data: Data) async throws
@@ -21,8 +22,13 @@ protocol AssistantAudioIO: AnyObject {
   func stop()
 }
 
+extension AssistantAudioIO {
+  var lastSpeechAt: TimeInterval? { nil }
+}
+
 @MainActor
 final class AssistantAudio: AssistantAudioIO {
+  var lastSpeechAt: TimeInterval? { input.lastSpeechAt }
   var onUtterance: ((Data, Bool) -> Void)?
   var onSpeechStarted: (() -> Void)?
   var onTranscriptPreview: ((Data) -> Void)?

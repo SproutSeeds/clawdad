@@ -36,20 +36,27 @@ struct MacAssistantRuntime {
     return data
   }
 
-  func respond(_ request: AssistantWireRequest) async throws -> Data {
+  func respond(_ request: AssistantWireRequest, queuedMs: Double = 0) async throws -> Data {
     try request.validate()
     switch request.action {
     case .state: return try await self.request("/v1/assistant/state")
     case .command: return try await self.request("/v1/assistant/request", body: request.payload)
     case .transcribe:
+      let started = ProcessInfo.processInfo.systemUptime
       let boundary = UUID().uuidString
       var body = Data(
         "--\(boundary)\r\nContent-Disposition: form-data; name=\"audio\"; filename=\"assistant.wav\"\r\nContent-Type: audio/wav\r\n\r\n"
           .utf8)
       body.append(request.payload)
       body.append(Data("\r\n--\(boundary)--\r\n".utf8))
-      return try await self.request(
+      let result = try await self.request(
         "/v1/stt/transcribe", body: body, contentType: "multipart/form-data; boundary=\(boundary)")
+      var value = try JSONDecoder().decode([String: AssistantValue].self, from: result)
+      value["assistantTiming"] = .object([
+        "hostQueueMs": .number(max(0, queuedMs)),
+        "hostTranscriptionMs": .number((ProcessInfo.processInfo.systemUptime - started) * 1000),
+      ])
+      return try JSONEncoder().encode(value)
     case .synthesize:
       var body = try JSONDecoder().decode([String: AssistantValue].self, from: request.payload)
       guard let text = body["text"]?.string, !text.isEmpty, text.utf8.count <= 32_000 else {

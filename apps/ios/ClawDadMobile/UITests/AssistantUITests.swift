@@ -2,6 +2,40 @@ import XCTest
 
 @MainActor
 final class AssistantUITests: XCTestCase {
+  func testSendNowAndPausePreferenceAreAvailableWithoutLeavingTheCall() {
+    let app = XCUIApplication()
+    app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-assistant-test", "--clawdad-assistant-send-test"]
+    app.launch()
+    XCTAssertTrue(app.buttons["clawdad.assistant.open"].waitForExistence(timeout: 20))
+    app.buttons["clawdad.assistant.open"].tap()
+    let send = app.buttons["clawdad.assistant.send-now"]
+    XCTAssertTrue(send.waitForExistence(timeout: 5))
+    XCTAssertTrue(send.isEnabled)
+    let bar = XCTAttachment(screenshot: app.screenshot())
+    bar.name = "Assistant Send now on the call bar"
+    bar.lifetime = .keepAlways
+    add(bar)
+    app.buttons["clawdad.assistant.return"].tap()
+    XCTAssertTrue(app.staticTexts["You · Draft"].waitForExistence(timeout: 5))
+    app.buttons["clawdad.assistant.voice-sending"].tap()
+    XCTAssertTrue(app.buttons["Wait for Send"].waitForExistence(timeout: 3))
+    XCTAssertTrue(app.buttons["Send after a pause"].exists)
+    app.buttons["Wait for Send"].tap()
+    let draft = XCTAttachment(screenshot: app.screenshot())
+    draft.name = "Assistant draft waits for Send"
+    draft.lifetime = .keepAlways
+    add(draft)
+    app.buttons["clawdad.assistant.back"].tap()
+    send.tap()
+    app.buttons["clawdad.assistant.return"].tap()
+    XCTAssertTrue(app.staticTexts["You"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.staticTexts["Please check the second Terminal tab."].exists)
+    XCTAssertFalse(app.staticTexts["You · Draft"].exists)
+    XCTAssertFalse(send.isEnabled)
+    // Leave the fixture's persisted preference in the default mode.
+    app.buttons["clawdad.assistant.voice-sending"].tap()
+    app.buttons["Send after a pause"].tap()
+  }
   func testReplyControlsAndMessagesStayAvailableAcrossNavigation() {
     let app = XCUIApplication()
     app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-assistant-test", "--clawdad-assistant-speaking"]

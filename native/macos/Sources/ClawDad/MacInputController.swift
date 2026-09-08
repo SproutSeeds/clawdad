@@ -340,6 +340,22 @@ final class MacInputController {
     return true
   }
 
+  /// Insert into the captured agent composer without sending Enter. The durable
+  /// Assistant job owns replay protection; verification never repeats this paste.
+  func insertAssistantDraft(_ text: String, targetToken token: String,
+                            isAllowed: @MainActor () -> Bool,
+                            terminalIdentity: @MainActor () async throws -> String?) async -> Bool {
+    if let inputProcessingTask { await inputProcessingTask.value }
+    if let clipboardCopyTask { await clipboardCopyTask.value }
+    await waitForImagePaste()
+    let identity = await recoverTerminalIdentity(for: dictationTargets.capture(for: token), read: terminalIdentity)
+    guard !Task.isCancelled, isAllowed(), !speechSelectionInProgress,
+          let target = dictationTargets.resolve(token: token, generation: inputGeneration,
+            terminalIdentity: identity, isCurrent: targetIsCurrent) else { return false }
+    defer { invalidateDictationTarget() }
+    return await insertText(text, into: target.input)
+  }
+
   func sendQuickChat(_ request: RemoteQuickChatMessage,
                     isAllowed: @MainActor () -> Bool = { true },
                     terminalIdentity: @MainActor () async throws -> String?) async -> RemoteQuickChatMessage {

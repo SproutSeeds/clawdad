@@ -18,6 +18,12 @@ final class MobileAssistantController: ObservableObject {
   @Published private(set) var liveTranscript = ""
   @Published private(set) var hearingSpeech = false
   @Published private(set) var transcribingSpeech = false
+  @Published private(set) var canSendVoice = false
+  @Published private(set) var waitForSend: Bool
+  private let defaults: UserDefaults?
+  private let automaticSendDelay: UInt64
+  private var automaticSend: Task<Void, Never>?
+  private var assistantReady = false
   private let connection: any AssistantTransport
   private let audio: any AssistantAudioIO
   private weak var session: CloudSession?
@@ -31,8 +37,9 @@ final class MobileAssistantController: ObservableObject {
   private var spoken = Set<String>()
   private var silencedReplies = Set<String>()
   private var pendingMessage: (text: String, id: String)?
-  private var voiceQueue: [(Data, Bool)] = []
-  private var transcriptParts: [String] = []
+  private var voiceQueue: [(data: Data, turn: AssistantVoiceTurn, capturedAt: TimeInterval)] = []
+  private var voiceTurns: [AssistantVoiceTurn] = []
+  private var draftTurn: AssistantVoiceTurn?
   private var speechQueue: [AssistantMessage] = []
   private var activeReplyRequest: String?
   private var taskError = ""
@@ -41,18 +48,27 @@ final class MobileAssistantController: ObservableObject {
   #endif
 
   init(connection: any AssistantTransport = AssistantConnection(),
-    audio: any AssistantAudioIO = AssistantAudio()) {
+    audio: any AssistantAudioIO = AssistantAudio(), defaults: UserDefaults? = .standard,
+    automaticSendDelay: UInt64 = 1_200_000_000) {
     self.connection = connection
     self.audio = audio
+    self.defaults = defaults
+    self.automaticSendDelay = automaticSendDelay
+    waitForSend = defaults?.bool(forKey: "assistant.waitForSend") ?? false
     connected = connection.connected
     connection.onChange = { [weak self] in
       guard let self else { return }
       connected = self.connection.connected
-      if !connected { status = "Reconnecting to your Mac…" }
+      if !connected { assistantReady = false; status = "Reconnecting to your Mac…" }
     }
     audio.onSpeechStarted = { [weak self] in
       guard let self, voiceActive, !muted, !replyAudioActive else { return }
+      automaticSend?.cancel()
+      automaticSend = nil
+      _ = currentVoiceTurn()
+      draftTurn?.endpointAt = nil
       hearingSpeech = true
+      canSendVoice = true
       status = "Hearing you…"
     }
     audio.onInputLevel = { [weak self] level in
@@ -134,6 +150,7 @@ final class MobileAssistantController: ObservableObject {
     let data = try await connection.request(.state)
     let next = try JSONDecoder().decode(AssistantSnapshot.self, from: data)
     snapshot = next
+    assistantReady = next.supportsBackgroundCalls && next.enabled && next.nativeOnline && next.catalog != nil
     let nextTaskError = next.tasks.last?.status == "attention" ? next.tasks.last?.error ?? "" : ""
     if error.isEmpty || error == taskError { error = nextTaskError }
     taskError = nextTaskError
@@ -195,6 +212,7 @@ final class MobileAssistantController: ObservableObject {
     Task { await startVoice() }
   }
   private func ensureAssistant() async throws {
+    if assistantReady, connected { return }
     // Check the current host before issuing start: an older Mac would open Terminal.
     try await refresh()
     guard snapshot?.supportsBackgroundCalls == true else {
@@ -202,7 +220,8 @@ final class MobileAssistantController: ObservableObject {
         NSLocalizedDescriptionKey: "Update ClawDad on your Mac to use the new Assistant call."
       ])
     }
-    try await command("start")
+    if snapshot?.enabled != true { try await command("start") }
+    assistantReady = snapshot?.enabled == true && snapshot?.nativeOnline == true && snapshot?.catalog != nil
   }
   func perform(_ action: String, args: [String: AssistantValue] = [:]) {
     Task {
@@ -221,12 +240,14 @@ final class MobileAssistantController: ObservableObject {
     pendingMessage = pending
     do {
       try await ensureAssistant()
+      try Task.checkCancellation()
       try await command("message", args: ["text": .string(text)], id: pending.id)
       pendingMessage = nil
       error = ""
       if !replyAudioActive { status = voiceActive ? "Thinking…" : "Message sent" }
       return true
     } catch {
+      assistantReady = false
       self.error = error.localizedDescription
       return false
     }
@@ -249,11 +270,20 @@ final class MobileAssistantController: ObservableObject {
         }
         voiceActive = true
         status = "Listening…"
+        if ProcessInfo.processInfo.arguments.contains("--clawdad-assistant-send-test") {
+          waitForSend = true
+          let turn = currentVoiceTurn()
+          turn.parts = ["Please check the second Terminal tab."]
+          turn.lastAudioAt = ProcessInfo.processInfo.systemUptime
+          updateVoiceDraft()
+        }
         if ProcessInfo.processInfo.arguments.contains("--clawdad-assistant-speaking") {
           setReplyActive(true)
           status = "Speaking…"
         }
         if ProcessInfo.processInfo.arguments.contains("--clawdad-assistant-transcript-test") {
+          _ = currentVoiceTurn()
+          canSendVoice = true
           hearingSpeech = true
           liveTranscript = "Could you check"
           Task { [weak self] in
@@ -350,7 +380,11 @@ final class MobileAssistantController: ObservableObject {
     transcribing?.cancel()
     transcribing = nil
     voiceQueue = []
-    transcriptParts = []
+    voiceTurns = []
+    draftTurn = nil
+    automaticSend?.cancel()
+    automaticSend = nil
+    canSendVoice = false
     cancelTranscriptionPreview()
     liveTranscript = ""
     hearingSpeech = false
@@ -363,20 +397,95 @@ final class MobileAssistantController: ObservableObject {
     monitor?.cancel()
     monitor = nil
     connection.close()
+    assistantReady = false
+  }
+  private func currentVoiceTurn() -> AssistantVoiceTurn {
+    if let draftTurn { return draftTurn }
+    let turn = AssistantVoiceTurn()
+    voiceTurns.append(turn)
+    draftTurn = turn
+    return turn
+  }
+  func setWaitForSend(_ enabled: Bool) {
+    waitForSend = enabled
+    defaults?.set(enabled, forKey: "assistant.waitForSend")
+    automaticSend?.cancel()
+    automaticSend = nil
+    if !enabled, !hearingSpeech, let draftTurn { scheduleVoiceSend(draftTurn) }
+    updateVoiceDraft()
+  }
+  func sendVoiceNow() {
+    guard voiceActive, !replyAudioActive, draftTurn != nil else { return }
+    // This callback synchronously appends the final recorded samples before the
+    // turn is sealed. STT may still be running; Send never submits a preview.
+    audio.finishUtterance()
+    hearingSpeech = false
+    if let draftTurn { sealVoiceTurn(draftTurn, manual: true) }
+  }
+  private func scheduleVoiceSend(_ turn: AssistantVoiceTurn) {
+    automaticSend?.cancel()
+    guard !waitForSend else { return }
+    let epoch = voiceEpoch
+    automaticSend = Task { [weak self] in
+      do { try await Task.sleep(nanoseconds: self?.automaticSendDelay ?? 0) } catch { return }
+      guard let self, voiceEpoch == epoch, draftTurn === turn, !hearingSpeech,
+        !waitForSend, !Task.isCancelled else { return }
+      sealVoiceTurn(turn, manual: false)
+    }
+  }
+  private func sealVoiceTurn(_ turn: AssistantVoiceTurn, manual: Bool) {
+    guard draftTurn === turn, !turn.sealed else { return }
+    automaticSend?.cancel()
+    automaticSend = nil
+    cancelTranscriptionPreview()
+    turn.sealed = true
+    turn.metrics["manualSend"] = manual ? 1 : 0
+    if let endpoint = turn.endpointAt {
+      turn.metrics["commitWaitMs"] = max(0, (ProcessInfo.processInfo.systemUptime - endpoint) * 1000)
+    }
+    draftTurn = nil
+    updateVoiceDraft()
+    processVoiceQueue()
+  }
+  private func updateVoiceDraft() {
+    canSendVoice = voiceActive && !replyAudioActive && draftTurn != nil
+    transcribingSpeech = !voiceQueue.isEmpty
+    liveTranscript = (draftTurn ?? voiceTurns.last)?.text ?? ""
+    guard voiceActive, !replyAudioActive else { return }
+    if hearingSpeech { status = "Hearing you…" }
+    else if transcribingSpeech { status = "Transcribing…" }
+    else if draftTurn != nil { status = waitForSend ? "Ready when you are · Tap Send" : "Continue or tap Send" }
+    else if !voiceTurns.isEmpty { status = "Sending…" }
+    else { status = muted ? "Microphone muted" : "Listening…" }
   }
   private func transcribe(_ data: Data, final: Bool) {
     guard voiceActive, !muted, !replyAudioActive else { return }
     cancelTranscriptionPreview()
     if final { hearingSpeech = false }
-    transcribingSpeech = true
-    voiceQueue.append((data, final))
+    let turn = currentVoiceTurn()
+    let now = ProcessInfo.processInfo.systemUptime
+    if !data.isEmpty {
+      turn.pendingSegments += 1
+      turn.lastAudioAt = now
+      voiceQueue.append((data, turn, now))
+    }
+    if final {
+      turn.endpointAt = now
+      if let lastSpeech = audio.lastSpeechAt {
+        turn.metrics["endpointDetectionMs"] = max(0, (now - lastSpeech) * 1000)
+      }
+      scheduleVoiceSend(turn)
+    }
     if voiceQueue.count >= 30 {
-      audio.finishUtterance()
       muted = true
       audio.muted = true
       error =
         "The microphone is paused while your Mac catches up. Your recorded speech is retained."
     }
+    updateVoiceDraft()
+    processVoiceQueue()
+  }
+  private func processVoiceQueue() {
     guard transcribing == nil else { return }
     let epoch = voiceEpoch
     transcribing = Task { [weak self] in
@@ -384,48 +493,67 @@ final class MobileAssistantController: ObservableObject {
       defer {
         if voiceEpoch == epoch {
           transcribing = nil
-          transcribingSpeech = false
+          updateVoiceDraft()
           speakNext()
         }
       }
-      status = "Transcribing…"
-      while !voiceQueue.isEmpty, voiceEpoch == epoch, !Task.isCancelled {
-        let (segment, final) = voiceQueue[0]
-        do {
-          if !segment.isEmpty {
-            let result = try await connection.request(.transcribe, payload: segment)
-            guard !Task.isCancelled, voiceEpoch == epoch else { return }
-            let value = try JSONDecoder().decode([String: AssistantValue].self, from: result)
-            if let text = value["text"]?.string,
-              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            {
-              transcriptParts.append(text)
-              liveTranscript = transcriptParts.joined(separator: " ")
-            }
-          }
-          voiceQueue.removeFirst()
-          if final {
-            let text = transcriptParts.joined(separator: " ")
-            let id = UUID().uuidString.lowercased()
+      while voiceEpoch == epoch, !Task.isCancelled {
+        if let turn = voiceTurns.first, turn.sealed, turn.pendingSegments == 0 {
+          let started = ProcessInfo.processInfo.systemUptime
+          let text = turn.text
+          if !text.isEmpty {
+            turn.metrics["finalAudioToSendMs"] = max(0, (started - turn.lastAudioAt) * 1000)
             while voiceEpoch == epoch, !Task.isCancelled {
-              if await send(text, id: id) {
-                transcriptParts = []
-                liveTranscript = ""
-                break
-              }
-              if !replyAudioActive { status = "Reconnecting to your Mac…" }
-              try await Task.sleep(nanoseconds: 2_000_000_000)
+              if await send(text, id: turn.id) { break }
+              status = "Reconnecting to your Mac…"
+              do { try await Task.sleep(nanoseconds: 2_000_000_000) } catch { return }
             }
           }
+          guard voiceEpoch == epoch, !Task.isCancelled else { return }
+          turn.metrics["sendRoundTripMs"] = (ProcessInfo.processInfo.systemUptime - started) * 1000
+          voiceTurns.removeFirst()
+          updateVoiceDraft()
+          if !text.isEmpty { recordVoiceTiming(turn) }
+          continue
+        }
+        guard let segment = voiceQueue.first else { break }
+        let turn = segment.turn
+        let started = ProcessInfo.processInfo.systemUptime
+        do {
+          let result = try await connection.request(.transcribe, payload: segment.data)
+          guard !Task.isCancelled, voiceEpoch == epoch else { return }
+          let value = try JSONDecoder().decode([String: AssistantValue].self, from: result)
+          if let text = value["text"]?.string,
+            !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            turn.parts.append(text)
+          }
+          turn.add("segments", 1)
+          turn.add("transcriptionQueueMs", (started - segment.capturedAt) * 1000)
+          turn.add("transcriptionRoundTripMs", (ProcessInfo.processInfo.systemUptime - started) * 1000)
+          if let timing = value["assistantTiming"]?.object {
+            for (key, value) in timing { if let ms = value.number { turn.add(key, ms) } }
+          }
+          if let seconds = value["generationSeconds"]?.number { turn.add("modelGenerationMs", seconds * 1000) }
+          turn.pendingSegments -= 1
+          voiceQueue.removeFirst()
+          turn.metrics["finalAudioToTranscriptMs"] = max(0, (ProcessInfo.processInfo.systemUptime - turn.lastAudioAt) * 1000)
+          updateVoiceDraft()
         } catch {
           guard !Task.isCancelled, voiceEpoch == epoch else { return }
           if !replyAudioActive { status = "Waiting for local transcription…" }
           try? await Task.sleep(nanoseconds: 2_000_000_000)
         }
       }
-      if voiceEpoch == epoch, !replyAudioActive {
-        status = muted ? "Microphone muted" : "Listening…"
-      }
+    }
+  }
+  private func recordVoiceTiming(_ turn: AssistantVoiceTurn) {
+    let metrics = turn.metrics.mapValues(AssistantValue.number)
+    // Numeric timing only. This optional diagnostic is independent of message
+    // acceptance and never retries, sends text, or changes the current snapshot.
+    Task { [connection] in
+      let body: [String: AssistantValue] = ["action": .string("voice.timing"),
+        "requestId": .string(turn.id), "metrics": .object(metrics)]
+      _ = try? await connection.request(.command, payload: JSONEncoder().encode(body))
     }
   }
   private func cancelTranscriptionPreview() {
@@ -440,23 +568,24 @@ final class MobileAssistantController: ObservableObject {
       transcriptionPreview == nil, !data.isEmpty else { return }
     let epoch = previewEpoch
     let call = voiceEpoch
+    let turn = currentVoiceTurn()
     transcriptionPreview = Task { [weak self] in
       guard let self else { return }
       defer { if previewEpoch == epoch { transcriptionPreview = nil } }
       do {
         let data = try await connection.request(.transcribe, payload: data)
         guard !Task.isCancelled, voiceEpoch == call, previewEpoch == epoch,
-          voiceActive, !replyAudioActive else { return }
+          voiceActive, !replyAudioActive, draftTurn === turn else { return }
         let result = try JSONDecoder().decode([String: AssistantValue].self, from: data)
         if let text = result["text"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
-          liveTranscript = (transcriptParts + [text]).joined(separator: " ")
+          liveTranscript = (turn.parts + [text]).joined(separator: " ")
         }
       } catch { /* The authoritative final transcription retains its normal retry. */ }
     }
   }
   private func speakNext() {
     guard voiceActive, speech == nil, !speechQueue.isEmpty,
-      !hearingSpeech, !transcribingSpeech else { return }
+      !hearingSpeech, !transcribingSpeech, voiceTurns.isEmpty else { return }
     setReplyActive(true)
     status = "Preparing reply…"
     let message = speechQueue.removeFirst()
@@ -598,7 +727,7 @@ struct AssistantView: View {
                 }
                 if controller.hearingSpeech || controller.transcribingSpeech || !controller.liveTranscript.isEmpty {
                   VStack(alignment: .leading, spacing: 5) {
-                    Text(controller.hearingSpeech ? "You · Speaking" : "You · Transcribing…")
+                    Text(controller.hearingSpeech ? "You · Speaking" : controller.transcribingSpeech ? "You · Transcribing…" : "You · Draft")
                       .font(.caption.bold()).foregroundStyle(ClawDadTheme.gold)
                     Text(controller.liveTranscript.isEmpty ? "Listening…" : controller.liveTranscript)
                       .textSelection(.enabled)
@@ -606,7 +735,7 @@ struct AssistantView: View {
                     .id("live-transcript")
                     .accessibilityIdentifier("clawdad.assistant.transcript")
                 }
-                ForEach((controller.snapshot?.tasks ?? []).filter { $0.action == "terminal.send" })
+                ForEach((controller.snapshot?.tasks ?? []).filter { ["terminal.send", "terminal.insert"].contains($0.action) })
                 { task in
                   VStack(alignment: .leading, spacing: 6) {
                     Text("\(task.tabTitle ?? "Terminal task") · \(task.status)").font(
@@ -691,6 +820,22 @@ struct AssistantView: View {
             "clawdad.assistant.back")
         }
         ToolbarItem(placement: .primaryAction) {
+          Menu {
+            Button {
+              controller.setWaitForSend(false)
+            } label: {
+              Label("Send after a pause", systemImage: controller.waitForSend ? "circle" : "checkmark.circle.fill")
+            }
+            Button {
+              controller.setWaitForSend(true)
+            } label: {
+              Label("Wait for Send", systemImage: controller.waitForSend ? "checkmark.circle.fill" : "circle")
+            }
+          } label: { Image(systemName: "slider.horizontal.3") }
+            .accessibilityLabel("Voice sending")
+            .accessibilityIdentifier("clawdad.assistant.voice-sending")
+        }
+        ToolbarItem(placement: .primaryAction) {
           Button(controller.snapshot?.paused == true ? "Resume control" : "Pause control") {
             controller.perform(
               "pause", args: ["paused": .bool(controller.snapshot?.paused != true)])
@@ -725,6 +870,14 @@ struct AssistantCallBar: View {
           }.accessibilityLabel("Interject")
             .accessibilityHint("Stops the spoken reply and resumes listening to you")
             .accessibilityIdentifier("clawdad.assistant.interject")
+        } else if controller.voiceActive {
+          Button { controller.sendVoiceNow() } label: {
+            Image(systemName: "arrow.up.circle.fill")
+              .font(.system(size: 28)).frame(width: 44, height: 44)
+          }.disabled(!controller.canSendVoice)
+            .accessibilityLabel("Send now")
+            .accessibilityHint("Finishes this thought and sends it after transcription")
+            .accessibilityIdentifier("clawdad.assistant.send-now")
         }
         Button {
           controller.toggleMute()

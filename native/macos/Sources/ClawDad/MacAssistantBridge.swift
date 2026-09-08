@@ -137,7 +137,7 @@ final class MacAssistantBridge {
       }
       return ["close": try .encode(await tabs.closing.handle(request))]
     }
-    if action == "terminal.send", tab.isBusy {
+    if ["terminal.send", "terminal.insert"].contains(action), tab.isBusy {
       throw MacAssistantDeferred(message: "Waiting for \(tab.title)'s agent to finish.")
     }
     guard interaction.isCurrent(ticket) else {
@@ -177,7 +177,7 @@ final class MacAssistantBridge {
     let conversation = try await Task.detached {
       try MacTerminalResponseReader().resolve(tty: target.tty)
     }.value
-    guard action == "terminal.send", let text = args["text"]?.string,
+    guard ["terminal.send", "terminal.insert"].contains(action), let text = args["text"]?.string,
       !text.isEmpty, text.utf8.count <= 32_000
     else { throw AssistantProtocolError.invalid }
     var activity = MacCodexRequestActivityLog()
@@ -200,6 +200,20 @@ final class MacAssistantBridge {
     guard try await tabs.catalog().selectedTabId == tabID,
       assistantPromptIsEmpty(try focusedTerminalText())
     else { throw MacAssistantError("The Terminal input changed. Your draft was preserved.") }
+    if action == "terminal.insert" {
+      try await assistantInsertVerifiedDraft(text, insert: {
+        await input.insertAssistantDraft(text, targetToken: token,
+          isAllowed: { [interaction] in interaction.isCurrent(ticket) }
+        ) { [tabs] in try await tabs.inputIdentity() }
+      }, read: { [self] in
+        guard interaction.isCurrent(ticket), try await tabs.catalog().selectedTabId == tabID else {
+          throw MacAssistantError("The tab changed after insertion. Inspect it before trying again.")
+        }
+        return try focusedTerminalText()
+      })
+      return ["tabId": .string(tabID), "tabTitle": .string(tab.title),
+        "draftVerified": .bool(true), "submitted": .bool(false)]
+    }
     // Register the exact CLI log before pressing Enter. Very fast responses can
     // otherwise be consumed before the delivery receipt reaches the runtime.
     _ = try await runtime.json(

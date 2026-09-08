@@ -71,8 +71,48 @@ test('a working task leaves its tab available for watching and inspection',async
 
 test('ordinary paired requests cannot call native-worker or desktop-tool actions',async t=>{
   const {runtime}=await fixture(t);
-  for(const action of ['terminal.send','computer.input','native.poll','turn/start'])await assert.rejects(runtime.command({action,requestId:action,tabId:'x',text:'x'}),/Unsupported/);
+  for(const action of ['terminal.send','terminal.insert','computer.input','native.poll','turn/start'])await assert.rejects(runtime.command({action,requestId:action,tabId:'x',text:'x'}),/Unsupported/);
   await assert.rejects(runtime.command({action:'message',requestId:'loop',text:'loop'},{tool:true}),/Unsupported/);
+});
+
+test('draft insertion has a durable verified receipt without submitting or replaying',async t=>{
+  const {runtime}=await fixture(t);
+  const request={action:'terminal.insert',requestId:'draft',tabId:'third',text:'hey Cody'};
+  await runtime.command(request,{tool:true});
+  await runtime.command(request,{tool:true});
+  assert.equal((await runtime.nativePoll({workerId:'worker-1'})).job.id,'draft');
+  await runtime.nativeResult({id:'draft',result:{tabId:'third',tabTitle:'contract-work-search',draftVerified:true,submitted:false}});
+  const job=await runtime.job('draft');
+  assert.equal(job.status,'completed');assert.equal(job.result.submitted,false);
+  await runtime.command(request,{tool:true});
+  assert.equal((await runtime.nativePoll({workerId:'worker-1'})).job,null);
+  assert.equal(runtime.state.jobs.length,2);
+  assert.equal(runtime.state.messages.length,0);
+});
+
+test('draft and submit requests keep their order while a busy tab is deferred',async t=>{
+  const {runtime,tick}=await fixture(t);
+  await runtime.command({action:'terminal.insert',requestId:'draft',tabId:'tab',text:'Leave this here'},{tool:true});
+  await runtime.command({action:'terminal.send',requestId:'send',tabId:'tab',text:'A later task'},{tool:true});
+  assert.equal((await runtime.nativePoll({workerId:'worker-1'})).job.id,'draft');
+  await runtime.nativeResult({id:'draft',deferred:true,error:'Agent is working'});
+  assert.equal((await runtime.nativePoll({workerId:'worker-1'})).job,null);
+  tick();assert.equal((await runtime.nativePoll({workerId:'worker-1'})).job.id,'draft');
+});
+
+test('voice timing attaches only bounded numeric diagnostics to the accepted user message',async t=>{
+  const {runtime,root}=await fixture(t);
+  await runtime.command({action:'message',requestId:'voice',text:'Original message'});
+  await runtime.command({action:'voice.timing',requestId:'voice',metrics:{segments:2,transcriptionRoundTripMs:700,hostTranscriptionMs:600,manualSend:1}});
+  assert.equal((await runtime.job('voice')).voiceTiming.segments,2);
+  assert.equal(runtime.state.messages.length,1);
+  assert.equal(runtime.state.jobs.length,2);
+  await assert.rejects(runtime.command({action:'voice.timing',requestId:'voice',metrics:{transcript:'private'}}),/Invalid voice timing/);
+  await assert.rejects(runtime.command({action:'voice.timing',requestId:'voice',metrics:{hostQueueMs:-1}}),/Invalid voice timing/);
+  await assert.rejects(runtime.command({action:'voice.timing',requestId:'voice',metrics:{hostQueueMs:Infinity}}),/Invalid voice timing/);
+  await assert.rejects(runtime.command({action:'voice.timing',requestId:'missing',metrics:{}}),/not found/);
+  await assert.rejects(runtime.command({action:'voice.timing',requestId:'voice',metrics:{}},{tool:true}),/Unsupported/);
+  assert.equal((await fs.readFile(path.join(root,'state.json'),'utf8')).includes('private'),false);
 });
 
 test('completion belongs to the accepting tab and creates one visible coordinator update',async t=>{
@@ -160,13 +200,17 @@ test('MCP sends the exact authorized prompt to the local Terminal queue and retu
   await fs.writeFile(path.join(root,'Assistant/connection.json'),JSON.stringify({baseURL:'http://127.0.0.1:4487'}));
   await fs.writeFile(path.join(root,'native-server.token'),'fixture-token');
   const frames=[{id:1,method:'initialize'},{id:2,method:'tools/list'},
-    {id:3,method:'tools/call',params:{name:'send_to_tab',arguments:{tabId:'tab-two',text:'Please review the existing patch.',requestId:'stable-request'}}}];
+    {id:3,method:'tools/call',params:{name:'send_to_tab',arguments:{tabId:'tab-two',text:'Please review the existing patch.',requestId:'stable-request'}}},
+    {id:4,method:'tools/call',params:{name:'insert_in_tab',arguments:{tabId:'tab-three',text:'hey Cody',requestId:'stable-draft'}}}];
   const requests=[],lines=[];
   await runAssistantMCP({root,input:Readable.from(frames.map(f=>JSON.stringify(f)+'\n')),
     output:new Writable({write(chunk,_encoding,done){lines.push(JSON.parse(chunk));done();}}),
-    fetchImpl:async(url,options)=>{requests.push({url:url.href,body:JSON.parse(options.body)});assert.equal(options.headers.authorization,'Bearer fixture-token');return {ok:true,json:async()=>({job:{id:'stable-request',status:'queued'}})};}});
+    fetchImpl:async(url,options)=>{const body=JSON.parse(options.body);requests.push({url:url.href,body});assert.equal(options.headers.authorization,'Bearer fixture-token');return {ok:true,json:async()=>({job:{id:body.requestId,status:'queued'}})};}});
   assert.equal(lines[0].result.serverInfo.name,'clawdad-assistant');
   assert.ok(lines[1].result.tools.some(t=>t.name==='inspect_tab'));
-  assert.deepEqual(requests,[{url:'http://127.0.0.1:4487/v1/assistant/tool',body:{tabId:'tab-two',text:'Please review the existing patch.',requestId:'stable-request',action:'terminal.send'}}]);
+  assert.ok(lines[1].result.tools.some(t=>t.name==='insert_in_tab'));
+  assert.deepEqual(requests,[{url:'http://127.0.0.1:4487/v1/assistant/tool',body:{tabId:'tab-two',text:'Please review the existing patch.',requestId:'stable-request',action:'terminal.send'}},
+    {url:'http://127.0.0.1:4487/v1/assistant/tool',body:{tabId:'tab-three',text:'hey Cody',requestId:'stable-draft',action:'terminal.insert'}}]);
   assert.equal(JSON.parse(lines[2].result.content[0].text).job.id,'stable-request');
+  assert.equal(JSON.parse(lines[3].result.content[0].text).job.id,'stable-draft');
 });

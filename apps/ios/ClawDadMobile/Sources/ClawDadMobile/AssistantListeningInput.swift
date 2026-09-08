@@ -10,6 +10,7 @@ struct AssistantListeningInput {
   private var resumeAt: TimeInterval = 0
   private var lastPreviewAt: TimeInterval = 0
   private var detector: AssistantVoiceActivity
+  private(set) var lastSpeechAt: TimeInterval?
   var sampleRate: Double { detector.sampleRate }
 
   init(sampleRate: Double) { detector = AssistantVoiceActivity(sampleRate: sampleRate) }
@@ -32,7 +33,7 @@ struct AssistantListeningInput {
     lastPreviewAt = 0
   }
 
-  mutating func reset() { detector.reset(); lastPreviewAt = 0 }
+  mutating func reset() { detector.reset(); lastPreviewAt = 0; lastSpeechAt = nil }
 
   mutating func finish() -> [Float]? {
     guard !muted, !replyActive else { return nil }
@@ -44,6 +45,7 @@ struct AssistantListeningInput {
   ) {
     guard acceptsInput(capturedAt: time) else { return (false, nil, false, nil) }
     let event = detector.consume(values)
+    if detector.speaking, detector.trailingSilenceDuration == 0 { lastSpeechAt = time }
     if event.started || event.utterance != nil { lastPreviewAt = time }
     var preview: [Float]?
     if event.utterance == nil, time - lastPreviewAt >= 3,

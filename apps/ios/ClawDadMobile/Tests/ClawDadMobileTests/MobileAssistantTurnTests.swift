@@ -5,6 +5,139 @@ import XCTest
 
 @MainActor
 final class MobileAssistantTurnTests: XCTestCase {
+  func testShortPauseKeepsBothSegmentsInOneThought() async throws {
+    let transport = AssistantTestTransport(), audio = AssistantTestAudio()
+    let controller = MobileAssistantController(connection: transport, audio: audio, defaults: nil,
+      automaticSendDelay: 100_000_000)
+    defer { controller.stop() }
+    transport.transcribe = { String(decoding: $0, as: UTF8.self) }
+    await controller.startVoice()
+    audio.onSpeechStarted?()
+    audio.onUtterance?(Data("Please check".utf8), true)
+    await until { controller.liveTranscript == "Please check" }
+    audio.onSpeechStarted?()
+    try await Task.sleep(for: .milliseconds(150))
+    XCTAssertTrue(transport.sentTexts.isEmpty)
+    audio.onUtterance?(Data("the second tab.".utf8), true)
+    await until { transport.sentTexts.count == 1 }
+    XCTAssertEqual(transport.sentTexts, ["Please check the second tab."])
+  }
+
+  func testWaitForSendRetainsLongPausesAndFlushesRecordedAudioOnTap() async throws {
+    let transport = AssistantTestTransport(), audio = AssistantTestAudio()
+    let controller = MobileAssistantController(connection: transport, audio: audio, defaults: nil,
+      automaticSendDelay: 20_000_000)
+    defer { controller.stop() }
+    transport.transcribe = { String(decoding: $0, as: UTF8.self) }
+    controller.setWaitForSend(true)
+    await controller.startVoice()
+    audio.onSpeechStarted?()
+    audio.onUtterance?(Data("First thought.".utf8), true)
+    await until { controller.liveTranscript == "First thought." }
+    try await Task.sleep(for: .milliseconds(100))
+    XCTAssertTrue(transport.sentTexts.isEmpty)
+    XCTAssertTrue(controller.canSendVoice)
+    audio.onSpeechStarted?()
+    audio.finishData = Data("And the rest.".utf8)
+    controller.sendVoiceNow()
+    controller.sendVoiceNow()
+    await until { transport.sentTexts.count == 1 }
+    XCTAssertEqual(transport.sentTexts, ["First thought. And the rest."])
+    XCTAssertFalse(controller.canSendVoice)
+    await until { !transport.timings.isEmpty }
+    XCTAssertEqual(transport.timings.first?["segments"]?.number, 2)
+    XCTAssertEqual(transport.timings.first?["manualSend"]?.number, 1)
+  }
+
+  func testSendDuringDelayedTranscriptionSeparatesTheNextThought() async throws {
+    let transport = AssistantTestTransport(), audio = AssistantTestAudio()
+    let controller = MobileAssistantController(connection: transport, audio: audio, defaults: nil)
+    defer { controller.stop() }
+    controller.setWaitForSend(true)
+    var pending: CheckedContinuation<String, Never>?
+    transport.transcribe = { data in
+      if data == Data([1]) { return await withCheckedContinuation { pending = $0 } }
+      return "Second thought"
+    }
+    await controller.startVoice()
+    audio.onSpeechStarted?()
+    audio.onUtterance?(Data([1]), true)
+    await until { pending != nil }
+    controller.sendVoiceNow()
+    controller.sendVoiceNow()
+    audio.onSpeechStarted?()
+    audio.onUtterance?(Data([2]), true)
+    controller.sendVoiceNow()
+    pending?.resume(returning: "First thought")
+    await until { transport.sentTexts.count == 2 }
+    XCTAssertEqual(transport.sentTexts, ["First thought", "Second thought"])
+    XCTAssertEqual(Set(transport.messageIDs).count, 2)
+  }
+
+  func testHangupCancelsThePauseDeadlineAndLateTranscription() async throws {
+    let transport = AssistantTestTransport(), audio = AssistantTestAudio()
+    let controller = MobileAssistantController(connection: transport, audio: audio, defaults: nil,
+      automaticSendDelay: 30_000_000)
+    var pending: CheckedContinuation<String, Never>?
+    transport.transcribe = { _ in await withCheckedContinuation { pending = $0 } }
+    await controller.startVoice()
+    audio.onSpeechStarted?()
+    audio.onUtterance?(Data([1]), true)
+    await until { pending != nil }
+    controller.endVoice()
+    pending?.resume(returning: "Already hung up")
+    try await Task.sleep(for: .milliseconds(100))
+    XCTAssertTrue(transport.sentTexts.isEmpty)
+    XCTAssertFalse(controller.canSendVoice)
+    controller.stop()
+  }
+
+  func testReadyConnectionSkipsStartupRoundTripsAndRechecksAfterDisconnect() async throws {
+    let transport = AssistantTestTransport(), audio = AssistantTestAudio()
+    let controller = MobileAssistantController(connection: transport, audio: audio, defaults: nil)
+    defer { controller.stop() }
+    await controller.startVoice()
+    let reads = transport.stateReads
+    let first = await controller.send("First message")
+    let second = await controller.send("Second message")
+    XCTAssertTrue(first)
+    XCTAssertTrue(second)
+    XCTAssertEqual(transport.stateReads, reads)
+    XCTAssertFalse(transport.commands.contains("start"))
+    transport.connected = false
+    transport.onChange?()
+    transport.connected = true
+    transport.onChange?()
+    let reconnected = await controller.send("After reconnect")
+    XCTAssertTrue(reconnected)
+    XCTAssertEqual(transport.stateReads, reads + 1)
+  }
+
+  func testUncertainVoiceDeliveryRetriesTheSameIDOnceWithoutDuplicatingText() async throws {
+    let transport = AssistantTestTransport(), audio = AssistantTestAudio()
+    let controller = MobileAssistantController(connection: transport, audio: audio, defaults: nil)
+    defer { controller.stop() }
+    controller.setWaitForSend(true)
+    transport.failAfterAcceptance = true
+    transport.transcribe = { _ in "A single request" }
+    await controller.startVoice()
+    audio.onSpeechStarted?()
+    audio.onUtterance?(Data([1]), true)
+    controller.sendVoiceNow()
+    await until { transport.messageIDs.count == 2 }
+    XCTAssertEqual(Set(transport.messageIDs).count, 1)
+    XCTAssertEqual(transport.sentTexts, ["A single request"])
+  }
+
+  func testWaitForSendPreferencePersistsBetweenControllers() {
+    let name = "assistant-test-\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: name)!
+    defer { defaults.removePersistentDomain(forName: name) }
+    let first = MobileAssistantController(connection: AssistantTestTransport(), audio: AssistantTestAudio(), defaults: defaults)
+    first.setWaitForSend(true)
+    let next = MobileAssistantController(connection: AssistantTestTransport(), audio: AssistantTestAudio(), defaults: defaults)
+    XCTAssertTrue(next.waitForSend)
+  }
   func testNoiseCannotInterruptAnyPartOfAReplyAndListeningResumesAfterward() async throws {
     let transport = AssistantTestTransport()
     let audio = AssistantTestAudio()
@@ -219,6 +352,7 @@ private final class AssistantTestAudio: AssistantAudioIO {
   var replyActive = false
   var played: [Data] = []
   var playbackStops = 0
+  var finishData: Data?
   private var clip: CheckedContinuation<Void, Error>?
   func start() async throws { muted = false }
   func setReplyActive(_ active: Bool) { replyActive = active }
@@ -228,7 +362,9 @@ private final class AssistantTestAudio: AssistantAudioIO {
   func completeClip() { let done = clip; clip = nil; done?.resume() }
   func stopPlayback() { playbackStops += 1; let done = clip; clip = nil; done?.resume(throwing: CancellationError()) }
   func resetUtterance() {}
-  func finishUtterance() {}
+  func finishUtterance() {
+    if let data = finishData { finishData = nil; onUtterance?(data, true) }
+  }
   func stop() { stopPlayback() }
 }
 
@@ -240,6 +376,10 @@ private final class AssistantTestTransport: AssistantTransport {
   var messages: [[String: Any]] = []
   var commands: [String] = []
   var sentTexts: [String] = []
+  var messageIDs: [String] = []
+  var timings: [[String: AssistantValue]] = []
+  var failAfterAcceptance = false
+  var stateReads = 0
   var transcriptions = 0
   var syntheses = 0
   var beforeSynthesis: (() async -> Void)?
@@ -253,14 +393,20 @@ private final class AssistantTestTransport: AssistantTransport {
   }
   func request(_ action: AssistantWireRequest.Action, payload: Data) async throws -> Data {
     switch action {
-    case .state: return try snapshot()
+    case .state: stateReads += 1; return try snapshot()
     case .command:
       let body = try JSONDecoder().decode([String: AssistantValue].self, from: payload)
       commands.append(body["action"]?.string ?? "")
       if body["action"]?.string == "message", let text = body["text"]?.string {
-        sentTexts.append(text)
-        messages.append(["id": body["requestId"]!.string!, "role": "user", "text": text, "createdAt": "2026-09-08T00:00:00Z"])
+        let id = body["requestId"]!.string!
+        messageIDs.append(id)
+        if !messages.contains(where: { $0["id"] as? String == id }) {
+          sentTexts.append(text)
+          messages.append(["id": id, "role": "user", "text": text, "createdAt": "2026-09-08T00:00:00Z"])
+        }
+        if failAfterAcceptance { failAfterAcceptance = false; throw AssistantProtocolError.disconnected }
       }
+      if body["action"]?.string == "voice.timing", let value = body["metrics"]?.object { timings.append(value) }
       return try snapshot()
     case .transcribe:
       transcriptions += 1

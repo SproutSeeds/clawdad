@@ -14,7 +14,7 @@ final class MacAssistantSession {
   private let signal: (String, [String: RemoteJSONValue]) async throws -> Void
   private var work: [String: Task<Void, Never>] = [:]
   private var lease: Task<Void, Never>?
-  private var pending: [AssistantWireRequest] = []
+  private var pending: [(request: AssistantWireRequest, receivedAt: TimeInterval)] = []
   private var lastActivity = Date()
   private var stopped = false
 
@@ -108,18 +108,19 @@ final class MacAssistantSession {
     guard !stopped, trusted, data.count <= 2 * 1024 * 1024, pending.count + work.count < 16,
       let request = try? JSONDecoder().decode(AssistantWireRequest.self, from: data),
       (try? request.validate()) != nil, work[request.id] == nil,
-      !pending.contains(where: { $0.id == request.id })
+      !pending.contains(where: { $0.request.id == request.id })
     else {
       onStop?()
       return
     }
     lastActivity = Date()
-    pending.append(request)
+    pending.append((request, ProcessInfo.processInfo.systemUptime))
     pump()
   }
   private func pump() {
     guard !stopped, work.count < 4, !pending.isEmpty else { return }
-    let request = pending.removeFirst()
+    let queued = pending.removeFirst()
+    let request = queued.request
     work[request.id] = Task { @MainActor [weak self] in
       guard let self else { return }
       defer {
@@ -127,7 +128,8 @@ final class MacAssistantSession {
         pump()
       }
       do {
-        let data = try await runtime.respond(request)
+        let data = try await runtime.respond(request,
+          queuedMs: (ProcessInfo.processInfo.systemUptime - queued.receivedAt) * 1000)
         guard !stopped, trusted else { return }
         let size = 64 * 1024
         if data.isEmpty {

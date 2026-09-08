@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
-import {AssistantCoordinator,assistantExecArguments} from '../lib/assistant-coordinator.mjs';
+import {AssistantCoordinator,assistantExecArguments,assistantWorkspaceInstructions} from '../lib/assistant-coordinator.mjs';
 import {AssistantRuntime} from '../lib/assistant-runtime.mjs';
 
 const id='01a07d6d-4359-7361-a94b-8a651ca9858b';
@@ -38,6 +38,20 @@ async function ready(runtime){
   await runtime.drainTask;
 }
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
+
+test('upgrades refresh only the owned Terminal tool guidance and preserve workspace instructions',async t=>{
+  const {root,make}=await fixture(t);
+  const custom='# My Assistant\nKeep my exact instructions.\n';
+  await fs.writeFile(path.join(root,'AGENTS.md'),custom);
+  await make().prepare();
+  const updated=await fs.readFile(path.join(root,'AGENTS.md'),'utf8');
+  assert.ok(updated.startsWith(custom));
+  assert.match(updated,/insert_in_tab/);
+  assert.match(updated,/without submitting/);
+  assert.equal(assistantWorkspaceInstructions(updated),updated);
+  assert.match(assistantWorkspaceInstructions(updated.replace('insert_in_tab','obsolete_insert')),/insert_in_tab/);
+  assert.equal(updated.includes('sandbox_mode'),false);
+});
 
 test('CLI arguments use an explicit conversation model, exact session, and stdin without a shell',()=>{
   const args=assistantExecArguments({root:'/Users/test/Library/Application Support/ClawDad/Assistant',sessionId:id,
