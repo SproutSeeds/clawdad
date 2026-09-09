@@ -68,13 +68,19 @@ extension MacTerminalResponseReader {
     let files = try run("/usr/sbin/lsof", ["-a", "-p", owner.pid, "-Fn"])
     var conversations: [String: MacCodexConversation] = [:]
     var pendingRollout = false
+    var unsupportedRollout = false
     for line in Set(files.split(separator: "\n").filter { $0.hasPrefix("n/") }) {
       let url = URL(fileURLWithPath: String(line.dropFirst()))
-      if let conversation = try MacCodexConversation.load(path: url, sessionRoot: sessionRoot) {
+      switch try MacCodexConversation.metadata(path: url, sessionRoot: sessionRoot) {
+      case .conversation(let conversation):
         conversations[conversation.sessionId] = conversation
-      } else if url.path.hasPrefix(sessionRoot.path + "/"), url.lastPathComponent.hasPrefix("rollout-") {
-        pendingRollout = true
+      case .pending: pendingRollout = true
+      case .unsupported: unsupportedRollout = true
+      case .auxiliary, .unrelated: break
       }
+    }
+    guard !unsupportedRollout else {
+      throw MacCodexInputFailure(code: "unsupported_session_metadata", message: "This Codex process has conversation metadata ClawDad cannot safely identify. Input was preserved. Inspect again after Codex finishes loading; if this persists, update ClawDad.")
     }
     guard conversations.count <= 1, !pendingRollout else {
       throw MacCodexInputFailure(code: conversations.count > 1 ? "ambiguous_session" : "session_starting",

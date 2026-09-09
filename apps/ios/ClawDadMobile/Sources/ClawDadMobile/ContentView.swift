@@ -13,6 +13,7 @@ struct ContentView: View {
   @Environment(\.scenePhase) private var scenePhase
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var showingSettings = false
+  @State private var showingWeeklyUsage = false
   @State private var showingScanner = false
   @State private var showingRemoteAssist = false
   @State private var showingFiles = false
@@ -187,6 +188,14 @@ struct ContentView: View {
       }
       .animation(reduceMotion ? nil : .easeInOut(duration: 0.38), value: session.startupLoading)
       .clawDadNavigationHidden()
+      .safeAreaInset(edge: .top, spacing: 0) { WeeklyUsageNotice() }
+      .sheet(isPresented: $showingWeeklyUsage) { WeeklyUsageSheet() }
+      .task {
+        while !Task.isCancelled {
+          if scenePhase == .active { session.requestWeeklyUsage() }
+          try? await Task.sleep(for: .seconds(30))
+        }
+      }
       .safeAreaInset(edge: .bottom, spacing: 0) { ReadAloudBar(reader: session.readAloud) }
       .safeAreaInset(edge: .bottom, spacing: 0) {
         if !showingRemoteAssist, !showingAssistant, !showingSettings {
@@ -347,11 +356,17 @@ struct ContentView: View {
         if showing { voiceRecorder.cancel() }
       }
       .onChange(of: session.activeComputerId) { _, _ in
+        session.requestWeeklyUsage()
         assistant.bind(session)
         selectedThreadSelection = nil
       }
       .onChange(of: session.pairedComputers.map { "\($0.id)|\($0.pairedAt)|\($0.cloudUrl)" }) { _, _ in notifications.bind(session) }
       .onChange(of: notifications.pendingOpen) { _, _ in openPendingNotification() }
+      .onChange(of: notifications.pendingUsageOpen) { _, _ in openPendingUsageNotification() }
+      .onChange(of: session.connected) { _, connected in
+        if !connected { session.weeklyUsage?.status = "stale" }
+        else { session.requestWeeklyUsage() }
+      }
       .onChange(of: session.notificationThread) { _, thread in
         guard let thread else { return }
         selectedThreadSelection = MobileThreadSelection(computerId: session.activeComputerId, initialThread: thread)
@@ -377,6 +392,7 @@ struct ContentView: View {
   }
 
   private func openPendingNotification() {
+    openPendingUsageNotification()
     guard let notification = notifications.pendingOpen else { return }
     notifications.pendingOpen = nil
     showingSettings = false
@@ -387,6 +403,20 @@ struct ContentView: View {
     showingRemoteAssist = false
     selectedThreadSelection = nil
     session.openNotification(notification)
+  }
+
+  private func openPendingUsageNotification() {
+    guard let value = notifications.pendingUsageOpen else { return }
+    notifications.pendingUsageOpen = nil
+    guard let computer = session.pairedComputers.first(where: { value.matches($0) }) else { return }
+    showingSettings = false; showingAssistant = false; showingRemoteAssist = false
+    showingFiles = false; showingTools = false; showingProjectPicker = false; selectedThreadSelection = nil
+    session.switchComputer(to: computer.id)
+    session.requestWeeklyUsage()
+    Task { @MainActor in
+      try? await Task.sleep(for: .milliseconds(400))
+      showingWeeklyUsage = true
+    }
   }
 
   private func presentAppStorePreviewIfNeeded() {
@@ -426,6 +456,7 @@ struct ContentView: View {
       VStack(spacing: 16) {
         brandHeader
         computerSelector
+        WeeklyUsageButton()
         composerPanel
         if !session.pendingApprovals.isEmpty {
           approvalPanel

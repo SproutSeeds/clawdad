@@ -12,6 +12,7 @@
 		1022DB6F1FD8E58702E505B4 /* AssistantChatComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 193E817EE91878630342FBFE /* AssistantChatComposer.swift */; };
 		187E31F4AF200A700830399F /* RemoteTerminalWindowGroups.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4B71B55085B2C1EE623A070 /* RemoteTerminalWindowGroups.swift */; };
 		1A308337EBE5F90AF0C5DD19 /* ClawDadRemoteAssistProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = 3E041F6ED9B6E45F5F37F06A /* ClawDadRemoteAssistProtocol */; };
+		248200D1744AEEF21347032F /* WeeklyUsage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 829424EA1773E56062EF9191 /* WeeklyUsage.swift */; };
 		275FAABA58CF0436EC6D32FB /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 471CC1C676A805963BAF2F99 /* Assets.xcassets */; };
 		2EFAB0BA46EC3D36BAF2E9A0 /* MobileNotifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97E3CAB4A99E84BAFA945FA2 /* MobileNotifications.swift */; };
 		3031C85399B84CB186BBF471 /* AssistantMessageLinks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A6015610A23A073B93087F9 /* AssistantMessageLinks.swift */; };
@@ -106,6 +107,7 @@
 		7A3BE7EC4AB5DE28F2E8E4EF /* RemoteSpeechPreviewHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteSpeechPreviewHost.swift; sourceTree = "<group>"; };
 		7DB814BD7925748F246B8403 /* MobileAudioSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileAudioSession.swift; sourceTree = "<group>"; };
 		7E1742773FEE684AF62701C4 /* AssistantCaptureRecovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantCaptureRecovery.swift; sourceTree = "<group>"; };
+		829424EA1773E56062EF9191 /* WeeklyUsage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WeeklyUsage.swift; sourceTree = "<group>"; };
 		82CD0587ABF14D7FC118DB37 /* AssistantCaptureBoundary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantCaptureBoundary.swift; sourceTree = "<group>"; };
 		83005EBBAE60D00DFFF52D33 /* MobileFileExport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileFileExport.swift; sourceTree = "<group>"; };
 		8960C1531C592BD814505199 /* SubscriptionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionManager.swift; sourceTree = "<group>"; };
@@ -216,6 +218,7 @@
 				8960C1531C592BD814505199 /* SubscriptionManager.swift */,
 				8F34770E78861322677F1C3C /* VoiceRecorder.swift */,
 				088F57A9C660D2D5A01BEF9B /* VoiceSettings.swift */,
+				829424EA1773E56062EF9191 /* WeeklyUsage.swift */,
 			);
 			path = ClawDadMobile;
 			sourceTree = "<group>";
@@ -420,6 +423,7 @@
 				4D1C0FA879A0AA478DD90B11 /* SubscriptionManager.swift in Sources */,
 				7751604101BB979587499134 /* VoiceRecorder.swift in Sources */,
 				A108218C025FA0193F36DE60 /* VoiceSettings.swift in Sources */,
+				248200D1744AEEF21347032F /* WeeklyUsage.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -530,7 +534,7 @@
 				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 74;
+				CURRENT_PROJECT_VERSION = 76;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_NS_ASSERTIONS = NO;
@@ -609,7 +613,7 @@
 				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 74;
+				CURRENT_PROJECT_VERSION = 76;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -720,7 +724,7 @@
 				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 74;
+				CURRENT_PROJECT_VERSION = 76;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_NS_ASSERTIONS = NO;

@@ -37,6 +37,24 @@ export function normalizeCompletion(value,now=Date.now()) {
   // Copy the allowlist only: response text, code and full paths stay on the Mac.
   return {id:value.id,sessionId:value.sessionId,directory:value.directory.trim(),completedAt:new Date(when).toISOString()};
 }
+export function normalizeWeeklyNotification(value, now = Date.now()) {
+  const when = Date.parse(value?.completedAt);
+  if (value?.kind !== 'codex_weekly' || !/^[a-f\d]{64}$/.test(value.id || '') ||
+      ![0, 5].includes(value.threshold) || !Number.isFinite(value.remainingPercent) ||
+      value.remainingPercent < 0 || value.remainingPercent > value.threshold ||
+      !Number.isSafeInteger(value.resetsAt) || value.resetsAt * 1000 <= now ||
+      !Number.isFinite(when) || when < now - day || when > now + 60_000) throw new Error('Invalid weekly allowance notification');
+  return {id: value.id, kind: 'codex_weekly', threshold: value.threshold, remainingPercent: value.remainingPercent,
+    resetsAt: value.resetsAt, completedAt: new Date(when).toISOString()};
+}
+export function weeklyNotificationPayload(event, registration, identity) {
+  const reset = new Intl.DateTimeFormat(registration.locale, {weekday: 'long', year: 'numeric', month: 'short', day: 'numeric',
+    hour: 'numeric', minute: '2-digit', timeZoneName: 'short', timeZone: registration.timeZone}).format(new Date(event.resetsAt * 1000));
+  return {aps: {alert: {title: event.threshold === 0 ? 'Codex weekly allowance reached 0%' : 'Codex weekly allowance is low',
+    body: `${event.remainingPercent}% remaining · Resets ${reset}`}, sound: 'default', 'thread-id': 'codex-weekly', category: 'CODEX_USAGE'},
+    clawdad: {version: 1, kind: 'codex_weekly', eventId: event.id, accountId: identity.accountId, workspaceId: identity.workspaceId,
+      hostId: identity.hostId}};
+}
 export function completionPayload(event,registration,identity) {
   const at=new Intl.DateTimeFormat(registration.locale,{hour:'numeric',minute:'2-digit',timeZone:registration.timeZone}).format(new Date(event.completedAt));
   return {aps:{alert:{title:`${event.directory} · Response ready`,subtitle:`${identity.hostName || 'ClawDad'} · Thread ${event.sessionId.slice(-6)}`,body:`Completed at ${at}`},
@@ -80,7 +98,7 @@ export class PushNotificationService {
   async revoke(deviceId) { return this.exclusive(()=>this.state.storage.delete(registrationPrefix+deviceId)); }
   async submit(value,identity) {
     return this.exclusive(async()=>{
-      const event=normalizeCompletion(value,this.clock());
+      const event=value?.kind === 'codex_weekly' ? normalizeWeeklyNotification(value,this.clock()) : normalizeCompletion(value,this.clock());
       const devices=await this.state.storage.list({prefix:registrationPrefix});
       const targets=[...devices.values()].filter(device=>Date.parse(event.completedAt)>=device.enabledSince).map(device=>device.deviceId);
       if (!targets.length) return {accepted:true,recipients:0};
@@ -117,7 +135,7 @@ export class PushNotificationService {
             const response=await this.fetch(`https://${device.environment==='development'?'api.sandbox.push.apple.com':'api.push.apple.com'}/3/device/${device.token}`,{
               method:'POST',headers:{authorization:`bearer ${token}`,'apns-topic':topic,'apns-push-type':'alert','apns-priority':'10',
                 'apns-expiration':String(Math.floor((Date.parse(event.completedAt)+day)/1000)),'apns-collapse-id':event.id,'content-type':'application/json'},
-              body:JSON.stringify(completionPayload(event,device,event.identity)),signal:AbortSignal.timeout(10_000)});
+              body:JSON.stringify(event.kind === 'codex_weekly' ? weeklyNotificationPayload(event,device,event.identity) : completionPayload(event,device,event.identity)),signal:AbortSignal.timeout(10_000)});
             delivered=response.ok; httpStatus=response.status;
             const providerReason=delivered?'':(await response.json().catch(()=>({}))).reason;
             reason=delivered?'':(/^[A-Za-z]{1,64}$/.test(providerReason || '')?providerReason:'ProviderError');

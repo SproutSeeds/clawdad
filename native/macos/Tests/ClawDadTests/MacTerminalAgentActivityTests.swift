@@ -77,6 +77,25 @@ final class MacTerminalAgentActivityTests: XCTestCase {
     XCTAssertFalse(try log.read(path))
   }
 
+  func testLargeWorldStateCannotHideOrEndAnEstablishedWorkingTurn() throws {
+    let path = try fixture()
+    try append(event("task_started"), to: path)
+    let record: [String: Any] = ["type": "world_state", "payload": String(repeating: "x", count: 4 * 1024 * 1024)]
+    var log = MacCodexRequestActivityLog()
+    XCTAssertTrue(try log.read(path))
+    try append(record, to: path, newline: false)
+    XCTAssertTrue(try log.read(path), "An in-flight large context record does not finish work")
+    var restarted = MacCodexRequestActivityLog()
+    XCTAssertTrue(try restarted.read(path), "Restart can scan past an incomplete context record")
+    try append(Data([10]), to: path)
+    XCTAssertTrue(try log.read(path))
+    var reopened = MacCodexRequestActivityLog()
+    XCTAssertTrue(try reopened.read(path), "Restart can scan past a complete large context record")
+    try append(event("task_complete"), to: path)
+    XCTAssertFalse(try log.read(path))
+    XCTAssertFalse(try reopened.read(path))
+  }
+
   func testReplacementAndTruncationCannotKeepAnOldBusyState() throws {
     let path = try fixture()
     try append(event("task_started"), to: path)
@@ -101,7 +120,7 @@ final class MacTerminalAgentActivityTests: XCTestCase {
     try append(event("task_complete"), to: second)
     try append(event("task_started"), to: child)
     let commands = ActivityCommandFixture(
-      processes: "10 ttys001 Sat Sep 5 10:00:00 2026 /opt/codex\n11 ttys001 Sat Sep 5 10:00:00 2026 /usr/bin/codex\n20 ttys002 Sat Sep 5 10:00:00 2026 /opt/codex\n21 ttys002 Sat Sep 5 10:00:00 2026 /bin/zsh\n",
+      processes: "10 10 10 S ttys001 Sat Sep 5 10:00:00 2026 /opt/codex\n11 99 10 S ttys001 Sat Sep 5 10:00:00 2026 /usr/bin/codex\n20 20 20 S ttys002 Sat Sep 5 10:00:00 2026 /opt/codex\n21 21 21 S ttys002 Sat Sep 5 10:00:00 2026 /bin/zsh\n",
       files: "p10\nn\(first.path)\nn\(child.path)\np11\nn\(first.path)\np20\nn\(second.path)\n")
     let reader = MacTerminalAgentActivityReader(reader: MacTerminalResponseReader(run: { try commands.run($0, $1) }, sessionRoot: root))
     let ttys: Set<String> = ["/dev/ttys001", "/dev/ttys002"]
@@ -123,7 +142,7 @@ final class MacTerminalAgentActivityTests: XCTestCase {
     let second = try fixture(root: root)
     try append(event("task_started"), to: first)
     try append(event("task_started"), to: second)
-    let commands = ActivityCommandFixture(processes: "10 ttys001 Sat Sep 5 10:00:00 2026 /opt/codex\n",
+    let commands = ActivityCommandFixture(processes: "10 10 10 S ttys001 Sat Sep 5 10:00:00 2026 /opt/codex\n",
       files: "p10\nn\(first.path)\nn\(second.path)\n")
     let reader = MacTerminalAgentActivityReader(reader: MacTerminalResponseReader(run: { try commands.run($0, $1) }, sessionRoot: root))
     let ambiguous = await reader.busyTTYs(in: ["/dev/ttys001"])
@@ -138,7 +157,7 @@ final class MacTerminalAgentActivityTests: XCTestCase {
   func testReopeningAnOldUnfinishedConversationDoesNotMakeItBusy() async throws {
     let path = try fixture()
     try append(event("task_started"), to: path)
-    let commands = ActivityCommandFixture(processes: "10 ttys001 Mon Sep 7 10:00:00 2026 /opt/codex\n",
+    let commands = ActivityCommandFixture(processes: "10 10 10 S ttys001 Mon Sep 7 10:00:00 2026 /opt/codex\n",
       files: "p10\nn\(path.path)\n")
     let reader = MacTerminalAgentActivityReader(reader: MacTerminalResponseReader(
       run: { try commands.run($0, $1) }, sessionRoot: path.deletingLastPathComponent()))
@@ -225,7 +244,7 @@ private final class ActivityCommandFixture: @unchecked Sendable {
   func run(_ executable: String, _ arguments: [String]) throws -> String {
     lock.lock(); defer { lock.unlock() }; count += 1
     if executable == "/bin/ps" {
-      XCTAssertEqual(arguments, ["-axo", "pid=,tty=,lstart=,comm="])
+      XCTAssertEqual(arguments, ["-axo", "pid=,pgid=,tpgid=,stat=,tty=,lstart=,comm="])
       return rows
     }
     XCTAssertEqual(executable, "/usr/sbin/lsof")

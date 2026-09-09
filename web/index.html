@@ -71,6 +71,15 @@
         </div>
         <p id="headerCatchphrase" class="header-catchphrase">"Run dat crawfish cool, cher"</p>
       </header>
+      <button id="weeklyUsage" class="weekly-usage" type="button" aria-haspopup="dialog">Weekly allowance unavailable</button>
+      <button id="weeklyUsageNotice" class="weekly-usage" type="button" hidden></button>
+      <dialog id="weeklyUsageDialog" class="weekly-usage-dialog" aria-labelledby="weeklyUsageTitle">
+        <h2 id="weeklyUsageTitle">Codex weekly allowance</h2>
+        <p id="weeklyUsageDetail"></p>
+        <button id="weeklyUsageRefresh" type="button">Check allowance</button>
+        <button id="weeklyUsageNotifications" type="button" hidden>Enable Mac allowance notifications</button>
+        <button id="weeklyUsageClose" type="button">Done</button>
+      </dialog>
 
       <form id="dispatchForm" class="composer">
         <div id="projectWorkspacePane" class="workspace-pane">
@@ -1327,6 +1336,7 @@
     </dialog>
     <div id="assistantCall" class="assistant-call" hidden><button id="assistantReturn" type="button">Messages</button><span id="assistantCallStatus">Listening…</span><button id="assistantMute" type="button">Mute</button><button id="assistantEnd" type="button">End</button></div>
     <script type="module" src="/app.js?v=__CLAWDAD_ASSET_VERSION__"></script>
+    <script src="/weekly-usage.js?v=__CLAWDAD_ASSET_VERSION__"></script>
     <script type="module" src="/assistant.js?v=__CLAWDAD_ASSET_VERSION__"></script>
   </body>
 </html>

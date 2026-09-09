@@ -116,10 +116,10 @@ final class MacTerminalResponseReaderTests: XCTestCase {
     let files = "p10\nn\(main.path.path)\nn\(child.path.path)\np11\nn\(main.path.path)\n"
     let reader = MacTerminalResponseReader(run: { executable, arguments in
       if executable == "/bin/ps" {
-        XCTAssertEqual(arguments, ["-t", "ttys001", "-o", "pid=,comm="])
-        return "10 /usr/local/bin/codex\n11 /opt/codex\n12 /bin/zsh\n"
+        XCTAssertEqual(arguments, ["-t", "ttys001", "-o", "pid=,pgid=,tpgid=,stat=,lstart=,comm="])
+        return "10 10 10 S Wed Sep 9 09:00:00 2026 /usr/local/bin/codex\n11 11 10 S Wed Sep 9 09:00:00 2026 /opt/codex\n12 12 10 S Wed Sep 9 09:00:00 2026 /bin/zsh\n"
       }
-      XCTAssertEqual(arguments, ["-a", "-p", "10,11", "-Fn"])
+      XCTAssertEqual(arguments, ["-a", "-p", "10", "-Fn"])
       return files
     }, sessionRoot: main.path.deletingLastPathComponent())
     XCTAssertEqual(try reader.resolve(tty: "/dev/ttys001"), main)
@@ -132,7 +132,7 @@ final class MacTerminalResponseReaderTests: XCTestCase {
     let second = try fixture(records: [], id: "22222222-2222-4222-8222-222222222222", directory: first.path.deletingLastPathComponent())
     let files = "n\(first.path.path)\nn\(second.path.path)\n"
     let reader = MacTerminalResponseReader(run: { executable, _ in
-      executable == "/bin/ps" ? "10 /opt/codex\n" : files
+      executable == "/bin/ps" ? "10 10 10 S Wed Sep 9 09:00:00 2026 /opt/codex\n" : files
     }, sessionRoot: first.path.deletingLastPathComponent())
     XCTAssertThrowsError(try reader.resolve(tty: "/dev/ttys001"))
   }

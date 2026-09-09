@@ -11,22 +11,36 @@ struct MacCodexConversation: Equatable, Sendable {
   let path: URL
   var cliVersion: String? = nil
 
+  enum Metadata {
+    case conversation(MacCodexConversation), auxiliary, unrelated, pending, unsupported
+  }
+
   static func load(path: URL, sessionRoot: URL) throws -> Self? {
+    if case .conversation(let value) = try metadata(path: path, sessionRoot: sessionRoot) { return value }
+    return nil
+  }
+
+  /// A CLI can also own Guardian/subagent rollouts. A complete helper header
+  /// is neither a second composer nor a conversation still starting up.
+  static func metadata(path: URL, sessionRoot: URL) throws -> Metadata {
     let url = path.resolvingSymlinksInPath()
     let root = sessionRoot.resolvingSymlinksInPath().path + "/"
     guard url.path.hasPrefix(root), url.pathExtension == "jsonl",
-          url.lastPathComponent.hasPrefix("rollout-") else { return nil }
+          url.lastPathComponent.hasPrefix("rollout-") else { return .unrelated }
     let handle = try FileHandle(forReadingFrom: url)
     defer { try? handle.close() }
     let prefix = try handle.read(upToCount: 256 * 1024) ?? Data()
-    guard let end = prefix.firstIndex(of: 10),
-          let record = try? JSONSerialization.jsonObject(with: prefix[..<end]) as? [String: Any],
+    guard let end = prefix.firstIndex(of: 10) else {
+      return prefix.count < 256 * 1024 ? .pending : .unsupported
+    }
+    guard let record = try? JSONSerialization.jsonObject(with: prefix[..<end]) as? [String: Any],
           record["type"] as? String == "session_meta",
           let payload = record["payload"] as? [String: Any],
-          payload["source"] as? String == "cli",
           let id = payload["id"] as? String, UUID(uuidString: id) != nil,
-          url.lastPathComponent.hasSuffix("\(id).jsonl") else { return nil }
-    return Self(sessionId: id, path: url, cliVersion: payload["cli_version"] as? String)
+          url.lastPathComponent.hasSuffix("\(id).jsonl") else { return .unsupported }
+    if let source = payload["source"] as? [String: Any], source["subagent"] != nil { return .auxiliary }
+    guard payload["source"] as? String == "cli" else { return .unsupported }
+    return .conversation(Self(sessionId: id, path: url, cliVersion: payload["cli_version"] as? String))
   }
 }
 
@@ -48,17 +62,9 @@ struct MacTerminalResponseReader: Sendable {
     guard tty.range(of: "^/dev/tty[A-Za-z0-9]+$", options: .regularExpression) != nil else {
       throw MacTerminalResponseFailure(message: "This Terminal tab has no supported terminal identity.")
     }
-    let rows = try run("/bin/ps", ["-t", String(tty.dropFirst(5)), "-o", "pid=,comm="])
-    let pids = rows.split(separator: "\n").compactMap { line -> String? in
-      let parts = line.split(maxSplits: 1, whereSeparator: { $0.isWhitespace })
-      guard parts.count == 2, Int(parts[0]) != nil,
-            URL(fileURLWithPath: String(parts[1])).lastPathComponent == "codex" else { return nil }
-      return String(parts[0])
-    }
-    guard !pids.isEmpty else {
-      throw MacTerminalResponseFailure(message: "No supported Codex conversation is running in this tab. You can read selected text instead.")
-    }
-    let files = try run("/usr/sbin/lsof", ["-a", "-p", pids.joined(separator: ","), "-Fn"])
+    let arguments = ["-t", String(tty.dropFirst(5)), "-o", "pid=,pgid=,tpgid=,stat=,lstart=,comm="]
+    let owner = try Self.inputOwner(run("/bin/ps", arguments))
+    let files = try run("/usr/sbin/lsof", ["-a", "-p", owner.pid, "-Fn"])
     var conversations: [String: MacCodexConversation] = [:]
     for line in Set(files.split(separator: "\n").filter { $0.hasPrefix("n") }) {
       if let conversation = try MacCodexConversation.load(
@@ -69,6 +75,9 @@ struct MacTerminalResponseReader: Sendable {
       throw MacTerminalResponseFailure(message: conversations.isEmpty
         ? "This tab's conversation could not be identified. You can read selected text instead."
         : "This tab has more than one agent conversation. Select text to choose exactly what to read.")
+    }
+    guard try Self.inputOwner(run("/bin/ps", arguments)) == owner else {
+      throw MacCodexInputFailure(code: "process_changed", message: "The agent in this tab changed. Inspect the same tab again.")
     }
     return conversation
   }

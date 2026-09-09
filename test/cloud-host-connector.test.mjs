@@ -64,6 +64,27 @@ function hostConfig({ trustedDevicePublicKeys = {}, allowUnverifiedCloudDevices 
   };
 }
 
+test('weekly allowance reads require a trusted device and reply with the matching signed request', async t => {
+  const device = generateP256KeyPair();
+  const config = hostConfig({trustedDevicePublicKeys: {'phone': device.publicKey}});
+  const originalFetch = globalThis.fetch; t.after(() => { globalThis.fetch = originalFetch; });
+  let reads = 0;
+  globalThis.fetch = async (url, options) => {
+    assert.equal(String(url), 'http://127.0.0.1:4477/v1/codex/weekly-usage');
+    assert.ok(!options.method || options.method === 'GET'); reads++;
+    return new Response(JSON.stringify({status: 'current', remainingPercent: 33, resetsAt: 1789435631, alerts: []}), {status: 200});
+  };
+  const make = sourceDeviceId => signCloudEnvelope(normalizeCloudEnvelope({type: 'usage.request',
+    accountId: config.accountId, workspaceId: config.workspaceId, sourceDeviceId, targetHostId: config.hostId, body: {}}), device.privateKey);
+  const sent = [], envelope = make('phone');
+  assert.equal((await handleCloudEnvelope(envelope, config, async message => sent.push(message))).ok, true);
+  assert.equal(reads, 1); assert.equal(sent[0].type, 'usage.snapshot');
+  assert.equal(sent[0].body.inReplyTo, envelope.id); assert.equal(sent[0].body.remainingPercent, 33);
+  assert.equal(verifyCloudEnvelopeSignature(sent[0], config.hostPublicKeyPem), true);
+  const denied = await handleCloudEnvelope(make('unpaired'), config, async () => {});
+  assert.equal(denied.ok, false); assert.equal(reads, 1);
+});
+
 test("cloud host reads a native local token file ahead of a legacy cloud.json token", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawdad-cloud-host-token-file-"));
   const configPath = path.join(tempDir, "cloud.json");

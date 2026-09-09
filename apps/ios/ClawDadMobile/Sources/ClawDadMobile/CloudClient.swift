@@ -453,6 +453,11 @@ final class CloudSession: ObservableObject {
   }
 
   let readAloud: MobileReadAloudController
+  @Published var weeklyUsage: WeeklyUsage?
+  @Published var weeklyUsageNotice: WeeklyUsageAlert?
+  private var weeklyUsageScope = ""
+  private var weeklyUsageRequestId = ""
+  private var weeklyUsageRequestedAt = Date.distantPast
   @Published var voiceSettings: MobileVoiceSettings?
   @Published var voiceSettingsPending = false
   @Published var voiceSettingsError = ""
@@ -706,6 +711,11 @@ final class CloudSession: ObservableObject {
     self.modelOptions = fixture.modelOptions
     self.hostOnline = true
     self.startupWorkspaceReady = true
+    if ProcessInfo.processInfo.arguments.contains("--clawdad-weekly-usage-test") {
+      self.weeklyUsage = WeeklyUsage(status: "current", remainingPercent: 33, resetsAt: 1789435631,
+        observedAt: nil, validUntil: Date().addingTimeInterval(3600).timeIntervalSince1970 * 1000,
+        message: nil, alerts: [])
+    }
     if ProcessInfo.processInfo.arguments.contains("--clawdad-voice-refresh-test") {
       Task { [weak self] in
         for tick in 0..<120 {
@@ -1584,6 +1594,30 @@ final class CloudSession: ObservableObject {
     }
   }
 
+  func requestWeeklyUsage() {
+    if appStorePreviewMode { return }
+    let scope = "\(accountId)/\(workspaceId)/\(hostId)"
+    if weeklyUsageScope != scope { weeklyUsage = nil; weeklyUsageNotice = nil; weeklyUsageRequestedAt = .distantPast }
+    weeklyUsageScope = scope
+    guard ready, Date().timeIntervalSince(weeklyUsageRequestedAt) >= 10 else { return }
+    weeklyUsageRequestedAt = Date()
+    let id = UUID().uuidString.lowercased(); weeklyUsageRequestId = id
+    Task {
+      do { try await sendEnvelope(type: "usage.request", body: [:], envelopeId: id) }
+      catch { if weeklyUsageRequestId == id { weeklyUsage?.status = "stale" } }
+    }
+  }
+
+  func dismissWeeklyUsageNotice() {
+    if let notice = weeklyUsageNotice {
+      var seen = defaults.stringArray(forKey: "clawdad.usage.seen") ?? []
+      for alert in weeklyUsage?.alerts ?? [] where !seen.contains(alert.id) && alert.completedAt <= notice.completedAt { seen.append(alert.id) }
+      if !seen.contains(notice.id) { seen.append(notice.id) }
+      defaults.set(seen, forKey: "clawdad.usage.seen")
+    }
+    weeklyUsageNotice = nil
+  }
+
   func previewVoice(_ selection: MobileVoiceSelection, text: String) {
     readAloud.stop()
     toggleSpeech(key: "voice-preview:\(UUID().uuidString)", text: text, projectPath: "", sessionId: "",
@@ -2238,6 +2272,14 @@ final class CloudSession: ObservableObject {
       applyVoiceTranscriptionAccepted(envelope)
     case "speech.transcription":
       applyVoiceTranscription(envelope)
+    case "usage.snapshot":
+      guard envelope.sourceDeviceId == hostId, envelope.accountId == accountId, envelope.workspaceId == workspaceId,
+        envelope.body["inReplyTo"]?.stringValue == weeklyUsageRequestId,
+        let data = try? JSONEncoder().encode(envelope.body),
+        let usage = try? JSONDecoder().decode(WeeklyUsage.self, from: data) else { return }
+      weeklyUsage = usage
+      let seen = defaults.stringArray(forKey: "clawdad.usage.seen") ?? []
+      weeklyUsageNotice = usage.isCurrent() ? usage.alerts.last(where: { !seen.contains($0.id) }) : nil
     case "speech.voices":
       guard verifyPairedHostEnvelope(envelope), voiceSettingsPending,
             envelope.body["requestId"]?.stringValue == voiceSettingsRequestId else { return }

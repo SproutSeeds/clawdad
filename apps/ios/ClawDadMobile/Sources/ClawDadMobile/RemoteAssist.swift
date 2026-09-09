@@ -3262,6 +3262,7 @@ struct RemoteAssistView: View {
     .statusBarHidden(true)
     .persistentSystemOverlays(.hidden)
     .safeAreaInset(edge: .top, spacing: 0) {
+      WeeklyUsageNotice()
       if let assistant, !showingAssistant { AssistantCallBar(controller: assistant) { showingAssistant = true } }
     }
     .sheet(isPresented: $showingAssistant) {
@@ -3398,6 +3399,7 @@ struct RemoteAssistView: View {
   private var primaryControlPanel: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 14) {
+        WeeklyUsageButton(location: "remote", width: Self.mainControlPanelWidth)
         if controller.remoteScreenLocked {
           Label("\(controller.remoteComputerKind) Locked", systemImage: "lock.fill")
             .font(.caption.weight(.bold)).foregroundStyle(ClawDadTheme.gold)

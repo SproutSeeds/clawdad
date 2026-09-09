@@ -2,6 +2,46 @@ import XCTest
 
 @MainActor
 final class AssistantUITests: XCTestCase {
+  func testWeeklyAllowanceInMainScreenAndRemoteMenu() {
+    let app = XCUIApplication()
+    app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-weekly-usage-test"]
+    app.launch()
+    let usage = app.buttons["clawdad.weeklyUsage.main"]
+    XCTAssertTrue(usage.waitForExistence(timeout: 15))
+    XCTAssertTrue(usage.label.contains("33% weekly remaining"))
+    XCTAssertGreaterThanOrEqual(usage.frame.height, 44)
+    usage.tap()
+    XCTAssertTrue(app.navigationBars["Weekly allowance"].waitForExistence(timeout: 5))
+    saveScreenshot(app, "Weekly allowance with exact reset in local time")
+    app.buttons["Done"].tap()
+    app.terminate()
+    app.launchArguments = ["--clawdad-app-store-preview", "terminal-reader", "--clawdad-weekly-usage-test"]
+    app.launch()
+    let controls = app.buttons["Open Remote Assist controls"]
+    if controls.waitForExistence(timeout: 2) { controls.tap() }
+    let remoteUsage = app.buttons["clawdad.weeklyUsage.remote"]
+    XCTAssertTrue(remoteUsage.waitForExistence(timeout: 5))
+    XCTAssertTrue(remoteUsage.label.contains("33% weekly remaining"))
+    XCTAssertLessThanOrEqual(remoteUsage.frame.maxX, app.frame.maxX - 10)
+    saveScreenshot(app, "Compact weekly allowance in Remote Assist menu")
+    remoteUsage.tap()
+    XCTAssertTrue(app.navigationBars["Weekly allowance"].waitForExistence(timeout: 5))
+    app.buttons["Done"].tap()
+    XCTAssertTrue(app.buttons["Close Remote Assist controls"].exists)
+  }
+
+  func testWeeklyAllowanceAtAccessibilityTextSize() {
+    let app = XCUIApplication()
+    app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-weekly-usage-test", "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+    app.launch()
+    let usage = app.buttons["clawdad.weeklyUsage.main"]
+    XCTAssertTrue(usage.waitForExistence(timeout: 15))
+    for _ in 0..<8 where !usage.isHittable { app.swipeUp() }
+    XCTAssertTrue(usage.isHittable); usage.tap()
+    XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 5))
+    saveScreenshot(app, "Weekly allowance at accessibility text size")
+    app.buttons["Done"].tap()
+  }
   func testVoiceTranscriptionEditSaveReopenAndExplicitSend() {
     let app = startTranscriptionReviewFixture()
     let edit = app.buttons["clawdad.assistant.transcript.edit"]

@@ -52,6 +52,7 @@ final class MobileNotificationController: ObservableObject {
   @Published private(set) var status = "Get an alert when a Terminal agent finishes responding."
   @Published private(set) var denied = false
   @Published var pendingOpen: CompletedTurnNotification?
+  @Published var pendingUsageOpen: WeeklyUsageNotification?
   private var token: String?
   private weak var session: CloudSession?
   private var syncing = false
@@ -231,6 +232,9 @@ final class ClawDadPushAppDelegate: NSObject, UIApplicationDelegate, UNUserNotif
     if let notification = CompletedTurnNotification.parse(response.notification.request.content.userInfo) {
       Task { @MainActor in MobileNotificationController.shared.pendingOpen = notification }
     }
+    if let usage = WeeklyUsageNotification.parse(response.notification.request.content.userInfo) {
+      Task { @MainActor in MobileNotificationController.shared.pendingUsageOpen = usage }
+    }
     completionHandler()
   }
 }
@@ -241,10 +245,10 @@ struct NotificationSettingsPanel: View {
   var body: some View {
     ClawDadPanel {
       VStack(alignment: .leading, spacing: 12) {
-        Toggle("Agent response notifications", isOn: Binding(get: { notifications.enabled }, set: { value in notifications.setEnabled(value) }))
+        Toggle("Response and allowance notifications", isOn: Binding(get: { notifications.enabled }, set: { value in notifications.setEnabled(value) }))
           .font(.subheadline.weight(.bold))
           .tint(ClawDadTheme.gold)
-        Text("Directory name and completion time. Tap an alert to open that conversation.")
+        Text("Agent completions and weekly Codex allowance alerts at 5% and 0%. Tap an alert to open its conversation or allowance.")
           .font(.caption).foregroundStyle(ClawDadTheme.peach.opacity(0.8))
         Text(notifications.status).font(.caption).foregroundStyle(ClawDadTheme.cream)
         if notifications.denied && notifications.enabled {

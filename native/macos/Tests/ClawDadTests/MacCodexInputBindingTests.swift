@@ -96,6 +96,41 @@ final class MacCodexInputBindingTests: XCTestCase {
     }
   }
 
+  func testEstablishedConversationWithGuardianIsNotStarting() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    var files = "p42\n"
+    var mainId = ""
+    for source: Any in ["cli", ["subagent": ["other": "guardian"]]] {
+      let id = UUID().uuidString
+      let url = root.appendingPathComponent("rollout-test-\(id).jsonl")
+      var data = try JSONSerialization.data(withJSONObject: ["type": "session_meta", "payload": ["id": id, "source": source]])
+      data.append(10); try data.write(to: url)
+      files += "n\(url.path)\n"
+      if source is String { mainId = id }
+    }
+    let first = try reader(files: files, root: root).inputBinding(tty: tty)
+    XCTAssertEqual(first.conversation?.sessionId, mainId)
+    XCTAssertEqual(try reader(files: files, root: root).inputBinding(tty: tty), first, "No in-memory session discovery required after an app restart")
+    let invalid = root.appendingPathComponent("rollout-unknown.jsonl")
+    try Data("{}\n".utf8).write(to: invalid)
+    XCTAssertThrowsError(try reader(files: files + "n\(invalid.path)\n", root: root).inputBinding(tty: tty)) { error in
+      XCTAssertEqual((error as? MacCodexInputFailure)?.code, "unsupported_session_metadata")
+    }
+  }
+
+  func testLiveEstablishedProcessReadOnly() throws {
+    guard let tty = ProcessInfo.processInfo.environment["CLAWDAD_TEST_ESTABLISHED_TTY"] else {
+      throw XCTSkip("Opt-in read-only established process inspection")
+    }
+    let binding = try MacTerminalResponseReader().inputBinding(tty: tty)
+    XCTAssertNotNil(binding.conversation)
+    var activity = MacCodexRequestActivityLog()
+    XCTAssertTrue(try activity.read(XCTUnwrap(binding.conversation).path))
+    print("Established live binding: \(binding.pid), \(binding.conversation!.sessionId), busy=true")
+  }
+
   func testStartupAndAttachmentInputsRemainProtected() {
     for screen in ["Do you trust this directory?\n1. Yes\n2. No", "Loading Codex…", "Sign in", "› hello\nConfirm?", "› [Image #1]\n  gpt-6-astra max"] {
       XCTAssertNil(assistantObserveDraft(screen).text)

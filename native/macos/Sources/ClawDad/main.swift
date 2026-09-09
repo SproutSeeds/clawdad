@@ -741,6 +741,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
   private var systemReadiness: MacSystemReadiness?
   private var remoteAssistHost: RemoteAssistHost?
   private var assistantBridge: MacAssistantBridge?
+  private let usageNotifications = MacUsageNotifications()
+  private var usageOpenPending = false
   private var remoteComputerManager: MacRemoteComputerManager?
   private var remoteAssistClient: MacRemoteAssistClient?
   private var remoteAssistWindowController: MacRemoteAssistWindowController?
@@ -749,6 +751,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
   private let updateController = ClawDadUpdateController()
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    usageNotifications.installDelegate()
+    usageNotifications.onOpen = { [weak self] in
+      self?.usageOpenPending = true
+      self?.openPendingUsage()
+    }
     let nativeInstanceGuard = NativeAppInstanceGuard()
     self.nativeInstanceGuard = nativeInstanceGuard
     nativeInstanceGuard.acquire { [weak self] outcome in
@@ -799,6 +806,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
   }
 
   func applicationWillTerminate(_ notification: Notification) {
+    usageNotifications.stop()
     assistantBridge?.stop()
     remoteAssistWindowController?.closeSession()
     remoteComputerManager?.stop()
@@ -936,6 +944,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     assistantBridge?.stop()
     assistantBridge = MacAssistantBridge(runtime: assistantRuntime)
     assistantBridge?.start()
+    usageNotifications.start(runtime: assistantRuntime)
     updateStatus("Opening ClawDad...")
     let configuration = WKWebViewConfiguration()
     configuration.applicationNameForUserAgent = "ClawDadNative/0.1"
@@ -948,6 +957,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     self.webView = webView
     window.contentView = webView
     webView.load(service.authenticatedRequest(for: baseURL))
+  }
+
+  private func openPendingUsage() {
+    guard usageOpenPending else { return }
+    window?.makeKeyAndOrderFront(nil)
+    NSApp.activate(ignoringOtherApps: true)
+    guard let webView, !webView.isLoading else { return }
+    webView.evaluateJavaScript("typeof window.openClawDadUsage === 'function' && (window.openClawDadUsage(), true)") { [weak self] value, _ in
+      if value as? Bool == true { self?.usageOpenPending = false }
+    }
+  }
+
+  func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+    openPendingUsage()
   }
 
   @available(macOS 12.0, *)
@@ -976,6 +999,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     }
     let params = body["params"] as? [String: Any] ?? [:]
     switch method {
+    case "enableUsageNotifications":
+      Task { @MainActor in
+        let allowed = await usageNotifications.requestPermission()
+        resolveNativeMessage(id: id, result: ["allowed": allowed])
+      }
     case "getCapabilities":
       resolveNativeMessage(id: id, result: [
         "platform": "macos",

@@ -118,13 +118,13 @@ struct MacCodexRequestActivityLog {
     }
     partial = lines.last.map { Data($0) } ?? Data()
     if partial.count > Self.maximumLine {
-      // An unreadable record cannot preserve a stale positive badge.
-      partial.removeAll(); droppingLine = true; state = Activity()
+      // Large world-state/tool records do not end the agent's current request.
+      partial.removeAll(); droppingLine = true
     }
   }
 
   private mutating func latestActivity(_ handle: FileHandle, end: UInt64) throws -> Activity {
-    var position = end, carry = Data()
+    var position = end, carry = Data(), skippingLargeRecord = false
     let lower = end > UInt64(Self.maximumScan) ? end - UInt64(Self.maximumScan) : 0
     partial.removeAll(); droppingLine = false
     while position > lower {
@@ -140,20 +140,21 @@ struct MacCodexRequestActivityLog {
         if partial.count > Self.maximumLine { partial.removeAll(); droppingLine = true }
         if lines.count == 1 && position > 0 {
           partial.removeAll(); droppingLine = true
-          return Activity()
+          skippingLargeRecord = true
         }
         lines.removeLast()
       }
       for line in lines.dropFirst().reversed() {
+        if skippingLargeRecord { skippingLargeRecord = false; continue }
+        guard line.count <= Self.maximumLine else { continue }
         if let value = Self.activity(Data(line)) { return value }
       }
       carry = lines.first.map { Data($0) } ?? Data()
       if carry.count > Self.maximumLine {
-        // Stop at an oversized/unknown event instead of reaching an older start.
-        return Activity()
+        carry.removeAll(); skippingLargeRecord = true
       }
     }
-    if position == 0, let value = Self.activity(carry) { return value }
+    if position == 0, !skippingLargeRecord, let value = Self.activity(carry) { return value }
     return Activity()
   }
 }
@@ -172,19 +173,22 @@ actor MacTerminalAgentActivityReader {
   }
 
   private func sample(_ ttys: Set<String>) throws -> Set<String> {
-    let rows = try reader.run("/bin/ps", ["-axo", "pid=,tty=,lstart=,comm="])
+    let rows = try reader.run("/bin/ps", ["-axo", "pid=,pgid=,tpgid=,stat=,tty=,lstart=,comm="])
     let launchTime = DateFormatter()
     launchTime.locale = Locale(identifier: "en_US_POSIX")
     launchTime.dateFormat = "EEE MMM d HH:mm:ss yyyy"
     var owners: [String: (tty: String, startedAt: Date)] = [:]
     for row in rows.split(separator: "\n") {
-      let parts = row.split(maxSplits: 7, whereSeparator: { $0.isWhitespace })
-      guard parts.count == 8, let pid = Int(parts[0]), pid > 0,
-            URL(fileURLWithPath: String(parts[7])).lastPathComponent == "codex",
-            let started = launchTime.date(from: parts[2...6].joined(separator: " ")) else { continue }
-      let tty = "/dev/\(parts[1])"
+      let parts = row.split(maxSplits: 10, whereSeparator: { $0.isWhitespace })
+      guard parts.count == 11, let pid = Int(parts[0]), pid > 0,
+            URL(fileURLWithPath: String(parts[10])).lastPathComponent == "codex",
+            let started = launchTime.date(from: parts[5...9].joined(separator: " ")) else { continue }
+      guard parts[1] == parts[2], !parts[3].contains("T"), !parts[3].contains("Z") else { continue }
+      let tty = "/dev/\(parts[4])"
       if ttys.contains(tty) { owners[String(pid)] = (tty, started) }
     }
+    let ambiguousTTYs = Set(Dictionary(grouping: owners.values, by: \.tty).filter { $0.value.count > 1 }.keys)
+    owners = owners.filter { !ambiguousTTYs.contains($0.value.tty) }
     guard !owners.isEmpty else { logs.removeAll(); return [] }
     let pids = owners.map(\.key).sorted().joined(separator: ",")
     let files = try reader.run("/usr/sbin/lsof", ["-a", "-p", pids, "-Fn"])

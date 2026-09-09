@@ -18544,6 +18544,13 @@ function bindEvents() {
 }
 
 async function boot() {
+  window.clawDadEnableUsageNotifications = async () => {
+    const button = document.getElementById('weeklyUsageNotifications');
+    try {
+      const result = await nativeBridge.call('enableUsageNotifications');
+      button.textContent = result.allowed ? 'Mac notifications enabled' : 'Allow ClawDad notifications in Mac System Settings';
+    } catch { button.textContent = 'Notification settings are unavailable'; }
+  };
   bindEvents();
   void initHeaderCarousel();
   resetProcessingPhraseCycle();
