@@ -7,6 +7,8 @@ import {ResearchBudget} from '../lib/research-budget.mjs';
 import {ResearchSupervisor} from '../lib/research-supervisor.mjs';
 import {researchEvidence,validateResearchDecision} from '../lib/research-evidence.mjs';
 import {AssistantRuntime} from '../lib/assistant-runtime.mjs';
+import {runAssistantMCP} from '../lib/assistant-mcp.mjs';
+import {Readable,Writable} from 'node:stream';
 import {normalizeResearchNotification,researchNotificationPayload} from '../cloud/push-notifications.mjs';
 
 const accountKey='a'.repeat(64), instance='codex-process-'+ 'b'.repeat(64), session='11111111-1111-4111-8111-111111111111';
@@ -14,6 +16,7 @@ const initial=Date.parse('2026-09-09T12:00:00Z');
 const config={objective:'Verify the two disposable calculations.',scope:'Only the disposable fixture directory. No external actions.',requirements:['Both calculations have verified evidence.'],evidencePaths:['report.txt']};
 const completion={sessionId:session,turnId:'turn-1',text:'The first calculation is ready. See [report](report.txt).',completedAt:new Date(initial).toISOString(),inProgress:false};
 const observation={verified:true,tabId:'tab-A',tty:'/dev/ttys099',sessionId:session,agentInstanceId:instance,conversationPath:'/fixture/rollout.jsonl',tabTitle:'Fixture',directory:'/fixture',isBusy:false,completion};
+const managementArgs=(thread,extra={})=>({threadId:thread.id,expectedRevision:thread.revision,confirmed:true,...extra});
 const review=()=>({kind:'continue',summary:'The first calculation passed; the second remains.',rationale:'Finish the remaining approved calculation.',
   prompt:'Verify the second calculation and update report.txt with the result.',acceptanceCriteria:['The second calculation is checked.'],noProgress:false,milestone:false,
   findings:[{kind:'proved',text:'First calculation checked.',evidence:[{id:'evidence-1',quote:'First calculation: PASS'}]},
@@ -28,12 +31,12 @@ async function fixture(t,{realRuntime=false}={}){
   const budget=new ResearchBudget({file:path.join(root,'budget.json'),usage,clock:()=>now});
   const jobs=new Map(), deliveries=[], observed=structuredClone(observation);let manual=false, reviews=0, onReview=null;
   const runtime=realRuntime?new AssistantRuntime({root:path.join(root,'Assistant'),coordinator:{stop(){},async prepare(){return {};}}}):{
-    state:{paused:false},async command(request){
+    state:{paused:false},async command(request,options={}){
       if(request.action==='terminal.observe')return {job:{status:'completed',result:structuredClone(observed)}};
       if(jobs.has(request.requestId))return {job:jobs.get(request.requestId)};
-      const j={id:request.requestId,args:request,status:'queued'};jobs.set(j.id,j);deliveries.push(j);return {job:j};
+      const j={id:request.requestId,args:request,supervisor:options.supervisor,status:'queued'};jobs.set(j.id,j);deliveries.push(j);return {job:j};
     },async job(id){return jobs.get(id);},async researchHasManualWork(){return manual;},
-    async cancelResearchWaiting(){for(const j of jobs.values())if(j.status==='queued')j.status='cancelled';},
+    async cancelResearchWaiting(threadId,beforeRevision=Infinity){for(const j of jobs.values())if(j.status==='queued'&&j.supervisor?.threadId===threadId&&j.supervisor.revision<beforeRevision)j.status='cancelled';},
   };
   const reviewer={async run(args){reviews++;return onReview?await onReview(args):review();}};
   const options={root:path.join(root,'Research'),runtime,budget,reviewer,clock:()=>now};
@@ -50,6 +53,211 @@ async function fixture(t,{realRuntime=false}={}){
 test('installation stays off and consumes no review/usage calls; conversation has a separate coordinator',async t=>{
   const f=await fixture(t);await f.supervisor.tick();
   assert.equal(f.reviewCount(),0);assert.equal(f.readCount(),0);assert.equal((await f.supervisor.snapshot()).threads.length,0);
+});
+test('save stopped, start, steer, pause, resume, stop, restart and clear retain one durable setup and history',async t=>{
+  const f=await fixture(t),args={...config,evidenceRoot:f.root,tabId:'tab-A',sessionId:session,agentInstanceId:instance,start:false,confirmed:true};
+  const saved=await f.supervisor.control('research.configure',args,'setup');
+  const thread=f.supervisor.state.threads[saved.controlReceipt.threadId];
+  await f.supervisor.tick();assert.equal(thread.enabled,false);assert.equal(f.reviewCount(),0);
+  for(const action of ['start','steer','pause','resume','off','restart']){
+    const before=thread.revision;
+    const result=await f.supervisor.control('research.'+action,managementArgs(thread,{text:'Keep the second calculation bounded.'}),action);
+    assert.equal(thread.revision,before+1);assert.equal(result.controlReceipt.revision,thread.revision);
+    assert.equal(Object.values(f.supervisor.state.threads).length,1);
+  }
+  assert.equal(thread.enabled,true);assert.equal(thread.steering.length,1);
+  await f.supervisor.control('research.clear',managementArgs(thread),'clear');
+  assert.equal(thread.enabled,false);assert.equal(thread.config,null);assert.equal(thread.status,'cleared');
+  const history=await f.supervisor.history(thread.id);assert.equal(history.objective,'');
+  assert.deepEqual(history.entries.at(-1).previousConfig,{...config,evidenceRoot:await fs.realpath(f.root)});
+  assert.ok(history.entries.find(e=>e.kind==='steer'));assert.equal(await fs.readFile(path.join(f.root,'report.txt'),'utf8'),'First calculation: PASS\n');
+  await assert.rejects(f.supervisor.control('research.start',managementArgs(thread),'invalid-start'),/cleared/);
+  const restored=new ResearchSupervisor(f.options);await restored.tick();assert.equal((await restored.snapshot()).threads[0].configured,false);
+  await restored.control('research.configure',{...args,threadId:thread.id,expectedRevision:thread.revision,objective:'A clearer approved objective.',start:false},'reconfigure');
+  assert.equal((await restored.history(thread.id)).entries.length,history.entries.length+1);
+});
+test('steering preserves paused/off states; changing an objective records both versions and drops superseded steering only from active context',async t=>{
+  const f=await fixture(t),thread=await f.enable();
+  for(const action of ['pause','off']){
+    await f.supervisor.control('research.'+action,managementArgs(thread),action);
+    const enabled=thread.enabled,status=thread.status;
+    await f.supervisor.control('research.steer',managementArgs(thread,{text:'Earlier within-scope direction.'}),'steer-'+action);
+    assert.equal(thread.enabled,enabled);assert.equal(thread.status,status);
+  }
+  await f.supervisor.control('research.configure',managementArgs(thread,{...config,evidenceRoot:f.root,objective:'New approved objective',start:false}),'new-objective');
+  assert.equal(thread.steering.length,0);assert.equal(thread.history.filter(e=>e.kind==='steer').length,2);
+  assert.equal(thread.history.at(-1).previousConfig.objective,config.objective);
+  assert.equal(thread.history.at(-1).config.objective,'New approved objective');
+});
+test('clearing or replacing during review discards the old decision and cannot dispatch it after the response arrives',async t=>{
+  for(const action of ['clear','configure']){
+    const f=await fixture(t),thread=await f.enable();let finish,started,signal;
+    const began=new Promise(r=>started=r);
+    f.setReview(async args=>{signal=args.signal;started();return new Promise(r=>finish=()=>r(review()));});
+    const tick=f.supervisor.tick();await began;
+    await f.supervisor.control('research.'+action,managementArgs(thread,action==='configure'?{...config,evidenceRoot:f.root,objective:'Changed objective',start:true}:{}),action);
+    assert.equal(signal.aborted,true);finish();await tick;
+    assert.equal(f.deliveries.length,0);assert.equal(thread.history.filter(e=>e.kind==='decision').length,0);
+    assert.equal(thread.status,action==='clear'?'cleared':'waiting');
+  }
+});
+test('configuration changes preserve working receipts, manual drafts and accepted queue entries; new work waits for completion',async t=>{
+  const f=await fixture(t),thread=await f.enable();await f.supervisor.tick();
+  const accepted=f.deliveries[0];accepted.status='agent_queued';
+  await f.supervisor.control('research.configure',managementArgs(thread,{...config,evidenceRoot:f.root,objective:'The refined objective',start:true}),'refine');
+  await f.supervisor.tick();assert.equal(accepted.status,'agent_queued');assert.equal(f.reviewCount(),1);assert.equal(thread.status,'working');
+  await f.supervisor.control('research.off',managementArgs(thread),'off-working');
+  await f.supervisor.control('research.restart',managementArgs(thread),'restart-working');
+  await f.supervisor.tick();assert.equal(f.deliveries.length,1);assert.equal(accepted.status,'agent_queued');
+  accepted.status='completed';f.observed.completion={...completion,turnId:'accepted-result'};f.setManual(true);
+  await f.supervisor.tick();assert.equal(f.reviewCount(),1);
+  await f.supervisor.control('research.clear',managementArgs(thread),'clear-working-history');
+  assert.equal(thread.decisions[0].jobId,accepted.id);assert.equal(accepted.status,'completed');
+});
+test('restart creates a new review generation without replaying previous outgoing requests',async t=>{
+  const f=await fixture(t),thread=await f.enable();
+  f.setReview(async()=>({...review(),kind:'needs_user',prompt:'',acceptanceCriteria:[]}));
+  await f.supervisor.tick();assert.equal(thread.status,'needs_user');
+  const generation=thread.generation;
+  await f.supervisor.control('research.restart',managementArgs(thread),'restart-review');
+  await f.supervisor.tick();assert.equal(f.reviewCount(),2);assert.equal(thread.decisions.length,2);
+  assert.equal(thread.decisions[1].generation,generation+1);assert.equal(f.deliveries.length,0);
+});
+test('superseded waiting deliveries cancel while running ones remain; stale revision, account and owner changes cannot reconfigure',async t=>{
+  const f=await fixture(t),thread=await f.enable();await f.supervisor.tick();
+  const stale=managementArgs(thread);
+  await f.supervisor.control('research.pause',managementArgs(thread),'pause');
+  assert.equal(f.deliveries[0].status,'cancelled');
+  const revision=thread.revision;
+  await assert.rejects(f.supervisor.control('research.restart',stale,'stale'),/changed/);assert.equal(thread.revision,revision);
+  f.observed.agentInstanceId='codex-process-'+'c'.repeat(64);
+  await assert.rejects(f.supervisor.control('research.start',managementArgs(thread),'wrong-owner'),/ownership/);assert.equal(thread.revision,revision);
+  f.observed.agentInstanceId=instance;f.observed.tabId='refreshed-catalog';
+  await f.supervisor.control('research.start',managementArgs(thread),'same-owner');assert.equal(thread.target.tabId,'refreshed-catalog');
+  f.setAccount('c'.repeat(64));
+  await assert.rejects(f.supervisor.control('research.configure',managementArgs(thread,{...config,evidenceRoot:f.root,start:true}),'wrong-account'),/account changed/);
+});
+test('an in-flight configuration cannot undo a later stop; concurrent duplicates and restart retries apply once',async t=>{
+  const f=await fixture(t),thread=await f.enable();let release,started;
+  const began=new Promise(r=>started=r),observe=f.supervisor.observe.bind(f.supervisor);
+  f.supervisor.observe=async(...args)=>{started();await new Promise(r=>release=r);return observe(...args);};
+  const update=f.supervisor.control('research.configure',managementArgs(thread,{...config,evidenceRoot:f.root,start:true}),'slow-configure');
+  await began;await f.supervisor.control('research.off',managementArgs(thread),'stop-now');release();
+  await assert.rejects(update,/changed/);assert.equal(thread.enabled,false);
+  f.supervisor.observe=observe;
+  const args=managementArgs(thread),before=thread.revision;
+  await Promise.all([f.supervisor.control('research.restart',args,'once'),f.supervisor.control('research.restart',args,'once')]);
+  assert.equal(thread.revision,before+1);
+  const restored=new ResearchSupervisor(f.options);
+  const retry=await restored.control('research.restart',args,'once',{authorize:()=>{throw Error('Original conversation ended');}});
+  assert.equal(retry.controlReceipt.revision,before+1);assert.equal(retry.threads[0].revision,before+1);
+  await assert.rejects(restored.control('research.restart',{...args,confirmed:false},'once'),/already used/);
+});
+test('all conversation management retains the account reserve latch across restart and reconfiguration',async t=>{
+  const f=await fixture(t),thread=await f.enable();f.setPercent(19);await f.supervisor.tick();
+  const latch=(await f.budget.snapshot()).accounts[0].latch;
+  for(const action of ['restart','off','start','clear'])await f.supervisor.control('research.'+action,managementArgs(thread),action);
+  await f.supervisor.control('research.configure',managementArgs(thread,{...config,evidenceRoot:f.root,start:true}),'configure-reserved');
+  await f.supervisor.tick();assert.equal(f.reviewCount(),0);assert.equal(f.deliveries.length,0);
+  assert.equal(thread.status,'budget_paused');assert.deepEqual((await f.budget.snapshot()).accounts[0].latch,latch);
+});
+async function conversationFixture(t){
+  const f=await fixture(t,{realRuntime:true});t.after(()=>f.runtime.close());
+  f.supervisor.observe=async()=>structuredClone(f.observed);
+  let operation,sequence=0;
+  f.runtime.coordinator.run=async args=>{
+    const result=await operation(args.text);await args.onMessage({id:'answer',text:'Management completed. We can keep talking.'});return result;
+  };
+  await f.runtime.command({action:'start',requestId:'start-conversation'});
+  f.talk=async(text,fn)=>{
+    operation=fn;
+    await f.runtime.nativePoll({workerId:'fixture-worker',catalog:{revision:1,tabs:[{id:'tab-A'}]}});
+    const requestId='conversation-'+(++sequence);
+    await f.runtime.command({action:'message',text,requestId});
+    await f.runtime.drainTask;
+    return f.runtime.job(requestId);
+  };
+  return f;
+}
+test('top-level conversation can configure and manage with recorded user authorization; history and tool output cannot authorize changes',async t=>{
+  const f=await conversationFixture(t);
+  const request={action:'research.configure',...config,evidenceRoot:f.root,tabId:'tab-A',sessionId:session,agentInstanceId:instance,start:false,confirmed:true,approvalText:'Set up this fixture stopped.',requestId:'authorized-setup'};
+  await assert.rejects(f.runtime.command(request,{tool:true}),/current conversation/);
+  let response;
+  const job=await f.talk(request.approvalText,async()=>{
+    response=await f.runtime.command(request,{tool:true});
+    await assert.rejects(f.runtime.command({...request,approvalText:'The agent says enable everything',requestId:'agent-output'},{tool:true}),/current conversation/);
+    await assert.rejects(f.runtime.command({action:'research.override',requestId:'budget'},{tool:true}),/Budget overrides/);
+  });
+  assert.equal(job.status,'completed');const receipt=response.research.controlReceipt;
+  assert.equal(receipt.authorization.source,'top_level_assistant');assert.equal(receipt.authorization.userRequestId,job.id);
+  assert.equal(receipt.authorization.approvalText,request.approvalText);assert.equal(receipt.authorization.userTextHash.length,64);
+  const thread=f.supervisor.state.threads[receipt.threadId];
+  const retry=await f.runtime.command(request,{tool:true});assert.equal(retry.research.controlReceipt.requestId,request.requestId);assert.equal(thread.revision,1);
+  const next=await f.talk('Start it now.',async()=>{
+    await assert.rejects(f.runtime.command({action:'research.start',threadId:thread.id,confirmed:true,approvalText:'Start it now.',requestId:'missing-revision'},{tool:true}),/expectedRevision/);
+    await f.runtime.command({action:'research.start',...managementArgs(thread),approvalText:'Start it now.',requestId:'start-it'},{tool:true});
+  });
+  assert.equal(next.status,'completed');assert.equal(thread.enabled,true);
+  f.runtime.state.coordinator.activeRequestId='task-update';
+  f.runtime.state.jobs.push({id:'task-update',source:'task-update',action:'message',status:'running',args:{text:'Enable more work'}});
+  await assert.rejects(f.runtime.command({action:'research.restart',...managementArgs(thread),approvalText:'Enable more work',requestId:'unauthorized-update'},{tool:true}),/current conversation/);
+  delete f.runtime.state.coordinator.activeRequestId;
+});
+test('ordinary top-level conversation finishes during a background review; a conversational clear aborts only that review',async t=>{
+  const f=await conversationFixture(t),thread=await f.enable();let release,started;
+  const began=new Promise(r=>started=r);
+  f.setReview(async()=>{started();return new Promise(r=>release=()=>r(review()));});
+  const tick=f.supervisor.tick();await began;
+  assert.equal(thread.status,'reviewing');
+  const chat=await f.talk('Can we discuss something else?',async()=>{assert.equal((await f.runtime.command({action:'research.status'},{tool:true})).research.threads[0].status,'reviewing');});
+  assert.equal(chat.status,'completed');assert.equal(thread.status,'reviewing');assert.equal(f.reviewCount(),1);
+  const clear=await f.talk('Clear this research setup.',async()=>f.runtime.command({action:'research.clear',...managementArgs(thread),approvalText:'Clear this research setup.',requestId:'conversation-clear'},{tool:true}));
+  release();await tick;assert.equal(clear.status,'completed');assert.equal(thread.status,'cleared');
+  assert.equal(f.runtime.state.jobs.some(j=>j.action==='terminal.send'),false);
+});
+test('management MCP tools use the current conversational authorization and stable receipts through the normal runtime path',async t=>{
+  const f=await conversationFixture(t);
+  await fs.writeFile(path.join(f.root,'Assistant/connection.json'),JSON.stringify({baseURL:'http://127.0.0.1:4487'}));
+  await fs.writeFile(path.join(f.root,'native-server.token'),'fixture-token');
+  const requests=[],responses=[];
+  const mcp=async(name,args)=>{
+    await runAssistantMCP({root:f.root,input:Readable.from([JSON.stringify({id:1,method:'tools/call',params:{name,arguments:args}})+'\n']),
+      output:new Writable({write(chunk,encoding,done){responses.push(JSON.parse(chunk));done();}}),
+      fetchImpl:async(url,options)=>{const body=JSON.parse(options.body);requests.push(body);
+        try{return {ok:true,json:async()=>await f.runtime.command(body,{tool:true})};}
+        catch(error){return {ok:false,json:async()=>({error:error.message})};}
+      }});
+    return responses.at(-1);
+  };
+  const job=await f.talk('Configure this fixture and keep it stopped.',async text=>{
+    await mcp('configure_research',{...config,evidenceRoot:f.root,tabId:'tab-A',sessionId:session,agentInstanceId:instance,start:false,approvalText:text,requestId:'mcp-config'});
+    const thread=Object.values(f.supervisor.state.threads)[0];assert.ok(thread);
+    await mcp('steer_research',{threadId:thread.id,expectedRevision:thread.revision,text:'Stay in the fixture.',approvalText:text,requestId:'mcp-steer'});
+    await mcp('manage_research',{threadId:thread.id,expectedRevision:thread.revision,operation:'stop',approvalText:text,requestId:'mcp-stop'});
+    const rejected=await mcp('manage_research',{operation:'override',approvalText:text,requestId:'mcp-override'});assert.equal(rejected.result.isError,true);
+    const missing=await mcp('manage_research',{operation:'stop',approvalText:text});assert.equal(missing.result.isError,true);
+  });
+  assert.equal(job.status,'completed');assert.deepEqual(requests.map(r=>r.action),['research.configure','research.steer','research.off']);
+  assert.ok(requests.every(r=>r.confirmed===true));assert.equal(responses.slice(0,3).some(r=>r.result.isError),false);
+  assert.equal(Object.values(f.supervisor.state.threads)[0].history[0].authorization.userRequestId,job.id);
+});
+test('a late failure from a superseded dispatch cannot pause the replacement objective or cancel newer waiting work',async t=>{
+  const f=await fixture(t),thread=await f.enable();
+  f.supervisor.permit=async()=>{
+    await f.supervisor.control('research.configure',managementArgs(thread,{...config,evidenceRoot:f.root,objective:'Replacement objective',start:true}),'replace-before-dispatch');
+    throw Error('Old authorization is no longer current');
+  };
+  await f.supervisor.tick();assert.equal(thread.status,'waiting');assert.equal(f.deliveries.length,0);
+  assert.equal(thread.decisions[0].deliveryStatus,'cancelled');
+  const real=await fixture(t,{realRuntime:true});await real.runtime.load();
+  real.runtime.state.jobs.push(
+    {id:'old',status:'queued',supervisor:{threadId:'fixture',revision:2}},
+    {id:'new',status:'queued',supervisor:{threadId:'fixture',revision:3}},
+    {id:'active',status:'working',supervisor:{threadId:'fixture',revision:2}},
+    {id:'manual',status:'queued'});
+  await real.runtime.cancelResearchWaiting('fixture',3);
+  assert.deepEqual(real.runtime.state.jobs.map(j=>j.status),['cancelled','queued','working','queued']);
 });
 test('a historical shell launch receipt does not hold a new Codex session open; its current agent draft and active work still do',async t=>{
   const f=await fixture(t,{realRuntime:true});await f.runtime.load();

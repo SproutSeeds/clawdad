@@ -52,6 +52,9 @@ test('upgrades refresh only the owned Terminal tool guidance and preserve worksp
   assert.ok(updated.startsWith(custom));
   assert.match(updated,/insert_in_tab/);
   assert.match(updated,/queue_in_tab/);
+  for(const tool of ['configure_research','manage_research','steer_research','approvalText','expectedRevision'])assert.ok(updated.includes(tool));
+  assert.match(updated,/do not run a polling loop/);
+  assert.match(updated,/budget or switch a Terminal session to app-server ownership/);
   assert.match(updated,/agent_queued confirms the native queue entry/);
   assert.match(updated,/never substitute Enter or generic Computer Use/);
   assert.match(updated,/without submitting/);
