@@ -4,6 +4,36 @@ import XCTest
 
 @MainActor
 final class AssistantVoiceMuteTests: XCTestCase {
+  func testDefaultAutomaticallySubmitsTwoSecondsAfterNewWordsRegisterWhileMuted() async throws {
+    let audio = AssistantTestAudio(), transport = AssistantTestTransport()
+    let controller = MobileAssistantController(connection: transport, audio: audio, defaults: nil)
+    defer { controller.stop() }
+    var registeredAt: TimeInterval = 0
+    transport.transcribe = { _ in
+      registeredAt = ProcessInfo.processInfo.systemUptime
+      return "Send these words after two seconds"
+    }
+    await controller.startVoice()
+    audio.lastSpeechAt = ProcessInfo.processInfo.systemUptime - 10
+    audio.finishData = Data([1])
+    audio.onSpeechStarted?()
+    controller.toggleMute()
+    await until { !controller.liveTranscript.isEmpty }
+    try await Task.sleep(for: .milliseconds(1700))
+    XCTAssertTrue(transport.sentTexts.isEmpty, "Use registration time, not the older audio timestamp")
+    await until { transport.sentTexts.count == 1 && !transport.timings.isEmpty }
+    let elapsed = ProcessInfo.processInfo.systemUptime - registeredAt
+    XCTAssertGreaterThanOrEqual(elapsed, 2)
+    XCTAssertLessThan(elapsed, 2.5)
+    XCTAssertEqual(transport.sentTexts, ["Send these words after two seconds"])
+    XCTAssertTrue(controller.muted)
+    XCTAssertTrue(controller.voiceActive)
+    let timing = try XCTUnwrap(transport.timings.last?["lastNewTranscriptToSubmitMs"]?.number)
+    XCTAssertGreaterThanOrEqual(timing, 2000)
+    XCTAssertLessThan(timing, 2500)
+    print("MUTE_TIMING lastNewTranscriptToSubmitMs=\(timing)")
+  }
+
   func testRetiredEnabledPreferencesCannotStartARecognizerOrMuteCalls() async {
     let name = "retired-voice-\(UUID())"
     let defaults = UserDefaults(suiteName: name)!
@@ -161,7 +191,7 @@ final class AssistantVoiceMuteTests: XCTestCase {
     let entries = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [[String: Any]])
     XCTAssertEqual(Set(entries[0].keys), ["at", "event", "inputs", "outputs", "microphonePermission", "sampleRate"])
   }
-  func testMuteDropsPendingFinalTranscriptionAndPreservesTypedTextAndImage() async throws {
+  func testMuteKeepsPendingFinalTranscriptionAndPreservesTypedTextAndImage() async throws {
     let audio = AssistantTestAudio(), transport = AssistantTestTransport()
     let root = FileManager.default.temporaryDirectory.appendingPathComponent("mute-draft-\(UUID())")
     defer { try? FileManager.default.removeItem(at: root) }
@@ -186,43 +216,52 @@ final class AssistantVoiceMuteTests: XCTestCase {
       audio.onTranscriptPreview?(Data("PRIVATE".utf8))
       audio.onSpeechStarted?()
     }
-    final?.resume(returning: "Stale pre-mute transcript")
-    try await Task.sleep(for: .milliseconds(80))
+    final?.resume(returning: "The complete pre-mute transcript")
+    await until { transport.sentTexts.count == 1 }
     XCTAssertEqual(transport.transcriptions, 1)
-    XCTAssertTrue(transport.sentTexts.isEmpty)
-    XCTAssertTrue(transport.timings.isEmpty)
+    XCTAssertEqual(transport.sentTexts, ["The complete pre-mute transcript"])
+    XCTAssertTrue(controller.muted)
+    XCTAssertTrue(controller.voiceActive)
+    XCTAssertEqual(audio.captureMode, .off)
+    XCTAssertEqual(transport.closes, 0)
     XCTAssertTrue(controller.liveTranscript.isEmpty)
     XCTAssertFalse(controller.canSendVoice)
     XCTAssertEqual(draft.value, before)
     XCTAssertEqual(try draft.bytes(image.upload, scope: ""), png)
-    XCTAssertEqual(audio.finishes, 0, "Muting must discard, never flush a voice turn")
+    XCTAssertGreaterThanOrEqual(audio.finishes, 1, "Muting finishes pre-tap audio")
     await controller.unmuteMicrophone()
     transport.transcribe = { String(decoding: $0, as: UTF8.self) }
     audio.onUtterance?(Data("Fresh public turn".utf8), true)
-    await until { transport.sentTexts.count == 1 }
-    XCTAssertEqual(transport.sentTexts, ["Fresh public turn"])
+    await until { transport.sentTexts.count == 2 }
+    XCTAssertEqual(transport.sentTexts, ["The complete pre-mute transcript", "Fresh public turn"])
     XCTAssertEqual(draft.value, before)
   }
 
-  func testLatePreviewAndReconnectCannotRestoreMutedInput() async throws {
+  func testMuteFlushesLastWordsAndReconnectDeliversOnceWithoutRestoringCapture() async throws {
     let audio = AssistantTestAudio(), transport = AssistantTestTransport()
-    let controller = MobileAssistantController(connection: transport, audio: audio, defaults: nil)
+    let controller = MobileAssistantController(connection: transport, audio: audio, defaults: nil, automaticSendDelay: 30_000_000)
     defer { controller.stop() }
     var preview: CheckedContinuation<String, Never>?
-    transport.transcribe = { _ in await withCheckedContinuation { preview = $0 } }
+    transport.transcribe = { data in
+      if data == Data([1]) { return await withCheckedContinuation { preview = $0 } }
+      return "All my words including the last phrase"
+    }
     await controller.startVoice()
     audio.onTranscriptPreview?(Data([1]))
     await until { preview != nil }
+    audio.finishData = Data([2])
+    transport.failAfterAcceptance = true
+    transport.disconnectOnFailure = true
+    transport.onReconnect = { transport.connected = true; transport.onChange?() }
     controller.toggleMute()
-    transport.connected = false; transport.onChange?()
-    transport.connected = true; transport.onChange?()
     preview?.resume(returning: "Stale preview")
-    try await controller.refresh()
-    await Task.yield()
+    await until { transport.sentTexts.count == 1 && transport.messageIDs.count == 2 }
     XCTAssertTrue(controller.muted)
     XCTAssertEqual(audio.captureMode, .off)
     XCTAssertTrue(controller.liveTranscript.isEmpty)
-    XCTAssertTrue(transport.sentTexts.isEmpty)
+    XCTAssertEqual(transport.sentTexts, ["All my words including the last phrase"])
+    XCTAssertEqual(Set(transport.messageIDs).count, 1)
+    XCTAssertEqual(transport.transcriptions, 2)
   }
 
   func testPlaybackEchoIsIgnoredAndManualMuteDoesNotStopReply() async throws {
@@ -257,17 +296,78 @@ final class AssistantVoiceMuteTests: XCTestCase {
     defer { controller.stop() }
     await controller.startVoice()
     controller.setWaitForSend(true)
-    controller.toggleMute()
-    await controller.unmuteMicrophone()
-    XCTAssertTrue(controller.waitForSend)
     audio.onUtterance?(Data("New thought".utf8), true)
     await until { controller.liveTranscript == "New thought" }
+    controller.toggleMute()
+    XCTAssertTrue(controller.waitForSend)
+    XCTAssertTrue(controller.canSendVoice)
     try await Task.sleep(for: .milliseconds(100))
     XCTAssertTrue(transport.sentTexts.isEmpty)
     controller.sendVoiceNow(); controller.sendVoiceNow()
     await until { transport.sentTexts.count == 1 }
     XCTAssertEqual(transport.sentTexts, ["New thought"])
     XCTAssertTrue(controller.voiceActive)
+    XCTAssertTrue(controller.muted)
+    await controller.unmuteMicrophone()
+    XCTAssertFalse(controller.muted)
+    XCTAssertTrue(controller.waitForSend)
+    XCTAssertEqual(transport.sentTexts.count, 1)
+  }
+
+  func testRapidMuteUnmuteRetainsThePendingThoughtAndFreshWordsInOrder() async throws {
+    let audio = AssistantTestAudio(), transport = AssistantTestTransport()
+    let controller = MobileAssistantController(connection: transport, audio: audio, defaults: nil, automaticSendDelay: 60_000_000)
+    defer { controller.stop() }
+    var first: CheckedContinuation<String, Never>?
+    var received: [Data] = []
+    transport.transcribe = { data in
+      received.append(data)
+      if data == Data([1]) { return await withCheckedContinuation { first = $0 } }
+      return "and the rest of my thought"
+    }
+    await controller.startVoice()
+    audio.finishData = Data([1])
+    audio.onSpeechStarted?()
+    controller.toggleMute()
+    await until { first != nil }
+    audio.onUtterance?(Data("PRIVATE".utf8), true)
+    await controller.unmuteMicrophone()
+    audio.onSpeechStarted?()
+    audio.onUtterance?(Data([2]), true)
+    first?.resume(returning: "The beginning")
+    await until { transport.sentTexts.count == 1 }
+    XCTAssertEqual(transport.sentTexts, ["The beginning and the rest of my thought"])
+    XCTAssertEqual(received, [Data([1]), Data([2])])
+    XCTAssertTrue(controller.voiceActive)
+    XCTAssertFalse(controller.muted)
+  }
+
+  func testFailedUnmuteKeepsTheAcceptedTurnAndEndingCallStillCancelsLateDelivery() async throws {
+    let audio = AssistantTestAudio(), transport = AssistantTestTransport()
+    let controller = MobileAssistantController(connection: transport, audio: audio, defaults: nil, automaticSendDelay: 30_000_000)
+    defer { controller.stop() }
+    var final: CheckedContinuation<String, Never>?
+    transport.transcribe = { _ in await withCheckedContinuation { final = $0 } }
+    await controller.startVoice()
+    audio.onUtterance?(Data([1]), true)
+    await until { final != nil }
+    controller.toggleMute()
+    audio.unmuteError = true
+    await controller.unmuteMicrophone()
+    final?.resume(returning: "Keep my completed thought")
+    await until { transport.sentTexts.count == 1 }
+    XCTAssertTrue(controller.muted)
+    XCTAssertEqual(transport.sentTexts, ["Keep my completed thought"])
+    audio.unmuteError = false
+    await controller.unmuteMicrophone()
+    final = nil
+    audio.onUtterance?(Data([2]), true)
+    await until { final != nil }
+    controller.endVoice()
+    final?.resume(returning: "Ended call result")
+    try await Task.sleep(for: .milliseconds(100))
+    XCTAssertEqual(transport.sentTexts.count, 1)
+    XCTAssertFalse(controller.voiceActive)
   }
 
   private func until(_ condition: () -> Bool, file: StaticString = #filePath, line: UInt = #line) async {

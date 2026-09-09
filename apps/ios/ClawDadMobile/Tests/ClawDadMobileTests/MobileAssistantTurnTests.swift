@@ -5,7 +5,7 @@ import XCTest
 
 @MainActor
 final class MobileAssistantTurnTests: XCTestCase {
-  func testAutomaticDefaultSubmitsFourSecondsAfterLastWordsAndKeepsCallConnected() async throws {
+  func testAutomaticDefaultSubmitsTwoSecondsAfterRegisteredWordsAndKeepsCallConnected() async throws {
     let transport = AssistantTestTransport(), audio = AssistantTestAudio()
     transport.transcribe = { String(decoding: $0, as: UTF8.self) }
     let controller = MobileAssistantController(connection: transport, audio: audio, defaults: nil)
@@ -16,12 +16,12 @@ final class MobileAssistantTurnTests: XCTestCase {
     audio.lastSpeechAt = lastWord
     audio.onSpeechStarted?()
     audio.onUtterance?(Data("Please respond now".utf8), true)
-    try await Task.sleep(for: .seconds(3.7))
+    try await Task.sleep(for: .seconds(1.7))
     XCTAssertTrue(transport.sentTexts.isEmpty)
     await until { transport.sentTexts.count == 1 }
     let latency = ProcessInfo.processInfo.systemUptime - lastWord
-    XCTAssertGreaterThanOrEqual(latency, 4)
-    XCTAssertLessThan(latency, 4.5)
+    XCTAssertGreaterThanOrEqual(latency, 2)
+    XCTAssertLessThan(latency, 2.5)
     XCTAssertTrue(controller.voiceActive)
     XCTAssertEqual(transport.closes, 0)
     XCTAssertEqual(transport.sentTexts, ["Please respond now"])
@@ -513,8 +513,10 @@ final class AssistantTestAudio: AssistantAudioIO {
   var finishes = 0
   private var clip: CheckedContinuation<Void, Error>?
   func start() async throws { starts += 1; muted = false; captureMode = .conversation; duringStart?() }
-  func muteCapture() throws {
-    muteCalls += 1; muted = true; captureMode = .off; resetUtterance()
+  func muteCapture(finishingUtterance: Bool) throws {
+    muteCalls += 1; captureMode = .off
+    if finishingUtterance && !muted { finishUtterance() }
+    muted = true; resetUtterance()
   }
   func unmuteCapture() async throws {
     let attempt = muteCalls

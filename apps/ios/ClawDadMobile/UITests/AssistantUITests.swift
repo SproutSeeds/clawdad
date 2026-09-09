@@ -252,6 +252,9 @@ final class AssistantUITests: XCTestCase {
     draft.lifetime = .keepAlways
     add(draft)
     app.buttons["clawdad.assistant.back"].tap()
+    app.buttons["Mute Assistant"].tap()
+    XCTAssertTrue(app.buttons["Unmute Assistant"].waitForExistence(timeout: 3))
+    XCTAssertTrue(send.isEnabled, "The retained Think aloud turn can be sent while the microphone is off")
     send.tap()
     app.buttons["clawdad.assistant.return"].tap()
     XCTAssertTrue(app.staticTexts["You"].waitForExistence(timeout: 5))
@@ -261,7 +264,7 @@ final class AssistantUITests: XCTestCase {
     // Leave the fixture's persisted preference in the default mode.
     thinkAloud.tap()
     XCTAssertEqual(thinkAloud.value as? String, "0")
-    XCTAssertTrue(app.staticTexts["Automatically send after 4 seconds without new words."].exists)
+    XCTAssertTrue(app.staticTexts["Automatically send after 2 seconds without new transcribed words."].exists)
   }
   func testReplyControlsAndMessagesStayAvailableAcrossNavigation() {
     let app = XCUIApplication()

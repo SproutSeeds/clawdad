@@ -24,19 +24,17 @@ final class AssistantVoiceTurn {
   func add(_ key: String, _ value: Double) { metrics[key, default: 0] += max(0, value) }
 }
 
-/// Word progress owns the pause deadline. Energy/onset notifications alone can
-/// extend it once while new speech is being recognized, never on every callback.
+/// Newly registered words own the pause deadline. Energy, punctuation changes
+/// and repeated partials never reset it. Pending STT still protects final words.
 struct AssistantTurnEnding {
   private(set) var lastWordAt: TimeInterval?
   private(set) var lastTranscriptAt: TimeInterval?
   private var beganAt: TimeInterval?
-  private var unconfirmedSpeechAt: TimeInterval?
   private var words: [String] = []
   private var unchangedThroughAt: TimeInterval?
 
   mutating func speechStarted(at time: TimeInterval) {
     if beganAt == nil { beganAt = time }
-    if unconfirmedSpeechAt == nil { unconfirmedSpeechAt = time }
   }
 
   @discardableResult mutating func transcript(_ text: String, capturedAt: TimeInterval,
@@ -53,22 +51,21 @@ struct AssistantTurnEnding {
     lastWordAt = max(lastWordAt ?? capturedAt, capturedAt)
     lastTranscriptAt = receivedAt
     beganAt = beganAt ?? capturedAt
-    unconfirmedSpeechAt = nil
     unchangedThroughAt = nil
     return true
   }
 
   func deadline(pause: TimeInterval) -> TimeInterval? {
-    guard let anchor = lastWordAt ?? beganAt else { return nil }
-    return max(anchor + pause, (unconfirmedSpeechAt ?? anchor) + min(pause, 0.8))
+    guard let anchor = lastTranscriptAt ?? beganAt else { return nil }
+    return anchor + pause
   }
 
   func shouldFinish(at time: TimeInterval, pause: TimeInterval, thinkAloud: Bool,
     activeSpeech: Bool, transcriptionPending: Bool) -> Bool {
     guard !thinkAloud, !transcriptionPending, let deadline = deadline(pause: pause), time >= deadline else { return false }
     // A stalled recognizer is not silence. Keep recording while speech and a
-    // transcription are both active. Final STT supplies the actual last-word
-    // capture time, avoiding a premature deadline measured from speech onset.
+    // transcription are both active. A fresh unchanged word checkpoint can
+    // override room noise; genuinely new registered words restart the timer.
     if !activeSpeech { return true }
     return (unchangedThroughAt ?? -.infinity) >= deadline
   }

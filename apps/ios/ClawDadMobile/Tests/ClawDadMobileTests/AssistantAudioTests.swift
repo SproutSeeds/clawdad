@@ -5,6 +5,55 @@ import XCTest
 
 @MainActor
 final class AssistantAudioTests: XCTestCase {
+  func testMuteAtomicallyDrainsCapturedTailAndExcludesPostMuteAndQueuedCallbacks() async {
+    let mailbox = AssistantInputMailbox()
+    var delivered = 0
+    let callback = assistantInputTap(mailbox: mailbox) { _, _ in delivered += 1 }
+    let format = AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 1)!
+    let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4800)!
+    buffer.frameLength = 4800
+    for i in 0..<4800 { buffer.floatChannelData![0][i] = 0.25 }
+    let now = ProcessInfo.processInfo.systemUptime
+    callback(buffer, AVAudioTime(hostTime: AVAudioTime.hostTime(forSeconds: now - 0.3)))
+    callback(buffer, AVAudioTime(hostTime: AVAudioTime.hostTime(forSeconds: now - 0.2)))
+    // Mute before the UI actor can receive either of these final speech frames.
+    let tail = mailbox.close(before: now)
+    XCTAssertEqual(tail.count, 2)
+    var input = AssistantListeningInput(sampleRate: 48000)
+    _ = input.consume(Array(repeating: 0.1, count: 9600), capturedAt: now - 0.5)
+    for packet in tail { _ = input.consume(packet.values, capturedAt: packet.capturedAt) }
+    let final = input.finish()
+    input.muted = true
+    XCTAssertEqual(final?.count, 19200)
+    XCTAssertEqual(final?.suffix(9600), Array(repeating: Float(0.25), count: 9600)[...])
+    for _ in 0..<100 { callback(buffer, AVAudioTime(hostTime: AVAudioTime.hostTime(forSeconds: now + 0.1))) }
+    for _ in 0..<10 { await Task.yield() }
+    XCTAssertEqual(delivered, 0, "Drained frames and private callbacks cannot be delivered later")
+    XCTAssertTrue(mailbox.drain().isEmpty)
+    var copiedPrivateAudio = false
+    XCTAssertFalse(mailbox.append(capturedAt: now + 1, sampleRate: 48000, samples: {
+      copiedPrivateAudio = true; return [1]
+    }))
+    XCTAssertFalse(copiedPrivateAudio)
+    // Unmute creates a different graph/mailbox. The retired mailbox stays shut.
+    let next = AssistantInputMailbox()
+    XCTAssertTrue(next.append(capturedAt: now + 2, sampleRate: 48000, samples: { [0.5] }))
+    XCTAssertEqual(next.drain().first?.values, [0.5])
+    XCTAssertTrue(mailbox.close(before: now + 3).isEmpty)
+  }
+
+  func testMuteCutoffTrimsAStraddlingPacketAndFailureCloseDiscardsSamples() {
+    let mailbox = AssistantInputMailbox()
+    XCTAssertTrue(mailbox.append(capturedAt: 10, sampleRate: 10, samples: { [1, 2, 3, 4] }))
+    XCTAssertTrue(mailbox.append(capturedAt: 11, sampleRate: 10, samples: { [9] }))
+    let packets = mailbox.close(before: 10.25)
+    XCTAssertEqual(packets.map(\.values), [[1, 2]])
+    let failure = AssistantInputMailbox()
+    XCTAssertTrue(failure.append(capturedAt: 10, sampleRate: 10, samples: { [1, 2] }))
+    XCTAssertTrue(failure.close().isEmpty)
+    XCTAssertTrue(failure.drain().isEmpty)
+  }
+
   func testTapFencesByFirstSampleAndBoundsAudioWaitingForUIActor() async {
     let now = ProcessInfo.processInfo.systemUptime
     var starts: [TimeInterval] = []

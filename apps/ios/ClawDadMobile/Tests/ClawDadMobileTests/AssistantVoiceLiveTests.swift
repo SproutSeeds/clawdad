@@ -23,6 +23,16 @@ final class AssistantVoiceLiveTests: XCTestCase {
     defer { controller.stop() }
     await controller.startVoice()
     XCTAssertTrue(controller.voiceActive)
+    let muteAtEnd = env["CLAWDAD_VOICE_MUTE_AT_END"] == "1"
+    var muteLatency: Double?
+    if muteAtEnd {
+      audio.onRecordedSpeechEnded = {
+        let began = ProcessInfo.processInfo.systemUptime
+        controller.muteMicrophone()
+        muteLatency = (ProcessInfo.processInfo.systemUptime - began) * 1000
+        XCTAssertTrue(controller.muted)
+      }
+    }
     let feed = Task { try await audio.feed(URL(fileURLWithPath: fixture)) }
     defer { feed.cancel() }
     let deadline = Date().addingTimeInterval(180)
@@ -36,19 +46,19 @@ final class AssistantVoiceLiveTests: XCTestCase {
     let lastWord = try XCTUnwrap(audio.lastRecordedSpeechAt)
     XCTAssertEqual(transport.deliveredIDs.count, 1)
     XCTAssertEqual(transport.sendAttempts, 1)
-    // The same final word can already be recognized in a preview before its
-    // voiced tail ends. Verify both the exact lexical deadline and Cody's
-    // requested 3–5 second audio-pause window, rather than conflating them.
-    let wordPause = try XCTUnwrap(transport.voiceMetrics["lastWordToSubmitMs"]?.number)
-    XCTAssertGreaterThanOrEqual(wordPause, 4000)
-    XCTAssertLessThan(wordPause, 5100)
-    XCTAssertGreaterThanOrEqual(submitted - lastWord, 3)
-    XCTAssertLessThan(submitted - lastWord, 5.1)
+    // Registration owns the two-second pause. Audio capture, final STT and
+    // response generation are measured separately rather than conflated.
+    let wordPause = try XCTUnwrap(transport.voiceMetrics["lastNewTranscriptToSubmitMs"]?.number)
+    XCTAssertGreaterThanOrEqual(wordPause, 2000)
+    XCTAssertLessThan(wordPause, 3500)
     XCTAssertTrue(controller.voiceActive)
+    XCTAssertEqual(controller.muted, muteAtEnd)
     let id = try XCTUnwrap(transport.deliveredIDs.first)
     let task = try await transport.json("/v1/assistant/job?id=\(id)")["job"]?.object
     let proof: [String: AssistantValue] = [
       "kind": .string("Recorded speech through real controller and local services; playback-ready PCM, not physical iPhone audio"),
+      "mutedAtEndOfSpeech": .bool(muteAtEnd), "muteToStateMs": muteLatency.map(AssistantValue.number) ?? .null,
+      "lastNewTranscriptToSubmitMs": .number(wordPause),
       "requestId": .string(id), "lastSpeechToSubmitMs": .number((submitted - lastWord) * 1000),
       "submitToPlaybackReadyMs": .number((playback - submitted) * 1000),
       "submitToResponseObservedMs": .number(((transport.responseAt ?? playback) - submitted) * 1000),
@@ -164,10 +174,16 @@ private final class AssistantRecordedAudio: AssistantAudioIO {
   var lastRecordedSpeechAt: TimeInterval?
   var playbackReadyAt: TimeInterval?
   var replyFrames: AVAudioFrameCount = 0
+  var onRecordedSpeechEnded: (() -> Void)?
   func start() async throws {}
   func stop() {}
   func stopPlayback() {}
   func resetUtterance() { input.reset() }
+  func muteCapture(finishingUtterance: Bool) throws {
+    if finishingUtterance && !muted { finishUtterance() }
+    muted = true; input.muted = true
+  }
+  func unmuteCapture() async throws { muted = false; input.muted = false; input.reset() }
   func setReplyActive(_ active: Bool) { input.setReplyActive(active, at: ProcessInfo.processInfo.systemUptime) }
   func finishUtterance() { if let samples = input.finish() { onUtterance?(assistantWAV(samples, sampleRate: input.sampleRate), true) } }
   func previewUtterance() { if let samples = input.preview() { onTranscriptPreview?(assistantWAV(samples, sampleRate: input.sampleRate)) } }
@@ -187,6 +203,8 @@ private final class AssistantRecordedAudio: AssistantAudioIO {
     let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: audio.processingFormat, frameCapacity: AVAudioFrameCount(audio.length)))
     try audio.read(into: buffer)
     let samples = Array(UnsafeBufferPointer(start: try XCTUnwrap(buffer.floatChannelData?[0]), count: Int(buffer.frameLength))) + Array(repeating: Float(0), count: Int(rate * 5))
+    let finalSpeechSample = samples.lastIndex(where: { abs($0) > 0.001 }) ?? samples.count - 1
+    var reachedEnd = false
     input.configure(sampleRate: rate)
     let frameSize = Int(rate / 10)
     for offset in stride(from: 0, to: samples.count, by: frameSize) {
@@ -196,6 +214,10 @@ private final class AssistantRecordedAudio: AssistantAudioIO {
       if event.started { onSpeechStarted?() }
       if let utterance = event.utterance { onUtterance?(assistantWAV(utterance, sampleRate: rate), event.final) }
       if let preview = event.preview { onTranscriptPreview?(assistantWAV(preview, sampleRate: rate)) }
+      if !reachedEnd, offset + frameSize > finalSpeechSample {
+        reachedEnd = true
+        onRecordedSpeechEnded?()
+      }
       try await Task.sleep(for: .milliseconds(100))
     }
   }

@@ -15,7 +15,9 @@ protocol AssistantAudioIO: AnyObject {
   var muted: Bool { get set }
   var lastSpeechAt: TimeInterval? { get }
   func start() async throws
-  func muteCapture() throws
+  /// Stop hardware capture synchronously. Optionally finish only samples that
+  /// were captured before this call, delivering them before returning.
+  func muteCapture(finishingUtterance: Bool) throws
   func unmuteCapture() async throws
   func setReplyActive(_ active: Bool)
   func play(_ data: Data) async throws
@@ -29,7 +31,7 @@ protocol AssistantAudioIO: AnyObject {
 extension AssistantAudioIO {
   var lastSpeechAt: TimeInterval? { nil }
   var onPlaybackStarted: (() -> Void)? { get { nil } set {} }
-  func muteCapture() throws { muted = true; resetUtterance() }
+  func muteCapture() throws { try muteCapture(finishingUtterance: false) }
   func unmuteCapture() async throws { muted = false; resetUtterance() }
   func previewUtterance() {}
 }
@@ -63,6 +65,7 @@ final class AssistantAudio: AssistantAudioIO {
   private var owner: UUID?
   private var generation = UUID()
   private var tapInstalled = false
+  private var inputMailbox: AssistantInputMailbox?
   private var startAttempt = UUID()
   private var interruptionObserver: NSObjectProtocol?
   private var routeObserver: NSObjectProtocol?
@@ -152,34 +155,37 @@ final class AssistantAudio: AssistantAudioIO {
     engine.connect(engine.mainMixerNode, to: engine.outputNode, format: format)
     let generation = UUID()
     self.generation = generation
+    let mailbox = AssistantInputMailbox()
+    inputMailbox = mailbox
     engine.inputNode.installTap(onBus: 0, bufferSize: 1024, format: format,
-      block: assistantInputTap { [weak self] values, capturedAt in
+      block: assistantInputTap(mailbox: mailbox) { [weak self] values, capturedAt in
         guard let self, self.generation == generation, owner != nil else { return }
-        let time = ProcessInfo.processInfo.systemUptime
-        microphone.receivedBuffer(at: time)
-        let route = boundary.route(capturedAt: capturedAt)
-        guard route != .off else { return }
-        guard route == .conversation else { return }
-        if time - lastMeterAt >= 0.1 {
-          lastMeterAt = time
-          let rms = sqrt(values.reduce(0.0) { $0 + ($1.isFinite ? Double($1) * Double($1) : 0) } / Double(values.count))
-          onInputLevel?(input.acceptsInput(capturedAt: capturedAt)
-            ? Float(max(0, min(1, (20 * log10(max(rms, 0.000_001)) + 60) / 35))) : 0)
-        }
-        let event = input.consume(values, capturedAt: capturedAt)
-        if event.started { onSpeechStarted?() }
-        if let samples = event.utterance {
-          onUtterance?(assistantWAV(samples, sampleRate: sampleRate), event.final)
-        } else if event.final {
-          onUtterance?(Data(), true)
-        }
-        if let preview = event.preview {
-          onTranscriptPreview?(assistantWAV(preview, sampleRate: sampleRate))
-        }
+        receiveInput(values, capturedAt: capturedAt, sampleRate: sampleRate)
       })
     tapInstalled = true
     engine.prepare()
     try engine.start()
+  }
+  private func receiveInput(_ values: [Float], capturedAt: TimeInterval, sampleRate: Double) {
+    let time = ProcessInfo.processInfo.systemUptime
+    microphone.receivedBuffer(at: time)
+    guard boundary.route(capturedAt: capturedAt) == .conversation else { return }
+    if time - lastMeterAt >= 0.1 {
+      lastMeterAt = time
+      let rms = sqrt(values.reduce(0.0) { $0 + ($1.isFinite ? Double($1) * Double($1) : 0) } / Double(values.count))
+      onInputLevel?(input.acceptsInput(capturedAt: capturedAt)
+        ? Float(max(0, min(1, (20 * log10(max(rms, 0.000_001)) + 60) / 35))) : 0)
+    }
+    let event = input.consume(values, capturedAt: capturedAt)
+    if event.started { onSpeechStarted?() }
+    if let samples = event.utterance {
+      onUtterance?(assistantWAV(samples, sampleRate: sampleRate), event.final)
+    } else if event.final {
+      onUtterance?(Data(), true)
+    }
+    if let preview = event.preview {
+      onTranscriptPreview?(assistantWAV(preview, sampleRate: sampleRate))
+    }
   }
   private func waitForInput(attempt: UUID) async throws {
     let deadline = ProcessInfo.processInfo.systemUptime + 4
@@ -264,6 +270,8 @@ final class AssistantAudio: AssistantAudioIO {
     input = AssistantListeningInput(sampleRate: 48000)
   }
   private func tearDownEngine() {
+    _ = inputMailbox?.close()
+    inputMailbox = nil
     generation = UUID()
     if tapInstalled {
       engine.inputNode.removeTap(onBus: 0)
@@ -272,17 +280,27 @@ final class AssistantAudio: AssistantAudioIO {
     engine.stop()
   }
 
-  func muteCapture() throws {
+  func muteCapture(finishingUtterance: Bool) throws {
+    let cutoff = ProcessInfo.processInfo.systemUptime
     captureChange = UUID()
-    muted = true
-    input.reset()
-    onInputLevel?(0)
-    boundary.move(to: .off, at: ProcessInfo.processInfo.systemUptime)
+    // Close the audio-thread mailbox first. Its bounded pre-tap samples are
+    // drained synchronously; queued actor callbacks cannot deliver them twice.
+    // A new graph gets a fresh mailbox on unmute, excluding all private audio.
+    let pending = inputMailbox?.close(before: finishingUtterance ? cutoff : nil) ?? []
     captureMonitor?.cancel()
     captureMonitor = nil
     tearDownEngine()
+    if finishingUtterance && !muted {
+      for packet in pending {
+        receiveInput(packet.values, capturedAt: packet.capturedAt, sampleRate: packet.sampleRate)
+      }
+      finishUtterance()
+    }
+    boundary.move(to: .off, at: cutoff)
     microphone.end()
     muted = true
+    input.reset()
+    onInputLevel?(0)
     if let owner { try MobileAudioSession.shared.suspendConversationMicrophone(owner) }
     diagnostics.record(.muted)
   }
@@ -300,7 +318,7 @@ final class AssistantAudio: AssistantAudioIO {
       }
       guard captureChange == change else { throw CancellationError() }
       input.reset()
-        boundary.move(to: .conversation, at: ProcessInfo.processInfo.systemUptime)
+      boundary.move(to: .conversation, at: ProcessInfo.processInfo.systemUptime)
       muted = false
       recovery = AssistantCaptureRecovery()
       monitorCapture(attempt: startAttempt)
@@ -316,36 +334,61 @@ final class AssistantAudio: AssistantAudioIO {
 // @MainActor method gives it UI-actor isolation and traps on the audio thread
 // in Swift 6. Copy samples here, then explicitly deliver them to the UI actor.
 nonisolated func assistantInputTap(
+  mailbox: AssistantInputMailbox = AssistantInputMailbox(),
   receive: @escaping @MainActor @Sendable ([Float], TimeInterval) -> Void
 ) -> @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void {
-  let mailbox = AssistantInputMailbox()
   return { buffer, when in
-    guard buffer.frameLength > 0, let channel = buffer.floatChannelData?[0], mailbox.acquire() else { return }
+    guard buffer.frameLength > 0, let channel = buffer.floatChannelData?[0] else { return }
     // Fence by the first sample, not callback delivery time. A buffer spanning
     // an unmute boundary must be discarded in full, including its private tail.
     let beganAt = ProcessInfo.processInfo.systemUptime - Double(buffer.frameLength) / buffer.format.sampleRate
     let capturedAt = when.isHostTimeValid && when.hostTime > 0
       ? min(beganAt, AVAudioTime.seconds(forHostTime: when.hostTime)) : beganAt
-    let values = (0..<Int(buffer.frameLength)).map { channel[$0 * buffer.stride] }
+    guard mailbox.append(capturedAt: capturedAt, sampleRate: buffer.format.sampleRate,
+      samples: { (0..<Int(buffer.frameLength)).map { channel[$0 * buffer.stride] } }) else { return }
     Task { @MainActor in
-      defer { mailbox.release() }
-      receive(values, capturedAt)
+      for packet in mailbox.drain() { receive(packet.values, packet.capturedAt) }
     }
   }
 }
 
 /// Bound transient audio-thread handoff even while the UI actor is stalled.
-/// The lock protects only a count; this object never stores audio or text.
-private final class AssistantInputMailbox: @unchecked Sendable {
+/// Own only the transient samples waiting for the UI actor. Closing atomically
+/// removes them and rejects future capture before even copying the samples.
+final class AssistantInputMailbox: @unchecked Sendable {
+  struct Packet: Sendable {
+    let values: [Float]
+    let capturedAt: TimeInterval
+    let sampleRate: Double
+  }
   private let lock = NSLock()
-  private var pending = 0
-  func acquire() -> Bool {
+  private var pending: [Packet] = []
+  private var closed = false
+  func append(capturedAt: TimeInterval, sampleRate: Double, samples: () -> [Float]) -> Bool {
     lock.lock(); defer { lock.unlock() }
-    guard pending < 4 else { return false }
-    pending += 1
+    guard !closed, pending.count < 4 else { return false }
+    pending.append(Packet(values: samples(), capturedAt: capturedAt, sampleRate: sampleRate))
     return true
   }
-  func release() { lock.lock(); pending -= 1; lock.unlock() }
+  func drain() -> [Packet] {
+    lock.lock(); defer { lock.unlock() }
+    let packets = pending
+    pending.removeAll(keepingCapacity: true)
+    return packets
+  }
+  func close(before cutoff: TimeInterval? = nil) -> [Packet] {
+    lock.lock(); defer { lock.unlock() }
+    closed = true
+    let packets = pending
+    pending.removeAll()
+    guard let cutoff else { return [] }
+    return packets.compactMap { packet in
+      guard packet.capturedAt < cutoff, packet.sampleRate > 0 else { return nil }
+      let count = Int(min(Double(packet.values.count), ((cutoff - packet.capturedAt) * packet.sampleRate).rounded(.down)))
+      guard count > 0 else { return nil }
+      return Packet(values: Array(packet.values.prefix(count)), capturedAt: packet.capturedAt, sampleRate: packet.sampleRate)
+    }
+  }
 }
 
 nonisolated func assistantPlaybackCompletion(
