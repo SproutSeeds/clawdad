@@ -569,3 +569,83 @@ test('diagnostic delivery has durable receipts without creating visible tasks or
   assert.equal(runtime.state.jobs.some(j=>j.id==='update:fixture'),false);
   assert.equal(runtime.snapshot().tasks.length,0);assert.equal(runtime.snapshot().messages.length,0);
 });
+
+test('fresh process-bound draft survives retries, reconnect and first-session discovery without dummy delivery',async t=>{
+  const {runtime,root,coordinator}=await fixture(t);
+  const agentInstanceId='codex-process-'+'a'.repeat(64),tty='/dev/ttys012';
+  const command={action:'terminal.insert',tabId:'fresh',agentInstanceId,text:'First real draft',requestId:'fresh-draft'};
+  await runtime.command(command,{tool:true});
+  await runtime.nativePoll({workerId:'one'});
+  await assert.rejects(runtime.nativePrepare({id:command.requestId,agentInstanceId:'codex-process-'+'b'.repeat(64),tty}),/inspected agent changed/);
+  await runtime.nativePrepare({id:command.requestId,agentInstanceId,tty});
+  await assert.rejects(runtime.nativePrepare({id:command.requestId,agentInstanceId,tty}),/already prepared/);
+  await runtime.nativeResult({id:command.requestId,result:{tabId:'fresh',agentInstanceId,draftVerified:true,submitted:false,expandedTextReadBack:false}});
+  assert.equal((await runtime.job(command.requestId)).status,'inserted');
+  assert.equal((await runtime.job(command.requestId)).sessionId,undefined);
+  await runtime.command(command,{tool:true});
+  const restarted=new AssistantRuntime({root,coordinator});t.after(()=>restarted.close());await restarted.load();
+  let poll=await restarted.nativePoll({workerId:'two'});
+  assert.equal(poll.job,null);assert.deepEqual(poll.pendingBindings,[{id:command.requestId,agentInstanceId,tty}]);
+  const binding={id:command.requestId,agentInstanceId,tty,sessionId:queueSession,conversationPath:'/test/new-cli.jsonl'};
+  for(const wrong of [{agentInstanceId:'other'},{tty:'/dev/ttys013'},{id:'other'}]) {
+    await restarted.nativePoll({workerId:'two',bindings:[{...binding,...wrong}]});
+    assert.equal((await restarted.job(command.requestId)).sessionId,undefined);
+  }
+  poll=await restarted.nativePoll({workerId:'two',bindings:[binding]});
+  assert.equal(poll.pendingBindings.length,0);assert.equal(poll.job,null);
+  assert.equal((await restarted.job(command.requestId)).status,'inserted');
+  const timestamp=new Date(Date.now()+1000).toISOString(),target={coordinator:false};
+  const event=(type,fields={})=>({type:'event_msg',timestamp,payload:{type,...fields}});
+  restarted.consumeRecord(event('task_started',{turn_id:'first-real-turn'}),binding.conversationPath,target);
+  restarted.consumeRecord(event('user_message',{message:command.text}),'/test/same-directory-other.jsonl',target);
+  assert.equal((await restarted.job(command.requestId)).status,'inserted');
+  restarted.consumeRecord(event('user_message',{message:command.text}),binding.conversationPath,target);
+  restarted.consumeRecord(event('task_complete',{turn_id:'first-real-turn',last_agent_message:'Done'}),binding.conversationPath,target);
+  restarted.consumeRecord(event('task_complete',{turn_id:'first-real-turn',last_agent_message:'Done'}),binding.conversationPath,target);
+  assert.equal((await restarted.job(command.requestId)).status,'completed');
+  assert.equal(restarted.state.jobs.filter(j=>j.id==='update:'+command.requestId).length,1);
+});
+
+test('fresh Enter receipt discovers delayed history without replay; changed processes remain uncertain',async t=>{
+  const {runtime,tick}=await fixture(t),agentInstanceId='codex-process-'+'c'.repeat(64),tty='/dev/ttys022';
+  const command={action:'terminal.send',tabId:'new',agentInstanceId,text:'First authorized task',requestId:'fresh-send'};
+  await runtime.command(command,{tool:true});await runtime.nativePoll({workerId:'one'});
+  await runtime.nativePrepare({id:command.requestId,agentInstanceId,tty});
+  await runtime.nativeResult({id:command.requestId,result:{tabId:'new',agentInstanceId}});
+  for(let i=0;i<16;i++)tick();await runtime.nativePoll({workerId:'one'});
+  assert.equal((await runtime.job(command.requestId)).status,'attention');
+  await runtime.command(command,{tool:true});
+  const file='/test/delayed-fresh.jsonl';
+  assert.equal((await runtime.nativePoll({workerId:'two',bindings:[{id:command.requestId,agentInstanceId,tty,sessionId:queueSession,conversationPath:file}]})).job,null);
+  const timestamp=new Date(Date.now()+1000).toISOString(),target={coordinator:false};
+  runtime.consumeRecord({type:'event_msg',timestamp,payload:{type:'task_started',turn_id:'real-first'}},file,target);
+  runtime.consumeRecord({type:'event_msg',timestamp,payload:{type:'user_message',message:command.text}},file,target);
+  assert.equal((await runtime.job(command.requestId)).status,'working');
+  runtime.consumeRecord({type:'event_msg',timestamp,payload:{type:'task_complete',turn_id:'real-first',last_agent_message:'Ready'}},file,target);
+  assert.equal((await runtime.job(command.requestId)).status,'completed');
+  const second={...command,requestId:'changed-process',tabId:'second'};
+  await runtime.command(second,{tool:true});await runtime.nativePoll({workerId:'two'});
+  await runtime.nativePrepare({id:second.requestId,agentInstanceId,tty});
+  await runtime.nativeResult({id:second.requestId,error:'Input receipt uncertain'});
+  let poll=await runtime.nativePoll({workerId:'two',bindings:[{id:second.requestId,agentInstanceId,tty,processChanged:true}]});
+  assert.equal(poll.pendingBindings.length,0);
+  await runtime.nativePoll({workerId:'two',bindings:[{id:second.requestId,agentInstanceId,tty,sessionId:queueSession,conversationPath:file}]});
+  assert.equal((await runtime.job(second.requestId)).sessionId,undefined);
+  assert.match((await runtime.job(second.requestId)).error,/original Codex process/);
+  assert.equal((await runtime.command(second,{tool:true})).job.status,'attention');
+});
+
+test('fresh draft edits retire the original receipt, missing bindings and queue-before-first-turn are refused',async t=>{
+  const {runtime}=await fixture(t),agentInstanceId='codex-process-'+'d'.repeat(64),tty='/dev/ttys032';
+  await assert.rejects(runtime.command({action:'terminal.insert',tabId:'fresh',text:'hi',requestId:'missing'},{tool:true}),/sessionId or fresh agentInstanceId/);
+  await assert.rejects(runtime.command({action:'terminal.queue',tabId:'fresh',agentInstanceId,text:'hi',requestId:'queue'},{tool:true}),/session/);
+  const command={action:'terminal.insert',tabId:'fresh',agentInstanceId,text:'Draft only',requestId:'original'};
+  await runtime.command(command,{tool:true});await runtime.nativePoll({workerId:'one'});
+  await runtime.nativePrepare({id:command.requestId,agentInstanceId,tty});
+  await runtime.nativeResult({id:command.requestId,result:{tabId:'fresh',agentInstanceId,draftVerified:true,submitted:false}});
+  await runtime.command({action:'terminal.clear',tabId:'fresh',token:'inspected',expectedText:command.text,requestId:'clear'},{tool:true});
+  await runtime.nativePoll({workerId:'one'});
+  await runtime.nativeResult({id:'clear',result:{tabId:'fresh',agentInstanceId,draftVerified:true,submitted:false,text:''}});
+  assert.equal((await runtime.job(command.requestId)).status,'cleared');
+  assert.equal((await runtime.nativePoll({workerId:'one'})).pendingBindings.length,0);
+});

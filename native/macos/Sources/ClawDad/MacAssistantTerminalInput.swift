@@ -70,6 +70,7 @@ final class MacAssistantTerminalInput {
   private struct Inspection {
     let tabId: String, tty: String, identity: String, sessionId: String
     let foreground: MacAssistantForeground
+    let agent: MacCodexInputBinding?
     let generation: UInt64
     let expires: Date
     let screen: String
@@ -120,12 +121,12 @@ final class MacAssistantTerminalInput {
       let identity = try await tabs.inputIdentity(), interaction.isCurrent(ticket) else { throw AssistantProtocolError.invalid }
     let foreground = try await Task.detached { try MacAssistantForeground.read(tty: tab.tty) }.value
     observationStep?("context")
-    let conversation = try? await Task.detached { try MacTerminalResponseReader().resolve(tty: tab.tty) }.value
+    let agent = try? await Task.detached { try MacTerminalResponseReader().inputBinding(tty: tab.tty) }.value
     observationStep?("screen")
     let value = try screen(shellIdentity:foreground.shell != nil ? identity : nil)
     let shellDraft = foreground.shell != nil ? MacAssistantShellDraft.read(value) : nil
-    let draft = shellDraft?.text ?? (conversation == nil ? nil : assistantEditableDraft(value, allowQueueFooter: true))
-    let sessionId = conversation?.sessionId ?? foreground.identity
+    let draft = shellDraft?.text ?? (agent == nil ? nil : assistantEditableDraft(value, allowQueueFooter: true))
+    let sessionId = agent?.conversation?.sessionId ?? agent?.instanceId ?? foreground.identity
     let token = UUID().uuidString
     let captured = await input.captureDictationTarget(.request(.captureTarget, requestId: token)) { [tabs] in try await tabs.inputIdentity() }
     observationStep?("capture")
@@ -134,12 +135,12 @@ final class MacAssistantTerminalInput {
     inspections = inspections.filter { $0.value.expires > Date() }
     if inspections.count >= 32 { inspections.removeAll() }
     inspections[token] = Inspection(tabId: tabId, tty: tab.tty, identity: identity, sessionId: sessionId,
-      foreground: foreground, generation: ticket, expires: Date().addingTimeInterval(45), screen: value,
+      foreground: foreground, agent: agent, generation: ticket, expires: Date().addingTimeInterval(45), screen: value,
       draft: draft, shellPrompt: shellDraft?.prompt)
     observationStep?("inspected")
     return ["tabId": .string(tabId), "inputToken": .string(token), "inputSessionId": .string(sessionId),
       "tty": .string(tab.tty), "windowGroupId": .string(focused.tabs.first { $0.id == tabId }?.windowGroupId ?? ""),
-      "kind": .string(conversation != nil ? "agent" : foreground.shell != nil ? "shell" : "native"),
+      "kind": .string(agent != nil ? "agent" : foreground.shell != nil ? "shell" : "native"),
       "shell": foreground.shell.map(AssistantValue.string) ?? .null,
       "canTypeDraft": .bool(shellDraft != nil), "draftText": draft.map(AssistantValue.string) ?? .null,
       "screenText": .string(value), "expiresInSeconds": .number(45),
@@ -157,9 +158,9 @@ final class MacAssistantTerminalInput {
         try await Task.detached(operation: { try MacAssistantForeground.read(tty: saved.tty) }).value == saved.foreground else {
         throw MacAssistantError("The targeted tab, process or input changed. It was preserved; inspect it again.")
       }
-      if !saved.sessionId.hasPrefix("native-") {
-        let owner = try await Task.detached { try MacTerminalResponseReader().resolve(tty: saved.tty) }.value
-        guard owner.sessionId == saved.sessionId else { throw MacAssistantError("The agent session changed. Inspect it again.") }
+      if let agent = saved.agent {
+        let owner = try await Task.detached { try MacTerminalResponseReader().inputBinding(tty: saved.tty) }.value
+        guard owner.continues(agent) else { throw MacAssistantError("The agent session changed. Inspect it again.") }
       }
       return try screen(shellIdentity:saved.shellPrompt != nil ? saved.identity : nil,allowEmptyTrim:allowEmptyTrim)
     }
@@ -228,7 +229,7 @@ final class MacAssistantTerminalInput {
       return result
     }
     if action == "terminal.images" {
-      guard !saved.sessionId.hasPrefix("native-"), saved.draft == "",
+      guard saved.agent != nil, saved.draft == "",
         let paths = args["paths"]?.array?.compactMap(\.string), !paths.isEmpty,
         paths.count <= RemoteImageLimits.count, paths.allSatisfy({ $0.hasPrefix("/") && !$0.contains("\0") }) else {
         throw MacAssistantError("Attach authorized local images to an inspected empty agent draft. Existing drafts are preserved.")
@@ -301,8 +302,7 @@ final class MacAssistantTerminalInput {
       throw MacAssistantError("Choose an explicit Remote Assist key and its intended effect.")
     }
     // Agent queue acceptance needs its own exact draft and log verification.
-    if command.shortcut == .tab, !saved.sessionId.hasPrefix("native-") {
-      let owner = try await Task.detached { try MacTerminalResponseReader().resolve(tty: saved.tty) }.value
+    if command.shortcut == .tab, let owner = saved.agent?.conversation {
       var activity = MacCodexRequestActivityLog()
       if try activity.read(owner.path) {
         throw MacAssistantError("Use queue_tab_draft for this working agent's existing draft, or queue_in_tab for a new message. Native queue acceptance must be verified.")

@@ -12,11 +12,12 @@ final class MacAssistantBridge {
   private let input = MacInputController()
   private var loop: Task<Void, Never>?
   private var inventoryRequested = false
+  private var pendingBindings: [AssistantValue] = []
   private var inspection:
     (token: String, pid: pid_t, element: AXUIElement, window: CFTypeRef?, launch: Date?, generation: UInt64, expires: Date, display: CGDirectDisplayID)?
   private struct DraftInspection {
     let tabId: String
-    let sessionId: String
+    let binding: MacCodexInputBinding
     let identity: String
     let generation: UInt64
     let text: String
@@ -55,7 +56,32 @@ final class MacAssistantBridge {
               observation["catalogError"] = .string(error.localizedDescription)
             }
           }
+          // History discovery is read-only and never selects a tab or replays input.
+          var bindings: [AssistantValue] = []
+          var owners: [String: MacCodexInputBinding] = [:]
+          var missing = Set<String>()
+          for pending in pendingBindings {
+            guard let request = pending.object, let tty = request["tty"]?.string,
+              let instanceId = request["agentInstanceId"]?.string, let id = request["id"]?.string else { continue }
+            if owners[tty] == nil && !missing.contains(tty) {
+              do { owners[tty] = try await Task.detached { try MacTerminalResponseReader().inputBinding(tty: tty) }.value }
+              catch let error as MacCodexInputFailure where error.code == "no_codex_process" { missing.insert(tty) }
+              catch { continue } // Transient inspection failures never authorize input or rerouting.
+            }
+            var receipt: [String: AssistantValue] = ["id": .string(id), "tty": .string(tty), "agentInstanceId": .string(instanceId)]
+            if missing.contains(tty) { receipt["processChanged"] = .bool(true) }
+            else if let owner = owners[tty] {
+              if owner.instanceId != instanceId { receipt["processChanged"] = .bool(true) }
+              else if let conversation = owner.conversation {
+                receipt["sessionId"] = .string(conversation.sessionId)
+                receipt["conversationPath"] = .string(conversation.path.path)
+              }
+            }
+            bindings.append(.object(receipt))
+          }
+          observation["bindings"] = .array(bindings)
           let next = try await runtime.json("/v1/assistant/native/poll", observation)
+          pendingBindings = next["pendingBindings"]?.array ?? []
           inventoryRequested = next["enabled"]?.bool == true
           if let job = next["job"]?.object, let id = job["id"]?.string {
             let completion: [String: AssistantValue]
@@ -218,54 +244,50 @@ final class MacAssistantBridge {
         "The tab's shell identity is still being resolved. Refresh its context.")
     }
     if action == "terminal.inspect" {
-      guard
-        let conversation = try? await Task.detached(operation: {
-          try MacTerminalResponseReader().resolve(tty: target.tty)
-        }).value
-      else {
-        return [
-          "tabId": .string(tabID), "tabTitle": .string(tab.title), "detail": .string(tab.detail),
-          "terminalTitle": .string(target.customTitle),
-          "screenText": .string(try focusedTerminalText()), "agentAvailable": .bool(false),
-          "draft": .object(["editable": .bool(false), "reason": .string("A supported idle Codex input is required.")]),
-        ]
-      }
-      let response = try? await Task.detached {
-        try MacCodexResponseParser.read(conversation: conversation)
-      }.value
       let screen = try focusedTerminalText()
-      let queueVersion = try? await Task.detached { try MacTerminalResponseReader().queueCLIVersion(tty: target.tty, conversation: conversation) }.value
-      let draft = await inspectDraft(tabId: tabID, tty: target.tty, conversation: conversation, screen: screen,
-        busy: tab.isBusy, supportsBusy: MacAssistantAgentQueueSnapshot.supports(version: queueVersion), ticket: ticket)
-      return [
-        "tabId": .string(tabID), "tabTitle": .string(tab.title), "detail": .string(tab.detail),
-        "terminalTitle": .string(target.customTitle),
-        "sessionId": .string(conversation.sessionId),
-        "conversationPath": .string(conversation.path.path),
-        "latestResponse": response.map { .string($0.text) } ?? .null,
+      let binding: MacCodexInputBinding
+      do {
+        binding = try await Task.detached { try MacTerminalResponseReader().inputBinding(tty: target.tty) }.value
+      } catch {
+        let code = (error as? MacCodexInputFailure)?.code ?? "process_inspection_failed"
+        return ["tabId": .string(tabID), "tabTitle": .string(tab.title), "detail": .string(tab.detail),
+          "terminalTitle": .string(target.customTitle), "tty": .string(target.tty),
+          "screenText": .string(screen), "agentAvailable": .bool(false), "inputState": .string(code),
+          "draft": .object(["editable": .bool(false), "reasonCode": .string(code), "reason": .string(error.localizedDescription)])]
+      }
+      let supported = MacAssistantAgentQueueSnapshot.supports(version: binding.version)
+      let draft = await inspectDraft(tabId: tabID, tty: target.tty, binding: binding, screen: screen,
+        busy: tab.isBusy, supportsBusy: supported, ticket: ticket)
+      let response = try? await Task.detached { () -> RemoteTerminalResponse? in
+        guard let conversation = binding.conversation else { return nil }
+        return try MacCodexResponseParser.read(conversation: conversation)
+      }.value
+      var result = binding.fields
+      result.merge(["tabId": .string(tabID), "tabTitle": .string(tab.title), "detail": .string(tab.detail),
+        "terminalTitle": .string(target.customTitle), "latestResponse": response.map { .string($0.text) } ?? .null,
+        "agentAvailable": .bool(supported && draft["editable"]?.bool == true),
+        "inputState": .string(draft["editable"]?.bool == true ? (binding.conversation == nil ? "ready_before_first_turn" : "ready") : draft["reasonCode"]?.string ?? "input_unavailable"),
         "screenText": .string(screen), "draft": .object(draft),
-        "queue": .object([
-          "supported": .bool(MacAssistantAgentQueueSnapshot.supports(version: queueVersion)),
-          "ready": .bool(MacAssistantAgentQueueSnapshot.supports(version: queueVersion)
-            && MacAssistantAgentQueueSnapshot.read(screen)?.draft == ""),
-          "cliVersion": queueVersion.map(AssistantValue.string) ?? .null,
-          "requires": .string("A working Codex agent with an empty, fully readable composer. Use this sessionId with queue_in_tab."),
-        ]),
-      ]
+        "queue": .object(["supported": .bool(supported),
+          "ready": .bool(supported && binding.conversation != nil && MacAssistantAgentQueueSnapshot.read(screen)?.draft == ""),
+          "cliVersion": .string(binding.version),
+          "requires": .string("Native Tab queue needs an already working turn and its real sessionId. Fresh idle input supports draft insertion or separately authorized Enter submission.")])], uniquingKeysWith: { _, new in new })
+      return result
     }
-    let conversation = try await Task.detached {
-      try MacTerminalResponseReader().resolve(tty: target.tty)
-    }.value
+    let binding = try await Task.detached { try MacTerminalResponseReader().inputBinding(tty: target.tty) }.value
     if action == "terminal.queue" {
+      guard let conversation = binding.conversation else {
+        throw MacAssistantError("This Codex input is ready before its first turn. Native Tab queue requires an already working turn; insert a draft or submit only as authorized.")
+      }
       return try await queueInAgent(id: id, args: args, tabId: tabID, tabTitle: tab.title,
         tty: target.tty, conversation: conversation, ticket: ticket, input: input)
     }
     if action == "terminal.insert" {
       return try await insertInAgent(id: id, args: args, tabId: tabID, tabTitle: tab.title,
-        tty: target.tty, conversation: conversation, ticket: ticket, input: input)
+        tty: target.tty, binding: binding, ticket: ticket, input: input)
     }
     if editing, let draftInspection {
-      guard draftInspection.sessionId == conversation.sessionId,
+      guard binding.continues(draftInspection.binding),
         try await tabs.inputIdentity() == draftInspection.identity,
         let expected = args["expectedText"]?.string,
         let replacement = action == "terminal.clear" ? "" : args["text"]?.string,
@@ -275,7 +297,7 @@ final class MacAssistantBridge {
       guard try await Task.detached(operation: { try MacAssistantForeground.read(tty: target.tty) }).value == draftInspection.foreground else {
         throw MacAssistantError("The foreground agent process changed since inspection. Inspect the exact tab again; its draft was preserved.")
       }
-      let version = try await Task.detached { try MacTerminalResponseReader().queueCLIVersion(tty: target.tty, conversation: conversation) }.value
+      let version = binding.version
       guard MacAssistantAgentQueueSnapshot.supports(version: version) else {
         throw MacAssistantError("This running Codex version's draft-clear control could not be verified. Its input was preserved.")
       }
@@ -291,8 +313,8 @@ final class MacAssistantBridge {
           try await tabs.inputIdentity() == draftInspection.identity else {
           throw MacAssistantError("The targeted input changed during editing. Inspect the tab; Enter was not sent.")
         }
-        let owner = try await Task.detached { try MacTerminalResponseReader().resolve(tty: target.tty) }.value
-        guard owner == conversation,
+        let owner = try await Task.detached { try MacTerminalResponseReader().inputBinding(tty: target.tty) }.value
+        guard owner.continues(binding),
           try await Task.detached(operation: { try MacAssistantForeground.read(tty: target.tty) }).value == draftInspection.foreground,
           interaction.isCurrent(draftInspection.generation) else {
           throw MacAssistantError("The inspected agent or user input changed. Inspect again; Enter and Tab were not sent.")
@@ -319,7 +341,7 @@ final class MacAssistantBridge {
         }
       }, verifyInserted: { try await verifyReplacement() })
       return ["tabId": .string(tabID), "tabTitle": .string(tab.title),
-        "sessionId": .string(conversation.sessionId),
+        "sessionId": binding.conversation.map { .string($0.sessionId) } ?? .null, "agentInstanceId": .string(binding.instanceId),
         "draftVerified": .bool(true), "submitted": .bool(false), "text": .string(replacement),
         "expandedTextReadBack": .bool(!collapsed),
         "wholeDraftAuthorized": .bool(draftInspection.requiresWholeDraftAuthorization),
@@ -329,8 +351,13 @@ final class MacAssistantBridge {
       !text.isEmpty, text.utf8.count <= 32_000
     else { throw AssistantProtocolError.invalid }
     var activity = MacCodexRequestActivityLog()
-    if try activity.read(conversation.path) {
+    if let conversation = binding.conversation, try activity.read(conversation.path) {
       throw MacAssistantDeferred(message: "Waiting for this agent's request to finish.")
+    }
+    guard MacAssistantAgentQueueSnapshot.supports(version: binding.version),
+      binding.accepts(sessionId: args["sessionId"]?.string, instanceId: args["agentInstanceId"]?.string)
+        || (binding.conversation != nil && args["sessionId"] == nil && args["agentInstanceId"] == nil) else {
+      throw MacAssistantError("Inspect this exact Codex tab and pass its agentInstanceId before submitting its first turn. No input was sent.")
     }
     guard assistantPromptIsEmpty(try focusedTerminalText()) else {
       throw MacAssistantError(
@@ -338,7 +365,7 @@ final class MacAssistantBridge {
       )
     }
     let capture = await input.captureDictationTarget(.request(.captureTarget, requestId: id)) {
-      [tabs] in try await tabs.inputIdentity()
+      [self] in try await verifiedInputIdentity(binding, ticket: ticket)
     }
     guard capture.ok == true, let token = capture.token else {
       throw MacAssistantError("The Terminal input could not be captured.")
@@ -346,39 +373,34 @@ final class MacAssistantBridge {
     // Re-read immediately before insertion; neither a changed tab nor a new draft
     // is allowed to inherit a previous capture.
     guard try await tabs.catalog().selectedTabId == tabID,
-      assistantPromptIsEmpty(try focusedTerminalText())
+      assistantPromptIsEmpty(try focusedTerminalText()),
+      try await Task.detached(operation: { try MacTerminalResponseReader().inputBinding(tty: target.tty) }).value.continues(binding)
     else { throw MacAssistantError("The Terminal input changed. Your draft was preserved.") }
-    // Register the exact CLI log before pressing Enter. Very fast responses can
-    // otherwise be consumed before the delivery receipt reaches the runtime.
-    _ = try await runtime.json(
-      "/v1/assistant/native/prepare",
-      [
-        "id": .string(id), "conversationPath": .string(conversation.path.path),
-        "sessionId": .string(conversation.sessionId), "tabTitle": .string(tab.title),
-      ])
+    // Persist the process binding before Enter, including before a rollout exists.
+    var prepared = binding.fields
+    prepared.merge(["id": .string(id), "tabTitle": .string(tab.title)], uniquingKeysWith: { _, new in new })
+    _ = try await runtime.json("/v1/assistant/native/prepare", prepared)
     let result = await input.sendQuickChat(
       .request(text: text, targetToken: token, requestId: id),
       isAllowed: { [interaction] in interaction.isCurrent(ticket) }
-    ) { [tabs] in try await tabs.inputIdentity() }
+    ) { [self] in try await verifiedInputIdentity(binding, ticket: ticket) }
     guard result.ok == true else {
       throw MacAssistantError(result.error ?? "Terminal input was not confirmed.")
     }
-    return [
-      "tabId": .string(tabID), "tabTitle": .string(tab.title),
-      "conversationPath": .string(conversation.path.path),
-      "sessionId": .string(conversation.sessionId),
-    ]
+    var receipt = binding.fields
+    receipt.merge(["tabId": .string(tabID), "tabTitle": .string(tab.title)], uniquingKeysWith: { _, new in new })
+    return receipt
   }
 
   private func insertInAgent(id: String, args: [String: AssistantValue], tabId: String, tabTitle: String,
-    tty: String, conversation: MacCodexConversation, ticket: UInt64, input: MacInputController
+    tty: String, binding: MacCodexInputBinding, ticket: UInt64, input: MacInputController
   ) async throws -> [String: AssistantValue] {
-    guard args["sessionId"]?.string == conversation.sessionId, let text = args["text"]?.string,
+    guard binding.accepts(sessionId: args["sessionId"]?.string, instanceId: args["agentInstanceId"]?.string), let text = args["text"]?.string,
       !text.isEmpty, text.utf8.count <= 16 * 1024,
       !text.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) && $0 != "\n" && $0 != "\t" }) else {
       throw MacAssistantError("Inspect the exact agent again before inserting this draft. Its existing input was preserved.")
     }
-    let version = try await Task.detached { try MacTerminalResponseReader().queueCLIVersion(tty: tty, conversation: conversation) }.value
+    let version = binding.version
     guard MacAssistantAgentQueueSnapshot.supports(version: version) else {
       throw MacAssistantError("This agent's draft controls could not be verified. Nothing was typed.")
     }
@@ -386,7 +408,7 @@ final class MacAssistantBridge {
     func current() async throws -> String {
       guard interaction.isCurrent(ticket), !MacConsoleSessionState.isLocked(), AXIsProcessTrusted(),
         try await tabs.inputIdentity() == identity,
-        try await Task.detached(operation: { try MacTerminalResponseReader().resolve(tty: tty) }).value == conversation,
+        try await Task.detached(operation: { try MacTerminalResponseReader().inputBinding(tty: tty) }).value.continues(binding),
         interaction.isCurrent(ticket) else {
         throw MacAssistantError("The targeted input changed. Inspect the draft before trying again.")
       }
@@ -396,15 +418,16 @@ final class MacAssistantBridge {
       throw MacAssistantError("This tab already has a draft or an unreadable input. It was preserved. Replacement needs your explicit approval and a fresh draft inspection.")
     }
     let capture = await input.captureDictationTarget(.request(.captureTarget, requestId: id)) {
-      [tabs] in try await tabs.inputIdentity()
+      [self] in try await verifiedInputIdentity(binding, ticket: ticket)
     }
     guard capture.ok == true, let token = capture.token else { throw MacAssistantError("The exact Terminal draft could not be captured.") }
     defer { input.invalidateDictationTarget() }
     var activity = MacCodexRequestActivityLog()
-    _ = try activity.read(conversation.path)
-    _ = try await runtime.json("/v1/assistant/native/prepare", ["id": .string(id),
-      "conversationPath": .string(conversation.path.path), "sessionId": .string(conversation.sessionId),
-      "tabTitle": .string(tabTitle), "priorTurnId": activity.turnId.map(AssistantValue.string) ?? .null])
+    if let conversation = binding.conversation { _ = try activity.read(conversation.path) }
+    var prepared = binding.fields
+    prepared.merge(["id": .string(id), "tabTitle": .string(tabTitle),
+      "priorTurnId": activity.turnId.map(AssistantValue.string) ?? .null], uniquingKeysWith: { _, new in new })
+    _ = try await runtime.json("/v1/assistant/native/prepare", prepared)
     var collapsed = false
     let inserted = await input.insertAssistantDraft(text, targetToken: token, isAllowed: { [self] in
       interaction.isCurrent(ticket) && (try? focusedTerminalText()).flatMap { assistantEditableDraft($0, allowQueueFooter: true) } == ""
@@ -412,14 +435,24 @@ final class MacAssistantBridge {
       guard let screen = try? await current() else { return false }
       collapsed = assistantCollapsedPasteMatches(screen, payload: text)
       return assistantDraftMatches(screen, expected: text, viewportRows: assistantTerminalRows(tty)) || collapsed
-    }) { [tabs] in try await tabs.inputIdentity() }
+    }) { [self] in try await verifiedInputIdentity(binding, ticket: ticket) }
     guard inserted else {
       throw MacAssistantError("The draft insertion could not be confirmed. Inspect this tab before retrying; Enter and Tab were not pressed.")
     }
-    return ["tabId": .string(tabId), "tabTitle": .string(tabTitle), "sessionId": .string(conversation.sessionId),
-      "conversationPath": .string(conversation.path.path), "draftVerified": .bool(true), "submitted": .bool(false),
+    var result = binding.fields
+    result.merge(["tabId": .string(tabId), "tabTitle": .string(tabTitle), "draftVerified": .bool(true), "submitted": .bool(false),
       "text": .string(text), "expandedTextReadBack": .bool(!collapsed),
-      "verification": .string(collapsed ? "exact-native-paste-and-collapsed-length" : "rendered-composer")]
+      "verification": .string(collapsed ? "exact-native-paste-and-collapsed-length" : "rendered-composer")], uniquingKeysWith: { _, new in new })
+    return result
+  }
+
+  private func verifiedInputIdentity(_ binding: MacCodexInputBinding, ticket: UInt64) async throws -> String? {
+    guard interaction.isCurrent(ticket),
+      try await Task.detached(operation: { try MacTerminalResponseReader().inputBinding(tty: binding.tty) }).value.continues(binding),
+      interaction.isCurrent(ticket) else {
+      throw MacAssistantError("The exact foreground agent changed. Inspect its input before retrying; this request will not be replayed.")
+    }
+    return try await tabs.inputIdentity()
   }
 
   private func queueInAgent(id: String, args: [String: AssistantValue], tabId: String, tabTitle: String,
@@ -446,7 +479,7 @@ final class MacAssistantBridge {
     let useExisting = args["useExistingDraft"]?.bool == true
     if useExisting {
       guard let token = args["token"]?.string, let inspected = draftInspections.removeValue(forKey: token),
-        inspected.expires > Date(), inspected.tabId == tabId, inspected.sessionId == conversation.sessionId,
+        inspected.expires > Date(), inspected.tabId == tabId, inspected.binding.conversation == conversation,
         inspected.identity == identity, inspected.text == text, !inspected.requiresWholeDraftAuthorization,
         try await Task.detached(operation: { try MacAssistantForeground.read(tty: tty) }).value == inspected.foreground,
         interaction.isCurrent(inspected.generation) else {
@@ -498,7 +531,7 @@ final class MacAssistantBridge {
       "submitted": .bool(false), "verification": .string("rendered-agent-queue")]
   }
 
-  private func inspectDraft(tabId: String, tty: String, conversation: MacCodexConversation, screen: String,
+  private func inspectDraft(tabId: String, tty: String, binding: MacCodexInputBinding, screen: String,
     busy: Bool, supportsBusy: Bool, ticket: UInt64) async -> [String: AssistantValue] {
     func unavailable(_ code: String, _ message: String) -> [String: AssistantValue] {
       ["editable": .bool(false), "reasonCode": .string(code), "reason": .string(message)]
@@ -507,7 +540,12 @@ final class MacAssistantBridge {
       return unavailable("unsupported_agent_version", "This running Codex version's draft control is unverified. Its input is preserved; check the agent version before editing.")
     }
     let view = assistantObserveDraft(screen, viewportRows: assistantTerminalRows(tty))
-    guard let text = view.text else { return unavailable(view.reasonCode, view.reason) }
+    guard let text = view.text else {
+      if binding.conversation == nil, ["composer_not_visible", "unresolved_prompt"].contains(view.reasonCode) {
+        return unavailable("startup_pending", "Finish Codex trust, sign-in or loading in this tab. Wait for its ordinary composer, then inspect again; no first message is required.")
+      }
+      return unavailable(view.reasonCode, view.reason)
+    }
     guard let input, let identity = try? await tabs.inputIdentity(),
       let foreground = try? await Task.detached(operation: { try MacAssistantForeground.read(tty: tty) }).value else {
       return unavailable("input_identity_unavailable", "The exact Terminal input or foreground process could not be captured. Inspect this tab again.")
@@ -524,7 +562,7 @@ final class MacAssistantBridge {
     }
     draftInspections = draftInspections.filter { $0.value.expires > Date() }
     if draftInspections.count >= 20 { draftInspections.removeAll() }
-    draftInspections[token] = DraftInspection(tabId: tabId, sessionId: conversation.sessionId,
+    draftInspections[token] = DraftInspection(tabId: tabId, binding: binding,
       identity: identity, generation: ticket, text: text, foreground: foreground,
       requiresWholeDraftAuthorization: view.requiresWholeDraftAuthorization, expires: Date().addingTimeInterval(45))
     return ["editable": .bool(true), "text": .string(text), "token": .string(token),
