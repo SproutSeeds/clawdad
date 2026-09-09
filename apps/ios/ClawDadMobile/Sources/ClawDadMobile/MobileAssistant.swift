@@ -10,6 +10,7 @@ private struct AssistantCommandReceipt: Decodable {
 final class MobileAssistantController: ObservableObject {
   let chatDraft: AssistantChatDraftStore
   @Published private(set) var snapshot: AssistantSnapshot?
+  @Published var researchRequested = false
   @Published private(set) var connected = false
   @Published private(set) var voiceActive = false
   @Published private(set) var muted = false
@@ -258,6 +259,17 @@ final class MobileAssistantController: ObservableObject {
     guard requestedScope == scope else { throw CancellationError() }
     snapshot = try JSONDecoder().decode(AssistantSnapshot.self, from: data)
     return try JSONDecoder().decode(AssistantCommandReceipt.self, from: data).job
+  }
+  func researchRequest(_ action: String, args: [String: AssistantValue] = [:],
+    id: String = UUID().uuidString.lowercased()) async throws -> [String: AssistantValue] {
+    #if DEBUG
+    if let preview { return try preview.research(action, args: args, id: id) }
+    #endif
+    var body = args; body["action"] = .string(action); body["requestId"] = .string(id)
+    let requestedScope = scope
+    let data = try await connection.request(.command, payload: JSONEncoder().encode(body))
+    guard scope == requestedScope else { throw CancellationError() }
+    return try JSONDecoder().decode([String: AssistantValue].self, from: data)
   }
   func watch(tabId: String, onWatch: @escaping () -> Void) {
     Task {
@@ -1184,9 +1196,13 @@ struct AssistantView: View {
   var onClose: () -> Void
   var onWatch: () -> Void
   @State private var showingWorkspace = false
+  @StateObject private var messageSelection = AssistantMessageSelection()
+  @State private var selectedHistory: AssistantSnapshot?
+  @State private var researchTab: String?
   var body: some View {
     NavigationStack {
       VStack(spacing: 12) {
+        ResearchActivityNotice(research: controller.snapshot?.research) { showingWorkspace = true }
         HStack {
           Circle().fill(controller.connected ? Color.green : ClawDadTheme.gold).frame(
             width: 8, height: 8)
@@ -1198,6 +1214,7 @@ struct AssistantView: View {
           ScrollView {
             LazyVStack(alignment: .leading, spacing: 10) {
               ForEach(catalog.tabs, id: \.id) { tab in
+                VStack(alignment: .leading, spacing: 0) {
                 Button {
                   controller.watch(tabId: tab.id, onWatch: onWatch)
                 } label: {
@@ -1213,6 +1230,12 @@ struct AssistantView: View {
                   .padding(12).background(
                     ClawDadTheme.cream.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
                 }.buttonStyle(.plain)
+                Button { researchTab = tab.id } label: {
+                  Label("Research autonomy", systemImage: "flask")
+                    .font(.caption).frame(minHeight: 44)
+                }.buttonStyle(.plain)
+                  .accessibilityIdentifier("clawdad.assistant.research.\(tab.id)")
+                }
               }
             }.padding(.horizontal)
           }
@@ -1235,7 +1258,7 @@ struct AssistantView: View {
                     }
                   }.padding(.vertical, 28)
                 }
-                AssistantChatHistory(snapshot: controller.snapshot,
+                AssistantChatHistory(snapshot: selectedHistory ?? controller.snapshot, selection: messageSelection,
                   watch: { controller.watch(tabId: $0, onWatch: onWatch) },
                   cancel: { controller.perform("cancel", args: ["jobId": .string($0)]) })
                 if controller.hearingSpeech || controller.transcribingSpeech || !controller.liveTranscript.isEmpty || controller.transcriptionReview != .listening {
@@ -1244,10 +1267,10 @@ struct AssistantView: View {
               }.padding()
             }
             .onChange(of: controller.snapshot?.messages.last?.id) { _, id in
-              if let id { withAnimation { proxy.scrollTo(id, anchor: .bottom) } }
+              if messageSelection.activeID == nil, let id { withAnimation { proxy.scrollTo(id, anchor: .bottom) } }
             }
             .onChange(of: controller.liveTranscript) { _, text in
-              if !text.isEmpty, controller.transcriptionReview != .editing { proxy.scrollTo("live-transcript", anchor: .bottom) }
+              if messageSelection.activeID == nil, !text.isEmpty, controller.transcriptionReview != .editing { proxy.scrollTo("live-transcript", anchor: .bottom) }
             }
             .onAppear {
               if !controller.liveTranscript.isEmpty { proxy.scrollTo("live-transcript", anchor: .bottom) }
@@ -1302,8 +1325,21 @@ struct AssistantView: View {
           }.disabled(!controller.connected)
         }
       }
-      .onAppear { controller.open() }
+      .onAppear {
+        controller.open()
+        if controller.researchRequested { showingWorkspace = true; controller.researchRequested = false }
+      }
+      .onChange(of: controller.researchRequested) { _, requested in
+        if requested { showingWorkspace = true; controller.researchRequested = false }
+      }
+      .onChange(of: messageSelection.activeID) { _, id in
+        if id != nil, selectedHistory == nil { selectedHistory = controller.snapshot }
+        if id == nil { selectedHistory = nil }
+      }
       .onDisappear { controller.leaveTranscriptionEditor() }
+      .sheet(isPresented: Binding(get: { researchTab != nil }, set: { if !$0 { researchTab = nil } })) {
+        if let researchTab { ResearchSupervisorView(controller: controller, tabId: researchTab) }
+      }
     }
   }
 }

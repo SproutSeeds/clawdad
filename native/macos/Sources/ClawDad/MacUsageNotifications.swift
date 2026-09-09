@@ -8,10 +8,13 @@ struct MacWeeklyUsageAlert: Decodable {
   let resetsAt: Double
 }
 private struct MacWeeklyUsageSnapshot: Decodable { let alerts: [MacWeeklyUsageAlert] }
+private struct MacResearchNotice: Decodable { let id: String; let event: String; let name: String?; let completedAt: String }
+private struct MacResearchNotices: Decodable { let events: [MacResearchNotice] }
 
 @MainActor
 final class MacUsageNotifications: NSObject, UNUserNotificationCenterDelegate {
   var onOpen: (() -> Void)?
+  var onOpenResearch: (() -> Void)?
   private var loop: Task<Void, Never>?
   private let defaults: UserDefaults
   init(defaults: UserDefaults = .standard) { self.defaults = defaults }
@@ -24,6 +27,10 @@ final class MacUsageNotifications: NSObject, UNUserNotificationCenterDelegate {
         if let data = try? await runtime.request("/v1/codex/weekly-usage"),
            let snapshot = try? JSONDecoder().decode(MacWeeklyUsageSnapshot.self, from: data) {
           await self?.deliver(snapshot.alerts)
+        }
+        if let data = try? await runtime.request("/v1/assistant/research/notifications"),
+          let snapshot = try? JSONDecoder().decode(MacResearchNotices.self, from: data) {
+          await self?.deliverResearch(snapshot.events)
         }
         try? await Task.sleep(for: .seconds(30))
       }
@@ -57,10 +64,30 @@ final class MacUsageNotifications: NSObject, UNUserNotificationCenterDelegate {
     withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
     completionHandler([.banner, .list, .sound])
   }
+  private func deliverResearch(_ events: [MacResearchNotice]) async {
+    let center = UNUserNotificationCenter.current()
+    let permission = await center.notificationSettings().authorizationStatus
+    var seen = defaults.stringArray(forKey: "clawdad.research.notified") ?? []
+    for event in events where !seen.contains(event.id) {
+      seen.append(event.id); defaults.set(seen, forKey: "clawdad.research.notified")
+      guard permission == .authorized || permission == .provisional,
+        let at = ISO8601DateFormatter().date(from: event.completedAt.replacingOccurrences(of: #"\.\d+Z$"#, with: "Z", options: .regularExpression)),
+        Date().timeIntervalSince(at) < 86400 else { continue }
+      let content = UNMutableNotificationContent()
+      content.title = event.event == "budget" ? "Autonomy paused · allowance reserve"
+        : "\(event.name ?? "Research") · \(event.event == "complete" ? "Objective verified complete" : event.event == "milestone" ? "Research milestone" : "Autonomy paused")"
+      content.body = event.event == "budget" ? "New automatic work is paused. Running tasks may use more allowance. Review a bounded override in Research autonomy." : "Open Research autonomy to review the evidence and decision."
+      content.sound = .default; content.userInfo = ["clawdadResearch": true]
+      try? await center.add(UNNotificationRequest(identifier: event.id, content: content, trigger: nil))
+    }
+  }
   nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
     withCompletionHandler completionHandler: @escaping () -> Void) {
     if response.notification.request.content.userInfo["clawdadUsage"] as? Bool == true {
       Task { @MainActor [weak self] in self?.onOpen?() }
+    }
+    if response.notification.request.content.userInfo["clawdadResearch"] as? Bool == true {
+      Task { @MainActor [weak self] in self?.onOpenResearch?() }
     }
     completionHandler()
   }

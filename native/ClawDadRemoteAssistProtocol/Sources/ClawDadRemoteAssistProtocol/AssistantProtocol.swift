@@ -156,4 +156,5 @@ public struct AssistantSnapshot: Codable, Sendable {
   public let tasks: [AssistantTaskRecord]
   public var operations: [AssistantTaskRecord]? = nil
   public var taskUpdates: [AssistantMessage]? = nil
+  public var research: [String: AssistantValue]? = nil
 }

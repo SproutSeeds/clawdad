@@ -49,6 +49,7 @@ private enum AssistantHistoryItem: Identifiable {
 
 struct AssistantChatHistory: View {
   let snapshot: AssistantSnapshot?
+  var selection: AssistantMessageSelection? = nil
   var watch: (String) -> Void
   var cancel: (String) -> Void
   private var items: [AssistantHistoryItem] {
@@ -67,8 +68,7 @@ struct AssistantChatHistory: View {
             Spacer()
             AssistantCopyButton(text: message.text, label: "\(message.role) message", id: message.id)
           }
-          if message.role == "assistant" { AssistantResponseText(text: message.text) }
-          else { Text(message.text).textSelection(.enabled) }
+          AssistantResponseText(text: message.text, id: message.id, selection: selection)
           ForEach(message.images ?? [], id: \.id) { image in
             Label(image.fileName, systemImage: "photo").font(.footnote)
           }
@@ -81,8 +81,8 @@ struct AssistantChatHistory: View {
             AssistantCopyButton(text: task.requestText ?? task.args["text"]?.string ?? "",
               label: "task request", id: "request.\(task.id)")
           }
-          Text(task.requestText ?? task.args["text"]?.string ?? "")
-            .font(.footnote).textSelection(.enabled)
+          AssistantSelectableText(text: task.requestText ?? task.args["text"]?.string ?? "",
+            id: "request.\(task.id)", selection: selection)
           if let error = task.error { Text(error).foregroundStyle(ClawDadTheme.gold).font(.footnote) }
           if let response = task.response, !response.isEmpty {
             HStack {
@@ -90,7 +90,7 @@ struct AssistantChatHistory: View {
               Spacer()
               AssistantCopyButton(text: response, label: "Assistant result", id: "result.\(task.id)")
             }
-            AssistantResponseText(text: response)
+            AssistantResponseText(text: response, id: "result.\(task.id)", selection: selection)
           }
           HStack {
             if let tab = task.args["tabId"]?.string { Button("Watch in Terminal") { watch(tab) } }

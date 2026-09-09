@@ -55,6 +55,20 @@ export function weeklyNotificationPayload(event, registration, identity) {
     clawdad: {version: 1, kind: 'codex_weekly', eventId: event.id, accountId: identity.accountId, workspaceId: identity.workspaceId,
       hostId: identity.hostId}};
 }
+export function normalizeResearchNotification(value, now = Date.now()) {
+  const when=Date.parse(value?.completedAt);
+  if(value?.kind!=='research'||!/^[a-f\d]{64}$/.test(value.id||'')||!['budget','pause','milestone','complete'].includes(value.event)||
+    !Number.isFinite(when)||when<now-day||when>now+60_000||
+    (value.event!=='budget'&&(!uuid(value.sessionId)||!/^[a-f\d]{64}$/.test(value.threadId||''))))throw Error('Invalid research supervisor notification');
+  const name=typeof value.name==='string'?value.name.replace(/[\x00-\x1f\/\\]/g,' ').trim().slice(0,80):'Research';
+  return {id:value.id,kind:'research',event:value.event,name,threadId:value.threadId||null,sessionId:value.sessionId||null,completedAt:new Date(when).toISOString()};
+}
+export function researchNotificationPayload(event, _registration, identity) {
+  const title=event.event==='budget'?'Autonomy paused · Codex allowance reserve':`${event.name} · ${ {pause:'Autonomy paused',milestone:'Research milestone',complete:'Objective verified complete'}[event.event]}`;
+  const body=event.event==='budget'?'New automatic work is paused. Running tasks may use additional allowance. Open Research autonomy to review a bounded override.':'Open Research autonomy to review the evidence and decision history.';
+  return {aps:{alert:{title,body},sound:'default','thread-id':'clawdad-research',category:'RESEARCH_SUPERVISOR'},
+    clawdad:{version:1,kind:'research',eventId:event.id,accountId:identity.accountId,workspaceId:identity.workspaceId,hostId:identity.hostId}};
+}
 export function completionPayload(event,registration,identity) {
   const at=new Intl.DateTimeFormat(registration.locale,{hour:'numeric',minute:'2-digit',timeZone:registration.timeZone}).format(new Date(event.completedAt));
   return {aps:{alert:{title:`${event.directory} · Response ready`,subtitle:`${identity.hostName || 'ClawDad'} · Thread ${event.sessionId.slice(-6)}`,body:`Completed at ${at}`},
@@ -98,7 +112,7 @@ export class PushNotificationService {
   async revoke(deviceId) { return this.exclusive(()=>this.state.storage.delete(registrationPrefix+deviceId)); }
   async submit(value,identity) {
     return this.exclusive(async()=>{
-      const event=value?.kind === 'codex_weekly' ? normalizeWeeklyNotification(value,this.clock()) : normalizeCompletion(value,this.clock());
+      const event=value?.kind === 'research' ? normalizeResearchNotification(value,this.clock()) : value?.kind === 'codex_weekly' ? normalizeWeeklyNotification(value,this.clock()) : normalizeCompletion(value,this.clock());
       const devices=await this.state.storage.list({prefix:registrationPrefix});
       const targets=[...devices.values()].filter(device=>Date.parse(event.completedAt)>=device.enabledSince).map(device=>device.deviceId);
       if (!targets.length) return {accepted:true,recipients:0};
@@ -135,7 +149,7 @@ export class PushNotificationService {
             const response=await this.fetch(`https://${device.environment==='development'?'api.sandbox.push.apple.com':'api.push.apple.com'}/3/device/${device.token}`,{
               method:'POST',headers:{authorization:`bearer ${token}`,'apns-topic':topic,'apns-push-type':'alert','apns-priority':'10',
                 'apns-expiration':String(Math.floor((Date.parse(event.completedAt)+day)/1000)),'apns-collapse-id':event.id,'content-type':'application/json'},
-              body:JSON.stringify(event.kind === 'codex_weekly' ? weeklyNotificationPayload(event,device,event.identity) : completionPayload(event,device,event.identity)),signal:AbortSignal.timeout(10_000)});
+              body:JSON.stringify(event.kind === 'research' ? researchNotificationPayload(event,device,event.identity) : event.kind === 'codex_weekly' ? weeklyNotificationPayload(event,device,event.identity) : completionPayload(event,device,event.identity)),signal:AbortSignal.timeout(10_000)});
             delivered=response.ok; httpStatus=response.status;
             const providerReason=delivered?'':(await response.json().catch(()=>({}))).reason;
             reason=delivered?'':(/^[A-Za-z]{1,64}$/.test(providerReason || '')?providerReason:'ProviderError');

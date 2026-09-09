@@ -166,6 +166,63 @@ struct ContentView: View {
 
   var body: some View {
     NavigationStack {
+      notificationContent
+      .onChange(of: session.connected) { _, connected in
+        if !connected { session.weeklyUsage?.status = "stale" }
+        else { session.requestWeeklyUsage() }
+      }
+      .onChange(of: session.notificationThread) { _, thread in
+        guard let thread else { return }
+        selectedThreadSelection = MobileThreadSelection(computerId: session.activeComputerId, initialThread: thread)
+      }
+      .onChange(of: threadScopeRaw) { _, _ in
+        session.requestCatalog(
+          refreshHistory: threadScope == .project,
+          syncSelectedProject: threadScope == .project
+        )
+      }
+      .onChange(of: voiceRecorder.state) { _, nextState in
+        voicePulse = false
+        if nextState == .recording {
+          withAnimation(.easeOut(duration: 1).repeatForever(autoreverses: false)) {
+            voicePulse = true
+          }
+        }
+      }
+      .onChange(of: session.voiceTranscription) { _, transcription in
+        appendVoiceTranscription(transcription)
+      }
+    }
+  }
+
+  private var notificationContent: some View {
+      mainContent
+      .onAppear(perform: appeared)
+      .onChange(of: scenePhase) { _, phase in
+        if phase == .active {
+          assistant.applicationForegroundChanged(true)
+          session.connectIfPaired()
+          notifications.bind(session)
+        } else if phase == .background {
+          assistant.applicationForegroundChanged(false)
+          voiceRecorder.cancel()
+        }
+      }
+      .onChange(of: showingRemoteAssist) { _, showing in
+        if showing { voiceRecorder.cancel() }
+      }
+      .onChange(of: session.activeComputerId) { _, _ in
+        session.requestWeeklyUsage()
+        assistant.bind(session)
+        selectedThreadSelection = nil
+      }
+      .onChange(of: session.pairedComputers.map { "\($0.id)|\($0.pairedAt)|\($0.cloudUrl)" }) { _, _ in notifications.bind(session) }
+      .onChange(of: notifications.pendingOpen) { _, _ in openPendingNotification() }
+      .onChange(of: notifications.pendingUsageOpen) { _, _ in openPendingUsageNotification() }
+      .onChange(of: notifications.pendingResearchOpen) { _, _ in openPendingResearchNotification() }
+  }
+
+  private var mainContent: some View {
       ZStack {
         ClawDadTheme.background
           .ignoresSafeArea()
@@ -334,64 +391,19 @@ struct ContentView: View {
       .alert("Open response", isPresented: Binding(get: { !session.notificationError.isEmpty }, set: { if !$0 { session.notificationError = "" } })) {
         Button("OK") { session.notificationError = "" }
       } message: { Text(session.notificationError) }
-      .onAppear {
-        assistant.bind(session)
-        notifications.bind(session)
-        openPendingNotification()
-        remoteAssist.bind(to: session)
-        session.connectIfPaired()
-        presentAppStorePreviewIfNeeded()
-      }
-      .onChange(of: scenePhase) { _, phase in
-        if phase == .active {
-          assistant.applicationForegroundChanged(true)
-          session.connectIfPaired()
-          notifications.bind(session)
-        } else if phase == .background {
-          assistant.applicationForegroundChanged(false)
-          voiceRecorder.cancel()
-        }
-      }
-      .onChange(of: showingRemoteAssist) { _, showing in
-        if showing { voiceRecorder.cancel() }
-      }
-      .onChange(of: session.activeComputerId) { _, _ in
-        session.requestWeeklyUsage()
-        assistant.bind(session)
-        selectedThreadSelection = nil
-      }
-      .onChange(of: session.pairedComputers.map { "\($0.id)|\($0.pairedAt)|\($0.cloudUrl)" }) { _, _ in notifications.bind(session) }
-      .onChange(of: notifications.pendingOpen) { _, _ in openPendingNotification() }
-      .onChange(of: notifications.pendingUsageOpen) { _, _ in openPendingUsageNotification() }
-      .onChange(of: session.connected) { _, connected in
-        if !connected { session.weeklyUsage?.status = "stale" }
-        else { session.requestWeeklyUsage() }
-      }
-      .onChange(of: session.notificationThread) { _, thread in
-        guard let thread else { return }
-        selectedThreadSelection = MobileThreadSelection(computerId: session.activeComputerId, initialThread: thread)
-      }
-      .onChange(of: threadScopeRaw) { _, _ in
-        session.requestCatalog(
-          refreshHistory: threadScope == .project,
-          syncSelectedProject: threadScope == .project
-        )
-      }
-      .onChange(of: voiceRecorder.state) { _, nextState in
-        voicePulse = false
-        if nextState == .recording {
-          withAnimation(.easeOut(duration: 1).repeatForever(autoreverses: false)) {
-            voicePulse = true
-          }
-        }
-      }
-      .onChange(of: session.voiceTranscription) { _, transcription in
-        appendVoiceTranscription(transcription)
-      }
-    }
+  }
+
+  private func appeared() {
+    assistant.bind(session)
+    notifications.bind(session)
+    openPendingNotification()
+    remoteAssist.bind(to: session)
+    session.connectIfPaired()
+    presentAppStorePreviewIfNeeded()
   }
 
   private func openPendingNotification() {
+    openPendingResearchNotification()
     openPendingUsageNotification()
     guard let notification = notifications.pendingOpen else { return }
     notifications.pendingOpen = nil
@@ -417,6 +429,15 @@ struct ContentView: View {
       try? await Task.sleep(for: .milliseconds(400))
       showingWeeklyUsage = true
     }
+  }
+
+  private func openPendingResearchNotification() {
+    guard let value = notifications.pendingResearchOpen else { return }
+    notifications.pendingResearchOpen = nil
+    guard let computer = session.pairedComputers.first(where: { value.matches($0) }) else { return }
+    session.switchComputer(to: computer.id)
+    assistant.researchRequested = true
+    showingAssistant = true
   }
 
   private func presentAppStorePreviewIfNeeded() {

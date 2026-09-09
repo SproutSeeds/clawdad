@@ -9,7 +9,7 @@ struct WeeklyUsageNotification: Codable, Equatable {
   let hostId: String
   static func parse(_ userInfo: [AnyHashable: Any]) -> Self? {
     guard let raw = userInfo["clawdad"] as? [String: Any], let data = try? JSONSerialization.data(withJSONObject: raw),
-      let value = try? JSONDecoder().decode(Self.self, from: data), value.version == 1, value.kind == "codex_weekly",
+      let value = try? JSONDecoder().decode(Self.self, from: data), value.version == 1, ["codex_weekly", "research"].contains(value.kind),
       value.eventId.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil,
       [value.accountId, value.workspaceId, value.hostId].allSatisfy({ !$0.isEmpty && $0.count <= 160 && $0.rangeOfCharacter(from: .controlCharacters) == nil }) else { return nil }
     return value

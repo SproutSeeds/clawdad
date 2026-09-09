@@ -134,10 +134,11 @@ final class MacAssistantBridge {
     // earlier draft observations, even if an opaque paste has the same length.
     // Local/phone human input is fenced independently by the interaction gate.
     defer {
-      if action.hasPrefix("terminal."), !["terminal.inspect", "terminal.native.inspect", "terminal.context"].contains(action) {
+      if action.hasPrefix("terminal."), !["terminal.observe", "terminal.inspect", "terminal.native.inspect", "terminal.context"].contains(action) {
         draftInspections.removeAll()
       }
     }
+    if action == "terminal.observe" { return try await observeResearchTarget(args) }
     let ticket = try interaction.ticket()
     guard action != "start", action != "message" else {
       throw MacAssistantError("Update ClawDad to use the background Assistant conversation.")
@@ -364,6 +365,12 @@ final class MacAssistantBridge {
         "This tab has a draft or an unresolved prompt. It was preserved. Finish it in Terminal before sending this task again."
       )
     }
+    if job["supervisor"] != nil {
+      let screen = try focusedTerminalText()
+      guard !screen.contains("Queued follow-up inputs"), !screen.contains("tab to queue message") else {
+        throw MacAssistantError("The native queue is still pending. Its messages and your draft were preserved.")
+      }
+    }
     let capture = await input.captureDictationTarget(.request(.captureTarget, requestId: id)) {
       [self] in try await verifiedInputIdentity(binding, ticket: ticket)
     }
@@ -383,13 +390,68 @@ final class MacAssistantBridge {
     let result = await input.sendQuickChat(
       .request(text: text, targetToken: token, requestId: id),
       isAllowed: { [interaction] in interaction.isCurrent(ticket) }
-    ) { [self] in try await verifiedInputIdentity(binding, ticket: ticket) }
+    ) { [self] in
+      if job["supervisor"] != nil {
+        _ = try await runtime.json("/v1/assistant/research/permit", ["requestId": .string(id)])
+      }
+      return try await verifiedInputIdentity(binding, ticket: ticket)
+    }
     guard result.ok == true else {
       throw MacAssistantError(result.error ?? "Terminal input was not confirmed.")
     }
     var receipt = binding.fields
     receipt.merge(["tabId": .string(tabID), "tabTitle": .string(tab.title)], uniquingKeysWith: { _, new in new })
     return receipt
+  }
+
+  /// Observe the owning foreground process and its rollout without selecting a
+  /// tab. A catalog ID may change on app restart; only the SAME TTY, process
+  /// instance and session can rebind it. Directory names never participate.
+  private func observeResearchTarget(_ args: [String: AssistantValue]) async throws -> [String: AssistantValue] {
+    let catalog = try await tabs.catalog()
+    let expectedInstance = args["agentInstanceId"]?.string
+    let expectedSession = args["sessionId"]?.string
+    let expectedTTY = args["tty"]?.string
+    if expectedTTY != nil || expectedInstance != nil || expectedSession != nil {
+      guard expectedTTY != nil, expectedInstance != nil, expectedSession != nil else {
+        throw MacAssistantError("For an existing authorization, supply the exact TTY, process instance and session together. Inspect this tab again; no input was sent.")
+      }
+    }
+    let candidates = catalog.tabs.filter { tab in
+      if let expectedTTY { return tabs.assistantSnapshot(tabID: tab.id)?.tty == expectedTTY }
+      return tab.id == args["tabId"]?.string
+    }
+    guard candidates.count == 1, let tab = candidates.first,
+      let target = tabs.assistantSnapshot(tabID: tab.id) else {
+      throw MacAssistantError("This exact Terminal process is unavailable or ambiguous. Autonomy is paused; inspect its identity.")
+    }
+    let binding = try await Task.detached { try MacTerminalResponseReader().inputBinding(tty: target.tty) }.value
+    guard expectedInstance == nil || expectedInstance == binding.instanceId,
+      expectedSession == nil || expectedSession == binding.conversation?.sessionId,
+      MacAssistantAgentQueueSnapshot.supports(version: binding.version) else {
+      throw MacAssistantError("The approved Terminal process or session changed. Choose and authorize the new thread explicitly.")
+    }
+    var result = binding.fields
+    result["tabId"] = .string(tab.id)
+    result["tabTitle"] = .string(tab.title)
+    result["verified"] = .bool(true)
+    result["draftInspected"] = .bool(false)
+    if let conversation = binding.conversation {
+      let observation = try await Task.detached { () throws -> (Bool, RemoteTerminalResponse?) in
+        var activity = MacCodexRequestActivityLog()
+        return (try activity.read(conversation.path), try? MacCodexResponseParser.read(conversation: conversation))
+      }.value
+      result["isBusy"] = .bool(observation.0)
+      result["completion"] = try observation.1.map(AssistantValue.encode) ?? .null
+    } else {
+      result["isBusy"] = .bool(false)
+      result["completion"] = .null
+    }
+    // Ownership must still be identical after reading potentially large logs.
+    guard try await Task.detached(operation: { try MacTerminalResponseReader().inputBinding(tty: target.tty) }).value.continues(binding) else {
+      throw MacAssistantError("Terminal ownership changed during observation. No input was sent.")
+    }
+    return result
   }
 
   private func insertInAgent(id: String, args: [String: AssistantValue], tabId: String, tabTitle: String,

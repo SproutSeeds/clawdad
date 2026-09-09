@@ -39,6 +39,7 @@ struct RemoteAssistIconGlossary: View {
           entry("keyboard.badge.ellipsis", "Special commands", "Opens the supported keyboard shortcuts and special keys. Tapping a key sends that key to the Mac.", "Key labels describe the actual command; these may submit, interrupt or navigate the focused app.")
         }
         section("Remote Assist: workspace") {
+          entry("flask", "Research autonomy", "Opens per-thread research authorization, pause/off controls, steering and decision history in Assistant Workspace.", "Off until explicitly enabled for an exact agent and objective. New automatic work pauses at the account allowance reserve; a reset never clears that pause. Running tasks stay intact.")
           entry("terminal", "Terminal tabs", "Opens the tab picker, grouped by physical window and ordered left to right. Tap a card to focus that exact tab.", "A checkmark marks the selected tab. Busy means its agent is working; a dot marks unread activity.")
           entry("line.3.horizontal", "Reorder Terminal tab", "Hold and drag the handle to move the tab within its window. Scrolling the card list remains separate.", "The picker and physical Terminal order update together after verification.")
           entry("trash", "Close Terminal tab", "Swipe a tab card to reveal Close. Follow any confirmation needed for a tab with running processes.", "The row is removed after the Mac confirms closure; an uncertain result keeps the tab visible.")

@@ -22,3 +22,11 @@
 @media(max-width:520px){#assistantOpen{left:86px;top:10px}.assistant-head,.assistant-controls,.assistant-composer{padding:10px;gap:8px}.assistant-feed,.assistant-workspace{padding:12px}}
 
 .assistant-copy { float:right;min-width:44px;min-height:44px;cursor:pointer;margin-left:12px; }
+.assistant-message span,.assistant-task p { user-select:text;-webkit-user-select:text; }
+.research-dialog { padding:20px;overflow:auto; }
+.research-dialog label { display:block;margin:14px 0; }
+.research-dialog input,.research-dialog textarea { display:block;box-sizing:border-box;width:100%;padding:12px;min-height:44px;background:#181416;color:inherit;border:1px solid #645234;border-radius:8px;font:inherit; }
+.research-dialog textarea { min-height:80px; }
+.research-dialog button { min-height:44px;margin:6px; }
+.research-dialog pre { white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;-webkit-user-select:text; }
+.research-dialog summary { cursor:pointer;padding:12px 0; }

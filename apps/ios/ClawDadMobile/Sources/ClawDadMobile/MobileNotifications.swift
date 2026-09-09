@@ -53,6 +53,7 @@ final class MobileNotificationController: ObservableObject {
   @Published private(set) var denied = false
   @Published var pendingOpen: CompletedTurnNotification?
   @Published var pendingUsageOpen: WeeklyUsageNotification?
+  @Published var pendingResearchOpen: WeeklyUsageNotification?
   private var token: String?
   private weak var session: CloudSession?
   private var syncing = false
@@ -233,7 +234,10 @@ final class ClawDadPushAppDelegate: NSObject, UIApplicationDelegate, UNUserNotif
       Task { @MainActor in MobileNotificationController.shared.pendingOpen = notification }
     }
     if let usage = WeeklyUsageNotification.parse(response.notification.request.content.userInfo) {
-      Task { @MainActor in MobileNotificationController.shared.pendingUsageOpen = usage }
+      Task { @MainActor in
+        if usage.kind == "research" { MobileNotificationController.shared.pendingResearchOpen = usage }
+        else { MobileNotificationController.shared.pendingUsageOpen = usage }
+      }
     }
     completionHandler()
   }

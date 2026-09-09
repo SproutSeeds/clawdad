@@ -24,7 +24,7 @@ settings:
     CODE_SIGN_STYLE: Automatic
     DEVELOPMENT_TEAM: 4QV4WR9G32
     MARKETING_VERSION: "0.7.0"
-    CURRENT_PROJECT_VERSION: "76"
+    CURRENT_PROJECT_VERSION: "77"
     CLAWDAD_FOUNDING_BETA_ACCESS: "NO"
 
 targets:
@@ -76,6 +76,22 @@ targets:
         GENERATE_INFOPLIST_FILE: "YES"
         TARGETED_DEVICE_FAMILY: "1"
 
+  ClawDadSelectionTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - path: SelectionTests
+    dependencies:
+      - target: ClawDadMobile
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: earth.frg.clawdad.ios.selectiontests
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/ClawDad.app/ClawDad"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        GENERATE_INFOPLIST_FILE: "YES"
+        TARGETED_DEVICE_FAMILY: "1"
+
 schemes:
   ClawDadMobile:
     build:
@@ -87,6 +103,7 @@ schemes:
       config: Debug
       targets:
         - ClawDadMobileUITests
+        - ClawDadSelectionTests
     archive:
       config: Release
   ClawDadMobile-Staging:

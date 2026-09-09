@@ -1,3 +1,4 @@
+import {researchSupervisorPanel} from './research-supervisor.js';
 const $ = (id) => document.getElementById(id);
 const dialog = $('assistantDialog');
 if (dialog) {
@@ -6,11 +7,17 @@ if (dialog) {
   let pendingMessage=null, sendTail=Promise.resolve(), voiceEpoch=0, startingVoice=false, callVisible=false;
   let speechQueue=[], speechRunner=null;
   const messageNodes=new Map(), taskNodes=new Map(), tabNodes=new Map();
+  const hasMessageSelection=()=>{const selection=window.getSelection();return !!selection&&!selection.isCollapsed&&
+    (selection.anchorNode?.parentElement?.closest('.assistant-message,.assistant-task')||selection.focusNode?.parentElement?.closest('.assistant-message,.assistant-task'));};
+  let deferredHistory=null;
+  document.addEventListener('selectionchange',()=>{if(!hasMessageSelection()&&deferredHistory){const next=deferredHistory;deferredHistory=null;render(next);}});
   async function request(route, body, options={}) {
     const response=await fetch(route,{method:body?'POST':'GET',headers:body instanceof FormData?{}:{'content-type':'application/json'},body:body instanceof FormData?body:body?JSON.stringify(body):undefined,...options});
     const result=await response.json();if(!response.ok)throw new Error(result.error||'The Mac could not finish this request');return result;
   }
   function error(message=''){$('assistantError').textContent=message;}
+  const openResearch=researchSupervisorPanel(request);
+  window.openClawDadResearch=()=>{open();$('assistantWorkspace').hidden=false;$('assistantFeed').hidden=true;};
   function status(message){$('assistantStatus').textContent=message;$('assistantCallStatus').textContent=message;}
   async function command(action,args={},id=crypto.randomUUID()) {
     const result=await request('/v1/assistant/request',{...args,action,requestId:id});render(result);return result;
@@ -48,6 +55,9 @@ if (dialog) {
     $('assistantSend').disabled=!next.nativeOnline;$('assistantTalk').disabled=!voice&&!next.nativeOnline;$('assistantPause').disabled=!next.nativeOnline;
     if(!voice&&!startingVoice&&!callVisible)status(next.nativeOnline?'Your Mac is connected':'Waiting for the Mac app…');
     const feed=$('assistantFeed'), nearBottom=feed.scrollHeight-feed.scrollTop-feed.clientHeight<100;
+    const held=hasMessageSelection();
+    if(held)deferredHistory=next;
+    if(!held){
     for(const message of next.messages||[]){
       let entry=messageNodes.get(message.id);
       if(!entry){
@@ -80,15 +90,16 @@ if (dialog) {
     }
     const visibleTasks=new Set((next.tasks||[]).map(t=>t.id));
     for(const [id,entry] of taskNodes)if(!visibleTasks.has(id)){entry.element.remove();taskNodes.delete(id);}
+    }
     const tabs=next.catalog?.tabs||[],currentTabs=new Set(tabs.map(t=>t.id));
     for(const [id,node] of tabNodes)if(!currentTabs.has(id)){node.remove();tabNodes.delete(id);}
     for(const [index,tab] of tabs.entries()){
       let node=tabNodes.get(tab.id);
-      if(!node){node=button('',()=>watch(tab.id));tabNodes.set(tab.id,node);}
-      node.textContent=`${tab.title} — ${tab.detail}${tab.isBusy?' · Busy':''}`;
+      if(!node){node=document.createElement('div');node.append(button('',()=>watch(tab.id)),button('Research autonomy',()=>openResearch(tab.id)));tabNodes.set(tab.id,node);}
+      node.firstChild.textContent=`${tab.title} — ${tab.detail}${tab.isBusy?' · Busy':''}`;
       const before=$('assistantWorkspace').children[index];if(before!==node)$('assistantWorkspace').insertBefore(node,before||null);
     }
-    if(nearBottom)feed.scrollTop=feed.scrollHeight;
+    if(nearBottom&&!held)feed.scrollTop=feed.scrollHeight;
     if(voice){
       for(const message of [...(next.messages||[]),...(next.taskUpdates||[])])if(message.role==='assistant'&&!spoken.has(message.id)){
         spoken.add(message.id);speechQueue.push(message);

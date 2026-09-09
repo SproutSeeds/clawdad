@@ -43,6 +43,13 @@
           "args": .object(["tabId": .string("code-one")]), "createdAt": .string("2026-09-08T00:00:02Z")
         ])])
       }
+      if ProcessInfo.processInfo.arguments.contains("--clawdad-assistant-selection-test") {
+        let role = ProcessInfo.processInfo.arguments.contains("--selection-user") ? "user" : "assistant"
+        state["messages"] = .array([.object([
+          "id": .string("selection-message"), "role": .string(role),
+          "text": .string("Amber birds return home.\nSelect a word or this second sentence.\n- Evidence remains visible\n- Calls stay connected\n`let result = 4`"),
+          "createdAt": .string("2026-09-09T00:00:00Z")])])
+      }
       let catalog = RemoteTerminalTabState(
         revision: 1, selectedTabId: "code-one",
         tabs: [
@@ -60,6 +67,27 @@
     }
     func snapshot() throws -> AssistantSnapshot {
       try JSONDecoder().decode(AssistantSnapshot.self, from: JSONEncoder().encode(state))
+    }
+    func research(_ action: String, args: [String: AssistantValue], id: String) throws -> [String: AssistantValue] {
+      if action == "research.target" { return ["researchTarget": .object(["tabId": args["tabId"] ?? .string("code-one"),
+        "tabTitle": .string("Disposable research"), "sessionId": .string("fixture-session"),
+        "agentInstanceId": .string("fixture-process"), "directory": .string("/tmp/research-fixture")])] }
+      var research = state["research"]?.object ?? ["available": .bool(true), "defaultEnabled": .bool(false), "threads": .array([])]
+      if action == "research.enable" {
+        var thread = args; thread["id"] = .string("fixture-research"); thread["name"] = .string("Disposable research")
+        thread["status"] = .string("waiting"); thread["enabled"] = .bool(true); thread["activity"] = .array([])
+        research["threads"] = .array([.object(thread)])
+      } else if ["research.pause", "research.off", "research.resume", "research.steer"].contains(action) {
+        research["threads"] = .array((research["threads"]?.array ?? []).map { value in
+          guard var thread = value.object else { return value }
+          thread["enabled"] = .bool(action != "research.off")
+          thread["status"] = .string(action == "research.off" ? "off" : action == "research.pause" ? "paused" : "waiting")
+          return .object(thread)
+        })
+      }
+      if action == "research.history" { return ["researchHistory": .object(["entries": .array([]), "nextCursor": .null])] }
+      state["research"] = .object(research)
+      return ["research": .object(research)]
     }
     func command(_ action: String, args: [String: AssistantValue], id: String) throws
       -> AssistantSnapshot

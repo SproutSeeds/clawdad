@@ -50,6 +50,17 @@
                ReferencedContainer = "container:ClawDadMobile.xcodeproj">
             </BuildableReference>
          </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "2631599B7A3427F1404C855E"
+               BuildableName = "ClawDadSelectionTests.xctest"
+               BlueprintName = "ClawDadSelectionTests"
+               ReferencedContainer = "container:ClawDadMobile.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
       <CommandLineArguments>
       </CommandLineArguments>

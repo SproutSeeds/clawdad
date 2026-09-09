@@ -743,6 +743,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
   private var assistantBridge: MacAssistantBridge?
   private let usageNotifications = MacUsageNotifications()
   private var usageOpenPending = false
+  private var researchOpenPending = false
   private var remoteComputerManager: MacRemoteComputerManager?
   private var remoteAssistClient: MacRemoteAssistClient?
   private var remoteAssistWindowController: MacRemoteAssistWindowController?
@@ -755,6 +756,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     usageNotifications.onOpen = { [weak self] in
       self?.usageOpenPending = true
       self?.openPendingUsage()
+    }
+    usageNotifications.onOpenResearch = { [weak self] in
+      self?.researchOpenPending = true
+      self?.openPendingResearch()
     }
     let nativeInstanceGuard = NativeAppInstanceGuard()
     self.nativeInstanceGuard = nativeInstanceGuard
@@ -971,6 +976,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
 
   func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
     openPendingUsage()
+    openPendingResearch()
+  }
+  private func openPendingResearch() {
+    guard researchOpenPending else { return }
+    window?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+    guard let webView, !webView.isLoading else { return }
+    webView.evaluateJavaScript("typeof window.openClawDadResearch === 'function' && (window.openClawDadResearch(), true)") { [weak self] value, _ in
+      if value as? Bool == true { self?.researchOpenPending = false }
+    }
   }
 
   @available(macOS 12.0, *)

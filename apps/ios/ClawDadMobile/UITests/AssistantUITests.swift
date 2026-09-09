@@ -2,6 +2,129 @@ import XCTest
 
 @MainActor
 final class AssistantUITests: XCTestCase {
+  private func messageText(_ app: XCUIApplication, _ text: String) -> XCUIElement {
+    let native = app.textViews.matching(NSPredicate(format: "value == %@ OR label == %@", text, text)).firstMatch
+    return native.exists ? native : app.staticTexts[text]
+  }
+
+  func testResearchOptInPauseAndOffPreserveCallAndTypedDraft() {
+    let app = XCUIApplication()
+    app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-assistant-test", "--clawdad-assistant-reset-draft"]
+    app.launch()
+    XCTAssertTrue(app.buttons["clawdad.assistant.chat"].waitForExistence(timeout: 15))
+    app.buttons["clawdad.assistant.chat"].tap()
+    app.buttons["clawdad.assistant.start-voice"].tap()
+    let composer = app.descendants(matching: .any).matching(identifier: "clawdad.assistant.composer").firstMatch
+    composer.tap(); composer.typeText("Preserve my unsent note.")
+    app.buttons["Workspace"].tap()
+    let research = app.buttons["clawdad.assistant.research.code-one"]
+    XCTAssertTrue(research.waitForExistence(timeout: 5)); research.tap()
+    XCTAssertTrue(app.staticTexts["clawdad.research.status"].waitForExistence(timeout: 5))
+    XCTAssertEqual(app.staticTexts["clawdad.research.status"].label, "Off")
+    let enable = app.buttons["clawdad.research.enable"]
+    for _ in 0..<8 where !enable.exists { app.swipeUp() }
+    XCTAssertTrue(enable.exists)
+    XCTAssertFalse(enable.isEnabled)
+    for _ in 0..<8 where app.descendants(matching: .any).matching(identifier: "clawdad.research.objective").firstMatch.frame.minY < 150 { app.swipeDown() }
+    for (id, text) in [("objective", "Verify the two fixture calculations."), ("scope", "Only this disposable directory."), ("requirements", "Both results have test evidence.")] {
+      let field = app.descendants(matching: .any).matching(identifier: "clawdad.research.\(id)").firstMatch
+      for _ in 0..<6 where !field.isHittable { app.swipeUp() }
+      for _ in 0..<6 where field.frame.minY < 150 { app.swipeDown() }
+      field.tap(); field.typeText(text)
+      if app.buttons["Done typing"].isHittable { app.buttons["Done typing"].tap() }
+    }
+    for _ in 0..<6 where !enable.isHittable { app.swipeUp() }
+    XCTAssertTrue(enable.isEnabled); enable.tap()
+    XCTAssertTrue(app.alerts["Enable autonomy for this exact thread?"].waitForExistence(timeout: 3))
+    app.alerts.buttons["Cancel"].tap()
+    for _ in 0..<8 where !enable.isHittable { app.swipeUp() }
+    enable.tap(); app.alerts.buttons["Enable"].tap()
+    let pause = app.buttons["clawdad.research.pause"]
+    for _ in 0..<8 where !pause.isHittable { app.swipeDown() }
+    XCTAssertTrue(pause.waitForExistence(timeout: 5)); pause.tap()
+    for _ in 0..<8 where !app.staticTexts["clawdad.research.status"].exists { app.swipeDown() }
+    XCTAssertEqual(app.staticTexts["clawdad.research.status"].label, "Paused")
+    for _ in 0..<8 where !app.buttons["clawdad.research.off"].isHittable { app.swipeUp() }
+    app.buttons["clawdad.research.off"].tap()
+    for _ in 0..<8 where !app.staticTexts["clawdad.research.status"].exists { app.swipeDown() }
+    XCTAssertEqual(app.staticTexts["clawdad.research.status"].label, "Off")
+    saveScreenshot(app, "Research controls require opt in and preserve the connected call")
+    app.buttons["Done"].tap()
+    app.buttons["Workspace"].tap()
+    XCTAssertEqual(composer.value as? String, "Preserve my unsent note.")
+    XCTAssertTrue(app.buttons["End voice conversation"].exists)
+    XCTAssertTrue(app.buttons["clawdad.assistant.think-aloud"].exists)
+  }
+
+  func testNativeSelectionHandleExtendsAcrossLines() {
+    let app = XCUIApplication()
+    app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-assistant-test", "--clawdad-assistant-selection-test", "--clawdad-assistant-reset-draft"]
+    app.launch()
+    XCTAssertTrue(app.buttons["clawdad.assistant.chat"].waitForExistence(timeout: 15))
+    app.buttons["clawdad.assistant.chat"].tap()
+    let message = app.textViews["clawdad.assistant.text.selection-message"]
+    XCTAssertTrue(message.waitForExistence(timeout: 5))
+    let start = message.coordinate(withNormalizedOffset: .zero)
+    start.withOffset(CGVector(dx: 28, dy: 12)).press(forDuration: 1.2)
+    start.withOffset(CGVector(dx: 50, dy: 26)).press(forDuration: 0.3, thenDragTo: start.withOffset(CGVector(dx: 235, dy: 88)))
+    let copy = app.menuItems["Copy"].waitForExistence(timeout: 2) ? app.menuItems["Copy"] : app.buttons["Copy"]
+    XCTAssertTrue(copy.waitForExistence(timeout: 3))
+    saveScreenshot(app, "Native selection handle extended across message lines")
+    copy.tap()
+    let composer = app.descendants(matching: .any).matching(identifier: "clawdad.assistant.composer").firstMatch
+    composer.tap(); composer.press(forDuration: 1.2)
+    let paste = app.menuItems["Paste"].waitForExistence(timeout: 2) ? app.menuItems["Paste"] : app.buttons["Paste"]
+    XCTAssertTrue(paste.waitForExistence(timeout: 3)); paste.tap()
+    let actual = composer.value as? String ?? ""
+    XCTAssertTrue(actual.hasPrefix("Amber"), actual)
+    XCTAssertTrue(actual.contains("\n"), actual)
+    XCTAssertTrue(actual.contains("Select"), actual)
+    XCTAssertFalse(actual.contains("let result"), actual)
+  }
+
+  func testNativePartialMessageSelectionAndCopyDuringCall() {
+    checkNativePartialMessageSelectionAndCopyDuringCall(largeText: false)
+  }
+
+  func testNativePartialMessageSelectionAtAccessibilityTextSize() {
+    checkNativePartialMessageSelectionAndCopyDuringCall(largeText: true)
+  }
+
+  private func checkNativePartialMessageSelectionAndCopyDuringCall(largeText: Bool) {
+    for user in [false, true] {
+      let app = XCUIApplication()
+      app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-assistant-test", "--clawdad-assistant-selection-test", "--clawdad-assistant-reset-draft"] + (user ? ["--selection-user"] : [])
+      if largeText { app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXL"] }
+      app.launch()
+      XCTAssertTrue(app.buttons["clawdad.assistant.chat"].waitForExistence(timeout: 15))
+      app.buttons["clawdad.assistant.chat"].tap()
+      app.buttons["clawdad.assistant.start-voice"].tap()
+      let message = app.textViews["clawdad.assistant.text.selection-message"]
+      XCTAssertTrue(message.waitForExistence(timeout: 5))
+      if largeText {
+        for _ in 0..<8 where message.frame.minY < 140 {
+          app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.36)).press(forDuration: 0.05,
+            thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.68)))
+        }
+      }
+      let start = message.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
+      start.withOffset(CGVector(dx: 28, dy: 12)).press(forDuration: 1.2)
+      let copy = app.menuItems["Copy"].waitForExistence(timeout: 2) ? app.menuItems["Copy"] : app.buttons["Copy"]
+      XCTAssertTrue(copy.waitForExistence(timeout: 3), app.debugDescription)
+      saveScreenshot(app, user ? "Native user message selection during call" : "Native Assistant response selection during call")
+      copy.tap()
+      XCTAssertTrue(app.buttons["End voice conversation"].exists)
+      let composer = app.descendants(matching: .any).matching(identifier: "clawdad.assistant.composer").firstMatch
+      composer.tap(); composer.press(forDuration: 1.2)
+      let paste = app.menuItems["Paste"].waitForExistence(timeout: 2) ? app.menuItems["Paste"] : app.buttons["Paste"]
+      XCTAssertTrue(paste.waitForExistence(timeout: 3)); paste.tap()
+      XCTAssertEqual(composer.value as? String, "Amber")
+      XCTAssertTrue(app.buttons["End voice conversation"].exists)
+      XCTAssertTrue(app.buttons["clawdad.assistant.think-aloud"].exists)
+      app.terminate()
+    }
+  }
+
   func testWeeklyAllowanceInMainScreenAndRemoteMenu() {
     let app = XCUIApplication()
     app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-weekly-usage-test"]
@@ -65,10 +188,10 @@ final class AssistantUITests: XCTestCase {
     app.buttons["clawdad.assistant.back"].tap()
     app.buttons["clawdad.assistant.return"].tap()
     XCTAssertTrue(app.staticTexts["You · Held"].waitForExistence(timeout: 5))
-    XCTAssertTrue(app.staticTexts[corrected!].exists)
+    XCTAssertTrue(messageText(app, corrected!).exists)
     app.buttons["clawdad.assistant.send-chat"].tap()
     XCTAssertTrue(app.staticTexts["You"].waitForExistence(timeout: 5))
-    XCTAssertTrue(app.staticTexts[corrected!].exists)
+    XCTAssertTrue(messageText(app, corrected!).exists)
     XCTAssertFalse(app.buttons["clawdad.assistant.transcript.edit"].exists)
     XCTAssertTrue(app.buttons["End voice conversation"].exists)
   }
@@ -86,13 +209,13 @@ final class AssistantUITests: XCTestCase {
     saveScreenshot(app, "Clear transcription requires an explicit confirmation")
     alert.buttons["Cancel"].tap()
     XCTAssertTrue(app.staticTexts["You · Held"].waitForExistence(timeout: 5))
-    XCTAssertTrue(app.staticTexts["Please check the second Terminal tab."].exists)
+    XCTAssertTrue(messageText(app, "Please check the second Terminal tab.").exists)
     XCTAssertFalse(app.staticTexts["You"].exists)
     clear.tap(); alert.buttons["Clear"].tap()
     let removed = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: clear)
     wait(for: [removed], timeout: 5)
     app.buttons["clawdad.assistant.back"].tap(); app.buttons["clawdad.assistant.return"].tap()
-    XCTAssertFalse(app.staticTexts["Please check the second Terminal tab."].exists)
+    XCTAssertFalse(messageText(app, "Please check the second Terminal tab.").exists)
     XCTAssertFalse(app.staticTexts["You"].exists)
     XCTAssertTrue(app.buttons["End voice conversation"].exists)
   }
@@ -114,7 +237,7 @@ final class AssistantUITests: XCTestCase {
     let held = app.staticTexts["You · Held"]
     XCTAssertTrue(held.waitForExistence(timeout: 5))
     for _ in 0..<8 where !held.isHittable { app.swipeUp() }
-    XCTAssertTrue(app.staticTexts[corrected!].exists)
+    XCTAssertTrue(messageText(app, corrected!).exists)
     XCTAssertFalse(app.staticTexts["You"].exists)
     XCTAssertTrue(app.buttons["End voice conversation"].isHittable)
     XCTAssertTrue(app.buttons["clawdad.assistant.mute"].isHittable)
@@ -203,9 +326,9 @@ final class AssistantUITests: XCTestCase {
     XCTAssertEqual(app.buttons["clawdad.assistant.copy.copy-assistant"].label, "Copied")
     app.buttons["Pause control"].tap()
     XCTAssertTrue(app.staticTexts["ClawDad · Completed"].waitForExistence(timeout: 5))
-    XCTAssertTrue(app.staticTexts["Playback is repaired. Your draft is preserved."].exists)
+    XCTAssertTrue(messageText(app, "Playback is repaired. Your draft is preserved.").exists)
     app.buttons["Resume control"].tap()
-    XCTAssertEqual(app.staticTexts.matching(identifier: "Repair playback and preserve my draft.").count, 1)
+    XCTAssertEqual(app.textViews.matching(identifier: "clawdad.assistant.text.request.history-task").count, 1)
     XCTAssertTrue(app.buttons["clawdad.assistant.copy.result.history-task"].exists)
     saveScreenshot(app, "Readable task result stays with original request and copy preserves draft")
   }
@@ -308,7 +431,7 @@ final class AssistantUITests: XCTestCase {
     app.buttons["clawdad.assistant.send-chat"].tap()
     let gone = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.buttons["clawdad.assistant.image-preview"])
     wait(for: [gone], timeout: 5)
-    XCTAssertTrue(app.staticTexts["Please inspect my attached screenshot."].exists)
+    XCTAssertTrue(messageText(app, "Please inspect my attached screenshot.").exists)
     XCTAssertEqual(app.staticTexts.matching(identifier: "Please inspect my attached screenshot.").count, 1)
     XCTAssertFalse(app.buttons["End voice conversation"].exists)
     saveScreenshot(app, "Assistant photo message sent once and draft cleared after acceptance")
@@ -408,7 +531,7 @@ final class AssistantUITests: XCTestCase {
     XCTAssertEqual(send.label, "Send voice turn")
     send.tap()
     XCTAssertTrue(app.staticTexts["You"].waitForExistence(timeout: 5))
-    XCTAssertTrue(app.staticTexts["Please check the second Terminal tab."].exists)
+    XCTAssertTrue(messageText(app, "Please check the second Terminal tab.").exists)
     XCTAssertFalse(app.staticTexts["You · Draft"].exists)
     XCTAssertFalse(send.isEnabled)
     // Leave the fixture's persisted preference in the default mode.
@@ -528,14 +651,14 @@ final class AssistantUITests: XCTestCase {
     XCTAssertTrue(app.buttons["clawdad.assistant.open"].waitForExistence(timeout: 20))
     app.buttons["clawdad.assistant.open"].tap()
     app.buttons["clawdad.assistant.return"].tap()
-    XCTAssertTrue(app.staticTexts["Could you check which Terminal tab is working?"].waitForExistence(timeout: 8))
+    XCTAssertTrue(messageText(app, "Could you check which Terminal tab is working?").waitForExistence(timeout: 8))
     let thread = XCTAttachment(screenshot: app.screenshot())
     thread.name = "Assistant conversation with live voice transcription"
     thread.lifetime = .keepAlways
     add(thread)
     app.buttons["clawdad.assistant.back"].tap()
     app.buttons["clawdad.assistant.return"].tap()
-    XCTAssertTrue(app.staticTexts["Could you check which Terminal tab is working?"].waitForExistence(timeout: 5))
+    XCTAssertTrue(messageText(app, "Could you check which Terminal tab is working?").waitForExistence(timeout: 5))
     XCTAssertTrue(app.buttons["End voice conversation"].exists)
   }
 
@@ -571,14 +694,14 @@ final class AssistantUITests: XCTestCase {
     draft.tap()
     draft.typeText("Which tab is working?")
     app.buttons["Send to Assistant"].tap()
-    XCTAssertTrue(app.staticTexts["Which tab is working?"].waitForExistence(timeout: 5))
+    XCTAssertTrue(messageText(app, "Which tab is working?").waitForExistence(timeout: 5))
     let screenshot = XCTAttachment(screenshot: app.screenshot())
     screenshot.name = "Assistant conversation inside ClawDad"
     screenshot.lifetime = .keepAlways
     add(screenshot)
     app.buttons["clawdad.assistant.back"].tap()
     app.buttons["clawdad.assistant.open"].tap()
-    XCTAssertTrue(app.staticTexts["Which tab is working?"].waitForExistence(timeout: 5))
+    XCTAssertTrue(messageText(app, "Which tab is working?").waitForExistence(timeout: 5))
     app.buttons["clawdad.assistant.back"].tap()
     XCTAssertTrue(app.buttons["clawdad.assistant.return"].waitForExistence(timeout: 5))
     app.buttons["Mute Assistant"].tap()

@@ -106,15 +106,16 @@ test('account changes have independent thresholds, returning account preserves i
   assert.equal(m.state.alerts.length, 2);
 });
 
-test('freshness, unavailable account, passed reset, and out-of-order cycle fail explicitly', async t => {
+test('future reset corrections stay authoritative without rearming; failures and passed resets stay stale', async t => {
   const f = await fixture(t), m = f.monitor;
   f.fail(true); await m.tick(); assert.equal((await m.snapshot()).status, 'unavailable');
   f.fail(false); await m.tick(); assert.equal((await m.snapshot()).status, 'current');
   f.fail(true); await m.tick(); assert.equal((await m.snapshot()).status, 'stale');
   f.fail(false); f.set(provider(99, 'signed-in-account', reset - 10)); await m.tick();
-  assert.equal((await m.snapshot()).status, 'stale'); assert.equal(m.state.alerts.length, 0);
+  assert.equal((await m.snapshot()).status, 'current'); assert.equal(m.state.alerts.length, 1);
+  assert.equal((await m.freshReading()).resetsAt, reset - 10);
   f.time(reset * 1000); f.set(provider(100)); await m.tick();
-  assert.equal((await m.snapshot()).status, 'stale'); assert.equal(m.state.alerts.length, 0);
+  assert.equal((await m.snapshot()).status, 'stale'); assert.equal(m.state.alerts.length, 1);
 });
 
 test('concurrent polling is coalesced without new model turns or duplicate delivery', async t => {

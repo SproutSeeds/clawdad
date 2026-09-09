@@ -9,7 +9,8 @@ enum AssistantMessageLinks {
   static func text(_ source: String) -> AttributedString {
     var result = AttributedString(source)
     guard let detector = try? NSDataDetector(types:
-      NSTextCheckingResult.CheckingType.phoneNumber.rawValue | NSTextCheckingResult.CheckingType.address.rawValue)
+      NSTextCheckingResult.CheckingType.phoneNumber.rawValue | NSTextCheckingResult.CheckingType.address.rawValue
+        | NSTextCheckingResult.CheckingType.link.rawValue)
     else { return result }
     for match in detector.matches(in: source, range: NSRange(source.startIndex..., in: source)) {
       guard let range = Range(match.range, in: source),
@@ -28,7 +29,8 @@ enum AssistantMessageLinks {
         components.host = "open"
         components.queryItems = [URLQueryItem(name: "q", value: String(source[range]))]
         url = components.url
-      } else { url = nil }
+      } else if match.resultType == .link { url = match.url }
+      else { url = nil }
       if let url { result[start..<end].link = url }
     }
     return result
@@ -59,6 +61,8 @@ enum AssistantMessageLinks {
 
 struct AssistantResponseText: View {
   let text: String
+  var id: String = "response"
+  var selection: AssistantMessageSelection? = nil
   @State private var failed = false
   #if DEBUG
   @State private var previewDestination = ""
@@ -66,7 +70,7 @@ struct AssistantResponseText: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 4) {
-      Text(AssistantMessageLinks.text(text)).textSelection(.enabled)
+      AssistantSelectableText(text: text, id: id, selection: selection)
         .environment(\.openURL, OpenURLAction { url in
           guard !AssistantMessageLinks.destinations(for: url).isEmpty else { return .systemAction }
           Task { @MainActor in
