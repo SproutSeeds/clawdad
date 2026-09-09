@@ -2,6 +2,118 @@ import XCTest
 
 @MainActor
 final class AssistantUITests: XCTestCase {
+  func testVoiceTranscriptionEditSaveReopenAndExplicitSend() {
+    let app = startTranscriptionReviewFixture()
+    let edit = app.buttons["clawdad.assistant.transcript.edit"]
+    XCTAssertTrue(edit.waitForExistence(timeout: 5))
+    XCTAssertGreaterThanOrEqual(edit.frame.width, 44)
+    XCTAssertGreaterThanOrEqual(edit.frame.height, 44)
+    XCTAssertEqual(edit.label, "Edit transcription")
+    edit.tap()
+    let editor = app.textViews["clawdad.assistant.transcript.editor"]
+    XCTAssertTrue(editor.waitForExistence(timeout: 5))
+    editor.tap(); editor.typeText(" Corrected name: Cody.")
+    let corrected = editor.value as? String
+    XCTAssertTrue(corrected?.contains("Corrected name: Cody.") == true)
+    saveScreenshot(app, "Editable transcription with Save and Resume while capture is paused")
+    app.buttons["clawdad.assistant.transcript.save"].tap()
+    XCTAssertTrue(app.staticTexts["You · Held"].waitForExistence(timeout: 5))
+    XCTAssertFalse(editor.exists)
+    XCTAssertFalse(app.staticTexts["You"].exists)
+    XCTAssertTrue(app.buttons["End voice conversation"].isHittable)
+    saveScreenshot(app, "Corrected transcription stays held with accessible edit and clear controls")
+    app.buttons["clawdad.assistant.back"].tap()
+    app.buttons["clawdad.assistant.return"].tap()
+    XCTAssertTrue(app.staticTexts["You · Held"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.staticTexts[corrected!].exists)
+    app.buttons["clawdad.assistant.send-chat"].tap()
+    XCTAssertTrue(app.staticTexts["You"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.staticTexts[corrected!].exists)
+    XCTAssertFalse(app.buttons["clawdad.assistant.transcript.edit"].exists)
+    XCTAssertTrue(app.buttons["End voice conversation"].exists)
+  }
+
+  func testVoiceClearCancelAndConfirmedClearStayConnected() {
+    let app = startTranscriptionReviewFixture()
+    let clear = app.buttons["clawdad.assistant.transcript.clear"]
+    XCTAssertTrue(clear.waitForExistence(timeout: 5))
+    XCTAssertGreaterThanOrEqual(clear.frame.width, 44)
+    XCTAssertGreaterThanOrEqual(clear.frame.height, 44)
+    XCTAssertEqual(clear.label, "Clear transcription")
+    clear.tap()
+    let alert = app.alerts["Clear this transcription?"]
+    XCTAssertTrue(alert.waitForExistence(timeout: 5))
+    saveScreenshot(app, "Clear transcription requires an explicit confirmation")
+    alert.buttons["Cancel"].tap()
+    XCTAssertTrue(app.staticTexts["You · Held"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.staticTexts["Please check the second Terminal tab."].exists)
+    XCTAssertFalse(app.staticTexts["You"].exists)
+    clear.tap(); alert.buttons["Clear"].tap()
+    let removed = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: clear)
+    wait(for: [removed], timeout: 5)
+    app.buttons["clawdad.assistant.back"].tap(); app.buttons["clawdad.assistant.return"].tap()
+    XCTAssertFalse(app.staticTexts["Please check the second Terminal tab."].exists)
+    XCTAssertFalse(app.staticTexts["You"].exists)
+    XCTAssertTrue(app.buttons["End voice conversation"].exists)
+  }
+
+  func testVoiceEditorBackKeepsCorrectionAtLargeTextSize() {
+    let app = startTranscriptionReviewFixture(largeText: true)
+    let edit = app.buttons["clawdad.assistant.transcript.edit"]
+    XCTAssertTrue(edit.waitForExistence(timeout: 5))
+    for _ in 0..<8 where !edit.isHittable { app.swipeUp() }
+    edit.tap()
+    let editor = app.textViews["clawdad.assistant.transcript.editor"]
+    XCTAssertTrue(editor.waitForExistence(timeout: 5))
+    editor.tap(); editor.typeText(" A correction.")
+    let corrected = editor.value as? String
+    app.buttons["clawdad.assistant.back"].tap()
+    XCTAssertFalse(editor.exists, "Back closes the editor first and retains its contents")
+    XCTAssertTrue(app.buttons["clawdad.assistant.back"].exists)
+    app.buttons["clawdad.assistant.back"].tap(); app.buttons["clawdad.assistant.return"].tap()
+    let held = app.staticTexts["You · Held"]
+    XCTAssertTrue(held.waitForExistence(timeout: 5))
+    for _ in 0..<8 where !held.isHittable { app.swipeUp() }
+    XCTAssertTrue(app.staticTexts[corrected!].exists)
+    XCTAssertFalse(app.staticTexts["You"].exists)
+    XCTAssertTrue(app.buttons["End voice conversation"].isHittable)
+    XCTAssertTrue(app.buttons["clawdad.assistant.mute"].isHittable)
+    XCTAssertTrue(app.buttons["clawdad.assistant.send-chat"].isHittable)
+    Thread.sleep(forTimeInterval: 0.5) // Capture the settled keyboard/navigation transition.
+    saveScreenshot(app, "Held voice correction survives navigation at accessibility text size")
+  }
+
+  func testTranscriptionReviewGlossaryExplainsHoldAndClear() {
+    let app = XCUIApplication()
+    app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-assistant-test"]
+    app.launch()
+    XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 20))
+    app.buttons["Settings"].tap()
+    let glossary = app.buttons["clawdad.settings.icon-glossary"]
+    for _ in 0..<18 where !glossary.isHittable { app.swipeUp() }
+    glossary.tap()
+    XCTAssertTrue(app.buttons["clawdad.settings.icon-glossary.back"].waitForExistence(timeout: 5))
+    for wording in ["Holds the unsent voice turn", "Clear discards the entire unsent voice turn"] {
+      let explanation = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", wording)).firstMatch
+      for _ in 0..<18 where !explanation.isHittable { app.swipeUp() }
+      XCTAssertTrue(explanation.isHittable, wording)
+    }
+    saveScreenshot(app, "Icon glossary explains transcription editing and deliberate clearing")
+    app.buttons["clawdad.settings.icon-glossary.back"].tap()
+    XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
+  }
+
+  private func startTranscriptionReviewFixture(largeText: Bool = false) -> XCUIApplication {
+    let app = XCUIApplication()
+    app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-assistant-test", "--clawdad-assistant-send-test", "--clawdad-assistant-reset-draft"]
+    if largeText { app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXL"] }
+    app.launch()
+    XCTAssertTrue(app.buttons["clawdad.assistant.open"].waitForExistence(timeout: 20))
+    app.buttons["clawdad.assistant.open"].tap()
+    app.buttons["clawdad.assistant.return"].tap()
+    return app
+  }
+
   func testCallingIsExplicitAndSpokenCommandSettingsAreRemoved() {
     let app = XCUIApplication()
     app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-assistant-test", "--clawdad-assistant-reset-draft"]

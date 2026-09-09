@@ -27,8 +27,23 @@ final class MobileAssistantController: ObservableObject {
   @Published private(set) var waitForSend: Bool
   @Published private(set) var microphoneNotice = ""
   @Published private(set) var changingMicrophone = false
+  @Published private(set) var transcriptionReview: AssistantTranscriptionReview = .listening
+  @Published private(set) var transcriptionEditText = ""
+  @Published private(set) var transcriptionClearPresented = false
+  @Published private(set) var transcriptionCapturePaused = false
+  private var clearTranscriptionTurn: AssistantVoiceTurn?
+  private var reviewBeforeClear = AssistantTranscriptionReview.held
+  private var transcriptionEdited = false
+  private var acceptingReviewFlush = false
+  private var voiceWorker = UUID()
+  private var transcribingTurn: AssistantVoiceTurn?
+  var canReviewTranscription: Bool { voiceActive && draftTurn != nil && !replyAudioActive && clearTranscriptionTurn == nil }
   var muteStatus: String { "Muted · microphone off" }
-  var callStatus: String { muted ? muteStatus : status }
+  var callStatus: String {
+    if transcriptionReview != .listening { return transcriptionReview == .editing ? "Editing transcription · Held" : "Transcription held" }
+    if transcriptionCapturePaused { return "Microphone paused" }
+    return muted ? muteStatus : status
+  }
   var automaticTurnInterval: TimeInterval { Double(automaticSendDelay) / 1_000_000_000 }
   var chatSendFinishesVoice: Bool { chatDraft.value.isEmpty && canSendVoice }
   var canSendChatInput: Bool {
@@ -94,7 +109,7 @@ final class MobileAssistantController: ObservableObject {
       }
     }
     audio.onSpeechStarted = { [weak self] in
-      guard let self, voiceActive, !muted, !replyAudioActive else { return }
+      guard let self, voiceActive, !muted, !replyAudioActive, !transcriptionCapturePaused else { return }
       let turn = currentVoiceTurn()
       turn.ending.speechStarted(at: ProcessInfo.processInfo.systemUptime)
       scheduleVoiceSend(turn)
@@ -105,15 +120,21 @@ final class MobileAssistantController: ObservableObject {
     }
     audio.onInputLevel = { [weak self] level in
       guard let self, abs(inputLevel - level) >= 0.03 else { return }
-      inputLevel = muted || replyAudioActive ? 0 : level
+      inputLevel = muted || replyAudioActive || transcriptionCapturePaused ? 0 : level
     }
     audio.onCaptureRecovery = { [weak self] recovering in
-      guard let self, voiceActive, !replyAudioActive else { return }
+      guard let self, voiceActive, !replyAudioActive, !transcriptionCapturePaused else { return }
       if recovering { status = "Reconnecting microphone…" }
       else if status == "Reconnecting microphone…" { status = muted ? muteStatus : "Listening…" }
     }
     audio.onCaptureFailure = { [weak self] failure in
       guard let self, voiceActive else { return }
+      if transcriptionReview != .listening {
+        muted = true
+        try? audio.muteCapture(finishingUtterance: false)
+        microphoneNotice = failure.localizedDescription
+        return
+      }
       // A hardware interruption pauses capture, not the connected conversation.
       // Preserve already displayed, unsent words for explicit review. Never
       // retain a turn whose delivery may already have been accepted.
@@ -430,14 +451,16 @@ final class MobileAssistantController: ObservableObject {
           status = "Speaking…"
         }
         if ProcessInfo.processInfo.arguments.contains("--clawdad-assistant-transcript-test") {
-          _ = currentVoiceTurn()
+          let turn = currentVoiceTurn()
+          turn.previewText = "Could you check"
+          updateVoiceDraft()
           canSendVoice = true
           hearingSpeech = true
-          liveTranscript = "Could you check"
           Task { [weak self] in
             try? await Task.sleep(nanoseconds: 3_000_000_000)
-            guard let self, voiceEpoch == attempt, voiceActive else { return }
-            liveTranscript = "Could you check which Terminal tab is working?"
+            guard let self, voiceEpoch == attempt, voiceActive, !transcriptionCapturePaused, draftTurn === turn else { return }
+            turn.previewText = "Could you check which Terminal tab is working?"
+            updateVoiceDraft()
           }
         }
         return
@@ -470,6 +493,11 @@ final class MobileAssistantController: ObservableObject {
   }
   func toggleMute() {
     guard voiceActive else { return }
+    if transcriptionCapturePaused {
+      guard clearTranscriptionTurn == nil else { return }
+      Task { await resumeTranscriptionListening(unmute: true) }
+      return
+    }
     if muted { Task { await unmuteMicrophone() } }
     else { muteMicrophone() }
   }
@@ -483,6 +511,8 @@ final class MobileAssistantController: ObservableObject {
     if let id = pendingMessage?.id, voiceTurns.contains(where: { $0.id == id }) { pendingMessage = nil }
     transcribing?.cancel()
     transcribing = nil
+    voiceWorker = UUID()
+    transcribingTurn = nil
     automaticSend?.cancel()
     automaticSend = nil
     cancelTranscriptionPreview()
@@ -494,7 +524,166 @@ final class MobileAssistantController: ObservableObject {
     hearingSpeech = false
     transcribingSpeech = false
     inputLevel = 0
+    resetTranscriptionReview()
     audio.resetUtterance()
+  }
+  private func resetTranscriptionReview() {
+    transcriptionReview = .listening
+    transcriptionEditText = ""
+    transcriptionEdited = false
+    transcriptionClearPresented = false
+    clearTranscriptionTurn = nil
+    transcriptionCapturePaused = false
+  }
+  /// Hold synchronously before closing capture. The native cutoff drains only
+  /// pre-tap samples; later callbacks cannot extend this reviewed turn.
+  private func holdTranscription() -> Bool {
+    guard canReviewTranscription else { return false }
+    transcriptionReview = .held
+    automaticSend?.cancel(); automaticSend = nil
+    let wasPaused = transcriptionCapturePaused
+    let needsCutoff = !wasPaused || changingMicrophone
+    transcriptionCapturePaused = true
+    microphoneChange = UUID()
+    changingMicrophone = false
+    if needsCutoff {
+      acceptingReviewFlush = !wasPaused
+      defer { acceptingReviewFlush = false }
+      // A new hold also cancels an unfinished Resume, at the native graph as
+      // well as the controller. It must not reopen capture behind the editor.
+      do { try audio.muteCapture(finishingUtterance: !wasPaused && !muted) }
+      catch { muted = true; microphoneNotice = "The microphone is off. Your transcription is held for review." }
+    }
+    cancelTranscriptionPreview()
+    hearingSpeech = false
+    inputLevel = 0
+    updateVoiceDraft()
+    return true
+  }
+  func editTranscription() {
+    guard holdTranscription() else { return }
+    transcriptionReview = .editing
+    transcriptionEdited = false
+    transcriptionEditText = draftTurn?.displayText ?? ""
+    updateVoiceDraft()
+  }
+  /// Once Cody edits (or saves), his complete text is authoritative. Cancel
+  /// only this draft's STT, preserving earlier submitted turns and their IDs.
+  func updateTranscriptionEdit(_ text: String) {
+    guard transcriptionReview == .editing, clearTranscriptionTurn == nil, let turn = draftTurn else { return }
+    transcriptionEdited = true
+    transcriptionEditText = text
+    cancelPendingTranscription(turn)
+    turn.parts = [text]
+    turn.previewText = ""
+    updateVoiceDraft()
+  }
+  func saveTranscriptionEdits() {
+    guard transcriptionReview == .editing, clearTranscriptionTurn == nil else { return }
+    updateTranscriptionEdit(transcriptionEditText)
+    transcriptionReview = .held
+    updateVoiceDraft()
+  }
+  func requestClearTranscription() {
+    let previous = transcriptionReview
+    guard holdTranscription(), let turn = draftTurn else { return }
+    reviewBeforeClear = previous == .editing ? .editing : .held
+    clearTranscriptionTurn = turn
+    transcriptionClearPresented = true
+    updateVoiceDraft()
+  }
+  // SwiftUI dismisses an alert binding before or after its action. Dismissal
+  // alone must never release the hold or invalidate the pending Clear target.
+  func hideTranscriptionClearPrompt() { transcriptionClearPresented = false }
+  func cancelClearTranscription() {
+    guard clearTranscriptionTurn != nil else { return }
+    clearTranscriptionTurn = nil
+    transcriptionClearPresented = false
+    transcriptionReview = reviewBeforeClear
+    updateVoiceDraft()
+  }
+  func clearTranscription() {
+    guard let turn = clearTranscriptionTurn, draftTurn === turn, !turn.sealed, turn.submittedAt == nil else { return }
+    cancelPendingTranscription(turn)
+    voiceTurns.removeAll { $0 === turn }
+    draftTurn = nil
+    automaticSend?.cancel(); automaticSend = nil
+    audio.resetUtterance()
+    clearTranscriptionTurn = nil
+    transcriptionClearPresented = false
+    transcriptionEditText = ""
+    transcriptionEdited = false
+    transcriptionReview = .listening
+    liveTranscript = ""
+    updateVoiceDraft()
+    processVoiceQueue()
+    Task { await resumeTranscriptionCapture() }
+  }
+  func leaveTranscriptionEditor() {
+    if clearTranscriptionTurn != nil { cancelClearTranscription() }
+    saveTranscriptionEdits()
+  }
+  private func cancelPendingTranscription(_ turn: AssistantVoiceTurn) {
+    cancelTranscriptionPreview()
+    voiceQueue.removeAll { $0.turn === turn }
+    turn.pendingSegments = 0
+    if transcribingTurn === turn {
+      voiceWorker = UUID()
+      transcribing?.cancel(); transcribing = nil; transcribingTurn = nil
+      processVoiceQueue()
+    }
+  }
+  func resumeTranscriptionListening(unmute: Bool = false) async {
+    guard voiceActive, clearTranscriptionTurn == nil, !changingMicrophone else { return }
+    saveTranscriptionEdits()
+    transcriptionReview = .listening
+    transcriptionEdited = false
+    if unmute && muted { transcriptionCapturePaused = true }
+    // A reviewed draft gets a fresh normal pause interval. It never inherits
+    // an expired deadline from the editor or confirmation dialog.
+    if let turn = draftTurn {
+      turn.ending = AssistantTurnEnding()
+      let now = ProcessInfo.processInfo.systemUptime
+      turn.ending.transcript(turn.text, capturedAt: now, receivedAt: now)
+    }
+    await resumeTranscriptionCapture(unmute: unmute)
+    if let draftTurn { scheduleVoiceSend(draftTurn) }
+    updateVoiceDraft()
+  }
+  private func resumeTranscriptionCapture(unmute: Bool = false) async {
+    guard transcriptionCapturePaused, voiceActive, !changingMicrophone, transcriptionReview == .listening,
+      clearTranscriptionTurn == nil else { return }
+    if muted && !unmute {
+      transcriptionCapturePaused = false
+      updateVoiceDraft()
+      return
+    }
+    #if DEBUG
+      if preview != nil {
+        transcriptionCapturePaused = false
+        muted = false
+        updateVoiceDraft()
+        return
+      }
+    #endif
+    let change = UUID(), call = voiceEpoch
+    microphoneChange = change
+    changingMicrophone = true
+    defer { if microphoneChange == change { changingMicrophone = false } }
+    do {
+      try await audio.unmuteCapture()
+      guard microphoneChange == change, voiceEpoch == call, voiceActive else { return }
+      transcriptionCapturePaused = false
+      muted = false
+      microphoneNotice = ""
+    } catch {
+      guard microphoneChange == change, voiceEpoch == call else { return }
+      muted = true
+      transcriptionCapturePaused = false
+      if draftTurn != nil { transcriptionReview = .held }
+      microphoneNotice = "The microphone could not resume. Your words are held; you can still Send or retry the microphone."
+    }
+    updateVoiceDraft()
   }
   func muteMicrophone(confirm: Bool = true, preservingTurn: Bool = true) {
     guard voiceActive else { return }
@@ -521,6 +710,10 @@ final class MobileAssistantController: ObservableObject {
     updateVoiceDraft()
   }
   func unmuteMicrophone() async {
+    if transcriptionReview != .listening {
+      await resumeTranscriptionListening(unmute: true)
+      return
+    }
     guard voiceActive, muted, !changingMicrophone, foreground else { return }
     let change = UUID()
     microphoneChange = change
@@ -573,6 +766,7 @@ final class MobileAssistantController: ObservableObject {
     }
   }
   func endVoice() {
+    if transcriptionReview != .listening { preserveVoiceForReview() }
     microphoneChange = UUID()
     inputEpoch = UUID()
     changingMicrophone = false
@@ -585,6 +779,8 @@ final class MobileAssistantController: ObservableObject {
     interruptSpeech()
     transcribing?.cancel()
     transcribing = nil
+    voiceWorker = UUID()
+    transcribingTurn = nil
     voiceQueue = []
     voiceTurns = []
     deliveredVoiceTurns = [:]
@@ -596,6 +792,7 @@ final class MobileAssistantController: ObservableObject {
     liveTranscript = ""
     hearingSpeech = false
     transcribingSpeech = false
+    resetTranscriptionReview()
     audio.stop()
     status = "Conversation saved"
   }
@@ -622,19 +819,26 @@ final class MobileAssistantController: ObservableObject {
     updateVoiceDraft()
   }
   func sendVoiceNow() {
-    guard voiceActive, !replyAudioActive, draftTurn != nil else { return }
+    guard canSendVoice, clearTranscriptionTurn == nil else { return }
+    saveTranscriptionEdits()
     // This callback synchronously appends the final recorded samples before the
     // turn is sealed. STT may still be running; Send never submits a preview.
     audio.finishUtterance()
     hearingSpeech = false
     if let draftTurn { sealVoiceTurn(draftTurn, manual: true) }
+    transcriptionReview = .listening
+    transcriptionEditText = ""
+    transcriptionEdited = false
+    Task { await resumeTranscriptionCapture() }
   }
   private func scheduleVoiceSend(_ turn: AssistantVoiceTurn) {
-    guard !waitForSend, automaticSend == nil else { return }
+    guard !waitForSend, automaticSend == nil, !transcriptionCapturePaused, transcriptionReview == .listening,
+      clearTranscriptionTurn == nil else { return }
     let epoch = voiceEpoch
     automaticSend = Task { [weak self] in
       while !Task.isCancelled {
-        guard let self, voiceEpoch == epoch, draftTurn === turn, !waitForSend else { return }
+        guard let self, voiceEpoch == epoch, draftTurn === turn, !waitForSend,
+          !transcriptionCapturePaused, transcriptionReview == .listening, clearTranscriptionTurn == nil else { return }
         let now = ProcessInfo.processInfo.systemUptime
         let active = hearingSpeech && (audio.lastSpeechAt.map { now - $0 < 0.8 } ?? true)
         if turn.ending.shouldFinish(at: now, pause: Double(automaticSendDelay) / 1_000_000_000,
@@ -661,7 +865,8 @@ final class MobileAssistantController: ObservableObject {
     }
   }
   private func sealVoiceTurn(_ turn: AssistantVoiceTurn, manual: Bool) {
-    guard draftTurn === turn, !turn.sealed else { return }
+    guard draftTurn === turn, !turn.sealed, clearTranscriptionTurn == nil,
+      manual || transcriptionReview == .listening else { return }
     automaticSend?.cancel()
     automaticSend = nil
     cancelTranscriptionPreview()
@@ -675,10 +880,16 @@ final class MobileAssistantController: ObservableObject {
     processVoiceQueue()
   }
   private func updateVoiceDraft() {
-    canSendVoice = voiceActive && !replyAudioActive && draftTurn != nil
+    canSendVoice = voiceActive && !replyAudioActive && draftTurn != nil && clearTranscriptionTurn == nil
+      && (!transcriptionEdited || !(draftTurn?.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true))
     transcribingSpeech = !voiceQueue.isEmpty
     liveTranscript = (draftTurn ?? voiceTurns.last)?.displayText ?? ""
+    if transcriptionReview == .editing, !transcriptionEdited { transcriptionEditText = liveTranscript }
     guard voiceActive, !replyAudioActive else { return }
+    if transcriptionReview != .listening {
+      status = transcriptionReview == .editing ? "Editing transcription · Held" : "Transcription held"
+      return
+    }
     if hearingSpeech { status = "Hearing you…" }
     else if transcribingSpeech { status = voiceTurns.first?.sealed == true ? "Finishing your words…" : "Transcribing…" }
     else if draftTurn != nil { status = waitForSend ? "Think aloud · Tap Send when ready" : "Replying after 2 seconds without new words" }
@@ -687,7 +898,8 @@ final class MobileAssistantController: ObservableObject {
     else { status = muted ? muteStatus : "Listening…" }
   }
   private func transcribe(_ data: Data, final: Bool) {
-    guard voiceActive, !muted, !replyAudioActive else { return }
+    guard voiceActive, !muted, !replyAudioActive,
+      !transcriptionCapturePaused || acceptingReviewFlush else { return }
     guard !data.isEmpty || draftTurn != nil else { return }
     cancelTranscriptionPreview()
     if final { hearingSpeech = false }
@@ -720,17 +932,20 @@ final class MobileAssistantController: ObservableObject {
   private func processVoiceQueue() {
     guard transcribing == nil else { return }
     let epoch = inputEpoch
+    let worker = UUID()
+    voiceWorker = worker
     transcribing = Task { [weak self] in
       guard let self else { return }
       defer {
-        if inputEpoch == epoch {
+        if inputEpoch == epoch, voiceWorker == worker {
           transcribing = nil
+          transcribingTurn = nil
           updateVoiceDraft()
           speakNext()
         }
       }
       // Muting gates capture, not this queue of already accepted public audio.
-      while inputEpoch == epoch, !Task.isCancelled {
+      while inputEpoch == epoch, voiceWorker == worker, !Task.isCancelled {
         if let turn = voiceTurns.first, turn.sealed, turn.pendingSegments == 0 {
           let started = ProcessInfo.processInfo.systemUptime
           let text = turn.text
@@ -771,10 +986,11 @@ final class MobileAssistantController: ObservableObject {
         }
         guard let segment = voiceQueue.first else { break }
         let turn = segment.turn
+        transcribingTurn = turn
         let started = ProcessInfo.processInfo.systemUptime
         do {
           let result = try await connection.request(.transcribe, payload: segment.data)
-          guard !Task.isCancelled, inputEpoch == epoch else { return }
+          guard !Task.isCancelled, inputEpoch == epoch, voiceWorker == worker else { return }
           let value = try JSONDecoder().decode([String: AssistantValue].self, from: result)
           guard value["error"] == nil, let text = value["text"]?.string else {
             throw AssistantProtocolError.invalid
@@ -782,11 +998,27 @@ final class MobileAssistantController: ObservableObject {
           if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !turn.previewText.isEmpty {
             turn.emptyTranscriptions += 1
             if turn.emptyTranscriptions < 2 { throw AssistantProtocolError.invalid }
+            if draftTurn === turn, transcriptionReview != .listening {
+              // Keep the current review surface intact when final STT fails.
+              // Visible words remain correctable, with no automatic delivery.
+              let visible = turn.displayText
+              turn.parts = [visible]
+              turn.previewText = ""
+              turn.pendingSegments = 0
+              voiceQueue.removeAll { $0.turn === turn }
+              transcribingTurn = nil
+              transcriptionEditText = visible
+              transcriptionEdited = true
+              microphoneNotice = "Some words could not be finalized. Check this held transcription before sending."
+              updateVoiceDraft()
+              continue
+            }
             // An empty final result must not erase a visible partial or submit
             // an incomplete thought. Keep it separate for user review; resume
             // normal listening without disconnecting or turning off the mic.
             chatDraft.recoverVoice(turn.displayText, id: turn.id)
             voiceQueue.removeAll { $0.turn === turn }
+            transcribingTurn = nil
             voiceTurns.removeAll { $0 === turn }
             if draftTurn === turn {
               draftTurn = nil
@@ -815,10 +1047,11 @@ final class MobileAssistantController: ObservableObject {
           if let seconds = value["generationSeconds"]?.number { turn.add("modelGenerationMs", seconds * 1000) }
           turn.pendingSegments -= 1
           voiceQueue.removeFirst()
+          transcribingTurn = nil
           turn.metrics["finalAudioToTranscriptMs"] = max(0, (ProcessInfo.processInfo.systemUptime - turn.lastAudioAt) * 1000)
           updateVoiceDraft()
         } catch {
-          guard !Task.isCancelled, inputEpoch == epoch else { return }
+          guard !Task.isCancelled, inputEpoch == epoch, voiceWorker == worker else { return }
           if !replyAudioActive { status = "Waiting for local transcription…" }
           try? await Task.sleep(nanoseconds: 2_000_000_000)
         }
@@ -843,7 +1076,7 @@ final class MobileAssistantController: ObservableObject {
   private func previewTranscription(_ data: Data) {
     // One in-flight provisional request at most. Final STT always replaces it
     // and is the only text eligible for submission to the Assistant.
-    guard voiceActive, !muted, !replyAudioActive, transcribing == nil,
+    guard voiceActive, !muted, !replyAudioActive, !transcriptionCapturePaused, transcribing == nil,
       transcriptionPreview == nil, !data.isEmpty else { return }
     let epoch = previewEpoch
     let call = voiceEpoch
@@ -1005,15 +1238,8 @@ struct AssistantView: View {
                 AssistantChatHistory(snapshot: controller.snapshot,
                   watch: { controller.watch(tabId: $0, onWatch: onWatch) },
                   cancel: { controller.perform("cancel", args: ["jobId": .string($0)]) })
-                if controller.hearingSpeech || controller.transcribingSpeech || !controller.liveTranscript.isEmpty {
-                  VStack(alignment: .leading, spacing: 5) {
-                    Text(controller.hearingSpeech ? "You · Speaking" : controller.transcribingSpeech ? "You · Transcribing…" : "You · Draft")
-                      .font(.caption.bold()).foregroundStyle(ClawDadTheme.gold)
-                    Text(controller.liveTranscript.isEmpty ? "Listening…" : controller.liveTranscript)
-                      .textSelection(.enabled)
-                  }.frame(maxWidth: .infinity, alignment: .leading)
-                    .id("live-transcript")
-                    .accessibilityIdentifier("clawdad.assistant.transcript")
+                if controller.hearingSpeech || controller.transcribingSpeech || !controller.liveTranscript.isEmpty || controller.transcriptionReview != .listening {
+                  AssistantVoiceTranscription(controller: controller).id("live-transcript")
                 }
               }.padding()
             }
@@ -1021,7 +1247,7 @@ struct AssistantView: View {
               if let id { withAnimation { proxy.scrollTo(id, anchor: .bottom) } }
             }
             .onChange(of: controller.liveTranscript) { _, text in
-              if !text.isEmpty { proxy.scrollTo("live-transcript", anchor: .bottom) }
+              if !text.isEmpty, controller.transcriptionReview != .editing { proxy.scrollTo("live-transcript", anchor: .bottom) }
             }
             .onAppear {
               if !controller.liveTranscript.isEmpty { proxy.scrollTo("live-transcript", anchor: .bottom) }
@@ -1064,7 +1290,8 @@ struct AssistantView: View {
       .navigationTitle("Assistant").toolbar {
         ToolbarItem(placement: .cancellationAction) {
           Button("Back", systemImage: "chevron.left") {
-            if showingWorkspace { showingWorkspace = false } else { onClose() }
+            if controller.transcriptionReview == .editing { controller.leaveTranscriptionEditor() }
+            else if showingWorkspace { showingWorkspace = false } else { onClose() }
           }.keyboardShortcut(.cancelAction).accessibilityIdentifier(
             "clawdad.assistant.back")
         }
@@ -1076,6 +1303,7 @@ struct AssistantView: View {
         }
       }
       .onAppear { controller.open() }
+      .onDisappear { controller.leaveTranscriptionEditor() }
     }
   }
 }
@@ -1120,13 +1348,14 @@ struct AssistantCallBar: View {
         Button {
           controller.toggleMute()
         } label: {
-          Image(systemName: controller.muted || controller.replyAudioActive ? "mic.slash.fill" : "mic.fill")
+          Image(systemName: controller.muted || controller.replyAudioActive || controller.transcriptionCapturePaused ? "mic.slash.fill" : "mic.fill")
             .font(.system(size: 22)).frame(
             width: 44, height: 44)
             .foregroundStyle(controller.replyAudioActive ? ClawDadTheme.cream.opacity(0.5)
               : controller.inputLevel > 0.15 && !controller.muted ? Color.green : ClawDadTheme.cream)
             .scaleEffect(controller.muted || controller.replyAudioActive ? 1 : 1 + CGFloat(controller.inputLevel) * 0.12)
-        }.disabled(!controller.voiceActive || controller.changingMicrophone).accessibilityLabel(controller.muted ? "Unmute Assistant" : "Mute Assistant")
+        }.disabled(!controller.voiceActive || controller.changingMicrophone || controller.transcriptionClearPresented)
+          .accessibilityLabel(controller.transcriptionCapturePaused ? "Resume listening" : controller.muted ? "Unmute Assistant" : "Mute Assistant")
           .accessibilityIdentifier("clawdad.assistant.mute")
           .accessibilityHint(controller.replyAudioActive ? "Microphone input pauses during the reply. Use Interject to speak now." : "")
         Button {

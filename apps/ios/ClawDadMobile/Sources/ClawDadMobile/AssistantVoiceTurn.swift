@@ -1,5 +1,7 @@
 import Foundation
 
+enum AssistantTranscriptionReview { case listening, editing, held }
+
 /// Recording segments belong to a thought until it is explicitly committed.
 /// A sealed turn keeps its identity through delayed STT and delivery retries.
 @MainActor
