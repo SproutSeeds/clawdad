@@ -29,6 +29,11 @@ final class MobileAssistantController: ObservableObject {
   @Published private(set) var changingMicrophone = false
   var muteStatus: String { "Muted · microphone off" }
   var callStatus: String { muted ? muteStatus : status }
+  var automaticTurnInterval: TimeInterval { Double(automaticSendDelay) / 1_000_000_000 }
+  var chatSendFinishesVoice: Bool { chatDraft.value.isEmpty && canSendVoice }
+  var canSendChatInput: Bool {
+    !sending && !chatDraft.importing && (chatDraft.value.isEmpty ? canSendVoice : connected)
+  }
   private var microphoneChange = UUID()
   private var inputEpoch = UUID()
   private var foreground = true
@@ -316,7 +321,11 @@ final class MobileAssistantController: ObservableObject {
     connection.connect()
   }
   func sendDraft() async {
-    guard !sending, !chatDraft.importing, !chatDraft.value.isEmpty else { return }
+    guard !sending, !chatDraft.importing else { return }
+    if chatDraft.value.isEmpty {
+      if canSendVoice { sendVoiceNow() }
+      return
+    }
     let draft = chatDraft.value, target = scope
     do {
       let images = try draft.images.map { PreparedRemoteImage(upload: $0, data: try chatDraft.bytes($0, scope: target)) }
@@ -1032,18 +1041,6 @@ struct AssistantView: View {
               .disabled(controller.startingVoice)
           }
         }
-        if controller.callVisible {
-          HStack {
-            VStack(alignment: .leading, spacing: 3) {
-              Text("Think aloud").font(.subheadline)
-              Text(controller.waitForSend ? "Keep listening through pauses until you tap Send." : "Automatically send after 2 seconds without new transcribed words.")
-                .font(.caption).foregroundStyle(ClawDadTheme.cream.opacity(0.65))
-            }
-            Spacer(minLength: 12)
-            Toggle("Think aloud", isOn: Binding(get: { controller.waitForSend }, set: { controller.setWaitForSend($0) }))
-              .labelsHidden().accessibilityIdentifier("clawdad.assistant.think-aloud")
-          }.padding(.horizontal)
-        }
         if !controller.callVisible, !controller.microphoneNotice.isEmpty {
           Text(controller.microphoneNotice).font(.caption).foregroundStyle(ClawDadTheme.gold).padding(.horizontal)
             .accessibilityIdentifier("clawdad.assistant.microphone-notice")
@@ -1085,6 +1082,7 @@ struct AssistantView: View {
 
 struct AssistantCallBar: View {
   @ObservedObject var controller: MobileAssistantController
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
   var onOpen: (() -> Void)? = nil
   var body: some View {
     if controller.callVisible {
@@ -1092,6 +1090,10 @@ struct AssistantCallBar: View {
       if !controller.microphoneNotice.isEmpty {
         Text(controller.microphoneNotice).font(.caption2).padding(.horizontal, 10).padding(.top, 4)
           .accessibilityIdentifier("clawdad.assistant.microphone-notice")
+      }
+      if dynamicTypeSize.isAccessibilitySize {
+        Text(controller.callStatus).font(.caption).frame(maxWidth: .infinity, alignment: .leading)
+          .padding(.horizontal, 10).padding(.top, 4)
       }
       HStack(spacing: 6) {
         if let onOpen {
@@ -1102,28 +1104,24 @@ struct AssistantCallBar: View {
             .accessibilityHint("Shows your voice transcriptions and the Assistant's replies without ending the call")
             .accessibilityIdentifier("clawdad.assistant.return")
         }
-        Text(controller.callStatus).font(.caption).lineLimit(2)
-          .frame(maxWidth: .infinity, alignment: .leading)
+        if dynamicTypeSize.isAccessibilitySize { Spacer(minLength: 0) }
+        else {
+          Text(controller.callStatus).font(.caption).lineLimit(2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
         if controller.replyAudioActive {
           Button { controller.interject() } label: {
-            Label("Interject", systemImage: "stop.circle.fill")
-              .font(.caption.bold()).frame(minHeight: 44)
+            Image(systemName: "stop.circle.fill").font(.system(size: 24)).frame(width: 44, height: 44)
           }.accessibilityLabel("Interject")
             .accessibilityHint("Stops the spoken reply and resumes listening to you")
             .accessibilityIdentifier("clawdad.assistant.interject")
-        } else if controller.voiceActive {
-          Button { controller.sendVoiceNow() } label: {
-            Image(systemName: "arrow.up.circle.fill")
-              .font(.system(size: 28)).frame(width: 44, height: 44)
-          }.disabled(!controller.canSendVoice)
-            .accessibilityLabel("Send now")
-            .accessibilityHint("Finishes this thought and sends it after transcription")
-            .accessibilityIdentifier("clawdad.assistant.send-now")
         }
+        AssistantThinkAloudButton(controller: controller)
         Button {
           controller.toggleMute()
         } label: {
-          Image(systemName: controller.muted || controller.replyAudioActive ? "mic.slash.fill" : "mic.fill").frame(
+          Image(systemName: controller.muted || controller.replyAudioActive ? "mic.slash.fill" : "mic.fill")
+            .font(.system(size: 22)).frame(
             width: 44, height: 44)
             .foregroundStyle(controller.replyAudioActive ? ClawDadTheme.cream.opacity(0.5)
               : controller.inputLevel > 0.15 && !controller.muted ? Color.green : ClawDadTheme.cream)
@@ -1134,11 +1132,40 @@ struct AssistantCallBar: View {
         Button {
           controller.endVoice()
         } label: {
-          Image(systemName: "phone.down.fill").foregroundStyle(.red).frame(width: 44, height: 44)
+          Image(systemName: "phone.down.fill").font(.system(size: 22)).foregroundStyle(.red).frame(width: 44, height: 44)
         }.accessibilityLabel("End voice conversation")
       }.padding(.horizontal, 10).background(Color.black.opacity(0.96)).foregroundStyle(
         ClawDadTheme.cream)
       }.background(Color.black.opacity(0.96)).foregroundStyle(ClawDadTheme.cream)
     }
+  }
+}
+
+struct AssistantThinkAloudButton: View {
+  @ObservedObject var controller: MobileAssistantController
+  var body: some View {
+    Button { controller.setWaitForSend(!controller.waitForSend) } label: {
+      Image(systemName: "infinity").font(.system(size: 22, weight: .semibold))
+        .frame(width: 44, height: 44)
+        .background(controller.waitForSend ? ClawDadTheme.gold.opacity(0.24) : Color.clear, in: Circle())
+        .overlay { Circle().stroke(controller.waitForSend ? ClawDadTheme.gold : ClawDadTheme.cream.opacity(0.45), lineWidth: controller.waitForSend ? 2 : 1) }
+        .overlay(alignment: .topTrailing) {
+          if controller.waitForSend {
+            Image(systemName: "checkmark.circle.fill").font(.system(size: 12, weight: .bold))
+              .symbolRenderingMode(.palette).foregroundStyle(.black, ClawDadTheme.gold)
+              .accessibilityHidden(true)
+          }
+        }
+        .foregroundStyle(controller.waitForSend ? ClawDadTheme.gold : ClawDadTheme.cream.opacity(0.7))
+        .contentShape(Circle())
+    }.buttonStyle(.plain).disabled(!controller.voiceActive)
+      .accessibilityLabel("Think aloud")
+      .accessibilityValue(controller.waitForSend ? "On" : "Off")
+      .accessibilityAddTraits(controller.waitForSend ? .isSelected : [])
+      .accessibilityHint("Holds your speaking turn until you send it from Assistant messages. Tap again for automatic turn ending.")
+      .accessibilityIdentifier("clawdad.assistant.think-aloud")
+      #if os(iOS)
+      .hoverEffect(.highlight)
+      #endif
   }
 }

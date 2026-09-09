@@ -146,6 +146,53 @@ final class AssistantChatTests: XCTestCase {
     XCTAssertTrue(store.value.isEmpty)
     controller.stop()
   }
+  func testChatSendFinishesHeldVoiceWhileMutedAndCannotSubmitItTwice() async throws {
+    let (_, store) = try fixture(), audio = AssistantTestAudio(), transport = AssistantTestTransport()
+    let controller = MobileAssistantController(connection: transport, audio: audio, defaults: nil, chatDraft: store)
+    defer { controller.stop() }
+    controller.setWaitForSend(true)
+    transport.transcribe = { _ in "A complete held thought" }
+    await controller.startVoice()
+    audio.onUtterance?(Data([1]), true)
+    for _ in 0..<200 where controller.liveTranscript.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
+    controller.toggleMute()
+    XCTAssertTrue(controller.muted)
+    XCTAssertTrue(controller.canSendChatInput)
+    XCTAssertTrue(controller.chatSendFinishesVoice)
+    XCTAssertTrue(transport.sentTexts.isEmpty)
+    await controller.sendDraft(); await controller.sendDraft()
+    for _ in 0..<200 where transport.sentTexts.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
+    XCTAssertEqual(transport.sentTexts, ["A complete held thought"])
+    XCTAssertTrue(controller.voiceActive)
+    XCTAssertTrue(controller.muted)
+    XCTAssertFalse(controller.canSendChatInput)
+    XCTAssertTrue(store.value.isEmpty)
+  }
+  func testChatSendKeepsTypedImageMessageSeparateFromHeldVoice() async throws {
+    let (_, store) = try fixture(), audio = AssistantTestAudio(), transport = AssistantTestTransport()
+    let image = try RemoteImagePreparation.prepare(png)
+    transport.uploadHandler = { _ in
+      try JSONSerialization.data(withJSONObject: ["uploadId": image.id, "offset": image.data.count, "complete": true])
+    }
+    let controller = MobileAssistantController(connection: transport, audio: audio, defaults: nil, chatDraft: store)
+    defer { controller.stop() }
+    controller.setWaitForSend(true)
+    transport.transcribe = { _ in "Held spoken words" }
+    await controller.startVoice()
+    audio.onUtterance?(Data([1]), true)
+    for _ in 0..<200 where controller.liveTranscript.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
+    controller.toggleMute()
+    try store.add([image], to: "")
+    XCTAssertFalse(controller.chatSendFinishesVoice, "An image-only draft takes priority over held voice")
+    await controller.sendDraft()
+    XCTAssertEqual(transport.sentTexts, [""])
+    XCTAssertEqual(transport.sentImages.count, 1)
+    XCTAssertEqual(controller.liveTranscript, "Held spoken words")
+    XCTAssertTrue(controller.chatSendFinishesVoice)
+    await controller.sendDraft()
+    for _ in 0..<200 where transport.sentTexts.count < 2 { try await Task.sleep(for: .milliseconds(5)) }
+    XCTAssertEqual(transport.sentTexts, ["", "Held spoken words"])
+  }
   func testDurableReceiptConfirmsMessagesOutsideRecentHistoryAndMissingReceiptsKeepDraft() async throws {
     let (_, store) = try fixture()
     let transport = AssistantTestTransport()

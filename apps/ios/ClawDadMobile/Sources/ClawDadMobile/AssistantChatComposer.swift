@@ -63,8 +63,11 @@ struct AssistantChatComposer: View {
         Button { Task { await controller.sendDraft() } } label: {
           if controller.sending { ProgressView().frame(width: 44, height: 44) }
           else { Image(systemName: "arrow.up.circle.fill").font(.system(size: 32)).frame(width: 44, height: 44) }
-        }.disabled(!controller.connected || controller.sending || draft.importing || draft.value.isEmpty)
-          .accessibilityLabel("Send to Assistant")
+        }.disabled(!controller.canSendChatInput)
+          .accessibilityLabel(controller.chatSendFinishesVoice ? "Send voice turn" : "Send to Assistant")
+          .accessibilityHint(controller.chatSendFinishesVoice
+            ? "Finishes the held speaking turn, including while muted, after final transcription"
+            : "Sends the typed message and attached images. A held voice turn stays separate.")
           .accessibilityIdentifier("clawdad.assistant.send-chat")
       }
       if !draft.value.isEmpty {

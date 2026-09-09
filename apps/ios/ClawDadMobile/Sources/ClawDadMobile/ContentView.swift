@@ -189,7 +189,7 @@ struct ContentView: View {
       .clawDadNavigationHidden()
       .safeAreaInset(edge: .bottom, spacing: 0) { ReadAloudBar(reader: session.readAloud) }
       .safeAreaInset(edge: .bottom, spacing: 0) {
-        if !showingRemoteAssist, !showingAssistant {
+        if !showingRemoteAssist, !showingAssistant, !showingSettings {
           AssistantCallBar(controller: assistant) { showingAssistant = true }
         }
       }
@@ -205,7 +205,7 @@ struct ContentView: View {
         })
       }
       .sheet(isPresented: $showingSettings) {
-        SettingsView(openScanner: {
+        SettingsView(assistant: assistant, openScanner: {
           showingSettings = false
           showingScanner = true
         })
@@ -3224,6 +3224,7 @@ struct SettingsView: View {
   @Environment(\.dismiss) private var dismiss
   @State private var showingAdvanced = false
   @State private var showingForgetPairingConfirm = false
+  @ObservedObject var assistant: MobileAssistantController
   var openScanner: () -> Void
 
   private var connectionTitle: String {
@@ -3279,6 +3280,17 @@ struct SettingsView: View {
 
         ScrollView {
           VStack(spacing: 14) {
+            ClawDadPanel {
+              NavigationLink {
+                RemoteAssistIconGlossary(assistant: assistant)
+              } label: {
+                HStack {
+                  Label("Icon glossary", systemImage: "square.grid.2x2")
+                  Spacer()
+                  Image(systemName: "chevron.right").accessibilityHidden(true)
+                }.frame(minHeight: 48).contentShape(Rectangle())
+              }.buttonStyle(.plain).accessibilityIdentifier("clawdad.settings.icon-glossary")
+            }
             VoiceSettingsPanel()
             NotificationSettingsPanel()
             ClawDadPanel {

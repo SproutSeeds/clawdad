@@ -228,43 +228,118 @@ final class AssistantUITests: XCTestCase {
     XCTAssertTrue(app.buttons["clawdad.assistant.return"].exists)
   }
 
-  func testSendNowAndPausePreferenceAreAvailableWithoutLeavingTheCall() {
+  func testInfinityIsSharedAcrossViewsAndChatSendFinishesHeldVoiceWhileMuted() {
     let app = XCUIApplication()
     app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-assistant-test", "--clawdad-assistant-send-test"]
     app.launch()
     XCTAssertTrue(app.buttons["clawdad.assistant.open"].waitForExistence(timeout: 20))
     app.buttons["clawdad.assistant.open"].tap()
-    let send = app.buttons["clawdad.assistant.send-now"]
-    XCTAssertTrue(send.waitForExistence(timeout: 5))
-    XCTAssertTrue(send.isEnabled)
-    let bar = XCTAttachment(screenshot: app.screenshot())
-    bar.name = "Assistant Send now on the call bar"
-    bar.lifetime = .keepAlways
-    add(bar)
+    let thinkAloud = app.buttons["clawdad.assistant.think-aloud"]
+    XCTAssertTrue(thinkAloud.waitForExistence(timeout: 5))
+    XCTAssertEqual(thinkAloud.value as? String, "On")
+    XCTAssertGreaterThanOrEqual(thinkAloud.frame.width, 44)
+    XCTAssertGreaterThanOrEqual(thinkAloud.frame.height, 44)
+    XCTAssertFalse(app.buttons["clawdad.assistant.send-now"].exists)
+    saveScreenshot(app, "Infinity enabled on the persistent call bar")
     app.buttons["clawdad.assistant.return"].tap()
     XCTAssertTrue(app.staticTexts["You · Draft"].waitForExistence(timeout: 5))
-    let thinkAloud = app.switches["clawdad.assistant.think-aloud"]
-    XCTAssertTrue(thinkAloud.waitForExistence(timeout: 3))
-    XCTAssertEqual(thinkAloud.value as? String, "1")
-    XCTAssertTrue(app.staticTexts["Keep listening through pauses until you tap Send."].exists)
-    let draft = XCTAttachment(screenshot: app.screenshot())
-    draft.name = "Think aloud retains the speaking turn until Send"
-    draft.lifetime = .keepAlways
-    add(draft)
+    XCTAssertEqual(thinkAloud.value as? String, "On")
+    XCTAssertFalse(app.switches["clawdad.assistant.think-aloud"].exists)
+    XCTAssertFalse(app.staticTexts["Think aloud"].exists)
+    XCTAssertFalse(app.staticTexts["Keep listening through pauses until you tap Send."].exists)
     app.buttons["clawdad.assistant.back"].tap()
     app.buttons["Mute Assistant"].tap()
     XCTAssertTrue(app.buttons["Unmute Assistant"].waitForExistence(timeout: 3))
-    XCTAssertTrue(send.isEnabled, "The retained Think aloud turn can be sent while the microphone is off")
-    send.tap()
     app.buttons["clawdad.assistant.return"].tap()
+    let send = app.buttons["clawdad.assistant.send-chat"]
+    XCTAssertTrue(send.isEnabled, "The retained Think aloud turn can be sent while the microphone is off")
+    XCTAssertEqual(send.label, "Send voice turn")
+    send.tap()
     XCTAssertTrue(app.staticTexts["You"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.staticTexts["Please check the second Terminal tab."].exists)
     XCTAssertFalse(app.staticTexts["You · Draft"].exists)
     XCTAssertFalse(send.isEnabled)
     // Leave the fixture's persisted preference in the default mode.
     thinkAloud.tap()
-    XCTAssertEqual(thinkAloud.value as? String, "0")
-    XCTAssertTrue(app.staticTexts["Automatically send after 2 seconds without new transcribed words."].exists)
+    XCTAssertEqual(thinkAloud.value as? String, "Off")
+    app.buttons["clawdad.assistant.back"].tap()
+    XCTAssertEqual(thinkAloud.value as? String, "Off")
+    saveScreenshot(app, "Infinity off after a held voice turn is sent from messages")
+  }
+
+  func testInfinityAvailableFromTerminalPickerAndCallChat() {
+    let app = XCUIApplication()
+    app.launchArguments = ["--clawdad-app-store-preview", "terminal-reader", "--clawdad-assistant-test", "--clawdad-assistant-reset-draft"]
+    app.launch()
+    XCTAssertTrue(app.buttons["clawdad.remote.assistant"].waitForExistence(timeout: 20))
+    app.buttons["clawdad.remote.assistant"].tap()
+    let infinity = app.buttons["clawdad.assistant.think-aloud"]
+    XCTAssertTrue(infinity.waitForExistence(timeout: 5))
+    if infinity.value as? String == "On" { infinity.tap() }
+    infinity.tap(); XCTAssertEqual(infinity.value as? String, "On")
+    if app.buttons["clawdad.assistant.back"].exists { app.buttons["clawdad.assistant.back"].tap() }
+    XCTAssertEqual(infinity.value as? String, "On")
+    app.buttons["Choose Terminal tab"].tap()
+    XCTAssertTrue(infinity.isHittable)
+    XCTAssertEqual(infinity.value as? String, "On")
+    infinity.tap(); XCTAssertEqual(infinity.value as? String, "Off")
+    app.buttons["clawdad.assistant.return"].tap()
+    XCTAssertTrue(app.buttons["clawdad.assistant.send-chat"].waitForExistence(timeout: 5))
+    XCTAssertEqual(infinity.value as? String, "Off")
+    saveScreenshot(app, "Terminal and chat share the same Think aloud state")
+  }
+
+  func testIconGlossaryNavigationAndActualTurnInterval() { checkIconGlossary(largeText: false) }
+  func testIconGlossaryAndCallControlsAtAccessibilityTextSize() { checkIconGlossary(largeText: true) }
+  private func checkIconGlossary(largeText: Bool) {
+    let app = XCUIApplication()
+    app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-assistant-test", "--clawdad-assistant-reset-draft"]
+    if largeText { app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"] }
+    app.launch()
+    XCTAssertTrue(app.buttons["clawdad.assistant.open"].waitForExistence(timeout: 20))
+    app.buttons["clawdad.assistant.open"].tap()
+    let infinity = app.buttons["clawdad.assistant.think-aloud"]
+    XCTAssertTrue(infinity.waitForExistence(timeout: 5))
+    XCTAssertTrue(infinity.isHittable)
+    XCTAssertGreaterThanOrEqual(infinity.frame.width, 44)
+    XCTAssertGreaterThanOrEqual(infinity.frame.height, 44)
+    app.buttons["Settings"].tap()
+    let glossary = app.buttons["clawdad.settings.icon-glossary"]
+    for _ in 0..<18 where !glossary.isHittable { app.swipeUp() }
+    XCTAssertTrue(glossary.isHittable, app.debugDescription)
+    glossary.tap()
+    XCTAssertTrue(app.buttons["clawdad.settings.icon-glossary.back"].waitForExistence(timeout: 5))
+    let timing = app.staticTexts["clawdad.glossary.turn-timing"]
+    for _ in 0..<8 where !timing.isHittable { app.swipeUp() }
+    XCTAssertTrue(timing.label.contains("2 seconds without new transcribed words"))
+    XCTAssertTrue(infinity.isHittable, "Call control remains available inside Settings and its glossary")
+    saveScreenshot(app, largeText ? "Glossary and call controls at largest accessibility text size" : "Icon glossary with actual two-second interval")
+    app.buttons["clawdad.settings.icon-glossary.back"].tap()
+    XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
+    app.buttons["Done"].tap()
+    XCTAssertTrue(infinity.isHittable)
+  }
+
+  func testImageOnlyDraftSurvivesFailedSendAndReopening() {
+    let app = XCUIApplication()
+    app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-assistant-test", "--clawdad-assistant-reset-draft", "--clawdad-assistant-failed-send"]
+    app.launch()
+    XCTAssertTrue(app.buttons["clawdad.assistant.chat"].waitForExistence(timeout: 20))
+    app.buttons["clawdad.assistant.chat"].tap()
+    selectAssistantPhoto(app)
+    let send = app.buttons["clawdad.assistant.send-chat"]
+    XCTAssertTrue(send.isEnabled)
+    send.tap()
+    XCTAssertTrue(app.staticTexts["clawdad.assistant.error"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["clawdad.assistant.image-preview"].exists)
+    app.buttons["clawdad.assistant.back"].tap()
+    app.buttons["clawdad.assistant.chat"].tap()
+    XCTAssertTrue(app.buttons["clawdad.assistant.image-preview"].waitForExistence(timeout: 5))
+    send.tap()
+    let sent = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.buttons["clawdad.assistant.image-preview"])
+    wait(for: [sent], timeout: 5)
+    XCTAssertFalse(app.staticTexts["clawdad.assistant.error"].exists)
+    saveScreenshot(app, "Image-only message accepted without a caption after a preserved failed draft")
   }
   func testReplyControlsAndMessagesStayAvailableAcrossNavigation() {
     let app = XCUIApplication()

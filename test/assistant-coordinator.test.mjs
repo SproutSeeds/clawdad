@@ -19,6 +19,10 @@ async function fixture(t){
   await fs.writeFile(script,`
     let text='';for await(const part of process.stdin)text+=part;
     const event=value=>process.stdout.write(JSON.stringify(value)+'\\n');
+    // Reproduce the installed CLI's prompt parsing, which upload-only mocks miss.
+    if(!text.trim() && process.argv.at(-1)==='-'){
+      process.stderr.write('No prompt provided via stdin.');process.exit(1);
+    }
     if(text==='failure'){process.stderr.write('private CLI diagnostic');process.exit(1);}
     event({type:'thread.started',thread_id:text==='wrong-session'?'01a07d6d-4359-7361-a94b-8a651ca9858c':'${id}'});
     if(text==='wait'){await new Promise(r=>setTimeout(r,60_000));}
@@ -78,6 +82,32 @@ test('repeated call starts prepare one conversation without spawning or creating
   assert.equal(spawns.length,0);
   assert.equal((await runtime.nativePoll({workerId:'native-1'})).job,null);
   assert.equal((await fs.readdir(root)).some(file=>file.endsWith('.command')),false);
+});
+
+test('image-only fresh and resumed turns use an explicit empty prompt and retain the same conversation',async t=>{
+  const {make,spawns}=await fixture(t),coordinator=make(),parts=[];
+  const images=['/fixture/an image.png'];
+  const first=await coordinator.run({text:'',images,onSession:async()=>{},onMessage:async m=>parts.push(m.text)});
+  assert.equal(first.sessionId,id);
+  assert.deepEqual(spawns[0].args.slice(-4),['--image',images[0],'--','']);
+  await coordinator.run({text:'',images,sessionId:id,onSession:async()=>{},onMessage:async m=>parts.push(m.text)});
+  assert.equal(spawns[1].args[spawns[1].args.indexOf('resume')+1],id);
+  assert.deepEqual(spawns[1].args.slice(-2),['--','']);
+  assert.deepEqual(parts,['Received: ','Finished','Received: ','Finished']);
+  await coordinator.run({text:'What was in that picture?',sessionId:id,onSession:async()=>{},onMessage:async m=>parts.push(m.text)});
+  assert.equal(spawns[2].args.at(-1),'-');
+  assert.equal(spawns[2].args.includes('--image'),false);
+  assert.ok(parts.includes('Received: What was in that picture?'));
+});
+
+test('captioned image turns keep exact text on stdin and whitespace-only captions are accepted',async t=>{
+  const {make,spawns}=await fixture(t),parts=[];
+  for(const text of ['\n\t  ','How about this?\nLiteral `text` $(unchanged)']){
+    await make().run({text,images:['/fixture/image.png'],onSession:async()=>{},onMessage:async m=>parts.push(m.text)});
+    assert.ok(parts.includes(`Received: ${text}`));
+  }
+  assert.deepEqual(spawns[0].args.slice(-2),['--','']);
+  assert.equal(spawns[1].args.at(-1),'-');
 });
 
 test('speech messages wait for the shared inventory and preserve duplicate-directory tab identities',async t=>{
