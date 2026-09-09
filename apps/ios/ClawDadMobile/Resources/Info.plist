@@ -34,8 +34,6 @@
 	<string>ClawDad uses the camera to scan the pairing QR code from your Mac.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>ClawDad uses your microphone for dictation and voice conversations with your Mac assistant.</string>
-	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Optional voice controls recognize mute and unmute commands only on this iPhone. With voice unmute enabled, the microphone stays active while muted for on-device command detection. ClawDad never sends this muted audio to your Mac or saves it.</string>
 	<key>UILaunchScreen</key>
 	<dict>
 		<key>UIColorName</key>

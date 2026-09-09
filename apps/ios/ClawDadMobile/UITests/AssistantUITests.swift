@@ -2,40 +2,30 @@ import XCTest
 
 @MainActor
 final class AssistantUITests: XCTestCase {
-  func testVoicePrivacySettingsExplainOptInAndCloseWithoutStartingACall() {
+  func testCallingIsExplicitAndSpokenCommandSettingsAreRemoved() {
     let app = XCUIApplication()
     app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-assistant-test", "--clawdad-assistant-reset-draft"]
     app.launch()
     XCTAssertTrue(app.buttons["clawdad.assistant.chat"].waitForExistence(timeout: 20))
     app.buttons["clawdad.assistant.chat"].tap()
-    app.buttons["clawdad.assistant.voice-controls"].tap()
-    XCTAssertTrue(app.navigationBars["Voice controls"].waitForExistence(timeout: 5))
-    XCTAssertEqual(app.switches["clawdad.assistant.voice-commands"].value as? String, "0")
-    XCTAssertEqual(app.switches["clawdad.assistant.voice-reactivation"].value as? String, "0")
-    XCTAssertEqual(app.switches["clawdad.assistant.alternate-voice-commands"].value as? String, "0")
-    XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "microphone stays active only for on-device")).firstMatch.exists)
-    saveScreenshot(app, "Voice commands and voice reactivation explicitly off by default")
-    app.buttons["Done"].tap()
+    XCTAssertFalse(app.buttons["clawdad.assistant.voice-controls"].exists)
     XCTAssertTrue(app.buttons["clawdad.assistant.start-voice"].exists)
     XCTAssertFalse(app.buttons["End voice conversation"].exists)
-    app.buttons["clawdad.assistant.back"].tap()
-    XCTAssertTrue(app.buttons["clawdad.assistant.chat"].exists)
+    saveScreenshot(app, "Text chat stays separate from explicit calling without command settings")
   }
 
-  func testVoiceMutedCallHasImmediateFullMicrophoneOffControl() {
+  func testManualMuteClearlyStopsMicrophoneAndKeepsCallConnected() {
     let app = XCUIApplication()
-    app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-assistant-test", "--clawdad-assistant-muted-preview"]
+    app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-assistant-test", "--clawdad-assistant-reset-draft"]
     app.launch()
     XCTAssertTrue(app.buttons["clawdad.assistant.chat"].waitForExistence(timeout: 20))
     app.buttons["clawdad.assistant.chat"].tap()
     app.buttons["clawdad.assistant.start-voice"].tap()
-    XCTAssertTrue(app.staticTexts.matching(identifier: "Muted · voice unmute enabled").firstMatch.waitForExistence(timeout: 5))
-    saveScreenshot(app, "Voice muted call identifies local listening and offers full microphone off")
-    app.buttons["clawdad.assistant.microphone-off"].tap()
+    XCTAssertTrue(app.buttons["clawdad.assistant.mute"].waitForExistence(timeout: 5))
+    app.buttons["clawdad.assistant.mute"].tap()
     XCTAssertTrue(app.staticTexts.matching(identifier: "Muted · microphone off").firstMatch.waitForExistence(timeout: 5))
-    XCTAssertTrue(app.buttons["Unmute Assistant"].exists)
     XCTAssertTrue(app.buttons["End voice conversation"].exists)
-    XCTAssertFalse(app.buttons["clawdad.assistant.microphone-off"].exists)
+    saveScreenshot(app, "Manual mute fully stops capture with the conversation connected")
     app.buttons["End voice conversation"].tap()
     XCTAssertTrue(app.buttons["clawdad.assistant.start-voice"].exists)
   }
@@ -51,7 +41,7 @@ final class AssistantUITests: XCTestCase {
     XCTAssertEqual(userCopy.label, "Copied")
     let composer = app.descendants(matching: .any).matching(identifier: "clawdad.assistant.composer").firstMatch
     composer.tap(); composer.press(forDuration: 1.2)
-    let paste = app.menuItems["Paste"].exists ? app.menuItems["Paste"] : app.buttons["Paste"]
+    let paste = app.menuItems["Paste"].waitForExistence(timeout: 3) ? app.menuItems["Paste"] : app.buttons["Paste"]
     XCTAssertTrue(paste.waitForExistence(timeout: 3), app.debugDescription); paste.tap()
     XCTAssertEqual(composer.value as? String, "Please inspect this request.\nKeep both lines 🦞.")
     app.buttons["clawdad.assistant.back"].tap()
@@ -66,6 +56,27 @@ final class AssistantUITests: XCTestCase {
     XCTAssertEqual(app.staticTexts.matching(identifier: "Repair playback and preserve my draft.").count, 1)
     XCTAssertTrue(app.buttons["clawdad.assistant.copy.result.history-task"].exists)
     saveScreenshot(app, "Readable task result stays with original request and copy preserves draft")
+  }
+  func testRecoveredVoiceSurvivesReopeningAndIsExplicitlyMovedIntoTypedDraft() {
+    let app = XCUIApplication()
+    app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-assistant-test", "--clawdad-assistant-reset-draft", "--clawdad-assistant-recovery-test"]
+    app.launch()
+    XCTAssertTrue(app.buttons["clawdad.assistant.chat"].waitForExistence(timeout: 20))
+    app.buttons["clawdad.assistant.chat"].tap()
+    XCTAssertTrue(app.staticTexts["Unsent voice · Review"].waitForExistence(timeout: 5))
+    app.terminate()
+    app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-assistant-test"]
+    app.launch()
+    XCTAssertTrue(app.buttons["clawdad.assistant.chat"].waitForExistence(timeout: 20))
+    app.buttons["clawdad.assistant.chat"].tap()
+    app.staticTexts["Unsent voice · Review"].tap()
+    XCTAssertTrue(app.buttons["clawdad.assistant.recover-voice"].waitForExistence(timeout: 5))
+    saveScreenshot(app, "Recovered unsent voice offers explicit review after app restart")
+    app.buttons["clawdad.assistant.recover-voice"].tap()
+    let composer = app.descendants(matching: .any).matching(identifier: "clawdad.assistant.composer").firstMatch
+    XCTAssertEqual(composer.value as? String, "A recovered voice message.")
+    XCTAssertFalse(app.staticTexts["Unsent voice · Review"].exists)
+    XCTAssertFalse(app.buttons["End voice conversation"].exists)
   }
   func testGroupedRemoteControlsHaveDistinctLabelsBackNavigationAndExplicitVoice() {
     let app = XCUIApplication()

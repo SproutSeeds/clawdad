@@ -6,7 +6,10 @@ import Foundation
 final class AssistantVoiceTurn {
   let id = UUID().uuidString.lowercased()
   var parts: [String] = []
+  var previewText = ""
+  var displayText: String { (parts + [previewText]).filter { !$0.isEmpty }.joined(separator: " ") }
   var pendingSegments = 0
+  var emptyTranscriptions = 0
   var sealed = false
   var lastAudioAt: TimeInterval = 0
   var endpointAt: TimeInterval?

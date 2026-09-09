@@ -351,6 +351,21 @@ test('clear and replace require an inspected input and preserve exact whitespace
   }
 });
 
+test('whole-draft authorization is explicit and part of the durable edit identity',async t=>{
+  const {runtime}=await fixture(t);
+  const request={action:'terminal.replace',requestId:'whole-draft',tabId:'exact-tab',token:'fresh',
+    expectedText:'[Pasted Content 2400 chars]',allowWholeDraft:true,text:'Exact replacement\nSecond line'};
+  await assert.rejects(runtime.command({...request,allowWholeDraft:'true'},{tool:true}),/explicit/);
+  await runtime.command(request,{tool:true});
+  const {job}=await runtime.nativePoll({workerId:'worker-1'});
+  assert.equal(job.args.allowWholeDraft,true);
+  assert.equal(job.args.expectedText,request.expectedText);
+  await runtime.nativeResult({id:job.id,result:{draftVerified:true,submitted:false,text:request.text}});
+  await runtime.command(request,{tool:true});
+  assert.equal((await runtime.nativePoll({workerId:'worker-1'})).job,null);
+  await assert.rejects(runtime.command({...request,allowWholeDraft:false},{tool:true}),/different action/);
+});
+
 test('draft edits share tab ordering and uncertain edits survive restart without replay',async t=>{
   const {runtime,root,coordinator,tick}=await fixture(t);
   const requests=[{action:'terminal.insert',sessionId:queueSession,requestId:'first',tabId:'tab',text:'Draft'},

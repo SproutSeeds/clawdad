@@ -14,6 +14,21 @@ struct AssistantChatComposer: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
       if !draft.error.isEmpty { Text(draft.error).font(.footnote).foregroundStyle(ClawDadTheme.gold) }
+      ForEach(draft.value.recoveredVoice ?? []) { voice in
+        DisclosureGroup("Unsent voice · Review") {
+          Text("The microphone paused before these words were sent. Check the wording before sending.")
+            .font(.caption).foregroundStyle(.secondary)
+          Text(voice.text).textSelection(.enabled)
+          HStack {
+            Button("Use in message") { draft.useRecoveredVoice(voice.id) }
+              .frame(minHeight: 44)
+              .accessibilityIdentifier("clawdad.assistant.recover-voice")
+            Spacer()
+            Button("Discard", role: .destructive) { draft.discardRecoveredVoice(voice.id) }
+              .frame(minHeight: 44)
+          }.frame(minHeight: 44).disabled(controller.sending)
+        }.font(.footnote)
+      }
       if !draft.value.images.isEmpty {
         ScrollView(.horizontal) {
           HStack(spacing: 12) {

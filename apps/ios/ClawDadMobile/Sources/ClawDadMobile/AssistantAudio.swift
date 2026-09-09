@@ -12,13 +12,10 @@ protocol AssistantAudioIO: AnyObject {
   var onCaptureRecovery: ((Bool) -> Void)? { get set }
   var onCaptureFailure: ((Error) -> Void)? { get set }
   var onPlaybackStarted: (() -> Void)? { get set }
-  var onVoiceCommand: ((AssistantVoiceCommand) -> Void)? { get set }
-  var onVoiceControlFailure: ((AssistantVoiceControlError) -> Void)? { get set }
   var muted: Bool { get set }
   var lastSpeechAt: TimeInterval? { get }
   func start() async throws
-  func configureVoiceCommands(enabled: Bool, alternates: Bool, requestPermission: Bool) async throws
-  func muteCapture(voiceReactivation: Bool) throws
+  func muteCapture() throws
   func unmuteCapture() async throws
   func setReplyActive(_ active: Bool)
   func play(_ data: Data) async throws
@@ -32,15 +29,7 @@ protocol AssistantAudioIO: AnyObject {
 extension AssistantAudioIO {
   var lastSpeechAt: TimeInterval? { nil }
   var onPlaybackStarted: (() -> Void)? { get { nil } set {} }
-  var onVoiceCommand: ((AssistantVoiceCommand) -> Void)? { get { nil } set {} }
-  var onVoiceControlFailure: ((AssistantVoiceControlError) -> Void)? { get { nil } set {} }
-  func configureVoiceCommands(enabled: Bool, alternates: Bool, requestPermission: Bool) async throws {
-    if enabled { throw AssistantVoiceControlError.unavailable }
-  }
-  func muteCapture(voiceReactivation: Bool) throws {
-    muted = true; resetUtterance()
-    if voiceReactivation { throw AssistantVoiceControlError.unavailable }
-  }
+  func muteCapture() throws { muted = true; resetUtterance() }
   func unmuteCapture() async throws { muted = false; resetUtterance() }
   func previewUtterance() {}
 }
@@ -56,16 +45,9 @@ final class AssistantAudio: AssistantAudioIO {
   var onCaptureRecovery: ((Bool) -> Void)?
   var onCaptureFailure: ((Error) -> Void)?
   var onPlaybackStarted: (() -> Void)?
-  var onVoiceCommand: ((AssistantVoiceCommand) -> Void)?
-  var onVoiceControlFailure: ((AssistantVoiceControlError) -> Void)?
-  private let commands: any AssistantCommandRecognizing
-  private var commandsEnabled = false
-  private var alternateCommands = false
-  private var commandsConfiguration = UUID()
   private var boundary = AssistantCaptureBoundary()
   private var captureChange = UUID()
   private var replyActive = false
-  private var commandResumeAt: TimeInterval = 0
   private var microphone = AssistantMicrophoneState()
   var muted: Bool {
     get { microphone.muted }
@@ -74,7 +56,8 @@ final class AssistantAudio: AssistantAudioIO {
   private var engine = AVAudioEngine()
   private let replyAudio = AssistantReplyAudio()
   private var captureMonitor: Task<Void, Never>?
-  private var recoveryAttempts = 0
+  private var recovery = AssistantCaptureRecovery()
+  private let diagnostics = AssistantAudioDiagnostics.deviceLog()
   private var lastMeterAt: TimeInterval = 0
   private var input = AssistantListeningInput(sampleRate: 48000)
   private var owner: UUID?
@@ -82,24 +65,10 @@ final class AssistantAudio: AssistantAudioIO {
   private var tapInstalled = false
   private var startAttempt = UUID()
   private var interruptionObserver: NSObjectProtocol?
+  private var routeObserver: NSObjectProtocol?
 
-  init(commands: any AssistantCommandRecognizing = AssistantOnDeviceCommands()) {
-    self.commands = commands
+  init() {
     replyAudio.onStarted = { [weak self] in self?.onPlaybackStarted?() }
-    commands.onCommand = { [weak self] command in
-      guard let self, commandsEnabled, !replyActive, owner != nil,
-        ProcessInfo.processInfo.systemUptime >= commandResumeAt else { return }
-      switch (boundary.mode, command) {
-      case (.conversation, .mute), (.commandsOnly, .unmute): onVoiceCommand?(command)
-      default: break
-      }
-    }
-    commands.onFailure = { [weak self] in
-      guard let self else { return }
-      commandsEnabled = false
-      try? muteCapture(voiceReactivation: false)
-      onVoiceControlFailure?(.failed)
-    }
     #if os(iOS)
       interruptionObserver = NotificationCenter.default.addObserver(
         forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
@@ -109,9 +78,18 @@ final class AssistantAudio: AssistantAudioIO {
         else { return }
         Task { @MainActor [weak self] in
           guard let self, owner != nil else { return }
-          try? muteCapture(voiceReactivation: false)
+          diagnostics.record(.interrupted)
+          try? muteCapture()
           stopPlayback()
-          onVoiceControlFailure?(.interrupted)
+          onCaptureFailure?(AssistantMicrophoneError.interrupted)
+        }
+      }
+      routeObserver = NotificationCenter.default.addObserver(
+        forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main
+      ) { [weak self] _ in
+        Task { @MainActor [weak self] in
+          guard let self, owner != nil else { return }
+          diagnostics.record(.routeChanged)
         }
       }
     #endif
@@ -135,7 +113,7 @@ final class AssistantAudio: AssistantAudioIO {
       microphone.begin(at: ProcessInfo.processInfo.systemUptime)
       input = AssistantListeningInput(sampleRate: 48000)
       boundary.move(to: .off, at: ProcessInfo.processInfo.systemUptime)
-      recoveryAttempts = 0
+      recovery = AssistantCaptureRecovery()
       for retry in 0..<2 {
         do {
           try configureCapture()
@@ -150,6 +128,7 @@ final class AssistantAudio: AssistantAudioIO {
       }
       monitorCapture(attempt: attempt)
       boundary.move(to: .conversation, at: ProcessInfo.processInfo.systemUptime)
+      diagnostics.record(.started)
     } catch {
       if startAttempt == attempt { stop() }
       throw error
@@ -180,12 +159,7 @@ final class AssistantAudio: AssistantAudioIO {
         microphone.receivedBuffer(at: time)
         let route = boundary.route(capturedAt: capturedAt)
         guard route != .off else { return }
-        if commandsEnabled, !replyActive, capturedAt >= commandResumeAt {
-          commands.consume(values, sampleRate: sampleRate, at: capturedAt, alternates: alternateCommands)
-        }
-        // Recognition can synchronously change the route. Recheck before any
-        // VAD, WAV creation, meter update or callback into remote transcription.
-        guard route == .conversation, boundary.route(capturedAt: capturedAt) == .conversation else { return }
+        guard route == .conversation else { return }
         if time - lastMeterAt >= 0.1 {
           lastMeterAt = time
           let rms = sqrt(values.reduce(0.0) { $0 + ($1.isFinite ? Double($1) * Double($1) : 0) } / Double(values.count))
@@ -222,28 +196,29 @@ final class AssistantAudio: AssistantAudioIO {
       while !Task.isCancelled {
         do { try await Task.sleep(nanoseconds: 500_000_000) } catch { return }
         guard let self, startAttempt == attempt, let owner else { return }
-        guard boundary.mode != .off, microphone.needsRecovery(at: ProcessInfo.processInfo.systemUptime,
-          engineRunning: engine.isRunning) else { continue }
-        if boundary.mode == .commandsOnly {
-          try? muteCapture(voiceReactivation: false)
-          onVoiceControlFailure?(.failed)
-          return
+        guard boundary.mode != .off else { continue }
+        guard microphone.needsRecovery(at: ProcessInfo.processInfo.systemUptime,
+          engineRunning: engine.isRunning) else {
+          recovery.healthy(at: ProcessInfo.processInfo.systemUptime)
+          continue
         }
         // Hardware route changes can stop AVAudioEngine without throwing.
         // Retain recognized speech, rebuild the graph, and bound automatic retries.
         onCaptureRecovery?(true)
+        diagnostics.record(.recoveryStarted)
         finishUtterance()
         tearDownEngine()
         do {
-          guard recoveryAttempts < 2 else { throw AssistantMicrophoneError.noInput }
-          recoveryAttempts += 1
+          guard recovery.begin() else { throw AssistantMicrophoneError.noInput }
           try MobileAudioSession.shared.reactivateConversation(owner)
           try configureCapture()
           try await waitForInput(attempt: attempt)
           onCaptureRecovery?(false)
+          diagnostics.record(.recovered)
         } catch {
           guard startAttempt == attempt, !Task.isCancelled, boundary.mode != .off else { return }
-          stop()
+          try? muteCapture()
+          diagnostics.record(.captureFailed)
           onCaptureFailure?(error)
           return
         }
@@ -257,8 +232,6 @@ final class AssistantAudio: AssistantAudioIO {
   func stopPlayback() { replyAudio.stop() }
   func setReplyActive(_ active: Bool) {
     replyActive = active
-    commandResumeAt = active ? .infinity : ProcessInfo.processInfo.systemUptime + 0.5
-    commands.reset()
     input.setReplyActive(active, at: ProcessInfo.processInfo.systemUptime)
     onInputLevel?(0)
   }
@@ -274,10 +247,8 @@ final class AssistantAudio: AssistantAudioIO {
     }
   }
   func stop() {
+    if owner != nil { diagnostics.record(.stopped) }
     captureChange = UUID()
-    commandsConfiguration = UUID()
-    commandsEnabled = false
-    commands.reset()
     boundary.move(to: .off, at: ProcessInfo.processInfo.systemUptime)
     startAttempt = UUID()
     captureMonitor?.cancel()
@@ -301,35 +272,19 @@ final class AssistantAudio: AssistantAudioIO {
     engine.stop()
   }
 
-  func configureVoiceCommands(enabled: Bool, alternates: Bool, requestPermission: Bool) async throws {
-    let configuration = UUID()
-    commandsConfiguration = configuration
-    commandsEnabled = false
-    commands.reset()
-    alternateCommands = alternates
-    guard enabled else { return }
-    try await commands.prepare(requestPermission: requestPermission)
-    guard configuration == commandsConfiguration else { throw CancellationError() }
-    commandsEnabled = true
-  }
-
-  func muteCapture(voiceReactivation: Bool) throws {
+  func muteCapture() throws {
     captureChange = UUID()
     muted = true
     input.reset()
-    commands.reset()
     onInputLevel?(0)
-    let localOnly = voiceReactivation && commandsEnabled && owner != nil && engine.isRunning
-    boundary.move(to: localOnly ? .commandsOnly : .off, at: ProcessInfo.processInfo.systemUptime)
-    if !localOnly {
-      captureMonitor?.cancel()
-      captureMonitor = nil
-      tearDownEngine()
-      microphone.end()
-      muted = true
-      if let owner { try MobileAudioSession.shared.suspendConversationMicrophone(owner) }
-    }
-    if voiceReactivation && !localOnly { throw AssistantVoiceControlError.unavailable }
+    boundary.move(to: .off, at: ProcessInfo.processInfo.systemUptime)
+    captureMonitor?.cancel()
+    captureMonitor = nil
+    tearDownEngine()
+    microphone.end()
+    muted = true
+    if let owner { try MobileAudioSession.shared.suspendConversationMicrophone(owner) }
+    diagnostics.record(.muted)
   }
 
   func unmuteCapture() async throws {
@@ -337,7 +292,6 @@ final class AssistantAudio: AssistantAudioIO {
     let change = UUID()
     captureChange = change
     // Keep the previous private route until a fresh capture graph is ready.
-    commands.reset()
     do {
       if !engine.isRunning {
         try MobileAudioSession.shared.reactivateConversation(owner)
@@ -346,12 +300,13 @@ final class AssistantAudio: AssistantAudioIO {
       }
       guard captureChange == change else { throw CancellationError() }
       input.reset()
-      commands.reset()
-      boundary.move(to: .conversation, at: ProcessInfo.processInfo.systemUptime)
+        boundary.move(to: .conversation, at: ProcessInfo.processInfo.systemUptime)
       muted = false
+      recovery = AssistantCaptureRecovery()
       monitorCapture(attempt: startAttempt)
+      diagnostics.record(.unmuted)
     } catch {
-      if captureChange == change { try? muteCapture(voiceReactivation: false) }
+      if captureChange == change { try? muteCapture() }
       throw error
     }
   }
@@ -400,9 +355,12 @@ nonisolated func assistantPlaybackCompletion(
 }
 
 enum AssistantMicrophoneError: LocalizedError {
-  case noInput
+  case noInput, interrupted
   var errorDescription: String? {
-    "ClawDad couldn't receive audio from the iPhone microphone. Tap Retry microphone to try again."
+    switch self {
+    case .noInput: "ClawDad couldn't receive microphone audio. Check your audio connection, then tap the microphone button to retry."
+    case .interrupted: "Audio was interrupted. The microphone is off; tap the microphone button when ready."
+    }
   }
 }
 

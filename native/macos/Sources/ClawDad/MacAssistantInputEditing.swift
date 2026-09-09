@@ -1,21 +1,27 @@
 import ApplicationServices
 import Foundation
 
-/// Only a fully readable, ordinary Codex composer can grant an edit token.
-/// Keep its rendered whitespace for the compare-before-edit check. Opaque paste
-/// and image placeholders cannot establish what would be deleted.
-func assistantEditableDraft(_ screen: String) -> String? { assistantEditableDraft(screen, allowQueueFooter: false) }
-
-func assistantEditableDraft(_ screen: String, allowQueueFooter: Bool) -> String? {
-  assistantEditableDraft(screen, allowQueueFooter: allowQueueFooter, allowCollapsedPaste: false)
+/// A native composer observation is separate from authorization to discard an
+/// opaque paste. No retained clipboard payload is used to guess current text.
+struct MacAssistantDraftObservation: Equatable {
+  let text: String?
+  let reasonCode: String
+  let reason: String
+  var requiresWholeDraftAuthorization: Bool { reasonCode == "collapsed_paste" }
 }
 
-func assistantEditableDraft(_ screen: String, allowQueueFooter: Bool, allowCollapsedPaste: Bool) -> String? {
+func assistantObserveDraft(_ screen: String, viewportRows: Int? = nil) -> MacAssistantDraftObservation {
+  func unavailable(_ code: String, _ reason: String) -> MacAssistantDraftObservation {
+    .init(text: nil, reasonCode: code, reason: reason)
+  }
   let lines = screen.components(separatedBy: .newlines)
-  guard let start = lines.lastIndex(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix("›") }),
-    let end = lines.indices.first(where: { $0 > start && assistantComposerFooter(lines[$0], allowQueue: allowQueueFooter) }),
-    lines.dropFirst(end).allSatisfy({ $0.trimmingCharacters(in: .whitespaces).isEmpty || assistantComposerFooter($0, allowQueue: allowQueueFooter) })
-  else { return nil }
+  guard let start = lines.lastIndex(where: { $0.hasPrefix("›") || $0.hasPrefix(" ›") }) else {
+    return unavailable("composer_not_visible", "The Codex composer is not visible. Dismiss overlays or return to its input, then inspect again.")
+  }
+  guard let end = lines.indices.first(where: { $0 > start && assistantComposerFooter(lines[$0], allowQueue: true) }),
+    lines.dropFirst(end).allSatisfy({ $0.trimmingCharacters(in: .whitespaces).isEmpty || assistantComposerFooter($0, allowQueue: true) }) else {
+    return unavailable("unresolved_prompt", "The normal Codex input footer is obscured or a prompt is open. Resolve it in Terminal, then inspect again.")
+  }
   var body = [String(lines[start].trimmingCharacters(in: .whitespaces).dropFirst())]
   if body[0].hasPrefix(" ") { body[0].removeFirst() }
   for line in lines[(start + 1)..<end] {
@@ -24,15 +30,40 @@ func assistantEditableDraft(_ screen: String, allowQueueFooter: Bool, allowColla
     body.append(line.hasPrefix("  ") ? String(line.dropFirst(2)) : line)
   }
   while body.last?.trimmingCharacters(in: .whitespaces).isEmpty == true { body.removeLast() }
-  // A tall/clipped composer cannot prove that the visible text is the whole draft.
-  guard body.count < 8 else { return nil }
   let value = body.joined(separator: "\n")
   let nearby = lines[max(0, start - 2)..<end].joined(separator: "\n")
-  guard value.utf8.count <= 16 * 1024,
-    nearby.range(of: allowCollapsedPaste ? #"\[Image\s*#?\d|[↑↓]"# : #"\[(?:Image\s*#?\d|Pasted (?:Content|content|text))|[↑↓]"#, options: .regularExpression) == nil,
-    !value.contains("›") else { return nil }
-  if ["Ask Codex to do anything", "Ask Codex to do anything.", "Ask anything"].contains(value) { return "" }
-  return value
+  guard nearby.range(of: #"\[Image\s*#?\d"#, options: .regularExpression) == nil else {
+    return unavailable("attachments_present", "This draft has image attachments. They were preserved. Remove them manually before whole-draft text editing.")
+  }
+  guard !value.contains("›"), value.utf8.count <= 16 * 1024 else {
+    return unavailable("ambiguous_composer", "The complete text input could not be identified. Expand or shorten it in Terminal, then inspect again.")
+  }
+  // Read the real TTY dimensions instead of assuming an eight-line editor. A
+  // composer filling the viewport can hide text or attachments; never clear it.
+  if body.count >= 8 && (viewportRows == nil || end - start >= (viewportRows ?? 0) - 6)
+      || nearby.range(of: #"[↑↓]"#, options: .regularExpression) != nil {
+    return unavailable("composer_clipped", "The draft may extend beyond the visible Terminal input. Enlarge the window to show the entire composer, then inspect again. Its text and attachments were preserved.")
+  }
+  if value.range(of: #"\[Pasted (?:Content|content|text)"#, options: .regularExpression) != nil {
+    guard value.range(of: #"\[Pasted (?:Content|content|text) [1-9][0-9]* chars\]"#, options: .regularExpression) != nil else {
+      return unavailable("unknown_paste", "This paste representation is unsupported. Expand it in Terminal before editing.")
+    }
+    return .init(text: value, reasonCode: "collapsed_paste", reason: "This text includes a collapsed paste. expectedText compares its visible representation, not hidden contents. Set allowWholeDraft=true only when Cody explicitly authorizes clearing or replacing the entire draft, including the collapsed text. Attachments remain protected.")
+  }
+  let empty = ["Ask Codex to do anything", "Ask Codex to do anything.", "Ask anything"].contains(value)
+  return .init(text: empty ? "" : value, reasonCode: "rendered_text", reason: "The complete rendered composer is visible. Terminal visual wraps may appear as newlines.")
+}
+
+func assistantEditableDraft(_ screen: String) -> String? { assistantEditableDraft(screen, allowQueueFooter: false) }
+func assistantEditableDraft(_ screen: String, allowQueueFooter: Bool) -> String? {
+  assistantEditableDraft(screen, allowQueueFooter: allowQueueFooter, allowCollapsedPaste: false)
+}
+func assistantEditableDraft(_ screen: String, allowQueueFooter: Bool, allowCollapsedPaste: Bool) -> String? {
+  let view = assistantObserveDraft(screen)
+  guard allowQueueFooter || !screen.components(separatedBy: .newlines).contains(where: {
+    $0.trimmingCharacters(in: .whitespaces).range(of: #"^[a-z+ ⇧←]+ to queue message\b"#, options: .regularExpression) != nil
+  }), allowCollapsedPaste || !view.requiresWholeDraftAuthorization else { return nil }
+  return view.text
 }
 
 private func assistantComposerFooter(_ line: String, allowQueue: Bool) -> Bool {
@@ -52,13 +83,15 @@ func assistantEditableDraftMatches(_ actual: String, expected: String) -> Bool {
 /// failed/uncertain verification never repeats a clear or a paste.
 @MainActor
 func assistantEditVerifiedDraft(expected: String, replacement: String,
+  forceReplacement: Bool = false,
   read: () async throws -> String?, clear: () async -> Bool, insert: (String) async -> Bool,
+  verifyInserted: (() async throws -> Bool)? = nil,
   wait: () async throws -> Void = { try await Task.sleep(nanoseconds: 150_000_000) }
 ) async throws {
   guard try await read() == expected else {
     throw MacAssistantError("The inspected draft changed or is unreadable. It was preserved. Inspect the tab again.")
   }
-  if expected == replacement { return }
+  if expected == replacement && !forceReplacement { return }
   if !expected.isEmpty {
     guard await clear() else { throw MacAssistantError("The draft changed before clearing. Inspect the tab again.") }
     try await verify("")
@@ -72,7 +105,9 @@ func assistantEditVerifiedDraft(expected: String, replacement: String,
   func verify(_ text: String) async throws {
     for attempt in 0..<12 {
       try Task.checkCancellation()
-      if let current = try await read(), assistantEditableDraftMatches(current, expected: text) { return }
+      if !text.isEmpty, let verifyInserted {
+        if try await verifyInserted() { return }
+      } else if let current = try await read(), assistantEditableDraftMatches(current, expected: text) { return }
       if attempt < 11 { try await wait() }
     }
     throw MacAssistantError("The draft edit could not be verified. Inspect the tab before trying again; Enter was not sent.")

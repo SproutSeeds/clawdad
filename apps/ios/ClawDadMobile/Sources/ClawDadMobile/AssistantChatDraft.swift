@@ -3,10 +3,18 @@ import CryptoKit
 import SwiftUI
 import ClawDadRemoteAssistProtocol
 
+struct AssistantRecoveredVoice: Codable, Equatable, Identifiable, Sendable {
+  let id: String
+  let text: String
+}
+
 struct AssistantChatDraft: Codable, Equatable, Sendable {
   var id = UUID().uuidString.lowercased()
   var text = ""
   var images: [RemoteImageUpload] = []
+  // Only unmuted words already displayed before an unexpected capture failure.
+  // Separate from typed text, never automatically submitted, and no audio files.
+  var recoveredVoice: [AssistantRecoveredVoice]?
   var isEmpty: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && images.isEmpty }
 }
 
@@ -68,6 +76,26 @@ final class AssistantChatDraftStore: ObservableObject {
     do { try write(value, scope: scope); error = "" }
     catch { self.error = "Your draft could not be saved on this device: \(error.localizedDescription)" }
   }
+  func recoverVoice(_ text: String, id: String) {
+    guard !text.isEmpty, !(value.recoveredVoice ?? []).contains(where: { $0.id == id }) else { return }
+    value.recoveredVoice = (value.recoveredVoice ?? []) + [AssistantRecoveredVoice(id: id, text: text)]
+    saveRecovery()
+  }
+  func discardRecoveredVoice(_ id: String) {
+    value.recoveredVoice?.removeAll { $0.id == id }
+    saveRecovery()
+  }
+  func useRecoveredVoice(_ id: String) {
+    guard let voice = value.recoveredVoice?.first(where: { $0.id == id }) else { return }
+    value.text = [value.text, voice.text].filter { !$0.isEmpty }.joined(separator: "\n\n")
+    value.id = UUID().uuidString.lowercased()
+    discardRecoveredVoice(id)
+  }
+  private func saveRecovery() {
+    drafts[scope] = value
+    do { try write(value, scope: scope); error = "" }
+    catch { self.error = "Your unsent words are retained here, but could not be saved on this device." }
+  }
   func add(_ images: [PreparedRemoteImage], to target: String) throws {
     var draft = try read(target)
     guard draft.images.count + images.count <= 4,
@@ -114,7 +142,9 @@ final class AssistantChatDraftStore: ObservableObject {
   func complete(_ sent: AssistantChatDraft, scope target: String) throws {
     // A late receipt cannot clear edits made after Send or another Mac's draft.
     guard try read(target).id == sent.id else { return }
-    let empty = AssistantChatDraft()
+    var empty = AssistantChatDraft()
+    // Sending a typed message never discards a separate voice recovery draft.
+    empty.recoveredVoice = try read(target).recoveredVoice
     try write(empty, scope: target)
     if target == scope { value = empty; error = "" }
     for image in sent.images {

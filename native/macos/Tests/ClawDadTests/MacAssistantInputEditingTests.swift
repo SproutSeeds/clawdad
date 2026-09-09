@@ -3,6 +3,68 @@ import XCTest
 @testable import ClawDad
 
 final class MacAssistantInputEditingTests: XCTestCase {
+  func testClearedComposerWithViewportPaddingIsReadyForSeparatelyAuthorizedSubmission() {
+    let padding = String(repeating: "\n", count: 30)
+    XCTAssertTrue(assistantPromptIsEmpty("• READY\n› Ask Codex to do anything\n gpt-6-astra low" + padding))
+    XCTAssertTrue(assistantPromptIsEmpty("› \n ctrl+c again to quit" + padding))
+    XCTAssertFalse(assistantPromptIsEmpty("› \n  Retained multiline draft\n gpt-6-astra" + padding))
+    XCTAssertFalse(assistantPromptIsEmpty("[Image #1]\n› \n gpt-6-astra" + padding))
+    XCTAssertFalse(assistantPromptIsEmpty("› \n tab to queue message" + padding))
+  }
+  func testExpandedSixteenLineDraftUsesActualTerminalHeight() {
+    let text = (1...16).map { "Line \($0) with  preserved spaces" }.joined(separator: "\n")
+    let screen = "Completed response\n› " + text.replacingOccurrences(of: "\n", with: "\n  ") + "\n\n gpt-6-astra max\n"
+    XCTAssertEqual(assistantObserveDraft(screen, viewportRows: 48).text, text)
+    XCTAssertFalse(assistantObserveDraft(screen, viewportRows: 48).requiresWholeDraftAuthorization)
+    XCTAssertTrue(assistantDraftMatches(screen, expected: text, viewportRows: 48))
+    XCTAssertEqual(assistantObserveDraft(screen, viewportRows: 20).reasonCode, "composer_clipped")
+    XCTAssertNil(assistantObserveDraft(screen, viewportRows: 20).text)
+    XCTAssertNil(assistantObserveDraft(screen).text, "Missing geometry cannot prove long-composer visibility")
+  }
+
+  func testCollapsedPasteOffersExplicitWholeDraftRouteWithoutClaimingHiddenText() {
+    let view = assistantObserveDraft("› Intro [Pasted Content 2578 chars] suffix\n gpt-6-astra max")
+    XCTAssertEqual(view.text, "Intro [Pasted Content 2578 chars] suffix")
+    XCTAssertTrue(view.requiresWholeDraftAuthorization)
+    XCTAssertTrue(view.reason.contains("not hidden contents"))
+    XCTAssertEqual(assistantObserveDraft("[Image #1]\n› [Pasted Content 2578 chars]\n gpt-6-astra").reasonCode, "attachments_present")
+    XCTAssertNil(assistantObserveDraft("[Image #1]\n› [Pasted Content 2578 chars]\n gpt-6-astra").text)
+    XCTAssertEqual(assistantObserveDraft("› Draft\n gpt-6-astra\n1. Allow command").reasonCode, "unresolved_prompt")
+    XCTAssertEqual(assistantObserveDraft("› [Pasted unknown]\n gpt-6-astra").requiresWholeDraftAuthorization, false)
+  }
+
+  @MainActor func testWholeDraftClearAndReplacementUseOneClearAndRetainedPasteVerification() async throws {
+    for replacement in ["", String(repeating: "Exact  long text 🦞\n", count: 120)] {
+      let original = "[Pasted Content 2840 chars]"
+      var draft = original, clears = 0, pastes = 0
+      try await assistantEditVerifiedDraft(expected: original, replacement: replacement, forceReplacement: true,
+        read: { draft }, clear: { clears += 1; draft = ""; return true },
+        insert: { _ in pastes += 1; draft = "[Pasted Content \(replacement.unicodeScalars.count) chars]"; return true },
+        verifyInserted: { assistantCollapsedPasteMatches("› \(draft)\n gpt-6-astra", payload: replacement) }, wait: {})
+      XCTAssertEqual(clears, 1)
+      XCTAssertEqual(pastes, replacement.isEmpty ? 0 : 1)
+      if replacement.isEmpty { XCTAssertEqual(draft, "") }
+    }
+  }
+
+  @MainActor func testChangedCollapsedRepresentationAndUncertainReplacementAreNeverReplayed() async {
+    var clears = 0, pastes = 0
+    do {
+      try await assistantEditVerifiedDraft(expected: "[Pasted Content 2000 chars]", replacement: "Replacement",
+        forceReplacement: true, read: { "[Pasted Content 2001 chars]" },
+        clear: { clears += 1; return true }, insert: { _ in pastes += 1; return true }, wait: {})
+      XCTFail("Changed draft must be preserved")
+    } catch {}
+    XCTAssertEqual(clears, 0); XCTAssertEqual(pastes, 0)
+    var draft = "[Pasted Content 2000 chars]"
+    do {
+      try await assistantEditVerifiedDraft(expected: draft, replacement: "Replacement", forceReplacement: true,
+        read: { draft }, clear: { clears += 1; draft = ""; return true },
+        insert: { _ in pastes += 1; return true }, verifyInserted: { false }, wait: {})
+      XCTFail("A paste dispatch is not verified text")
+    } catch { XCTAssertTrue(error.localizedDescription.contains("could not be verified")) }
+    XCTAssertEqual(clears, 1); XCTAssertEqual(pastes, 1)
+  }
   func testBusyDraftReadbackAndCollapsedPasteReceiptsAreDistinct() {
     let busy = "• Working (3s • esc to interrupt)\n› Review this draft\n tab to queue message\n"
     XCTAssertEqual(assistantEditableDraft(busy, allowQueueFooter: true), "Review this draft")

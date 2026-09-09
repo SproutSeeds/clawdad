@@ -53,6 +53,16 @@ struct MacAssistantForeground: Equatable {
   }
 }
 
+func assistantTerminalRows(_ tty: String) -> Int? {
+  guard tty.range(of: #"^/dev/tty[A-Za-z0-9]+$"#, options: .regularExpression) != nil else { return nil }
+  let fd = open(tty, O_RDONLY | O_NOCTTY | O_NONBLOCK)
+  guard fd >= 0 else { return nil }
+  defer { close(fd) }
+  var size = winsize()
+  guard ioctl(fd, TIOCGWINSZ, &size) == 0, size.ws_row > 0 else { return nil }
+  return Int(size.ws_row)
+}
+
 /// Fresh observations and native tab identities guard each individual edit or
 /// key. Durable job receipts in AssistantRuntime own replay prevention.
 @MainActor

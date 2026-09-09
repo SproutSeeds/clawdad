@@ -404,9 +404,10 @@ final class MacInputController {
     return await insertText(text, into: target.input)
   }
 
-  /// Codex handles a single Ctrl-C on a nonempty idle composer as draft clear.
+  /// The verified Codex version handles one Ctrl-C on a nonempty composer as
+  /// draft clear, before its idle/busy interrupt path. A second key is never sent.
   /// Never use Terminal's Select All (which selects scrollback), or send Enter.
-  /// The caller verifies nonempty draft text and idle state again synchronously
+  /// The caller verifies nonempty draft text and the authorized draft again synchronously
   /// in isAllowed, after the exact native tab identity has been resolved.
   func clearAssistantDraft(targetToken token: String,
                            isAllowed: @MainActor () -> Bool,

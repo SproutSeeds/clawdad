@@ -496,10 +496,7 @@ final class AssistantTestAudio: AssistantAudioIO {
   var onCaptureRecovery: ((Bool) -> Void)?
   var onCaptureFailure: ((Error) -> Void)?
   var onPlaybackStarted: (() -> Void)?
-  var onVoiceCommand: ((AssistantVoiceCommand) -> Void)?
-  var onVoiceControlFailure: ((AssistantVoiceControlError) -> Void)?
   var captureMode: AssistantCaptureMode = .off
-  var commandsAvailable = true
   var unmuteError = false
   var beforeUnmute: (() async -> Void)?
   var duringStart: (() -> Void)?
@@ -516,21 +513,14 @@ final class AssistantTestAudio: AssistantAudioIO {
   var finishes = 0
   private var clip: CheckedContinuation<Void, Error>?
   func start() async throws { starts += 1; muted = false; captureMode = .conversation; duringStart?() }
-  func configureVoiceCommands(enabled: Bool, alternates: Bool, requestPermission: Bool) async throws {
-    if enabled && !commandsAvailable { throw AssistantVoiceControlError.unavailable }
-  }
-  func muteCapture(voiceReactivation: Bool) throws {
+  func muteCapture() throws {
     muteCalls += 1; muted = true; captureMode = .off; resetUtterance()
-    if voiceReactivation {
-      guard commandsAvailable else { throw AssistantVoiceControlError.unavailable }
-      captureMode = .commandsOnly
-    }
   }
   func unmuteCapture() async throws {
     let attempt = muteCalls
     await beforeUnmute?()
     guard attempt == muteCalls else { throw CancellationError() }
-    if unmuteError { throw AssistantVoiceControlError.failed }
+    if unmuteError { throw AssistantMicrophoneError.noInput }
     muted = false; captureMode = .conversation; resetUtterance()
   }
   func setReplyActive(_ active: Bool) { replyActive = active }

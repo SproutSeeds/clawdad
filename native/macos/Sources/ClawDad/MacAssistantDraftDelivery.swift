@@ -18,8 +18,9 @@ func assistantInsertVerifiedDraft(_ text: String,
   throw MacAssistantError("The paste was requested, but the draft could not be verified. Inspect the tab before trying again; Enter was not sent.")
 }
 
-func assistantDraftMatches(_ screen: String, expected: String) -> Bool {
-  guard !expected.isEmpty, let draft = assistantEditableDraft(screen, allowQueueFooter: true) else { return false }
+func assistantDraftMatches(_ screen: String, expected: String, viewportRows: Int? = nil) -> Bool {
+  let view = assistantObserveDraft(screen, viewportRows: viewportRows)
+  guard !expected.isEmpty, !view.requiresWholeDraftAuthorization, let draft = view.text else { return false }
   return assistantEditableDraftMatches(draft, expected: expected)
 }
 
