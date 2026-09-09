@@ -71,6 +71,14 @@ final class MobileAudioSession {
     owner?.active = true
   }
 
+  func suspendConversationMicrophone(_ id: UUID) throws {
+    guard owner?.id == id, owner?.use == .conversation else { throw AudioError.expired }
+    // The conversation reservation remains owned, but iOS now has an output-
+    // only session. Removing an input tap alone would leave hardware capture on.
+    try activate(.playback)
+    owner?.active = true
+  }
+
   func release(_ id: UUID) {
     guard owner?.id == id else { return }
     // Normal completion does not invoke the replacement callback.
@@ -98,7 +106,9 @@ final class MobileAudioSession {
     switch use {
     case .recording: try session.setCategory(.record, mode: .default)
     case .playback: try session.setCategory(.playback, mode: .spokenAudio)
-    case .conversation: try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth])
+    case .conversation:
+      try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetoothHFP])
+      try session.setAllowHapticsAndSystemSoundsDuringRecording(true)
     }
     try session.setActive(true)
 #endif

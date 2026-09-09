@@ -5,6 +5,33 @@ import XCTest
 
 @MainActor
 final class AssistantConnectionTests: XCTestCase {
+  func testCancellingVoiceUploadStopsTheWriterAndKeepsTextConnectionUsable() async throws {
+    let signal = AssistantTestSignaling(), peer = AssistantPeerFixture()
+    let connection = AssistantConnection(makePeer: { peer })
+    defer { connection.close() }
+    connection.bindSignaling(signal); connection.connect(); peer.onOpen?()
+    var began = false, cancelled = false, delivered = false
+    peer.onSend = { _ in
+      began = true
+      do { try await Task.sleep(for: .seconds(10)); delivered = true }
+      catch { cancelled = true; throw error }
+    }
+    let upload = Task { try? await connection.request(.transcribe, payload: Data([1, 2, 3])) }
+    while !began { await Task.yield() }
+    upload.cancel()
+    _ = await upload.value
+    for _ in 0..<100 where !cancelled { await Task.yield() }
+    XCTAssertTrue(cancelled)
+    XCTAssertFalse(delivered)
+    XCTAssertTrue(connection.connected)
+    peer.onSend = { data in
+      let request = try JSONDecoder().decode(AssistantWireRequest.self, from: data)
+      peer.onMessage?(try JSONEncoder().encode(AssistantWireResponse(id: request.id, payload: Data("ok".utf8))))
+    }
+    let response = try await connection.request(.state)
+    XCTAssertEqual(response, Data("ok".utf8))
+    XCTAssertFalse(peer.stopped)
+  }
   func testUnansweredHealthRequestClosesStaleConnectionAndNextAttemptUsesNewPeer() async throws {
     let signal = AssistantTestSignaling(), first = AssistantPeerFixture(), second = AssistantPeerFixture()
     var peers = [first, second]

@@ -25,6 +25,21 @@ final class MobileAssistantController: ObservableObject {
   @Published private(set) var transcribingSpeech = false
   @Published private(set) var canSendVoice = false
   @Published private(set) var waitForSend: Bool
+  @Published private(set) var voiceCommandsEnabled: Bool
+  @Published private(set) var voiceReactivationEnabled: Bool
+  @Published private(set) var alternateVoiceCommands: Bool
+  @Published private(set) var voiceMuted = false
+  @Published private(set) var voiceControlNotice = ""
+  @Published private(set) var changingMicrophone = false
+  @Published private(set) var configuringVoiceCommands = false
+  @Published private(set) var voiceCommandDetectionAvailable = false
+  var muteStatus: String { voiceMuted ? "Muted · voice unmute enabled" : "Muted · microphone off" }
+  var callStatus: String { muted ? muteStatus : status }
+  private var microphoneChange = UUID()
+  private var inputEpoch = UUID()
+  private var foreground = true
+  private let confirmMicrophoneChange: @MainActor () -> Void
+  private let keepScreenAwake: @MainActor (Bool) -> Void
   private let defaults: UserDefaults?
   private let automaticSendDelay: UInt64
   private var automaticSend: Task<Void, Never>?
@@ -42,7 +57,7 @@ final class MobileAssistantController: ObservableObject {
   private var spoken = Set<String>()
   private var silencedReplies = Set<String>()
   private var pendingMessage: (text: String, id: String)?
-  private var voiceQueue: [(data: Data, turn: AssistantVoiceTurn, capturedAt: TimeInterval, speechAt: TimeInterval)] = []
+  private var voiceQueue: [(data: Data, turn: AssistantVoiceTurn, capturedAt: TimeInterval, speechAt: TimeInterval, final: Bool)] = []
   private var voiceTurns: [AssistantVoiceTurn] = []
   private var draftTurn: AssistantVoiceTurn?
   private var deliveredVoiceTurns: [String: AssistantVoiceTurn] = [:]
@@ -55,13 +70,20 @@ final class MobileAssistantController: ObservableObject {
 
   init(connection: any AssistantTransport = AssistantConnection(),
     audio: any AssistantAudioIO = AssistantAudio(), defaults: UserDefaults? = .standard,
-    automaticSendDelay: UInt64 = 4_000_000_000, chatDraft: AssistantChatDraftStore = AssistantChatDraftStore()) {
+    automaticSendDelay: UInt64 = 4_000_000_000, chatDraft: AssistantChatDraftStore = AssistantChatDraftStore(),
+    confirmMicrophoneChange: @escaping @MainActor () -> Void = assistantMicrophoneConfirmation,
+    keepScreenAwake: @escaping @MainActor (Bool) -> Void = assistantKeepScreenAwake) {
     self.chatDraft = chatDraft
     self.connection = connection
     self.audio = audio
     self.defaults = defaults
     self.automaticSendDelay = automaticSendDelay
     waitForSend = defaults?.bool(forKey: "assistant.thinkAloud") ?? false
+    voiceCommandsEnabled = defaults?.bool(forKey: "assistant.voiceCommands") ?? false
+    voiceReactivationEnabled = defaults?.bool(forKey: "assistant.voiceReactivation") ?? false
+    alternateVoiceCommands = defaults?.bool(forKey: "assistant.alternateVoiceCommands") ?? false
+    self.confirmMicrophoneChange = confirmMicrophoneChange
+    self.keepScreenAwake = keepScreenAwake
     connected = connection.connected
     connection.onChange = { [weak self] in
       guard let self else { return }
@@ -95,7 +117,7 @@ final class MobileAssistantController: ObservableObject {
     audio.onCaptureRecovery = { [weak self] recovering in
       guard let self, voiceActive, !replyAudioActive else { return }
       if recovering { status = "Reconnecting microphone…" }
-      else if status == "Reconnecting microphone…" { status = muted ? "Microphone muted" : "Listening…" }
+      else if status == "Reconnecting microphone…" { status = muted ? muteStatus : "Listening…" }
     }
     audio.onCaptureFailure = { [weak self] failure in
       guard let self else { return }
@@ -107,6 +129,14 @@ final class MobileAssistantController: ObservableObject {
     audio.onUtterance = { [weak self] in self?.transcribe($0, final: $1) }
     audio.onTranscriptPreview = { [weak self] in self?.previewTranscription($0) }
     audio.onReplaced = { [weak self] in self?.endVoice() }
+    audio.onVoiceCommand = { [weak self] command in self?.handleVoiceCommand(command) }
+    audio.onVoiceControlFailure = { [weak self] failure in
+      guard let self, voiceActive || startingVoice else { return }
+      if failure == .interrupted { interruptSpeech() }
+      if failure == .failed || failure == .unavailable { voiceCommandDetectionAvailable = false }
+      muteMicrophone(reactivation: false, confirm: false)
+      voiceControlNotice = failure.localizedDescription
+    }
     audio.onPlaybackStarted = { [weak self] in
       guard let self, let id = activeReplyRequest, let turn = deliveredVoiceTurns[id],
         turn.metrics["submitToPlaybackMs"] == nil, let submitted = turn.submittedAt else { return }
@@ -310,7 +340,7 @@ final class MobileAssistantController: ObservableObject {
       }
     } catch { self.error = error.localizedDescription }
   }
-  @discardableResult func send(_ text: String, id: String? = nil, images: [PreparedRemoteImage] = []) async -> Bool {
+  @discardableResult func send(_ text: String, id: String? = nil, images: [PreparedRemoteImage] = [], voiceInputEpoch: UUID? = nil) async -> Bool {
     guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty else { return true }
     let target = scope
     while sending { do { try await Task.sleep(nanoseconds: 100_000_000) } catch { return false } }
@@ -324,10 +354,10 @@ final class MobileAssistantController: ObservableObject {
     let deadline = Date().addingTimeInterval(60)
     for attempt in 0..<2 {
       do {
-        guard target == scope else { throw CancellationError() }
+        guard target == scope, voiceInputEpoch == nil || voiceInputEpoch == inputEpoch else { throw CancellationError() }
         try await awaitAssistant(until: deadline)
         try Task.checkCancellation()
-        guard target == scope else { throw CancellationError() }
+        guard target == scope, voiceInputEpoch == nil || voiceInputEpoch == inputEpoch else { throw CancellationError() }
         if !images.isEmpty {
           guard snapshot?.imageAttachments == true else {
             throw RemoteImagePreparation.failure("Update ClawDad on your Mac to send chat images. Your draft is saved.")
@@ -343,7 +373,8 @@ final class MobileAssistantController: ObservableObject {
             }
           }
         }
-        guard target == scope else { throw CancellationError() }
+        try Task.checkCancellation()
+        guard target == scope, voiceInputEpoch == nil || voiceInputEpoch == inputEpoch else { throw CancellationError() }
         var args: [String: AssistantValue] = ["text": .string(text)]
         if !images.isEmpty { args["images"] = try .encode(images.map(\.upload)) }
         let receipt = try await command("message", args: args, id: pending.id)
@@ -358,6 +389,7 @@ final class MobileAssistantController: ObservableObject {
         if !replyAudioActive { status = voiceActive ? "Thinking…" : "Message sent" }
         return true
       } catch {
+        if Task.isCancelled || (voiceInputEpoch != nil && voiceInputEpoch != inputEpoch) { return false }
         assistantReady = false
         if attempt == 0, !connected, !Task.isCancelled, target == scope, Date() < deadline {
           // Recover an uncertain send using its original durable ID. The Mac
@@ -379,15 +411,23 @@ final class MobileAssistantController: ObservableObject {
     defer { if voiceEpoch == attempt { startingVoice = false } }
     status = "Connecting Assistant…"
     error = ""
+    voiceControlNotice = ""
     open()
     #if DEBUG
       if preview != nil {
+        defer { updateScreenAwake() }
         if ProcessInfo.processInfo.arguments.contains("--clawdad-assistant-delayed-start") {
           try? await Task.sleep(nanoseconds: 3_000_000_000)
           guard voiceEpoch == attempt else { return }
         }
         voiceActive = true
         status = "Listening…"
+        if ProcessInfo.processInfo.arguments.contains("--clawdad-assistant-muted-preview") {
+          voiceCommandsEnabled = true
+          voiceReactivationEnabled = true
+          muted = true
+          voiceMuted = true
+        }
         if ProcessInfo.processInfo.arguments.contains("--clawdad-assistant-send-test") {
           waitForSend = true
           let turn = currentVoiceTurn()
@@ -419,6 +459,16 @@ final class MobileAssistantController: ObservableObject {
       try await awaitAssistant(until: deadline, voiceAttempt: attempt)
       spoken = Set(((snapshot?.messages ?? []) + (snapshot?.taskUpdates ?? [])).map(\.id))
       guard voiceEpoch == attempt else { return }
+      if voiceCommandsEnabled {
+        do {
+          try await audio.configureVoiceCommands(enabled: true, alternates: alternateVoiceCommands, requestPermission: false)
+          voiceCommandDetectionAvailable = true
+        } catch {
+          voiceCommandDetectionAvailable = false
+          voiceControlNotice = AssistantVoiceControlError.unavailable.localizedDescription
+        }
+      }
+      guard voiceEpoch == attempt else { return }
       status = "Starting microphone…"
       microphoneStartup = true
       try await audio.start()
@@ -431,6 +481,10 @@ final class MobileAssistantController: ObservableObject {
       audio.muted = false
       status = "Listening…"
       error = ""
+      if voiceCommandsEnabled && (!voiceControlNotice.isEmpty || !foreground) {
+        muteMicrophone(reactivation: false, confirm: false)
+      }
+      updateScreenAwake()
     } catch {
       if voiceEpoch == attempt {
         self.error = error.localizedDescription
@@ -439,11 +493,118 @@ final class MobileAssistantController: ObservableObject {
     }
   }
   func toggleMute() {
-    if !muted { audio.finishUtterance() }
-    muted.toggle()
-    audio.muted = muted
+    guard voiceActive else { return }
+    if muted { Task { await unmuteMicrophone() } }
+    else { muteMicrophone(reactivation: false) }
+  }
+  func handleVoiceCommand(_ command: AssistantVoiceCommand) {
+    guard voiceActive, foreground, voiceCommandsEnabled, !replyAudioActive, !changingMicrophone else { return }
+    switch command {
+    case .mute where !muted: muteMicrophone(reactivation: voiceReactivationEnabled)
+    case .unmute where voiceMuted && voiceReactivationEnabled: Task { await unmuteMicrophone() }
+    default: break
+    }
+  }
+  private func discardUnsentVoice() {
+    inputEpoch = UUID()
+    if let id = pendingMessage?.id, voiceTurns.contains(where: { $0.id == id }) { pendingMessage = nil }
+    transcribing?.cancel()
+    transcribing = nil
+    automaticSend?.cancel()
+    automaticSend = nil
+    cancelTranscriptionPreview()
+    voiceQueue = []
+    voiceTurns = []
+    draftTurn = nil
+    canSendVoice = false
+    liveTranscript = ""
+    hearingSpeech = false
+    transcribingSpeech = false
+    inputLevel = 0
     audio.resetUtterance()
-    if !replyAudioActive { status = muted ? "Microphone muted" : "Listening…" }
+  }
+  func muteMicrophone(reactivation: Bool, confirm: Bool = true) {
+    guard voiceActive else { return }
+    defer { updateScreenAwake() }
+    microphoneChange = UUID()
+    changingMicrophone = false
+    let previous = muted, previousVoiceMuted = voiceMuted
+    // Seal the controller boundary synchronously before any asynchronous work.
+    muted = true
+    voiceMuted = false
+    discardUnsentVoice()
+    do {
+      let local = reactivation && voiceReactivationEnabled && voiceCommandsEnabled && foreground
+      try audio.muteCapture(voiceReactivation: local)
+      voiceMuted = local
+      if confirm && (!previous || previousVoiceMuted != voiceMuted) { confirmMicrophoneChange() }
+    } catch {
+      try? audio.muteCapture(voiceReactivation: false)
+      voiceControlNotice = AssistantVoiceControlError.unavailable.localizedDescription
+    }
+    if !replyAudioActive { status = muteStatus }
+  }
+  func unmuteMicrophone() async {
+    guard voiceActive, muted, !changingMicrophone, foreground else { return }
+    defer { updateScreenAwake() }
+    let change = UUID()
+    microphoneChange = change
+    changingMicrophone = true
+    defer { if microphoneChange == change { changingMicrophone = false } }
+    discardUnsentVoice()
+    do {
+      try await audio.unmuteCapture()
+      guard microphoneChange == change, voiceActive else { return }
+      muted = false
+      voiceMuted = false
+      voiceControlNotice = voiceCommandsEnabled && !voiceCommandDetectionAvailable
+        ? "Voice commands are unavailable. Re-enable them in Voice controls to try again; the microphone button still works." : ""
+      if !replyAudioActive { status = "Listening…" }
+      confirmMicrophoneChange()
+    } catch {
+      guard microphoneChange == change else { return }
+      muteMicrophone(reactivation: false, confirm: false)
+      voiceControlNotice = AssistantVoiceControlError.failed.localizedDescription
+    }
+  }
+  func fullyStopMicrophone() {
+    voiceReactivationEnabled = false
+    defaults?.set(false, forKey: "assistant.voiceReactivation")
+    muteMicrophone(reactivation: false)
+  }
+  func setVoiceCommands(_ enabled: Bool, reactivation: Bool? = nil, alternates: Bool? = nil) async {
+    guard !configuringVoiceCommands else { return }
+    defer { updateScreenAwake() }
+    configuringVoiceCommands = true
+    defer { configuringVoiceCommands = false }
+    if !enabled || reactivation == false, voiceMuted { muteMicrophone(reactivation: false) }
+    do {
+      try await audio.configureVoiceCommands(enabled: enabled, alternates: alternates ?? alternateVoiceCommands, requestPermission: enabled)
+      voiceCommandDetectionAvailable = enabled
+      voiceCommandsEnabled = enabled
+      voiceReactivationEnabled = enabled && (reactivation ?? voiceReactivationEnabled)
+      alternateVoiceCommands = alternates ?? alternateVoiceCommands
+      defaults?.set(enabled, forKey: "assistant.voiceCommands")
+      defaults?.set(voiceReactivationEnabled, forKey: "assistant.voiceReactivation")
+      defaults?.set(alternateVoiceCommands, forKey: "assistant.alternateVoiceCommands")
+      voiceControlNotice = ""
+      if !foreground, voiceActive, enabled { applicationForegroundChanged(false) }
+    } catch {
+      voiceCommandDetectionAvailable = false
+      if voiceActive { muteMicrophone(reactivation: false, confirm: false) }
+      voiceControlNotice = AssistantVoiceControlError.unavailable.localizedDescription
+    }
+  }
+  func applicationForegroundChanged(_ active: Bool) {
+    foreground = active
+    if !active, voiceActive, voiceCommandsEnabled {
+      muteMicrophone(reactivation: false, confirm: false)
+      voiceControlNotice = AssistantVoiceControlError.background.localizedDescription
+    }
+    updateScreenAwake()
+  }
+  private func updateScreenAwake() {
+    keepScreenAwake(voiceActive && foreground && voiceCommandsEnabled && (!muted || voiceMuted))
   }
   func interject() {
     guard voiceActive, replyAudioActive else { return }
@@ -451,9 +612,8 @@ final class MobileAssistantController: ObservableObject {
     // written message and leaving project work running in Terminal.
     if let activeReplyRequest { silencedReplies.insert(activeReplyRequest) }
     interruptSpeech()
-    muted = false
-    audio.muted = false
-    status = "Listening…"
+    if muted { Task { await unmuteMicrophone() } }
+    else { status = "Listening…" }
   }
   private func interruptSpeech() {
     speech?.cancel()
@@ -462,7 +622,7 @@ final class MobileAssistantController: ObservableObject {
     audio.stopPlayback()
     activeReplyRequest = nil
     setReplyActive(false)
-    if voiceActive { status = muted ? "Microphone muted" : "Listening…" }
+    if voiceActive { status = muted ? muteStatus : "Listening…" }
   }
   private func setReplyActive(_ active: Bool) {
     replyAudioActive = active
@@ -475,8 +635,13 @@ final class MobileAssistantController: ObservableObject {
     }
   }
   func endVoice() {
+    microphoneChange = UUID()
+    inputEpoch = UUID()
+    changingMicrophone = false
+    voiceMuted = false
     voiceEpoch = UUID()
     voiceActive = false
+    updateScreenAwake()
     startingVoice = false
     callVisible = false
     muted = false
@@ -574,7 +739,7 @@ final class MobileAssistantController: ObservableObject {
     processVoiceQueue()
   }
   private func updateVoiceDraft() {
-    canSendVoice = voiceActive && !replyAudioActive && draftTurn != nil
+    canSendVoice = voiceActive && !muted && !replyAudioActive && draftTurn != nil
     transcribingSpeech = !voiceQueue.isEmpty
     liveTranscript = (draftTurn ?? voiceTurns.last)?.text ?? ""
     guard voiceActive, !replyAudioActive else { return }
@@ -583,7 +748,7 @@ final class MobileAssistantController: ObservableObject {
     else if draftTurn != nil { status = waitForSend ? "Think aloud · Tap Send when ready" : "Replying after a 4-second pause" }
     else if !voiceTurns.isEmpty { status = "Sending…" }
     else if deliveredVoiceTurns.values.contains(where: { $0.responseObservedAt == nil }) { status = "Thinking…" }
-    else { status = muted ? "Microphone muted" : "Listening…" }
+    else { status = muted ? muteStatus : "Listening…" }
   }
   private func transcribe(_ data: Data, final: Bool) {
     guard voiceActive, !muted, !replyAudioActive else { return }
@@ -598,7 +763,7 @@ final class MobileAssistantController: ObservableObject {
     if !data.isEmpty {
       turn.pendingSegments += 1
       turn.lastAudioAt = now
-      voiceQueue.append((data, turn, now, speechAt))
+      voiceQueue.append((data, turn, now, speechAt, final))
     }
     if final {
       turn.endpointAt = now
@@ -608,27 +773,26 @@ final class MobileAssistantController: ObservableObject {
       scheduleVoiceSend(turn)
     }
     if voiceQueue.count >= 30 {
-      muted = true
-      audio.muted = true
-      error =
-        "The microphone is paused while your Mac catches up. Your recorded speech is retained."
+      muteMicrophone(reactivation: false, confirm: false)
+      error = "The microphone is fully off because transcription fell behind. Unsent voice input was discarded; your typed draft is saved."
+      return
     }
     updateVoiceDraft()
     processVoiceQueue()
   }
   private func processVoiceQueue() {
     guard transcribing == nil else { return }
-    let epoch = voiceEpoch
+    let epoch = inputEpoch
     transcribing = Task { [weak self] in
       guard let self else { return }
       defer {
-        if voiceEpoch == epoch {
+        if inputEpoch == epoch {
           transcribing = nil
           updateVoiceDraft()
           speakNext()
         }
       }
-      while voiceEpoch == epoch, !Task.isCancelled {
+      while inputEpoch == epoch, !muted, !Task.isCancelled {
         if let turn = voiceTurns.first, turn.sealed, turn.pendingSegments == 0 {
           let started = ProcessInfo.processInfo.systemUptime
           let text = turn.text
@@ -647,13 +811,13 @@ final class MobileAssistantController: ObservableObject {
               turn.metrics["finalizationToSubmitMs"] = max(0, (started - finalized) * 1000)
             }
             turn.metrics["finalAudioToSendMs"] = max(0, (started - turn.lastAudioAt) * 1000)
-            while voiceEpoch == epoch, !Task.isCancelled {
-              if await send(text, id: turn.id) { break }
+            while inputEpoch == epoch, !Task.isCancelled {
+              if await send(text, id: turn.id, voiceInputEpoch: epoch) { break }
               status = "Reconnecting to your Mac…"
               do { try await Task.sleep(nanoseconds: 2_000_000_000) } catch { return }
             }
           }
-          guard voiceEpoch == epoch, !Task.isCancelled else { return }
+          guard inputEpoch == epoch, !Task.isCancelled else { return }
           turn.metrics["sendRoundTripMs"] = (ProcessInfo.processInfo.systemUptime - started) * 1000
           voiceTurns.removeFirst()
           if !text.isEmpty {
@@ -672,10 +836,20 @@ final class MobileAssistantController: ObservableObject {
         let started = ProcessInfo.processInfo.systemUptime
         do {
           let result = try await connection.request(.transcribe, payload: segment.data)
-          guard !Task.isCancelled, voiceEpoch == epoch else { return }
+          guard !Task.isCancelled, inputEpoch == epoch, !muted else { return }
           let value = try JSONDecoder().decode([String: AssistantValue].self, from: result)
           if let text = value["text"]?.string,
             !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            // Defense in depth for a command the phone recognizer missed or
+            // recognized late. This is already-authorized, unmuted final STT
+            // from the normal Mac path; muted audio can never reach this branch.
+            // Reserve exact control phrases instead of creating an agent task.
+            if segment.final, voiceCommandsEnabled,
+              let control = AssistantVoiceCommand.match(text, alternates: alternateVoiceCommands) {
+              if control == .mute { muteMicrophone(reactivation: voiceReactivationEnabled) }
+              else { discardUnsentVoice(); updateVoiceDraft() }
+              return
+            }
             turn.parts.append(text)
           }
           let finalized = ProcessInfo.processInfo.systemUptime
@@ -696,7 +870,7 @@ final class MobileAssistantController: ObservableObject {
           turn.metrics["finalAudioToTranscriptMs"] = max(0, (ProcessInfo.processInfo.systemUptime - turn.lastAudioAt) * 1000)
           updateVoiceDraft()
         } catch {
-          guard !Task.isCancelled, voiceEpoch == epoch else { return }
+          guard !Task.isCancelled, inputEpoch == epoch, !muted else { return }
           if !replyAudioActive { status = "Waiting for local transcription…" }
           try? await Task.sleep(nanoseconds: 2_000_000_000)
         }
@@ -733,7 +907,7 @@ final class MobileAssistantController: ObservableObject {
       do {
         let data = try await connection.request(.transcribe, payload: data)
         guard !Task.isCancelled, voiceEpoch == call, previewEpoch == epoch,
-          voiceActive, !replyAudioActive, draftTurn === turn else { return }
+          voiceActive, !muted, !replyAudioActive, draftTurn === turn else { return }
         let result = try JSONDecoder().decode([String: AssistantValue].self, from: data)
         if let text = result["text"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines) {
           let combined = (turn.parts + [text]).joined(separator: " ").trimmingCharacters(in: .whitespaces)
@@ -764,7 +938,7 @@ final class MobileAssistantController: ObservableObject {
           if speechQueue.isEmpty {
             activeReplyRequest = nil
             setReplyActive(false)
-            status = muted ? "Microphone muted" : "Listening…"
+            status = muted ? muteStatus : "Listening…"
           } else { speakNext() }
         }
       }
@@ -829,13 +1003,14 @@ struct AssistantView: View {
   var onClose: () -> Void
   var onWatch: () -> Void
   @State private var showingWorkspace = false
+  @State private var showingVoiceControls = false
   var body: some View {
     NavigationStack {
       VStack(spacing: 12) {
         HStack {
           Circle().fill(controller.connected ? Color.green : ClawDadTheme.gold).frame(
             width: 8, height: 8)
-          Text(controller.status).font(.subheadline)
+          Text(controller.callStatus).font(.subheadline)
           Spacer()
           Button("Workspace", systemImage: "terminal") { showingWorkspace.toggle() }
         }.padding(.horizontal)
@@ -931,6 +1106,12 @@ struct AssistantView: View {
               .labelsHidden().accessibilityIdentifier("clawdad.assistant.think-aloud")
           }.padding(.horizontal)
         }
+        if !controller.callVisible, !controller.voiceControlNotice.isEmpty {
+          Text(controller.voiceControlNotice).font(.caption).foregroundStyle(ClawDadTheme.gold).padding(.horizontal)
+            .accessibilityIdentifier("clawdad.assistant.voice-control-notice")
+        }
+        Button("Voice controls", systemImage: "mic.badge.plus") { showingVoiceControls = true }
+          .font(.caption).accessibilityIdentifier("clawdad.assistant.voice-controls")
         AssistantChatComposer(controller: controller, draft: controller.chatDraft).padding(.horizontal)
         if controller.callVisible {
           AssistantCallBar(controller: controller)
@@ -962,6 +1143,7 @@ struct AssistantView: View {
         }
       }
       .onAppear { controller.open() }
+      .sheet(isPresented: $showingVoiceControls) { AssistantVoicePrivacySettings(controller: controller) }
     }
   }
 }
@@ -971,6 +1153,16 @@ struct AssistantCallBar: View {
   var onOpen: (() -> Void)? = nil
   var body: some View {
     if controller.callVisible {
+      VStack(spacing: 0) {
+      if !controller.voiceControlNotice.isEmpty {
+        Text(controller.voiceControlNotice).font(.caption2).padding(.horizontal, 10).padding(.top, 4)
+          .accessibilityIdentifier("clawdad.assistant.voice-control-notice")
+      }
+      if controller.voiceMuted {
+        Button("Turn microphone fully off", systemImage: "mic.slash.fill") { controller.fullyStopMicrophone() }
+          .font(.caption).frame(minHeight: 44)
+          .accessibilityIdentifier("clawdad.assistant.microphone-off")
+      }
       HStack(spacing: 6) {
         if let onOpen {
           Button(action: onOpen) {
@@ -980,7 +1172,7 @@ struct AssistantCallBar: View {
             .accessibilityHint("Shows your voice transcriptions and the Assistant's replies without ending the call")
             .accessibilityIdentifier("clawdad.assistant.return")
         }
-        Text(controller.status).font(.caption).lineLimit(2)
+        Text(controller.callStatus).font(.caption).lineLimit(2)
           .frame(maxWidth: .infinity, alignment: .leading)
         if controller.replyAudioActive {
           Button { controller.interject() } label: {
@@ -1006,7 +1198,8 @@ struct AssistantCallBar: View {
             .foregroundStyle(controller.replyAudioActive ? ClawDadTheme.cream.opacity(0.5)
               : controller.inputLevel > 0.15 && !controller.muted ? Color.green : ClawDadTheme.cream)
             .scaleEffect(controller.muted || controller.replyAudioActive ? 1 : 1 + CGFloat(controller.inputLevel) * 0.12)
-        }.disabled(!controller.voiceActive).accessibilityLabel(controller.muted ? "Unmute Assistant" : "Mute Assistant")
+        }.disabled(!controller.voiceActive || controller.changingMicrophone).accessibilityLabel(controller.muted ? "Unmute Assistant" : "Mute Assistant")
+          .accessibilityIdentifier("clawdad.assistant.mute")
           .accessibilityHint(controller.replyAudioActive ? "Microphone input pauses during the reply. Use Interject to speak now." : "")
         Button {
           controller.endVoice()
@@ -1015,6 +1208,7 @@ struct AssistantCallBar: View {
         }.accessibilityLabel("End voice conversation")
       }.padding(.horizontal, 10).background(Color.black.opacity(0.96)).foregroundStyle(
         ClawDadTheme.cream)
+      }.background(Color.black.opacity(0.96)).foregroundStyle(ClawDadTheme.cream)
     }
   }
 }

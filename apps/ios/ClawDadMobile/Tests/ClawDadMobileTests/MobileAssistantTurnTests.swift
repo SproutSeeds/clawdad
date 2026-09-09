@@ -332,7 +332,7 @@ final class MobileAssistantTurnTests: XCTestCase {
     audio.completeClip()
     await until { !controller.replyAudioActive }
     XCTAssertTrue(audio.muted)
-    XCTAssertEqual(controller.status, "Microphone muted")
+    XCTAssertEqual(controller.status, "Muted · microphone off")
   }
 
   func testMicrophoneStaysHeldWhileTheNextAudioPartIsBeingGenerated() async throws {
@@ -388,6 +388,7 @@ final class MobileAssistantTurnTests: XCTestCase {
     await until { audio.played.count == 1 }
     controller.toggleMute()
     controller.interject()
+    await until { !controller.muted }
     XCTAssertFalse(audio.replyActive)
     XCTAssertFalse(audio.muted)
     XCTAssertTrue(controller.voiceActive)
@@ -495,6 +496,15 @@ final class AssistantTestAudio: AssistantAudioIO {
   var onCaptureRecovery: ((Bool) -> Void)?
   var onCaptureFailure: ((Error) -> Void)?
   var onPlaybackStarted: (() -> Void)?
+  var onVoiceCommand: ((AssistantVoiceCommand) -> Void)?
+  var onVoiceControlFailure: ((AssistantVoiceControlError) -> Void)?
+  var captureMode: AssistantCaptureMode = .off
+  var commandsAvailable = true
+  var unmuteError = false
+  var beforeUnmute: (() async -> Void)?
+  var duringStart: (() -> Void)?
+  var muteCalls = 0
+  var resets = 0
   var lastSpeechAt: TimeInterval?
   var muted = false
   var replyActive = false
@@ -505,14 +515,31 @@ final class AssistantTestAudio: AssistantAudioIO {
   var starts = 0
   var finishes = 0
   private var clip: CheckedContinuation<Void, Error>?
-  func start() async throws { starts += 1; muted = false }
+  func start() async throws { starts += 1; muted = false; captureMode = .conversation; duringStart?() }
+  func configureVoiceCommands(enabled: Bool, alternates: Bool, requestPermission: Bool) async throws {
+    if enabled && !commandsAvailable { throw AssistantVoiceControlError.unavailable }
+  }
+  func muteCapture(voiceReactivation: Bool) throws {
+    muteCalls += 1; muted = true; captureMode = .off; resetUtterance()
+    if voiceReactivation {
+      guard commandsAvailable else { throw AssistantVoiceControlError.unavailable }
+      captureMode = .commandsOnly
+    }
+  }
+  func unmuteCapture() async throws {
+    let attempt = muteCalls
+    await beforeUnmute?()
+    guard attempt == muteCalls else { throw CancellationError() }
+    if unmuteError { throw AssistantVoiceControlError.failed }
+    muted = false; captureMode = .conversation; resetUtterance()
+  }
   func setReplyActive(_ active: Bool) { replyActive = active }
   func play(_ data: Data) async throws {
     try await withCheckedThrowingContinuation { clip = $0; played.append(data); onPlaybackStarted?() }
   }
   func completeClip() { let done = clip; clip = nil; done?.resume() }
   func stopPlayback() { playbackStops += 1; let done = clip; clip = nil; done?.resume(throwing: CancellationError()) }
-  func resetUtterance() {}
+  func resetUtterance() { resets += 1 }
   func previewUtterance() { if let previewData { onTranscriptPreview?(previewData) } }
   func finishUtterance() {
     finishes += 1

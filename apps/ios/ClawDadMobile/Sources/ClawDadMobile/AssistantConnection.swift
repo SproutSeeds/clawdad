@@ -57,6 +57,7 @@ final class AssistantConnection: AssistantTransport {
   private var timeout: Task<Void, Never>?
   private var sender: Task<Void, Never>?
   private var senderID: UUID?
+  private var senderRequestID: String?
   private var outgoing: [AssistantWireRequest] = []
   private struct Pending {
     var data = Data()
@@ -180,12 +181,14 @@ final class AssistantConnection: AssistantTransport {
     }
   }
   func request(_ action: AssistantWireRequest.Action, payload: Data = Data()) async throws -> Data {
+    try Task.checkCancellation()
     guard connected, pending.count < 12 else { throw AssistantProtocolError.disconnected }
     let request = AssistantWireRequest(action: action, payload: payload)
     try request.validate()
     let connectionID = id
     return try await withTaskCancellationHandler {
-      try await withCheckedThrowingContinuation { continuation in
+      try Task.checkCancellation()
+      return try await withCheckedThrowingContinuation { continuation in
         let timeout = Task { [weak self] in
           try? await Task.sleep(nanoseconds: self?.requestTimeout(action) ?? 150_000_000_000)
           guard !Task.isCancelled, let self, self.id == connectionID,
@@ -206,16 +209,23 @@ final class AssistantConnection: AssistantTransport {
     let request = outgoing.removeFirst()
     let connectionID = id, sendingID = UUID()
     senderID = sendingID
+    senderRequestID = request.id
     sender = Task { [weak self] in
       guard let self else { return }
       defer {
         if senderID == sendingID {
           sender = nil
           senderID = nil
+          senderRequestID = nil
           pump()
         }
       }
-      do { try await peer.send(JSONEncoder().encode(request)) } catch {
+      do {
+        try Task.checkCancellation()
+        guard pending[request.id] != nil else { return }
+        try await peer.send(JSONEncoder().encode(request))
+      } catch {
+        if Task.isCancelled { return }
         if id == connectionID {
           let failure = assistantConnectionError(error)
           finish(request.id, error: failure)
@@ -245,6 +255,7 @@ final class AssistantConnection: AssistantTransport {
   }
   private func finish(_ id: String, error: Error? = nil) {
     guard let result = pending.removeValue(forKey: id) else { return }
+    if error is CancellationError, senderRequestID == id { sender?.cancel() }
     result.timeout.cancel()
     outgoing.removeAll { $0.id == id }
     if let error {
@@ -269,6 +280,7 @@ final class AssistantConnection: AssistantTransport {
     sender?.cancel()
     sender = nil
     senderID = nil
+    senderRequestID = nil
     outgoing = []
     peer?.stop()
     peer = nil

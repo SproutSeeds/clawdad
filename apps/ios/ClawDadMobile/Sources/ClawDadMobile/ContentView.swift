@@ -335,9 +335,11 @@ struct ContentView: View {
       }
       .onChange(of: scenePhase) { _, phase in
         if phase == .active {
+          assistant.applicationForegroundChanged(true)
           session.connectIfPaired()
           notifications.bind(session)
         } else if phase == .background {
+          assistant.applicationForegroundChanged(false)
           voiceRecorder.cancel()
         }
       }

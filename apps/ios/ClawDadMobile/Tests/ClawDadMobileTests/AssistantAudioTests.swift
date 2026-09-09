@@ -5,6 +5,36 @@ import XCTest
 
 @MainActor
 final class AssistantAudioTests: XCTestCase {
+  func testTapFencesByFirstSampleAndBoundsAudioWaitingForUIActor() async {
+    let now = ProcessInfo.processInfo.systemUptime
+    var starts: [TimeInterval] = []
+    let callback = assistantInputTap { _, capturedAt in starts.append(capturedAt) }
+    let format = AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 1)!
+    let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4800)!
+    buffer.frameLength = 4800
+    let firstSampleAt = now - 1
+    let when = AVAudioTime(hostTime: AVAudioTime.hostTime(forSeconds: firstSampleAt))
+    // No actor yield: model a burst while delivery is blocked. Only four
+    // transient handoffs may be queued, irrespective of the burst length.
+    for _ in 0..<100 { callback(buffer, when) }
+    for _ in 0..<20 where starts.count < 4 { await Task.yield() }
+    XCTAssertEqual(starts.count, 4)
+    XCTAssertTrue(starts.allSatisfy { abs($0 - firstSampleAt) < 0.001 })
+  }
+
+  func testFullMuteUsesAnOutputOnlySessionWithoutReleasingConversationOwnership() throws {
+    var uses: [MobileAudioSession.Use] = []
+    let session = MobileAudioSession(activate: { uses.append($0) }, deactivate: {})
+    let owner = try session.beginConversation {}
+    try session.suspendConversationMicrophone(owner)
+    XCTAssertEqual(uses.count, 2)
+    XCTAssertTrue(uses.last == .playback)
+    XCTAssertThrowsError(try session.beginRecording(), "The call still owns its reservation")
+    try session.reactivateConversation(owner)
+    XCTAssertTrue(uses.last == .conversation)
+    session.release(owner)
+    XCTAssertThrowsError(try session.suspendConversationMicrophone(owner))
+  }
   func testAudioThreadTapCopiesSamplesAndDeliversOnMainActor() async {
     let samples: [Float] = await withCheckedContinuation { finished in
       Task.detached {
