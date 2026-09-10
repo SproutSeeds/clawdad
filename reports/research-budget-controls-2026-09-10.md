@@ -1,0 +1,55 @@
+# Shared and per-supervisor allowance controls — September 10, 2026
+
+Cody chose one account default plus per-supervisor overrides, with the same properties available to the main conversational Assistant and manual controls. This implementation uses **percentage of weekly allowance remaining** as the stopping threshold. Installation does not approve a budget change or activate a supervisor.
+
+## Behavior and controls
+
+- The account default starts at **20% remaining**. An explicitly approved default is saved for that signed-in Codex account.
+- Each saved supervisor can use that default or an explicitly approved custom integer from **0 through 100**. A custom value can be higher or lower than the default. **0% permits consuming the remaining weekly allowance until exhaustion**; objective, scope, evidence, identity, manual-control and other existing stop conditions still apply. 100% reserves all available allowance.
+- All supervisors and manual work share the same account allowance. A threshold is a stopping level, not a separate allocation or a guarantee that ongoing work cannot consume more.
+- Custom overrides are bound to the exact saved supervisor, account and current verified weekly cycle. They expire at its reset. An expired override remains paused until an explicit new approval or an explicit return to the shared default. Reset, reconnect and restart never release an existing pause.
+- A shared-default change preserves custom overrides. Removing an override restores the shared policy, including any shared pause already latched. Reapproving a chosen limit releases its budget latch only where the remaining allowance allows it.
+- Stopped and manually paused supervisors stay stopped. An enabled supervisor held only by its allowance can become eligible after explicit approval. Accepted and running Terminal work is never interrupted by a budget change.
+- Fresh authoritative account usage is checked before every new review and continuation delivery. All supervisors serialize against the same account ledger. Stale usage, changed accounts, stale policy revisions and changed supervisor revisions reject new changes/work with recovery guidance. The existing separate 5% and 0% general notifications remain intact.
+
+On iPhone: **Assistant → Workspace → Research autonomy beside the intended agent → Weekly allowance**. Choose **This supervisor**, enter a custom percentage or use the stepper, then **Review supervisor limit → Approve**. Expand **Shared default** to change the account default. The desktop research panel exposes the same controls. A new **Save setup with autonomy off** action allows configuring the objective, scope and verification requirements, choosing a limit, and only then explicitly enabling it.
+
+The main Assistant now has `set_research_budget` alongside the existing `research_status`, `configure_research`, `manage_research` and `steer_research` tools. It can set the shared default, assign a custom override, or return a supervisor to the default. Descriptions and its managed Terminal instructions explain the meaning of 0%, exact account/thread targeting, revisions, cycle expiry, stopped states and setup-before-start ordering. The tool quotes the current user instruction through the existing authorization path and records its source request; a supervisor response or old history cannot authorize increased usage. Stable request receipts make retries idempotent.
+
+Every approval records the previous setting, approved threshold/scope, actual usage/cycle, user authorization and receipt in durable history. A setting change returns promptly to the independent conversational Assistant. No polling loop or supervisor ownership of the conversation is introduced.
+
+## UI and live-data corrections found during verification
+
+The new iPhone form initially restarted its initialization task as rows returned into view, resetting an unsaved choice. It now initializes once per account/thread destination. Polling updates the current approved state without replacing the choice being edited. A group-level accessibility identifier also obscured the identifiers of nested fields; it was removed. Small-screen tests use bounded drags so they do not skip over virtualized rows.
+
+A final installed-data check found a stopped supervisor still projecting the reading saved at its last budget admission, while the shared usage monitor had a newer reading. Status now projects the current matching account reading without rewriting preferences, creating a latch or starting any work. Admission still requires a fresh check. A regression verifies current 13% usage against a saved 50% reading, with unchanged durable state and zero work. An explicit budget approval also clears an obsolete budget-only pause label as soon as that enabled supervisor becomes eligible; stopped/manual-paused setups remain unchanged.
+
+## Verification
+
+- **Runtime:** all **642 tests passed**, zero failures or skips. The 47 focused supervisor/budget tests also passed, including the additional current-reading regression.
+- **Mobile state logic:** 210 tests executed, 209 passed and one opt-in test skipped; zero failures. Includes strict 0–100 input validation and existing voice, drafts, image, recovery and turn-ending coverage.
+- **Native Mac:** 232 tests executed, 222 passed and ten opt-in live checks skipped; zero failures.
+- **iPhone simulator UI:** the SE-sized simulator passed custom 0%, explicit cancel/approve, polling retention, returning to the default and changing the shared default to 25%. The same allowance flow passed at Accessibility XL text size. A separate opt-in/pause/off flow preserved an active simulated call and the exact unsent chat draft. Screenshots were inspected. Simulator controls use disposable preview data and do not capture the real microphone or change real account settings.
+- **Desktop manual UI:** CUA exercised the actual web allowance component against a disposable local fixture: cancellation causes no mutation; custom 0% persists through polling; changing shared default to 25% preserves that custom 0%; explicit inheritance removes the override; 101% disables approval. Exact scoped request payloads and revisions were observed. The fixture page and server were closed afterward.
+- **Assistant integration:** the actual MCP dispatcher, Assistant runtime authorization, supervisor controls and durable budget ledger were exercised together with a controlled conversational fixture. Shared/custom/inherited changes produced one receipt each and rejected a quote originating from agent output. Duplicate requests after conversation completion returned their original receipts without applying again.
+- **Budget/runtime coverage:** thresholds 0/20/100 and custom early stops; shared-account simultaneous admission; stale account, policy and supervisor revisions; manual pauses/off; unchanged drafts/configuration; threshold crossings during review and before dispatch; custom expiry/reset/restart; explicit renewal/inheritance; and notification/receipt deduplication. Existing supervisor management, Terminal ownership/queue and general usage-alert tests remain in the full suite.
+
+One earlier full run encountered a timing failure in the unchanged shared-app-server approval fixture. Its isolated recheck and the subsequent full 641-test run passed. Initial simulator failures led to the initialization/accessibility repairs above and corrected test scrolling; their final scoped runs passed.
+
+## Release checkpoint
+
+Released: **ClawDad Mac 0.7.0 (93)** is installed, signed, notarized, stapled and healthy. Both app and DMG passed Gatekeeper. **iPhone 0.7.0 (78)** is **IN_BETA_TESTING** in **ClawDad Internal**, with matching testing notes and verified group assignment at 07:11:30 UTC. Installation on Cody’s physical iPhone remains user-controlled through TestFlight. No public npm publication, public appcast, app-server destination routing, cloud provisioning or live research-task submission was performed.
+
+Mac build 92 was installed and verified first. The initial installation did not pass runtime-hash verification and restored build 91. The installer now explicitly waits for the expected runtime fingerprint and source hashes, and starts the intended bundle as a fresh app process. The retry verified build 92, native readiness in 6.09 seconds, all seven changed runtime/web modules, unchanged Assistant history and user instructions, unchanged research and budget files, and all 18 Terminal Codex process records preserved. Build 93 includes the final status corrections.
+
+Build 93 passed the same preservation checks. App launch to native readiness was **5.766 seconds**; warm local catalog access returned 254 projects in **31 ms**, health in **1 ms**, and available local speech status in **5 ms**. These are Mac-local measurements. The actual installed Assistant MCP exposes `set_research_budget` and successfully reads `research_status`; all seven changed runtime/web files match source. The current 13% shared usage correctly projects the 20% reserve while both existing setups remain disabled. The shared default remains 20%, revision zero, with no custom policies or new approval. The research state and budget files match their pre-install hashes.
+
+The iPhone archive and upload succeeded. Apple reported an existing missing-symbol warning for the third-party WebRTC framework; build 78 was nevertheless accepted and is available internally. This warning affects framework crash symbolication, not the successful upload. The supplied WebRTC binary was unchanged in this patch.
+
+Remaining physical iPhone checks: update TestFlight, open the exact supervisor’s allowance editor, confirm numeric entry/stepper and approval wording, test VoiceOver focus/announcements and large text on Cody’s device, and navigate back during a real call. Automatic admission and state preservation were verified with disposable fixtures; no real supervisor was enabled and no real budget was changed as a test. Actual audio, network reconnection and notification arrival on the physical phone are not established by the simulator.
+
+## Evidence and workspace
+
+Canonical ignored evidence: `native/macos/dist/candidates/research-budget-controls-2026-09-10/`. It contains final and diagnostic test logs, simulator result bundles/screenshots, desktop fixture evidence, signed native artifacts, installed-runtime checks and TestFlight receipts.
+
+The scoped implementation, tests, generated Xcode project and this report are committed together. The nine pre-existing unrelated dirty buckets remain preserved: `.agents/skills/clawdad-release/SKILL.md`, `native/macos/build-app.sh`, `native/macos/package-release.sh`, `native/macos/storage-workflow.sh`, `plugins/clawdad-codex-integration/.codex-plugin/plugin.json`, `plugins/clawdad-codex-integration/skills/clawdad-release/SKILL.md`, `assets/wordmark-explorations/`, `cloud/native/` and `marketing-site/`. Their next action is review/checkpoint in their existing lanes. Final hygiene requires zero unclassified dirty paths.

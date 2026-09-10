@@ -2,12 +2,87 @@ import XCTest
 
 @MainActor
 final class AssistantUITests: XCTestCase {
+  func testResearchBudgetDefaultOverrideAndPolling() {
+    checkResearchBudgetControls(largeText: false)
+  }
+  func testResearchBudgetControlsAtAccessibilityTextSize() {
+    checkResearchBudgetControls(largeText: true)
+  }
+  private func checkResearchBudgetControls(largeText: Bool) {
+    continueAfterFailure = false
+    let app = XCUIApplication()
+    app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-assistant-test", "--clawdad-assistant-reset-draft"]
+    if largeText { app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXL"] }
+    app.launch()
+    XCTAssertTrue(app.buttons["clawdad.assistant.chat"].waitForExistence(timeout: 15))
+    app.buttons["clawdad.assistant.chat"].tap()
+    app.buttons["clawdad.assistant.start-voice"].tap()
+    app.buttons["Workspace"].tap()
+    let open = app.buttons["clawdad.assistant.research.code-one"]
+    XCTAssertTrue(open.waitForExistence(timeout: 5)); open.tap()
+    func reveal(_ element: XCUIElement, up: Bool = true) {
+      for _ in 0..<16 {
+        if element.exists && element.isHittable { break }
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: up ? 0.68 : 0.38))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: up ? 0.38 : 0.68))
+        start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0)
+      }
+      XCTAssertTrue(element.isHittable)
+    }
+    func replace(_ field: XCUIElement, with text: String) {
+      field.doubleTap()
+      let selectAll = app.menuItems["Select All"].exists ? app.menuItems["Select All"] : app.buttons["Select All"]
+      if selectAll.exists { selectAll.tap() }
+      field.typeText(text)
+      XCTAssertEqual(field.value as? String, text)
+      if app.buttons["Done typing"].isHittable { app.buttons["Done typing"].tap() }
+    }
+    for (id, text) in [("objective", "Verify fixture results."), ("scope", "Only the fixture."), ("requirements", "Check both results.")] {
+      let field = app.descendants(matching: .any).matching(identifier: "clawdad.research.\(id)").firstMatch
+      reveal(field); field.tap(); field.typeText(text)
+      if app.buttons["Done typing"].isHittable { app.buttons["Done typing"].tap() }
+    }
+    let save = app.buttons["clawdad.research.save"]; reveal(save); save.tap()
+    let picker = app.buttons["clawdad.research.budget.mode"]
+    reveal(picker); picker.tap(); app.buttons["Custom stopping percentage"].tap()
+    let percent = app.textFields["clawdad.research.budget.override"]
+    reveal(percent); replace(percent, with: "0")
+    // Wait through a real UI status refresh: editing must retain the exact zero.
+    let retained = expectation(for: NSPredicate(format: "value == %@", "0"), evaluatedWith: percent)
+    wait(for: [retained], timeout: 2)
+    RunLoop.current.run(until: Date().addingTimeInterval(5.5))
+    XCTAssertEqual(percent.value as? String, "0")
+    let review = app.buttons["clawdad.research.budget.review-supervisor"]
+    reveal(review); review.tap()
+    XCTAssertTrue(app.alerts["Approve allowance setting?"].waitForExistence(timeout: 3))
+    XCTAssertTrue(app.alerts.staticTexts.element(boundBy: 1).label.contains("0%"))
+    app.alerts.buttons["Cancel"].tap()
+    review.tap(); app.alerts.buttons["Approve"].tap()
+    let current = app.staticTexts["clawdad.research.budget.current"]
+    reveal(current, up: false)
+    XCTAssertTrue(current.label.contains("0% remaining"), current.label)
+    saveScreenshot(app, largeText ? "Research allowance zero at accessibility text size" : "Research allowance zero override with shared default")
+    reveal(picker); picker.tap(); app.buttons["Use shared default"].tap()
+    reveal(review); review.tap(); app.alerts.buttons["Approve"].tap()
+    reveal(current, up: false); XCTAssertTrue(current.label.contains("20% remaining"), current.label)
+    let shared = app.buttons["Shared default: 20% remaining"]
+    reveal(shared); shared.tap()
+    let sharedPercent = app.textFields["clawdad.research.budget.default"]
+    reveal(sharedPercent); replace(sharedPercent, with: "25")
+    let sharedReview = app.buttons["clawdad.research.budget.review-default"]
+    reveal(sharedReview); sharedReview.tap(); app.alerts.buttons["Approve"].tap()
+    reveal(current, up: false); XCTAssertTrue(current.label.contains("25% remaining"), current.label)
+    app.buttons["Done"].tap()
+    app.buttons["Workspace"].tap()
+    XCTAssertTrue(app.buttons["End voice conversation"].exists)
+  }
   private func messageText(_ app: XCUIApplication, _ text: String) -> XCUIElement {
     let native = app.textViews.matching(NSPredicate(format: "value == %@ OR label == %@", text, text)).firstMatch
     return native.exists ? native : app.staticTexts[text]
   }
 
   func testResearchOptInPauseAndOffPreserveCallAndTypedDraft() {
+    continueAfterFailure = false
     let app = XCUIApplication()
     app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-assistant-test", "--clawdad-assistant-reset-draft"]
     app.launch()
@@ -21,32 +96,41 @@ final class AssistantUITests: XCTestCase {
     XCTAssertTrue(research.waitForExistence(timeout: 5)); research.tap()
     XCTAssertTrue(app.staticTexts["clawdad.research.status"].waitForExistence(timeout: 5))
     XCTAssertEqual(app.staticTexts["clawdad.research.status"].label, "Off")
+    func reveal(_ element: XCUIElement, up: Bool = true) {
+      for _ in 0..<20 {
+        if element.exists && element.isHittable { break }
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: up ? 0.68 : 0.38))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: up ? 0.38 : 0.68))
+        start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0)
+      }
+      XCTAssertTrue(element.isHittable)
+    }
     let enable = app.buttons["clawdad.research.enable"]
-    for _ in 0..<8 where !enable.exists { app.swipeUp() }
+    reveal(enable)
     XCTAssertTrue(enable.exists)
     XCTAssertFalse(enable.isEnabled)
-    for _ in 0..<8 where app.descendants(matching: .any).matching(identifier: "clawdad.research.objective").firstMatch.frame.minY < 150 { app.swipeDown() }
+    let objective = app.descendants(matching: .any).matching(identifier: "clawdad.research.objective").firstMatch
+    reveal(objective, up: false)
     for (id, text) in [("objective", "Verify the two fixture calculations."), ("scope", "Only this disposable directory."), ("requirements", "Both results have test evidence.")] {
       let field = app.descendants(matching: .any).matching(identifier: "clawdad.research.\(id)").firstMatch
-      for _ in 0..<6 where !field.isHittable { app.swipeUp() }
-      for _ in 0..<6 where field.frame.minY < 150 { app.swipeDown() }
+      reveal(field)
       field.tap(); field.typeText(text)
       if app.buttons["Done typing"].isHittable { app.buttons["Done typing"].tap() }
     }
-    for _ in 0..<6 where !enable.isHittable { app.swipeUp() }
+    reveal(enable)
     XCTAssertTrue(enable.isEnabled); enable.tap()
     XCTAssertTrue(app.alerts["Enable autonomy for this exact thread?"].waitForExistence(timeout: 3))
     app.alerts.buttons["Cancel"].tap()
-    for _ in 0..<8 where !enable.isHittable { app.swipeUp() }
+    reveal(enable)
     enable.tap(); app.alerts.buttons["Enable"].tap()
     let pause = app.buttons["clawdad.research.pause"]
-    for _ in 0..<8 where !pause.isHittable { app.swipeDown() }
+    reveal(pause, up: false)
     XCTAssertTrue(pause.waitForExistence(timeout: 5)); pause.tap()
-    for _ in 0..<8 where !app.staticTexts["clawdad.research.status"].exists { app.swipeDown() }
+    reveal(app.staticTexts["clawdad.research.status"], up: false)
     XCTAssertEqual(app.staticTexts["clawdad.research.status"].label, "Paused")
-    for _ in 0..<8 where !app.buttons["clawdad.research.off"].isHittable { app.swipeUp() }
+    reveal(app.buttons["clawdad.research.off"])
     app.buttons["clawdad.research.off"].tap()
-    for _ in 0..<8 where !app.staticTexts["clawdad.research.status"].exists { app.swipeDown() }
+    reveal(app.staticTexts["clawdad.research.status"], up: false)
     XCTAssertEqual(app.staticTexts["clawdad.research.status"].label, "Off")
     saveScreenshot(app, "Research controls require opt in and preserve the connected call")
     app.buttons["Done"].tap()

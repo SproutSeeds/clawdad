@@ -1,3 +1,4 @@
+import {researchBudgetPanel} from './research-budget.js';
 export function researchSupervisorPanel(request) {
   const dialog=document.createElement('dialog');dialog.className='assistant-dialog research-dialog';
   const title=document.createElement('h2');title.textContent='Research autonomy';
@@ -9,11 +10,13 @@ export function researchSupervisorPanel(request) {
     const container=document.createElement('label'),input=document.createElement(key==='evidenceRoot'?'input':'textarea');
     container.textContent=label;input.name=key;input.required=key!=='evidencePaths';container.append(input);form.append(container);fields[key]=input;
   }
-  const enable=document.createElement('button');enable.textContent='Enable for this exact thread';form.append(enable);
-  const explanation=document.createElement('p');explanation.textContent='Off by default. Reviews completed work and sends bounded continuations within your approved objective. At 20% weekly allowance, new automatic work pauses until you explicitly approve a bounded override. Running tasks may consume more. A reset does not clear the pause.';
+  const enable=document.createElement('button');enable.textContent='Enable for this exact thread';
+  const save=document.createElement('button');save.textContent='Save setup with autonomy off';save.dataset.saveOnly='1';form.append(save,enable);
+  const explanation=document.createElement('p');explanation.textContent='Off by default. Reviews completed work and sends bounded continuations within your approved objective. New automatic work follows the shared weekly stopping default or this supervisor’s approved override. Running tasks may consume more. A reset does not clear a pause.';
   dialog.append(title,close,state,explanation,form,controls,error,history);document.body.append(dialog);
   let target=null,thread=null,timer=null,pending=null,data=null,opener=null,draftKey=null;
   const drafts=new Map();
+  const budgetPanel=researchBudgetPanel(mutate);dialog.insertBefore(budgetPanel.element,error);
   const call=(action,args={},id=crypto.randomUUID())=>request('/v1/assistant/request',{action,...args,requestId:id});
   const button=(name,action)=>{const b=document.createElement('button');b.type='button';b.textContent=name;b.onclick=action;return b;};
   async function mutate(action,args){
@@ -27,6 +30,7 @@ export function researchSupervisorPanel(request) {
       thread=data.threads.find(t=>t.sessionId===target?.sessionId&&t.agentInstanceId===target?.agentInstanceId)||null;
       state.textContent=`${target?.tabTitle||'Selected agent'} · ${thread?.status||'Off'}${thread?.reason?' · '+thread.reason:''}`;
       form.hidden=!!thread?.enabled;
+      budgetPanel.render(data.budget,thread);
       if(controls.contains(document.activeElement)&&['TEXTAREA','INPUT'].includes(document.activeElement.tagName))return;
       const selection=window.getSelection();if(selection&&!selection.isCollapsed&&controls.contains(selection.anchorNode))return;
       controls.replaceChildren();
@@ -37,16 +41,7 @@ export function researchSupervisorPanel(request) {
         // Preserve an unsent steering draft across polling and navigation.
         steering.value=dialog.dataset.steering||'';steering.oninput=()=>dialog.dataset.steering=steering.value;
         controls.append(steering,button('Apply steering',async()=>{if(steering.value.trim()){await mutate('research.steer',{threadId:thread.id,text:steering.value,confirmed:true});if(!pending){dialog.dataset.steering='';steering.value='';}}}));
-        const account=data.budget.accounts.find(a=>a.accountKey===thread.accountKey);
-        if(account?.latched){
-          const reserve=document.createElement('input'),limit=document.createElement('input');
-          reserve.type=limit.type='number';reserve.min='0';reserve.max='20';reserve.value=dialog.dataset.reserve||'10';limit.min='1';limit.max='20';limit.value=dialog.dataset.limit||'3';
-          reserve.setAttribute('aria-label','Revised percent reserve');limit.setAttribute('aria-label','Maximum additional reviews');
-          reserve.oninput=()=>dialog.dataset.reserve=reserve.value;limit.oninput=()=>dialog.dataset.limit=limit.value;
-          controls.append(reserve,limit,button('Review budget override',()=>{
-            if(confirm(`Approve up to ${limit.value} reviews for this exact thread and account, with a ${reserve.value}% reserve, until the next weekly cycle or 24 hours? This does not purchase usage.`))void mutate('research.override',{accountKey:thread.accountKey,threadIds:[thread.id],threshold:Number(reserve.value),maxReviews:Number(limit.value),confirmed:true});
-          }));
-        }
+
       }
       if(thread&&!history.childElementCount)history.append(button('Open decision history',()=>loadHistory(0)));
     }catch(e){error.textContent=e.message;}
@@ -61,9 +56,10 @@ export function researchSupervisorPanel(request) {
   }
   form.onsubmit=async event=>{
     event.preventDefault();if(!target?.sessionId)return;
-    if(!confirm('Enable automatic research continuations for this exact agent, objective and scope?'))return;
+    const saveOnly=event.submitter===save;
+    if(!saveOnly&&!confirm('Enable automatic research continuations for this exact agent, objective and scope, using its approved weekly stopping limit?'))return;
     const lines=value=>value.split('\n').map(s=>s.trim()).filter(Boolean);
-    await mutate('research.enable',{confirmed:true,tabId:target.tabId,sessionId:target.sessionId,agentInstanceId:target.agentInstanceId,
+    await mutate(saveOnly?'research.configure':'research.enable',{confirmed:true,...(saveOnly?{start:false}:{}),...(thread?{threadId:thread.id,expectedRevision:thread.revision}:{}),tabId:target.tabId,sessionId:target.sessionId,agentInstanceId:target.agentInstanceId,
       objective:fields.objective.value,scope:fields.scope.value,requirements:lines(fields.requirements.value),evidenceRoot:fields.evidenceRoot.value,evidencePaths:lines(fields.evidencePaths.value)});
   };
   dialog.addEventListener('close',()=>{
@@ -72,14 +68,16 @@ export function researchSupervisorPanel(request) {
     opener?.focus();
   });
   return async(tabId)=>{
-    opener=document.activeElement;error.textContent='';history.replaceChildren();dialog.showModal();enable.disabled=true;
+    opener=document.activeElement;error.textContent='';history.replaceChildren();dialog.showModal();enable.disabled=true;save.disabled=true;
     try{
       ({researchTarget:target}=await call('research.target',{tabId}));
       draftKey=target.agentInstanceId+':'+target.sessionId;
       const saved=drafts.get(draftKey);
       for(const [key,input]of Object.entries(fields))input.value=saved?.fields[key]||(key==='evidenceRoot'?target.directory||'':'');
       dialog.dataset.steering=saved?.steering||'';
-      enable.disabled=!target.sessionId;await refresh();timer=setInterval(refresh,5000);
+      enable.disabled=save.disabled=!target.sessionId;await refresh();
+      if(thread&&!saved)for(const [key,input]of Object.entries(fields))input.value=Array.isArray(thread[key])?thread[key].join('\n'):thread[key]||input.value;
+      timer=setInterval(refresh,5000);
     }
     catch(e){error.textContent=e.message;}
   };

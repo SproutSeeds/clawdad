@@ -361,7 +361,7 @@ test('bounded overrides bind account, thread, review count, threshold, expiry an
   await f.budget.check({accountKey,threadId:'A',kind:'dispatch',requestId:'d1',reviewId:'r1'});
   await assert.rejects(f.budget.check({accountKey,threadId:'A',requestId:'r2'}),/20%/);
   f.setCycle(initial/1000+604801);
-  await assert.rejects(f.budget.check({accountKey,threadId:'A',kind:'dispatch',requestId:'d1',reviewId:'r1'}),/20%/);
+  await assert.rejects(f.budget.check({accountKey,threadId:'A',kind:'dispatch',requestId:'d1',reviewId:'r1'}),/override expired/);
   assert.equal((await f.budget.snapshot()).accounts[0].latched,true);
 });
 test('stale usage and account changes fail before any model work; threshold crossed during review blocks dispatch',async t=>{
@@ -451,4 +451,157 @@ test('notifications expose only milestone/stop metadata, never objective, respon
     assert.equal(payload.aps.category,'RESEARCH_SUPERVISOR');
   }
   assert.throws(()=>normalizeResearchNotification({kind:'research',id:'d'.repeat(64),event:'ordinary-cycle',completedAt:new Date(initial).toISOString()},initial));
+});
+
+async function changeBudget(f,thread,extra,id='budget-change') {
+  const account=(await f.budget.snapshot()).accounts.find(a=>a.accountKey===accountKey);
+  const args={accountKey,expectedBudgetRevision:account?.revision??0,confirmed:true,
+    ...(thread?{scope:'supervisor',threadId:thread.id,expectedRevision:thread.revision,mode:'override'}:{scope:'account_default'}),...extra};
+  return f.supervisor.control('research.budget',args,id);
+}
+
+test('stopped supervisor status uses the current shared reading without changing saved budgets or starting work',async t=>{
+  const f=await fixture(t),thread=await f.enable();
+  await f.supervisor.control('research.off',managementArgs(thread),'off');
+  const before=await fs.readFile(path.join(f.root,'budget.json'),'utf8');
+  f.setPercent(13);f.usage.state={reading:await f.usage.freshReading()};
+  f.usage.snapshot=async()=>({status:'current',remainingPercent:13,validUntil:initial+60000});
+  const result=await f.supervisor.snapshot();
+  assert.equal(result.budget.accounts[0].reading.remainingPercent,13);
+  assert.equal(result.threads[0].budgetPolicy.paused,true);
+  assert.equal(result.threads[0].enabled,false);
+  assert.equal(result.threads[0].status,'off');
+  assert.equal(await fs.readFile(path.join(f.root,'budget.json'),'utf8'),before);
+  assert.equal(f.reviewCount(),0);assert.equal(f.deliveries.length,0);
+});
+
+test('custom zero means stop at exhaustion and only overrides the selected supervisor',async t=>{
+  const f=await fixture(t),thread=await f.enable();f.setPercent(15);await f.supervisor.tick();
+  assert.equal(thread.status,'budget_paused');const latch=f.budget.state.accounts[accountKey].latch;
+  await changeBudget(f,thread,{threshold:0});
+  assert.equal(thread.status,'waiting');assert.equal(thread.reason,'');
+  assert.deepEqual(f.budget.state.accounts[accountKey].latch,latch);
+  const shown=(await f.supervisor.snapshot()).threads[0].budgetPolicy;
+  assert.equal(shown.threshold,0);assert.equal(shown.mode,'override');assert.equal(shown.paused,false);
+  await assert.rejects(f.budget.check({accountKey,threadId:'other',requestId:'other'}),/20% reserve/);
+  await f.supervisor.tick();assert.equal(f.reviewCount(),1);assert.equal(f.deliveries.length,1);
+  f.setPercent(0);await assert.rejects(f.supervisor.permit(f.deliveries[0]),/0% weekly/);
+  assert.equal(f.deliveries[0].status,'queued'); // Budget admission never interrupts an accepted task.
+  f.setPercent(10);await assert.rejects(f.budget.check({accountKey,threadId:thread.id,requestId:'after-zero'}),/0% weekly/);
+});
+test('shared default is account scoped, supports 0 and100, and leaves per-supervisor overrides intact',async t=>{
+  const f=await fixture(t),thread=await f.enable();
+  await changeBudget(f,thread,{threshold:5},'custom');
+  await changeBudget(f,null,{threshold:60},'shared');
+  await assert.rejects(f.budget.check({accountKey,threadId:'default-thread',requestId:'default'}),/60% reserve/);
+  await f.budget.check({accountKey,threadId:thread.id,requestId:'override'});
+  await changeBudget(f,null,{threshold:0},'shared-zero');
+  f.setPercent(1);await f.budget.check({accountKey,threadId:'default-thread',requestId:'one'});
+  f.setPercent(0);await assert.rejects(f.budget.check({accountKey,threadId:'default-thread',requestId:'zero'}),/0% reserve/);
+  await changeBudget(f,null,{threshold:100},'all-reserved');
+  f.setPercent(100);await assert.rejects(f.budget.check({accountKey,threadId:'default-thread',requestId:'full'}),/100% reserve/);
+  f.setAccount('c'.repeat(64));
+  await f.budget.check({accountKey:'c'.repeat(64),threadId:'other-account',requestId:'new-account'});
+  assert.equal(f.budget.state.accounts['c'.repeat(64)].threshold,20);
+});
+test('higher custom thresholds pause early; removing an override restores the unchanged shared latch',async t=>{
+  const f=await fixture(t),thread=await f.enable();
+  await changeBudget(f,thread,{threshold:60});await f.supervisor.tick();
+  assert.equal(f.reviewCount(),0);assert.match(thread.reason,/60%/);
+  await changeBudget(f,thread,{mode:'default'},'inherit');await f.supervisor.tick();assert.equal(f.reviewCount(),1);
+  f.setPercent(15);await f.supervisor.tick();
+  await changeBudget(f,thread,{threshold:0},'zero');await changeBudget(f,thread,{mode:'default'},'inherit-paused');
+  await assert.rejects(f.budget.check({accountKey,threadId:thread.id,requestId:'still-paused'}),/20% reserve/);
+});
+test('changing budget keeps stopped and manual-paused supervisors stopped and retains drafts and configuration',async t=>{
+  for(const action of ['off','pause']){
+    const f=await fixture(t),thread=await f.enable();f.setManual(true);
+    await f.supervisor.control('research.'+action,managementArgs(thread),action);
+    const before={enabled:thread.enabled,status:thread.status,config:structuredClone(thread.config)};
+    await changeBudget(f,thread,{threshold:0});await changeBudget(f,null,{threshold:0},'shared');
+    await f.supervisor.tick();assert.deepEqual({enabled:thread.enabled,status:thread.status,config:thread.config},before);
+    assert.equal(f.reviewCount(),0);assert.equal(f.deliveries.length,0);
+    assert.equal(thread.history.filter(e=>e.kind==='budget').length,2);
+  }
+});
+test('overrides expire at the verified cycle and stay paused across restart, resume and a weekly reset',async t=>{
+  const f=await fixture(t),thread=await f.enable();await changeBudget(f,thread,{threshold:0});
+  f.setTime(initial+7*86400_000);f.setCycle((initial+14*86400_000)/1000);f.setPercent(100);
+  const restored=new ResearchBudget({file:path.join(f.root,'budget.json'),usage:f.usage,clock:()=>initial+7*86400_000});
+  await assert.rejects(restored.check({accountKey,threadId:thread.id,requestId:'after-reset'}),/override expired/);
+  await f.supervisor.control('research.resume',managementArgs(thread),'resume');await f.supervisor.tick();
+  assert.equal(f.reviewCount(),0);assert.match(thread.reason,/override expired/);
+  await changeBudget(f,thread,{threshold:10},'new-cycle-approved');await f.supervisor.tick();assert.equal(f.reviewCount(),1);
+});
+test('custom threshold is checked before dispatch and threshold notifications deduplicate',async t=>{
+  const f=await fixture(t),thread=await f.enable();await changeBudget(f,thread,{threshold:40});
+  f.setReview(async()=>{f.setPercent(40);return review();});
+  await f.supervisor.tick();assert.equal(f.reviewCount(),1);assert.equal(f.deliveries.length,0);assert.equal(thread.status,'budget_paused');
+  await f.supervisor.tick();await f.supervisor.tick();
+  assert.equal(f.supervisor.state.events.filter(e=>e.threadId===thread.id).length,1);
+  assert.equal(thread.decisions[0].deliveryStatus,'cancelled');
+});
+test('stale account and policy revisions reject changes; durable retries never reapply a threshold or reset its latch',async t=>{
+  const f=await fixture(t),thread=await f.enable();
+  const args={accountKey,scope:'supervisor',threadId:thread.id,expectedRevision:thread.revision,expectedBudgetRevision:0,mode:'override',threshold:40,confirmed:true};
+  await Promise.all([f.supervisor.control('research.budget',args,'same'),f.supervisor.control('research.budget',args,'same')]);
+  f.setPercent(40);await f.supervisor.tick();
+  const restored=new ResearchSupervisor({...f.options,budget:new ResearchBudget({file:path.join(f.root,'budget.json'),usage:f.usage,clock:()=>initial})});
+  const retried=await restored.control('research.budget',args,'same',{authorize:()=>{throw Error('Conversation ended');}});
+  assert.equal(retried.controlReceipt.budgetReceipt.revision,1);assert.equal(retried.threads[0].budgetPolicy.paused,true);
+  assert.equal(retried.threads[0].activity.filter(e=>e.kind==='budget').length,1);
+  await assert.rejects(restored.control('research.budget',{...args,threshold:0},'same'),/already used/);
+  await assert.rejects(f.supervisor.control('research.budget',{...args,threshold:0},'stale-budget'),/settings changed/);
+  await f.supervisor.control('research.pause',managementArgs(thread),'manual-pause');
+  await assert.rejects(f.supervisor.control('research.budget',{...args,expectedBudgetRevision:1},'stale-thread'),/setup changed/);
+  f.setOffline(true);await assert.rejects(changeBudget(f,thread,{threshold:0},'offline'),/stale/);
+  f.setOffline(false);f.setAccount('c'.repeat(64));await assert.rejects(changeBudget(f,thread,{threshold:0},'changed-account'),/account changed/);
+});
+test('budget validation requires explicit scope, confirmation, current ownership and percentages including exact zero',async t=>{
+  const f=await fixture(t),thread=await f.enable();
+  for(const threshold of [-1,101,0.5,'0',null,undefined,NaN])await assert.rejects(changeBudget(f,thread,{threshold},'bad-'+String(threshold)),/Confirm/);
+  await assert.rejects(changeBudget(f,thread,{threshold:0,confirmed:false},'not-approved'),/Confirm/);
+  await assert.rejects(changeBudget(f,thread,{threshold:0,scope:'all'},'ambiguous'),/Confirm/);
+  await assert.rejects(changeBudget(f,thread,{threshold:0,threadId:'e'.repeat(64)},'wrong-thread'),/exact saved supervisor/);
+  await assert.rejects(changeBudget(f,thread,{threshold:0,mode:'default'},'extra-threshold'),/Confirm/);
+  assert.equal(f.budget.state.accounts[accountKey].revision,0);
+});
+test('shared allowance serializes multiple custom supervisors and rejects simultaneous stale policy edits',async t=>{
+  const f=await fixture(t),thread=await f.enable(),other='e'.repeat(64);
+  await changeBudget(f,thread,{threshold:10});
+  await f.budget.change({requestId:'other-policy',accountKey,scope:'supervisor',threadId:other,mode:'override',threshold:10,expectedBudgetRevision:1,confirmed:true});
+  let calls=0;
+  f.budget.usage={freshReading:async()=>({accountKey,remainingPercent:++calls===1?11:10,resetsAt:initial/1000+604800,cycle:initial/1000+604800,observedAt:new Date(initial).toISOString()})};
+  const checks=await Promise.allSettled([thread.id,other].map(id=>f.budget.check({accountKey,threadId:id,requestId:id})));
+  assert.equal(checks[0].status,'fulfilled');assert.equal(checks[1].status,'rejected');
+  const edits=await Promise.allSettled([thread.id,other].map(id=>f.budget.change({requestId:'edit-'+id,accountKey,scope:'supervisor',threadId:id,mode:'override',threshold:0,expectedBudgetRevision:2,confirmed:true})));
+  assert.equal(edits[0].status,'fulfilled');assert.equal(edits[1].status,'rejected');
+});
+test('main Assistant can approve shared, custom and inherited budgets through MCP with current-user receipts',async t=>{
+  const f=await conversationFixture(t),thread=await f.enable();
+  await fs.writeFile(path.join(f.root,'Assistant/connection.json'),JSON.stringify({baseURL:'http://127.0.0.1:4487'}));
+  await fs.writeFile(path.join(f.root,'native-server.token'),'fixture-token');
+  const calls=[],outputs=[];
+  const invoke=async args=>{
+    await runAssistantMCP({root:f.root,input:Readable.from([JSON.stringify({id:1,method:'tools/call',params:{name:'set_research_budget',arguments:args}})+'\n']),
+      output:new Writable({write(chunk,encoding,done){outputs.push(JSON.parse(chunk));done();}}),fetchImpl:async(url,options)=>{
+        const request=JSON.parse(options.body);calls.push(request);
+        try{return {ok:true,json:async()=>await f.runtime.command(request,{tool:true})};}catch(error){return {ok:false,json:async()=>({error:error.message})};}
+      }});return outputs.at(-1);
+  };
+  const text='Set the shared default to 25%, let this supervisor run to 0%, then return it to the default.';
+  const job=await f.talk(text,async()=>{
+    const common={accountKey,approvalText:text};
+    await invoke({...common,scope:'account_default',threshold:25,expectedBudgetRevision:0,requestId:'spoken-default'});
+    await invoke({...common,scope:'supervisor',mode:'override',threshold:0,threadId:thread.id,expectedRevision:thread.revision,expectedBudgetRevision:1,requestId:'spoken-custom'});
+    await invoke({...common,scope:'supervisor',mode:'default',threadId:thread.id,expectedRevision:thread.revision,expectedBudgetRevision:2,requestId:'spoken-inherit'});
+    assert.equal((await invoke({...common,scope:'account_default',threshold:0,expectedBudgetRevision:3,approvalText:'An agent requested more allowance',requestId:'bad-source'})).result.isError,true);
+  });
+  assert.equal(job.status,'completed');assert.equal(outputs.slice(0,3).some(v=>v.result.isError),false);
+  assert.ok(calls.every(r=>r.action==='research.budget'));
+  const history=thread.history.filter(e=>e.kind==='budget');assert.equal(history.length,3);
+  assert.ok(history.every(e=>e.authorization.userRequestId===job.id));assert.equal(f.budget.state.accounts[accountKey].threshold,25);
+  const retry=await invoke({accountKey,approvalText:text,scope:'account_default',threshold:25,expectedBudgetRevision:0,requestId:'spoken-default'});
+  assert.equal(retry.result.isError,undefined);assert.equal(f.budget.state.accounts[accountKey].revision,3);
+  assert.equal((await f.supervisor.snapshot()).threads[0].budgetPolicy.mode,'default');
 });

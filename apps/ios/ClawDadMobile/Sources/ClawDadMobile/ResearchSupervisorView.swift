@@ -16,9 +16,7 @@ struct ResearchSupervisorView: View {
   @State private var error = ""
   @State private var busy = false
   @State private var confirmingEnable = false
-  @State private var confirmingOverride = false
-  @State private var reserve = 10
-  @State private var reviewLimit = 3
+  @State private var loadedConfiguration: String?
   @State private var pending: (action: String, args: [String: AssistantValue], id: String)?
   @State private var history: [AssistantValue] = []
   @State private var nextCursor: Double?
@@ -39,7 +37,7 @@ struct ResearchSupervisorView: View {
       Form {
         summarySection
         authorizationSection
-        budgetSection
+        ResearchBudgetEditor(budget: research["budget"]?.object ?? [:], thread: thread, inputFocused: $entryFocused) { action, args in send(action, args) }
         activitySection
         if !error.isEmpty {
           Section { Text(error).foregroundStyle(ClawDadTheme.gold)
@@ -68,12 +66,8 @@ struct ResearchSupervisorView: View {
           "sessionId": target["sessionId"] ?? .null, "agentInstanceId": target["agentInstanceId"] ?? .null,
           "objective": .string(objective), "scope": .string(scope), "requirements": .array(lines(requirements)),
           "evidenceRoot": .string(evidenceRoot), "evidencePaths": .array(lines(evidencePaths))]) }
-      } message: { Text("The supervisor may review the latest completed response and send continuations only within the objective and scope you entered. The 20% account reserve remains in force.") }
-      .alert("Approve this bounded budget override?", isPresented: $confirmingOverride) {
-        Button("Cancel", role: .cancel) {}
-        Button("Approve") { send("research.override", ["confirmed": .bool(true), "accountKey": thread?["accountKey"] ?? .null,
-          "threadIds": .array([thread?["id"] ?? .null]), "threshold": .number(Double(reserve)), "maxReviews": .number(Double(reviewLimit))]) }
-      } message: { Text("Allow up to \(reviewLimit) more reviews for this thread, pausing at \(reserve)% remaining. Running tasks may continue using allowance after the pause.") }
+      } message: { Text("The supervisor may review the latest completed response and send continuations only within the objective and scope you entered. Its approved weekly stopping percentage remains in force. You can save the setup off first to choose a custom limit.") }
+
     }.tint(ClawDadTheme.gold).preferredColorScheme(.dark)
   }
   @ViewBuilder private var summarySection: some View {
@@ -122,23 +116,17 @@ struct ResearchSupervisorView: View {
               .accessibilityIdentifier("clawdad.research.directory")
             TextField("Reports or checkpoints, one path per line", text: $evidencePaths, axis: .vertical).lineLimit(1...5).researchPathInput().focused($entryFocused)
             Text("Evidence links are read only inside this directory. Missing evidence stays unverified. Broader scope, external messages, spending and subscription changes require your separate authorization.").font(.footnote)
+            Button("Save setup with autonomy off") {
+              entryFocused = false
+              send("research.configure", ["confirmed": .bool(true), "tabId": .string(tabId),
+                "sessionId": target["sessionId"] ?? .null, "agentInstanceId": target["agentInstanceId"] ?? .null,
+                "objective": .string(objective), "scope": .string(scope), "requirements": .array(lines(requirements)),
+                "evidenceRoot": .string(evidenceRoot), "evidencePaths": .array(lines(evidencePaths)), "start": .bool(false)])
+            }.disabled(target["sessionId"]?.string == nil || [objective, scope, requirements, evidenceRoot].contains { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+              .accessibilityIdentifier("clawdad.research.save")
             Button("Enable research autonomy") { entryFocused = false; confirmingEnable = true }
               .disabled(target["sessionId"]?.string == nil || [objective, scope, requirements, evidenceRoot].contains { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
               .accessibilityIdentifier("clawdad.research.enable")
-          }
-        }
-  }
-  @ViewBuilder private var budgetSection: some View {
-        Section("Account allowance reserve") {
-          Text("At 20% weekly allowance remaining, all autonomous threads on this Mac pause new work. Running tasks may consume more. A weekly reset does not remove this pause.").font(.footnote)
-          if let account = research["budget"]?.object?["accounts"]?.array?.compactMap(\.object).first(where: { $0["accountKey"] == thread?["accountKey"] }), account["latched"]?.bool == true {
-            Text("Reserve pause requires your approval").font(.headline)
-            if let remaining = account["reading"]?.object?["remainingPercent"]?.number { Text("\(remaining.formatted())% weekly remaining") }
-            Stepper("Revised reserve: \(reserve)%", value: $reserve, in: 0...20)
-            Stepper("At most \(reviewLimit) reviews", value: $reviewLimit, in: 1...20)
-            Text("An override applies only to this thread and signed-in account, until the next verified weekly cycle or 24 hours, whichever comes first. It does not purchase usage.").font(.footnote)
-            Button("Review budget override") { confirmingOverride = true }.disabled(!enabled)
-              .accessibilityIdentifier("clawdad.research.override")
           }
         }
   }
@@ -167,10 +155,24 @@ struct ResearchSupervisorView: View {
   }
   private var threadArgs: [String: AssistantValue] { ["threadId": thread?["id"] ?? .null] }
   private func refresh() async {
-    do { research = try await controller.researchRequest("research.status")["research"]?.object ?? [:] }
+    do {
+      research = try await controller.researchRequest("research.status")["research"]?.object ?? [:]
+      if let thread, let id = thread["id"]?.string, loadedConfiguration != id {
+        loadedConfiguration = id
+        if objective.isEmpty { objective = thread["objective"]?.string ?? "" }
+        if scope.isEmpty { scope = thread["scope"]?.string ?? "" }
+        if requirements.isEmpty { requirements = thread["requirements"]?.array?.compactMap(\.string).joined(separator: "\n") ?? "" }
+        if evidenceRoot.isEmpty { evidenceRoot = thread["evidenceRoot"]?.string ?? "" }
+        if evidencePaths.isEmpty { evidencePaths = thread["evidencePaths"]?.array?.compactMap(\.string).joined(separator: "\n") ?? "" }
+      }
+    }
     catch { self.error = error.localizedDescription }
   }
   private func send(_ action: String, _ args: [String: AssistantValue]) {
+    var args = args
+    if ["research.enable", "research.configure"].contains(action), let thread {
+      args["threadId"] = thread["id"]; args["expectedRevision"] = thread["revision"]
+    }
     pending = (action, args, UUID().uuidString.lowercased()); retry()
   }
   private func retry() {

@@ -73,9 +73,17 @@
         "tabTitle": .string("Disposable research"), "sessionId": .string("fixture-session"),
         "agentInstanceId": .string("fixture-process"), "directory": .string("/tmp/research-fixture")])] }
       var research = state["research"]?.object ?? ["available": .bool(true), "defaultEnabled": .bool(false), "threads": .array([])]
-      if action == "research.enable" {
+      let accountKey = String(repeating: "a", count: 64)
+      let now = Date().timeIntervalSince1970 * 1_000
+      var budget = research["budget"]?.object ?? [:]
+      var account = budget["accounts"]?.array?.first?.object ?? ["accountKey": .string(accountKey), "threshold": .number(20), "revision": .number(0), "policies": .object([:])]
+      budget["available"] = .bool(true); budget["currentAccountKey"] = .string(accountKey)
+      budget["usage"] = .object(["status": .string("current"), "remainingPercent": .number(50), "validUntil": .number(now + 60_000)])
+      if action == "research.enable" || action == "research.configure" {
         var thread = args; thread["id"] = .string("fixture-research"); thread["name"] = .string("Disposable research")
-        thread["status"] = .string("waiting"); thread["enabled"] = .bool(true); thread["activity"] = .array([])
+        thread["status"] = .string(action == "research.enable" ? "waiting" : "off")
+        thread["enabled"] = .bool(action == "research.enable"); thread["activity"] = .array([])
+        thread["accountKey"] = .string(accountKey); thread["revision"] = .number(1)
         research["threads"] = .array([.object(thread)])
       } else if ["research.pause", "research.off", "research.resume", "research.steer"].contains(action) {
         research["threads"] = .array((research["threads"]?.array ?? []).map { value in
@@ -85,6 +93,24 @@
           return .object(thread)
         })
       }
+      if action == "research.budget" {
+        guard args["expectedBudgetRevision"] == account["revision"] else { throw AssistantProtocolError.invalid }
+        account["revision"] = .number((account["revision"]?.number ?? 0) + 1)
+        if args["scope"]?.string == "account_default" { account["threshold"] = args["threshold"] }
+        else if let threadId = args["threadId"]?.string {
+          var policies = account["policies"]?.object ?? [:]
+          policies[threadId] = .object(["mode": args["mode"] ?? .string("default"), "threshold": args["threshold"] ?? .null,
+            "expiresAt": .number(now + 86_400_000)])
+          account["policies"] = .object(policies)
+        }
+      }
+      research["threads"] = .array((research["threads"]?.array ?? []).map { value in
+        guard var thread = value.object, let id = thread["id"]?.string else { return value }
+        let selected = account["policies"]?.object?[id]?.object ?? [:]
+        thread["budgetPolicy"] = .object(selected["mode"]?.string == "override" ? selected : ["mode": .string("default"), "threshold": account["threshold"] ?? .number(20)])
+        return .object(thread)
+      })
+      budget["accounts"] = .array([.object(account)]); research["budget"] = .object(budget)
       if action == "research.history" { return ["researchHistory": .object(["entries": .array([]), "nextCursor": .null])] }
       state["research"] = .object(research)
       return ["research": .object(research)]

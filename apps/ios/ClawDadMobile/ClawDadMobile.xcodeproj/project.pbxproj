@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		05786F433B673CB51ED01B38 /* ResearchBudgetEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D7242D152C900A9BC22484E /* ResearchBudgetEditor.swift */; };
 		06B20F27947BBF2559A2A982 /* AssistantPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D4E99AEE8642626D8FD9843 /* AssistantPreview.swift */; };
 		08A2F61153C0221F74B49988 /* RemoteTerminalReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B67F2E9259E05DBACEB7F04 /* RemoteTerminalReader.swift */; };
 		1022DB6F1FD8E58702E505B4 /* AssistantChatComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 193E817EE91878630342FBFE /* AssistantChatComposer.swift */; };
@@ -98,6 +99,7 @@
 		19EE4C738B3B5065E4CF4B99 /* AssistantImageUpload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantImageUpload.swift; sourceTree = "<group>"; };
 		1C8EA67C2D88980A87BDCFA9 /* ClawDadMobile.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = ClawDadMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1CBE9BB9E28B2AADC9243157 /* RemoteTerminalTabList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTerminalTabList.swift; sourceTree = "<group>"; };
+		1D7242D152C900A9BC22484E /* ResearchBudgetEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResearchBudgetEditor.swift; sourceTree = "<group>"; };
 		21A33EE26BF9BD9F84918E9F /* FilesLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilesLibraryView.swift; sourceTree = "<group>"; };
 		26AABBF8F4DF0D8B38BF9365 /* QRScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRScannerView.swift; sourceTree = "<group>"; };
 		29F575EC9D8D541AD658DF6B /* AssistantMicrophoneState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantMicrophoneState.swift; sourceTree = "<group>"; };
@@ -239,6 +241,7 @@
 				4B67F2E9259E05DBACEB7F04 /* RemoteTerminalReader.swift */,
 				1CBE9BB9E28B2AADC9243157 /* RemoteTerminalTabList.swift */,
 				E4B71B55085B2C1EE623A070 /* RemoteTerminalWindowGroups.swift */,
+				1D7242D152C900A9BC22484E /* ResearchBudgetEditor.swift */,
 				482370CE69CA78C83DA3EB3A /* ResearchSupervisorView.swift */,
 				8960C1531C592BD814505199 /* SubscriptionManager.swift */,
 				8F34770E78861322677F1C3C /* VoiceRecorder.swift */,
@@ -470,6 +473,7 @@
 				08A2F61153C0221F74B49988 /* RemoteTerminalReader.swift in Sources */,
 				4004BF2CF15494DE5009C531 /* RemoteTerminalTabList.swift in Sources */,
 				187E31F4AF200A700830399F /* RemoteTerminalWindowGroups.swift in Sources */,
+				05786F433B673CB51ED01B38 /* ResearchBudgetEditor.swift in Sources */,
 				12BA298BF1ED630AADFF8002 /* ResearchSupervisorView.swift in Sources */,
 				4D1C0FA879A0AA478DD90B11 /* SubscriptionManager.swift in Sources */,
 				7751604101BB979587499134 /* VoiceRecorder.swift in Sources */,
@@ -616,7 +620,7 @@
 				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 77;
+				CURRENT_PROJECT_VERSION = 78;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_NS_ASSERTIONS = NO;
@@ -713,7 +717,7 @@
 				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 77;
+				CURRENT_PROJECT_VERSION = 78;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -824,7 +828,7 @@
 				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 77;
+				CURRENT_PROJECT_VERSION = 78;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_NS_ASSERTIONS = NO;
