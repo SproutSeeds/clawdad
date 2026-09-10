@@ -26,6 +26,7 @@ async function fixture(t){
     if(method==='thread/queue/list')return {data:queue.get(args.threadId)||[],nextCursor:null};
     if(method==='thread/start'){const key=id();threads.set(key,{id:key,cwd:args.cwd,status:{type:'idle'},turns:[]});loaded.add(key);return {thread:threads.get(key)};}
     if(method==='thread/name/set'){thread.name=args.name;return {};}
+    if(method==='thread/unarchive'){thread.archived=false;return {thread};}
     if(method==='thread/resume'){loaded.add(args.threadId);return {thread};}
     if(method==='thread/queue/add'){
       const entry={id:id(),...args};queue.set(args.threadId,[...(queue.get(args.threadId)||[]),entry]);
@@ -138,4 +139,16 @@ test('unverified index-only histories remain discoverable and legacy reads never
   assert.equal(first.data[0].id,'one');
   assert.equal((await f.app.history({threadId:unlisted,limit:1,cursor:first.nextCursor})).data[0].id,'two');
   assert.equal(f.calls.some(c=>c.method==='thread/resume'),false);
+});
+
+test('archived restoration is explicit, owner-bound and separate from resume or submission', async t => {
+  const f=await fixture(t);f.threads.get(f.threadId).archived=true;f.loaded.delete(f.threadId);
+  const inspected=await f.app.inspect(f.threadId);assert.equal(inspected.capabilities.restore,true);assert.equal(inspected.capabilities.resume,false);
+  const requestId=id(),args={threadId:f.threadId,targetToken:inspected.targetToken};
+  const restored=await f.app.control('appserver.restore',args,requestId);assert.equal(restored.job.status,'completed');assert.equal(restored.job.result.submitted,false);
+  await f.app.control('appserver.restore',args,requestId);assert.equal(f.calls.filter(c=>c.method==='thread/unarchive').length,1);
+  assert.equal(f.calls.some(c=>c.method==='thread/resume'||c.method==='thread/queue/add'),false);
+  const again=await f.app.inspect(f.threadId);assert.equal(again.capabilities.resume,true);
+  await f.app.control('appserver.resume',{threadId:f.threadId,targetToken:again.targetToken},id());
+  assert.equal(f.calls.filter(c=>c.method==='thread/resume').length,1);
 });
