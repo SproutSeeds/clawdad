@@ -108,7 +108,7 @@ final class MacAssistantTerminalInput {
           allowEmptyTrim:allowEmptyTrim || verifiedEmptyScreens[shellIdentity] == String(value.suffix(24_000))).suffix(24_000))
       }
     }
-    return String(value.suffix(24_000))
+    return MacAssistantComposerRendering.shared.normalized(String(value.suffix(24_000)))
   }
 
   func inspect(tabId: String, input: MacInputController, ticket: UInt64) async throws -> [String: AssistantValue] {
@@ -123,7 +123,8 @@ final class MacAssistantTerminalInput {
     observationStep?("context")
     let agent = try? await Task.detached { try MacTerminalResponseReader().inputBinding(tty: tab.tty) }.value
     observationStep?("screen")
-    let value = try screen(shellIdentity:foreground.shell != nil ? identity : nil)
+    MacAssistantComposerRendering.shared.invalidate()
+    let value = try await MacAssistantComposerRendering.shared.read(ticket: ticket) { try screen(shellIdentity:foreground.shell != nil ? identity : nil) }
     let shellDraft = foreground.shell != nil ? MacAssistantShellDraft.read(value) : nil
     let draft = shellDraft?.text ?? (agent == nil ? nil : assistantEditableDraft(value, allowQueueFooter: true))
     let sessionId = agent?.conversation?.sessionId ?? agent?.instanceId ?? foreground.identity
@@ -148,6 +149,7 @@ final class MacAssistantTerminalInput {
   }
 
   func execute(_ action: String, args: [String: AssistantValue], input: MacInputController) async throws -> [String: AssistantValue] {
+    MacAssistantComposerRendering.shared.invalidate()
     guard let token = args["inputToken"]?.string, let saved = inspections.removeValue(forKey: token),
       args["tabId"]?.string == saved.tabId, args["inputSessionId"]?.string == saved.sessionId else {
       throw MacAssistantError("Inspect the exact native Terminal input before acting.")
@@ -162,7 +164,7 @@ final class MacAssistantTerminalInput {
         let owner = try await Task.detached { try MacTerminalResponseReader().inputBinding(tty: saved.tty) }.value
         guard owner.continues(agent) else { throw MacAssistantError("The agent session changed. Inspect it again.") }
       }
-      return try screen(shellIdentity:saved.shellPrompt != nil ? saved.identity : nil,allowEmptyTrim:allowEmptyTrim)
+      return try await MacAssistantComposerRendering.shared.read(ticket: saved.generation) { try screen(shellIdentity:saved.shellPrompt != nil ? saved.identity : nil,allowEmptyTrim:allowEmptyTrim) }
     }
     func draft(_ value: String) -> String? {
       if let prompt = saved.shellPrompt { return MacAssistantShellDraft.read(value, prompt: prompt)?.text }

@@ -31,6 +31,9 @@ func assistantObserveDraft(_ screen: String, viewportRows: Int? = nil) -> MacAss
   }
   while body.last?.trimmingCharacters(in: .whitespaces).isEmpty == true { body.removeLast() }
   let value = body.joined(separator: "\n")
+  guard !value.contains(where: MacAssistantComposerFrame.stars.contains) else {
+    return unavailable("animated_or_braille_input", "Decorative dots or Braille text require a stable native observation. The draft was preserved; inspect again after the display settles.")
+  }
   let nearby = lines[max(0, start - 2)..<end].joined(separator: "\n")
   guard nearby.range(of: #"\[Image\s*#?\d"#, options: .regularExpression) == nil else {
     return unavailable("attachments_present", "This draft has image attachments. They were preserved. Remove them manually before whole-draft text editing.")
@@ -66,10 +69,10 @@ func assistantEditableDraft(_ screen: String, allowQueueFooter: Bool, allowColla
   return view.text
 }
 
-private func assistantComposerFooter(_ line: String, allowQueue: Bool) -> Bool {
+func assistantComposerFooter(_ line: String, allowQueue: Bool) -> Bool {
   let value = line.trimmingCharacters(in: .whitespaces)
   if allowQueue, value.range(of: #"^[a-z+ ⇧←]+ to queue message\b"#, options: .regularExpression) != nil { return true }
-  return value.range(of: #"^(?:gpt[-\s]|\d+% context left\b|\? for shortcuts\b|(?:press )?ctrl\+c again to (?:quit|exit)\b)"#,
+  return value.range(of: #"^(?:enter to (?:send|submit)\b|gpt[-\s]|\d+% context left\b|\? for shortcuts\b|(?:press )?ctrl\+c again to (?:quit|exit)\b)"#,
     options: [.regularExpression, .caseInsensitive]) != nil
 }
 

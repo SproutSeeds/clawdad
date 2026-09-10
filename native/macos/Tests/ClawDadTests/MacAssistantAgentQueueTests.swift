@@ -8,17 +8,15 @@ final class MacAssistantAgentQueueTests: XCTestCase {
       "\n› \(draft.isEmpty ? "Ask Codex to do anything" : draft)\n\n  \(draft.isEmpty ? "gpt-6-astra low" : "\(binding) to queue message     93% context left")\n"
   }
 
-  func testInstalledCodexQueueRenderingAndOnlyVerifiedVersionSupported() {
+  func testInstalledCodexQueueRenderingRequiresObservedBinding() {
     let snapshot = MacAssistantAgentQueueSnapshot.read(screen(queue: ["Keep first", "Keep second"]))
     XCTAssertEqual(snapshot?.draft, ""); XCTAssertEqual(snapshot?.messages, ["Keep first", "Keep second"])
     XCTAssertTrue(MacAssistantAgentQueueSnapshot.read(screen(draft: "Exact message"))?.tabQueues == true)
     XCTAssertFalse(MacAssistantAgentQueueSnapshot.read(screen(draft: "Exact message", binding: "ctrl+q"))?.tabQueues == true)
-    XCTAssertTrue(MacAssistantAgentQueueSnapshot.supports(version: "0.153.4"))
-    for version: String? in [nil, "0.153.3", "0.154.0"] { XCTAssertFalse(MacAssistantAgentQueueSnapshot.supports(version: version)) }
   }
 
-  func testOpaqueQueuesAttachmentsModalsAndIdlePromptsAreNotEditable() {
-    for text in [screen(queue: ["Long message\n    …"]), screen(draft: "[Image #1]"),
+  func testAttachmentsModalsAndIdlePromptsAreNotEditable() {
+    for text in [screen(draft: "[Image #1]"),
       screen(draft: "[Pasted Content 9999 chars]"), screen() + "Allow this command?\n1. Yes",
       "• Earlier (3s • esc to interrupt)\n› Old request\n• Finished\n› Ask Codex to do anything\n gpt-6-astra"] {
       XCTAssertNil(MacAssistantAgentQueueSnapshot.read(text), text)
@@ -35,6 +33,20 @@ final class MacAssistantAgentQueueTests: XCTestCase {
       actions.append("tab"); current = self.screen(queue: ["Earlier follow-up", "Next follow-up"]); return true
     }, wait: {})
     XCTAssertEqual(actions, ["paste", "prepare", "tab"]); XCTAssertGreaterThan(reads, 3)
+  }
+
+  @MainActor func testPreviouslyAcceptedCollapsedEntriesStayOpaqueAndUnchanged() async throws {
+    let prior = "Earlier authorized long request\n…"
+    var current = screen(queue: [prior]), tabs = 0
+    try await assistantQueueVerifiedMessage("New complete follow-up", read: {
+      MacAssistantAgentQueueSnapshot.read(current)
+    }, insert: {
+      current = self.screen(draft: "New complete follow-up", queue: [prior]); return true
+    }, prepare: {}, pressTab: {
+      tabs += 1; current = self.screen(queue: [prior, "New complete follow-up"]); return true
+    }, wait: {})
+    XCTAssertEqual(tabs, 1)
+    XCTAssertEqual(MacAssistantAgentQueueSnapshot.read(current)?.messages, [prior, "New complete follow-up"])
   }
 
   @MainActor func testExistingDraftIsPreservedWithoutAnyInput() async {

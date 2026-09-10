@@ -21,7 +21,7 @@ struct MacCodexInputBinding: Equatable, Sendable {
 
   var fields: [String: AssistantValue] {
     ["agentInstanceId": .string(instanceId), "tty": .string(tty),
-     "processId": .string(pid), "directory": .string(directory), "cliVersion": .string(version),
+     "processId": .string(pid), "executable": .string(executable), "directory": .string(directory), "cliVersion": .string(version),
      "sessionId": conversation.map { .string($0.sessionId) } ?? .null,
      "conversationPath": conversation.map { .string($0.path.path) } ?? .null,
      "historyState": .string(conversation == nil ? "awaiting_first_turn" : "identified")]

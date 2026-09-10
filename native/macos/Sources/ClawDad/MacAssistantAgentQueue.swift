@@ -20,7 +20,10 @@ struct MacAssistantAgentQueueSnapshot: Equatable {
       var ended = false
       for line in lines[(header + 1)..<prompt] where !line.isEmpty {
         if line.hasSuffix("edit last queued message") { ended = true; continue }
-        if ended || line == "…" || line.hasPrefix("• ") { return nil }
+        // Previously accepted long entries may be clipped to an ellipsis.
+        // Keep their visible representation opaque and unchanged; only the
+        // newly inserted message must match its complete authorized text.
+        if ended || line.hasPrefix("• ") { return nil }
         if line.hasPrefix("↳ ") { messages.append(String(line.dropFirst(2))) }
         else if !messages.isEmpty { messages[messages.count - 1] += "\n" + line }
         else { return nil }
@@ -30,7 +33,6 @@ struct MacAssistantAgentQueueSnapshot: Equatable {
     return Self(draft: draft, messages: messages, tabQueues: tabQueues)
   }
 
-  static func supports(version: String?) -> Bool { version == "0.153.4" }
 }
 
 @MainActor

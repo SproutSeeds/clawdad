@@ -240,6 +240,8 @@ final class MacAssistantBridge {
     }
     state = try await tabs.focus(tabID: tabID, expectedRevision: state.revision)
     if action == "terminal.focus" { return ["catalog": try .encode(state)] }
+    MacAssistantComposerRendering.shared.invalidate()
+    _ = try await MacAssistantComposerRendering.shared.read(ticket: ticket, raw: rawFocusedTerminalText)
     guard let target = tabs.assistantSnapshot(tabID: tabID), !target.tty.isEmpty else {
       throw MacAssistantError(
         "The tab's shell identity is still being resolved. Refresh its context.")
@@ -256,9 +258,9 @@ final class MacAssistantBridge {
           "screenText": .string(screen), "agentAvailable": .bool(false), "inputState": .string(code),
           "draft": .object(["editable": .bool(false), "reasonCode": .string(code), "reason": .string(error.localizedDescription)])]
       }
-      let supported = MacAssistantAgentQueueSnapshot.supports(version: binding.version)
+      let capabilities = MacCodexComposerCapabilities(screen: screen, version: binding.version, viewportRows: assistantTerminalRows(target.tty))
       let draft = await inspectDraft(tabId: tabID, tty: target.tty, binding: binding, screen: screen,
-        busy: tab.isBusy, supportsBusy: supported, ticket: ticket)
+        ticket: ticket)
       let response = try? await Task.detached { () -> RemoteTerminalResponse? in
         guard let conversation = binding.conversation else { return nil }
         return try MacCodexResponseParser.read(conversation: conversation)
@@ -266,11 +268,12 @@ final class MacAssistantBridge {
       var result = binding.fields
       result.merge(["tabId": .string(tabID), "tabTitle": .string(tab.title), "detail": .string(tab.detail),
         "terminalTitle": .string(target.customTitle), "latestResponse": response.map { .string($0.text) } ?? .null,
-        "agentAvailable": .bool(supported && draft["editable"]?.bool == true),
+        "agentAvailable": .bool(draft["token"] != nil && capabilities.observation.text != nil),
+        "capabilities": .object(capabilities.fields),
         "inputState": .string(draft["editable"]?.bool == true ? (binding.conversation == nil ? "ready_before_first_turn" : "ready") : draft["reasonCode"]?.string ?? "input_unavailable"),
         "screenText": .string(screen), "draft": .object(draft),
-        "queue": .object(["supported": .bool(supported),
-          "ready": .bool(supported && binding.conversation != nil && MacAssistantAgentQueueSnapshot.read(screen)?.draft == ""),
+        "queue": .object(["supported": .bool(capabilities.canQueue),
+          "ready": .bool(capabilities.canQueue && binding.conversation != nil && capabilities.queue?.draft == ""),
           "cliVersion": .string(binding.version),
           "requires": .string("Native Tab queue needs an already working turn and its real sessionId. Fresh idle input supports draft insertion or separately authorized Enter submission.")])], uniquingKeysWith: { _, new in new })
       return result
@@ -298,9 +301,8 @@ final class MacAssistantBridge {
       guard try await Task.detached(operation: { try MacAssistantForeground.read(tty: target.tty) }).value == draftInspection.foreground else {
         throw MacAssistantError("The foreground agent process changed since inspection. Inspect the exact tab again; its draft was preserved.")
       }
-      let version = binding.version
-      guard MacAssistantAgentQueueSnapshot.supports(version: version) else {
-        throw MacAssistantError("This running Codex version's draft-clear control could not be verified. Its input was preserved.")
+      guard MacCodexComposerCapabilities(screen: try focusedTerminalText(), version: binding.version, viewportRows: assistantTerminalRows(target.tty)).canClear else {
+        throw MacAssistantError(MacCodexComposerCapabilities.clearRecovery)
       }
       defer { input.invalidateDictationTarget() }
       func allowed(_ value: String) -> Bool {
@@ -320,7 +322,7 @@ final class MacAssistantBridge {
           interaction.isCurrent(draftInspection.generation) else {
           throw MacAssistantError("The inspected agent or user input changed. Inspect again; Enter and Tab were not sent.")
         }
-        return try focusedTerminalText()
+        return try await MacAssistantComposerRendering.shared.read(ticket: ticket, raw: rawFocusedTerminalText)
       }
       var collapsed = false
       func verifyReplacement() async throws -> Bool {
@@ -355,7 +357,7 @@ final class MacAssistantBridge {
     if let conversation = binding.conversation, try activity.read(conversation.path) {
       throw MacAssistantDeferred(message: "Waiting for this agent's request to finish.")
     }
-    guard MacAssistantAgentQueueSnapshot.supports(version: binding.version),
+    guard MacCodexComposerCapabilities(screen: try focusedTerminalText(), version: binding.version).canSubmit,
       binding.accepts(sessionId: args["sessionId"]?.string, instanceId: args["agentInstanceId"]?.string)
         || (binding.conversation != nil && args["sessionId"] == nil && args["agentInstanceId"] == nil) else {
       throw MacAssistantError("Inspect this exact Codex tab and pass its agentInstanceId before submitting its first turn. No input was sent.")
@@ -427,8 +429,7 @@ final class MacAssistantBridge {
     }
     let binding = try await Task.detached { try MacTerminalResponseReader().inputBinding(tty: target.tty) }.value
     guard expectedInstance == nil || expectedInstance == binding.instanceId,
-      expectedSession == nil || expectedSession == binding.conversation?.sessionId,
-      MacAssistantAgentQueueSnapshot.supports(version: binding.version) else {
+      expectedSession == nil || expectedSession == binding.conversation?.sessionId else {
       throw MacAssistantError("The approved Terminal process or session changed. Choose and authorize the new thread explicitly.")
     }
     var result = binding.fields
@@ -462,10 +463,6 @@ final class MacAssistantBridge {
       !text.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) && $0 != "\n" && $0 != "\t" }) else {
       throw MacAssistantError("Inspect the exact agent again before inserting this draft. Its existing input was preserved.")
     }
-    let version = binding.version
-    guard MacAssistantAgentQueueSnapshot.supports(version: version) else {
-      throw MacAssistantError("This agent's draft controls could not be verified. Nothing was typed.")
-    }
     let identity = try await tabs.inputIdentity()
     func current() async throws -> String {
       guard interaction.isCurrent(ticket), !MacConsoleSessionState.isLocked(), AXIsProcessTrusted(),
@@ -474,7 +471,7 @@ final class MacAssistantBridge {
         interaction.isCurrent(ticket) else {
         throw MacAssistantError("The targeted input changed. Inspect the draft before trying again.")
       }
-      return try focusedTerminalText()
+      return try await MacAssistantComposerRendering.shared.read(ticket: ticket, raw: rawFocusedTerminalText)
     }
     guard assistantEditableDraft(try await current(), allowQueueFooter: true) == "" else {
       throw MacAssistantError("This tab already has a draft or an unreadable input. It was preserved. Replacement needs your explicit approval and a fresh draft inspection.")
@@ -523,9 +520,9 @@ final class MacAssistantBridge {
     guard args["sessionId"]?.string == conversation.sessionId else {
       throw MacAssistantError("The agent in this tab changed. Inspect it again; no message was inserted.")
     }
-    let queueVersion = try await Task.detached { try MacTerminalResponseReader().queueCLIVersion(tty: tty, conversation: conversation) }.value
-    guard MacAssistantAgentQueueSnapshot.supports(version: queueVersion) else {
-      throw MacAssistantError("Native Tab queue is unsupported for this agent version. This tool has been verified with Codex 0.153.4; the input was preserved.")
+    let queueBinding = try await Task.detached { try MacTerminalResponseReader().inputBinding(tty: tty) }.value
+    guard queueBinding.conversation == conversation else {
+      throw MacAssistantError("The exact foreground queue owner changed. Inspect this tab again; its input was preserved.")
     }
     guard let text = args["text"]?.string, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
       text.utf8.count <= 16 * 1024,
@@ -570,9 +567,9 @@ final class MacAssistantBridge {
         try await tabs.inputIdentity() == identity else {
         throw MacAssistantError("The targeted input changed. Inspect this request; its input will not be repeated.")
       }
-      let owner = try await Task.detached { try MacTerminalResponseReader().resolve(tty: tty) }.value
-      guard owner == conversation else { throw MacAssistantError("The agent changed during queue delivery. Inspect the tab and receipt.") }
-      return MacAssistantAgentQueueSnapshot.read(try focusedTerminalText())
+      let owner = try await Task.detached { try MacTerminalResponseReader().inputBinding(tty: tty) }.value
+      guard owner.continues(queueBinding) else { throw MacAssistantError("The agent changed during queue delivery. Inspect the tab and receipt.") }
+      return MacAssistantAgentQueueSnapshot.read(try await MacAssistantComposerRendering.shared.read(ticket: ticket, raw: rawFocusedTerminalText))
     }, insert: {
       await input.insertAssistantDraft(text, targetToken: token, isAllowed: { allowed("") }) {
         [tabs] in try await tabs.inputIdentity()
@@ -594,12 +591,9 @@ final class MacAssistantBridge {
   }
 
   private func inspectDraft(tabId: String, tty: String, binding: MacCodexInputBinding, screen: String,
-    busy: Bool, supportsBusy: Bool, ticket: UInt64) async -> [String: AssistantValue] {
+    ticket: UInt64) async -> [String: AssistantValue] {
     func unavailable(_ code: String, _ message: String) -> [String: AssistantValue] {
       ["editable": .bool(false), "reasonCode": .string(code), "reason": .string(message)]
-    }
-    guard supportsBusy else {
-      return unavailable("unsupported_agent_version", "This running Codex version's draft control is unverified. Its input is preserved; check the agent version before editing.")
     }
     let view = assistantObserveDraft(screen, viewportRows: assistantTerminalRows(tty))
     guard let text = view.text else {
@@ -608,6 +602,7 @@ final class MacAssistantBridge {
       }
       return unavailable(view.reasonCode, view.reason)
     }
+    let capabilities = MacCodexComposerCapabilities(screen: screen, version: binding.version, viewportRows: assistantTerminalRows(tty))
     guard let input, let identity = try? await tabs.inputIdentity(),
       let foreground = try? await Task.detached(operation: { try MacAssistantForeground.read(tty: tty) }).value else {
       return unavailable("input_identity_unavailable", "The exact Terminal input or foreground process could not be captured. Inspect this tab again.")
@@ -627,10 +622,12 @@ final class MacAssistantBridge {
     draftInspections[token] = DraftInspection(tabId: tabId, binding: binding,
       identity: identity, generation: ticket, text: text, foreground: foreground,
       requiresWholeDraftAuthorization: view.requiresWholeDraftAuthorization, expires: Date().addingTimeInterval(45))
-    return ["editable": .bool(true), "text": .string(text), "token": .string(token),
+    return ["editable": .bool(capabilities.canClear), "text": .string(text), "token": .string(token),
+      "queueable": .bool(capabilities.canQueue && !view.requiresWholeDraftAuthorization),
       "requiresWholeDraftAuthorization": .bool(view.requiresWholeDraftAuthorization),
       "textIsCollapsedRepresentation": .bool(view.requiresWholeDraftAuthorization),
-      "reasonCode": .string(view.reasonCode), "reason": .string(view.reason),
+      "reasonCode": .string(capabilities.canClear ? view.reasonCode : "clear_binding_unverified"),
+      "reason": .string(capabilities.canClear ? view.reason : MacCodexComposerCapabilities.clearRecovery),
       "expiresInSeconds": .number(45)]
   }
 
@@ -652,6 +649,9 @@ final class MacAssistantBridge {
     return (app, element)
   }
   private func focusedTerminalText() throws -> String {
+    MacAssistantComposerRendering.shared.normalized(try rawFocusedTerminalText())
+  }
+  private func rawFocusedTerminalText() throws -> String {
     let (app, element) = try focusedElement()
     guard app.bundleIdentifier == "com.apple.Terminal",
       let text = ax(element, kAXValueAttribute) as? String
