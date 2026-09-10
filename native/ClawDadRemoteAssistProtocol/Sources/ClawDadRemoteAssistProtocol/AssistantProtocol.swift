@@ -131,6 +131,7 @@ public struct AssistantTaskRecord: Codable, Identifiable, Equatable, Sendable {
     case "cleared": "Draft cleared"
     case "replaced": "Draft replaced"
     case "agent_queued": "Queued in agent"
+    case "sending": "Waiting for delivery"
     case "submitted": "Submitted"
     case "working": "Working"
     case "completed": "Completed"
@@ -157,4 +158,5 @@ public struct AssistantSnapshot: Codable, Sendable {
   public var operations: [AssistantTaskRecord]? = nil
   public var taskUpdates: [AssistantMessage]? = nil
   public var research: [String: AssistantValue]? = nil
+  public var destination: [String: AssistantValue]? = nil
 }

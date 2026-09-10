@@ -28,6 +28,7 @@ final class MobileAssistantController: ObservableObject {
   @Published private(set) var waitForSend: Bool
   @Published private(set) var microphoneNotice = ""
   @Published private(set) var changingMicrophone = false
+  @Published private(set) var changingDestination = false
   @Published private(set) var transcriptionReview: AssistantTranscriptionReview = .listening
   @Published private(set) var transcriptionEditText = ""
   @Published private(set) var transcriptionClearPresented = false
@@ -46,6 +47,18 @@ final class MobileAssistantController: ObservableObject {
     return muted ? muteStatus : status
   }
   var automaticTurnInterval: TimeInterval { Double(automaticSendDelay) / 1_000_000_000 }
+  var destinationTransport: String { snapshot?.destination?["transport"]?.string ?? "terminal" }
+  var destinationName: String { destinationTransport == "app_server" ? "ClawDad threads" : "Terminal" }
+  func toggleDestination() async {
+    guard !changingDestination, connected, let destination = snapshot?.destination,
+      let conversation = destination["conversationId"], let revision = destination["revision"] else { return }
+    changingDestination = true
+    defer { changingDestination = false }
+    do {
+      _ = try await command("destination", args: ["transport": .string(destinationTransport == "terminal" ? "app_server" : "terminal"),
+        "conversationId": conversation, "expectedRevision": revision])
+    } catch { self.error = "Could not change the work destination. Reconnect and try again." }
+  }
   var chatSendFinishesVoice: Bool { chatDraft.value.isEmpty && canSendVoice }
   var canSendChatInput: Bool {
     !sending && !chatDraft.importing && (chatDraft.value.isEmpty ? canSendVoice : connected)
@@ -1138,11 +1151,14 @@ final class MobileAssistantController: ObservableObject {
       var played = 0
       var poll = false
       var voiceSelection: AssistantValue?
+      var fallbackChunks: [String] = []
       let deadline = Date().addingTimeInterval(180)
+      let firstAudioDeadline = Date().addingTimeInterval(12)
       do {
         while Date() < deadline {
           try Task.checkCancellation()
           guard voiceActive, voiceEpoch == epoch else { return }
+          if played == 0, Date() >= firstAudioDeadline { throw AssistantProtocolError.timedOut }
           var payload: [String: AssistantValue] = [
             "text": .string(String(message.text.prefix(20_000))), "requestId": .string(message.id),
             "poll": .bool(poll),
@@ -1154,6 +1170,9 @@ final class MobileAssistantController: ObservableObject {
           guard voiceEpoch == epoch else { return }
           let body = try JSONDecoder().decode([String: AssistantValue].self, from: result)
           let generated = body["audio"]?.object ?? [:]
+          if let chunks = generated["fallbackChunks"]?.array?.compactMap(\.string), !chunks.isEmpty {
+            fallbackChunks = chunks
+          }
           voiceSelection = body["voiceSelection"] ?? voiceSelection
           if generated["state"]?.string == "failed" {
             throw NSError(
@@ -1183,8 +1202,17 @@ final class MobileAssistantController: ObservableObject {
         }
         throw AssistantProtocolError.timedOut
       } catch {
-        if !Task.isCancelled {
-          self.error = error.localizedDescription
+        if !Task.isCancelled, voiceActive, voiceEpoch == epoch {
+          let remaining = played == 0 ? message.text : fallbackChunks.dropFirst(played).joined(separator: "\n\n")
+          if !remaining.isEmpty {
+            // This sequential path abandons preparation for this reply. Late
+            // primary results have no playback consumer and cannot replay it.
+            status = "Speaking · device voice"
+            do { try await audio.speakFallback(remaining) }
+            catch { if !Task.isCancelled { self.error = "Speech could not play. The reply is available in messages." } }
+          } else {
+            self.error = "Speech stopped partway through. The complete reply is available in messages."
+          }
         }
       }
     }
@@ -1298,6 +1326,8 @@ struct AssistantView: View {
         if controller.callVisible {
           AssistantCallBar(controller: controller)
         } else {
+          HStack(spacing: 12) {
+          AssistantDestinationButton(controller: controller)
           Button {
             Task { await controller.startVoice() }
           } label: {
@@ -1307,6 +1337,7 @@ struct AssistantView: View {
           ).foregroundStyle(Color.black).disabled(controller.startingVoice).padding([
             .horizontal, .bottom,
           ]).accessibilityIdentifier("clawdad.assistant.start-voice")
+          }.padding(.leading)
         }
       }
       .foregroundStyle(ClawDadTheme.cream).background(Color.black).tint(ClawDadTheme.gold)
@@ -1355,8 +1386,8 @@ struct AssistantCallBar: View {
         Text(controller.microphoneNotice).font(.caption2).padding(.horizontal, 10).padding(.top, 4)
           .accessibilityIdentifier("clawdad.assistant.microphone-notice")
       }
-      if dynamicTypeSize.isAccessibilitySize {
-        Text(controller.callStatus).font(.caption).frame(maxWidth: .infinity, alignment: .leading)
+      if !controller.connected {
+        Text("Assistant is reconnecting. Open messages for connection details.").font(.caption).frame(maxWidth: .infinity, alignment: .leading)
           .padding(.horizontal, 10).padding(.top, 4)
       }
       HStack(spacing: 6) {
@@ -1368,11 +1399,8 @@ struct AssistantCallBar: View {
             .accessibilityHint("Shows your voice transcriptions and the Assistant's replies without ending the call")
             .accessibilityIdentifier("clawdad.assistant.return")
         }
-        if dynamicTypeSize.isAccessibilitySize { Spacer(minLength: 0) }
-        else {
-          Text(controller.callStatus).font(.caption).lineLimit(2)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
+        AssistantDestinationButton(controller: controller)
+        Spacer(minLength: 0)
         if controller.replyAudioActive {
           Button { controller.interject() } label: {
             Image(systemName: "stop.circle.fill").font(.system(size: 24)).frame(width: 44, height: 44)
@@ -1403,6 +1431,29 @@ struct AssistantCallBar: View {
         ClawDadTheme.cream)
       }.background(Color.black.opacity(0.96)).foregroundStyle(ClawDadTheme.cream)
     }
+  }
+}
+
+struct AssistantDestinationButton: View {
+  @ObservedObject var controller: MobileAssistantController
+  var body: some View {
+    Button { Task { await controller.toggleDestination() } } label: {
+      Group {
+        if controller.changingDestination { ProgressView() }
+        else if controller.destinationTransport == "app_server" {
+          Image("ClawGlyph").resizable().scaledToFit().frame(width: 28, height: 28)
+        } else { Image(systemName: "terminal").font(.system(size: 23, weight: .semibold)) }
+      }.frame(width: 44, height: 44)
+        .background(ClawDadTheme.gold.opacity(0.14), in: RoundedRectangle(cornerRadius: 12))
+        .overlay { RoundedRectangle(cornerRadius: 12).stroke(ClawDadTheme.cream.opacity(0.7), lineWidth: 1) }
+    }.buttonStyle(.plain)
+      .disabled(!controller.connected || controller.changingDestination || controller.snapshot?.destination == nil)
+      .accessibilityLabel("Work destination")
+      .accessibilityValue(controller.destinationName + " selected")
+      .accessibilityAddTraits(.isSelected)
+      .accessibilityHint("Tap to switch between Terminal and ClawDad threads for future requested work. Switching does not send or move work. Explicit instructions can choose another destination.")
+      .help("Work destination: \(controller.destinationName). Tap to switch; existing tasks stay where they are.")
+      .accessibilityIdentifier("clawdad.assistant.destination")
   }
 }
 

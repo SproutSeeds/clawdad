@@ -14,6 +14,7 @@
         "version": .number(1), "conversationMode": .string("background"), "imageAttachments": .bool(true), "enabled": .bool(true), "paused": .bool(false),
         "nativeOnline": .bool(true), "coordinator": .object(["mode": .string("background"), "model": .string("gpt-6-astra"), "status": .string("ready")]),
         "tasks": .array([]),
+        "destination": .object(["conversationId": .string("preview-conversation"), "transport": .string("terminal"), "revision": .number(0), "targets": .object([:])]),
         "messages": .array([
           .object([
             "id": .string("greeting"), "role": .string("assistant"),
@@ -118,6 +119,14 @@
     func command(_ action: String, args: [String: AssistantValue], id: String) throws
       -> AssistantSnapshot
     {
+      if action == "destination" {
+        var destination = state["destination"]?.object ?? [:]
+        guard args["conversationId"] == destination["conversationId"], args["expectedRevision"] == destination["revision"] else { throw AssistantProtocolError.invalid }
+        destination["transport"] = args["transport"]
+        destination["revision"] = .number((destination["revision"]?.number ?? 0) + 1)
+        state["destination"] = .object(destination)
+        return try snapshot()
+      }
       if action == "pause" { state["paused"] = args["paused"] }
       if action == "pause", ProcessInfo.processInfo.arguments.contains("--clawdad-assistant-history-test") {
         state["tasks"] = .array((state["tasks"]?.array ?? []).map { value in

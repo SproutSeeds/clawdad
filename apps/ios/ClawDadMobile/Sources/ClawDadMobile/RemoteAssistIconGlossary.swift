@@ -10,6 +10,16 @@ struct RemoteAssistIconGlossary: View {
         Text("The same symbol can act on your iPhone conversation or your Mac. Its location and accessible name identify the action.")
           .font(.callout)
         section("Assistant call bar") {
+          VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 12) {
+              Image(systemName: "terminal").font(.system(size: 24)).frame(width: 44, height: 44)
+              Image("ClawGlyph").resizable().scaledToFit().frame(width: 32, height: 32)
+              Text("Work destination").font(.headline)
+            }.accessibilityHidden(true)
+            Text("Terminal means work in an exact Terminal tab. The ClawDad claw means work in an exact app-server thread. Tap to switch the preferred destination for future requested work. An explicit instruction can select a different destination.")
+            Text("The outlined button shows the selected destination; VoiceOver announces its name. Switching creates and sends nothing. Running tasks, saved drafts, queues and research supervision stay with their original owners. This preference belongs to this conversation on this Mac and survives navigation and reopening.")
+              .font(.callout).foregroundStyle(ClawDadTheme.cream.opacity(0.8))
+          }.accessibilityElement(children: .combine).accessibilityLabel("Work destination")
           entry("infinity", "Think aloud", "Holds the current speaking turn until you explicitly send it from Assistant messages. Tap again to return to automatic turn ending.",
             "A steady light, thicker outline and checkmark mean On; an unfilled thin outline means Off. VoiceOver announces On or Off. The setting stays the same across call views.")
           Text("Normal mode sends after \(assistant.automaticTurnInterval.formatted(.number.precision(.fractionLength(0...2)))) seconds without new transcribed words. Repeated text and background noise do not reset the timer. Pending transcription preserves the final words.")

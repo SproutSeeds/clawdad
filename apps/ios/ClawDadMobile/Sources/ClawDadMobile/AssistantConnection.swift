@@ -71,6 +71,8 @@ final class AssistantConnection: AssistantTransport {
       switch $0 {
       case .state: 12_000_000_000
       case .command: 30_000_000_000
+      case .synthesize: 12_000_000_000
+      case .audio: 15_000_000_000
       default: 150_000_000_000
       }
     }) {
@@ -194,7 +196,9 @@ final class AssistantConnection: AssistantTransport {
           guard !Task.isCancelled, let self, self.id == connectionID,
             self.pending[request.id] != nil else { return }
           self.finish(request.id, error: AssistantProtocolError.timedOut)
-          self.disconnect(error: AssistantProtocolError.timedOut)
+          // Speech may recover on the next reply. A slow audio service must
+          // not end the conversation or change microphone state.
+          if action != .synthesize && action != .audio { self.disconnect(error: AssistantProtocolError.timedOut) }
         }
         pending[request.id] = Pending(continuation: continuation, timeout: timeout)
         outgoing.append(request)

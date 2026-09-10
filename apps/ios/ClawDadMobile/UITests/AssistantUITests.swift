@@ -2,6 +2,53 @@ import XCTest
 
 @MainActor
 final class AssistantUITests: XCTestCase {
+  func testDestinationAcrossTextCallWorkspaceAndNavigation() {
+    checkDestinationControls(largeText: false)
+  }
+  func testDestinationAtAccessibilityTextSize() {
+    checkDestinationControls(largeText: true)
+  }
+  private func checkDestinationControls(largeText: Bool) {
+    continueAfterFailure = false
+    let app = XCUIApplication()
+    app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-assistant-test", "--clawdad-assistant-reset-draft"]
+    if largeText { app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXL"] }
+    app.launch()
+    XCTAssertTrue(app.buttons["clawdad.assistant.chat"].waitForExistence(timeout: 15))
+    app.buttons["clawdad.assistant.chat"].tap()
+    let destination = app.buttons["clawdad.assistant.destination"]
+    XCTAssertTrue(destination.waitForExistence(timeout: 5))
+    XCTAssertEqual(destination.value as? String, "Terminal selected")
+    XCTAssertGreaterThanOrEqual(destination.frame.width, 44)
+    XCTAssertGreaterThanOrEqual(destination.frame.height, 44)
+    destination.tap()
+    let changed = expectation(for: NSPredicate(format: "value == %@", "ClawDad threads selected"), evaluatedWith: destination)
+    wait(for: [changed], timeout: 3)
+    XCTAssertFalse(app.buttons["End voice conversation"].exists)
+    app.buttons["clawdad.assistant.start-voice"].tap()
+    XCTAssertTrue(app.buttons["End voice conversation"].waitForExistence(timeout: 5))
+    XCTAssertEqual(destination.value as? String, "ClawDad threads selected")
+    let mic = app.buttons["clawdad.assistant.mute"]
+    let micState = mic.value as? String
+    let infinity = app.buttons["clawdad.assistant.think-aloud"]
+    let heldState = infinity.value as? String
+    app.buttons["Workspace"].tap()
+    XCTAssertTrue(destination.isHittable)
+    destination.tap()
+    let terminal = expectation(for: NSPredicate(format: "value == %@", "Terminal selected"), evaluatedWith: destination)
+    wait(for: [terminal], timeout: 3)
+    XCTAssertEqual(mic.value as? String, micState)
+    XCTAssertEqual(infinity.value as? String, heldState)
+    app.buttons["Workspace"].tap()
+    XCTAssertEqual(destination.value as? String, "Terminal selected")
+    XCTAssertTrue(app.buttons["End voice conversation"].exists)
+    app.buttons["clawdad.assistant.back"].tap()
+    XCTAssertTrue(destination.isHittable)
+    XCTAssertTrue(app.buttons["clawdad.assistant.return"].isHittable)
+    app.buttons["clawdad.assistant.return"].tap()
+    XCTAssertEqual(destination.value as? String, "Terminal selected")
+    saveScreenshot(app, largeText ? "Destination with accessibility text" : "Destination during a call")
+  }
   func testResearchBudgetDefaultOverrideAndPolling() {
     checkResearchBudgetControls(largeText: false)
   }

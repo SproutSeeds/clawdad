@@ -10,6 +10,7 @@ final class AssistantReplyAudio {
   private var delegate: AssistantClipDelegate?
   private var completion: CheckedContinuation<Void, Error>?
   private var epoch = UUID()
+  private let fallback = AssistantDeviceSpeech()
   private let volume: Float
   init(volume: Float = 1) { self.volume = volume }
 
@@ -53,6 +54,7 @@ final class AssistantReplyAudio {
   }
 
   func stop() {
+    fallback.stop()
     epoch = UUID()
     let done = completion
     completion = nil
@@ -60,6 +62,62 @@ final class AssistantReplyAudio {
     player = nil
     delegate = nil
     done?.resume(throwing: CancellationError())
+  }
+
+  func speakFallback(_ text: String) async throws {
+    stop()
+    fallback.onStarted = { [weak self] in self?.onStarted?() }
+    try await fallback.speak(text)
+  }
+}
+
+/// Device speech is a per-reply fallback, never a saved voice preference. It
+/// shares the current playback audio session and cannot activate a microphone.
+@MainActor
+private final class AssistantDeviceSpeech: NSObject, AVSpeechSynthesizerDelegate {
+  private let synthesizer = AVSpeechSynthesizer()
+  private var completion: CheckedContinuation<Void, Error>?
+  private var utterance: AVSpeechUtterance?
+  var onStarted: (() -> Void)?
+  override init() { super.init(); synthesizer.delegate = self }
+  func speak(_ text: String) async throws {
+    try Task.checkCancellation()
+    stop()
+    let item = AVSpeechUtterance(string: text)
+    utterance = item
+    let identifier = ObjectIdentifier(item)
+    try await withTaskCancellationHandler {
+      try await withCheckedThrowingContinuation { continuation in
+        completion = continuation
+        synthesizer.speak(item)
+      }
+    } onCancel: { Task { @MainActor [weak self] in
+      guard let self, let active = self.utterance, ObjectIdentifier(active) == identifier else { return }
+      self.stop()
+    } }
+  }
+  func stop() {
+    let done = completion; completion = nil; utterance = nil
+    synthesizer.stopSpeaking(at: .immediate)
+    done?.resume(throwing: CancellationError())
+  }
+  nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
+    let identifier = ObjectIdentifier(utterance)
+    Task { @MainActor [weak self] in guard let self, let active = self.utterance, ObjectIdentifier(active) == identifier else { return }; self.onStarted?() }
+  }
+  nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+    let identifier = ObjectIdentifier(utterance)
+    Task { @MainActor [weak self] in
+      guard let self, let active = self.utterance, ObjectIdentifier(active) == identifier else { return }
+      let done = completion; completion = nil; self.utterance = nil; done?.resume()
+    }
+  }
+  nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+    let identifier = ObjectIdentifier(utterance)
+    Task { @MainActor [weak self] in
+      guard let self, let active = self.utterance, ObjectIdentifier(active) == identifier else { return }
+      let done = completion; completion = nil; self.utterance = nil; done?.resume(throwing: CancellationError())
+    }
   }
 }
 

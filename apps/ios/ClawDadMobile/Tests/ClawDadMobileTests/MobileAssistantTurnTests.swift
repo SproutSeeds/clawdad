@@ -361,7 +361,7 @@ final class MobileAssistantTurnTests: XCTestCase {
     await until { !controller.replyAudioActive }
   }
 
-  func testSynthesisFailureReleasesTheMicrophoneHold() async throws {
+  func testSynthesisFailureFallsBackOnceThenNextReplyTriesPrimary() async throws {
     let transport = AssistantTestTransport()
     let audio = AssistantTestAudio()
     let controller = MobileAssistantController(connection: transport, audio: audio)
@@ -370,11 +370,45 @@ final class MobileAssistantTurnTests: XCTestCase {
     await controller.startVoice()
     transport.addReply("A reply that remains readable")
     try await controller.refresh()
-    await until { controller.error == "Speech test failed" }
+    await until { audio.fallbackTexts.count == 1 }
+    XCTAssertEqual(audio.fallbackTexts, ["A reply that remains readable"])
+    XCTAssertTrue(controller.replyAudioActive)
+    XCTAssertTrue(audio.replyActive)
+    XCTAssertNotEqual(controller.error, "Speech test failed")
+    audio.completeClip()
+    await until { !controller.replyAudioActive }
     XCTAssertFalse(controller.replyAudioActive)
     XCTAssertFalse(audio.replyActive)
     XCTAssertEqual(controller.status, "Listening…")
     XCTAssertEqual(controller.snapshot?.messages.last?.text, "A reply that remains readable")
+    transport.synthesis = nil
+    transport.addReply("Primary is back", item: "recovery")
+    try await controller.refresh()
+    await until { audio.played.count == 1 }
+    XCTAssertEqual(audio.fallbackTexts.count, 1)
+    audio.completeClip()
+    await until { audio.played.count == 2 }
+    audio.completeClip()
+  }
+
+  func testPartialPrimaryFailureSpeaksOnlyRemainingChunks() async throws {
+    let transport = AssistantTestTransport(), audio = AssistantTestAudio()
+    let controller = MobileAssistantController(connection: transport, audio: audio)
+    defer { controller.stop() }
+    transport.synthesis = {
+      ["audio": ["state": transport.syntheses > 1 ? "failed" : "generating",
+        "fallbackChunks": ["First", "Second", "Third"], "parts": [["url": "one"]]]]
+    }
+    await controller.startVoice(); transport.addReply("First Second Third")
+    try await controller.refresh()
+    await until { audio.played.count == 1 }; audio.completeClip()
+    await until { !audio.fallbackTexts.isEmpty }
+    XCTAssertEqual(audio.fallbackTexts, ["Second\n\nThird"])
+    controller.interject()
+    XCTAssertFalse(controller.replyAudioActive)
+    XCTAssertTrue(controller.voiceActive)
+    try await controller.refresh()
+    XCTAssertEqual(audio.fallbackTexts.count, 1)
   }
 
   func testInterjectStopsPlaybackAndSuppressesLaterAudioFromTheSameResponse() async throws {
@@ -506,6 +540,7 @@ final class AssistantTestAudio: AssistantAudioIO {
   var muted = false
   var replyActive = false
   var played: [Data] = []
+  var fallbackTexts: [String] = []
   var playbackStops = 0
   var finishData: Data?
   var previewData: Data?
@@ -528,6 +563,9 @@ final class AssistantTestAudio: AssistantAudioIO {
   func setReplyActive(_ active: Bool) { replyActive = active }
   func play(_ data: Data) async throws {
     try await withCheckedThrowingContinuation { clip = $0; played.append(data); onPlaybackStarted?() }
+  }
+  func speakFallback(_ text: String) async throws {
+    try await withCheckedThrowingContinuation { clip = $0; fallbackTexts.append(text); onPlaybackStarted?() }
   }
   func completeClip() { let done = clip; clip = nil; done?.resume() }
   func stopPlayback() { playbackStops += 1; let done = clip; clip = nil; done?.resume(throwing: CancellationError()) }

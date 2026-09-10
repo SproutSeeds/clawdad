@@ -21,6 +21,7 @@ protocol AssistantAudioIO: AnyObject {
   func unmuteCapture() async throws
   func setReplyActive(_ active: Bool)
   func play(_ data: Data) async throws
+  func speakFallback(_ text: String) async throws
   func stopPlayback()
   func resetUtterance()
   func finishUtterance()
@@ -34,6 +35,7 @@ extension AssistantAudioIO {
   func muteCapture() throws { try muteCapture(finishingUtterance: false) }
   func unmuteCapture() async throws { muted = false; resetUtterance() }
   func previewUtterance() {}
+  func speakFallback(_ text: String) async throws { throw AssistantProtocolError.invalid }
 }
 
 @MainActor
@@ -236,6 +238,7 @@ final class AssistantAudio: AssistantAudioIO {
     try await replyAudio.play(data)
   }
   func stopPlayback() { replyAudio.stop() }
+  func speakFallback(_ text: String) async throws { try await replyAudio.speakFallback(text) }
   func setReplyActive(_ active: Bool) {
     replyActive = active
     input.setReplyActive(active, at: ProcessInfo.processInfo.systemUptime)
