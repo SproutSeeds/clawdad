@@ -3343,6 +3343,7 @@ struct SettingsView: View {
                 }.frame(minHeight: 48).contentShape(Rectangle())
               }.buttonStyle(.plain).accessibilityIdentifier("clawdad.settings.icon-glossary")
             }
+            AssistantModelSettingsPanel(controller: assistant)
             VoiceSettingsPanel()
             NotificationSettingsPanel()
             ClawDadPanel {

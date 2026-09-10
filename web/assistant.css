@@ -30,3 +30,15 @@
 .research-dialog button { min-height:44px;margin:6px; }
 .research-dialog pre { white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;-webkit-user-select:text; }
 .research-dialog summary { cursor:pointer;padding:12px 0; }
+.assistant-model-form { display:grid;gap:8px;margin:12px 0 18px; }
+.assistant-model-form h4 { margin:4px 0; }
+#assistantModelSettingsTitle { display:flex;align-items:center;justify-content:space-between; }
+#assistantModelSettingsTitle .assistant-info { width:44px;height:44px;padding:0;background:none;border:0; }
+.assistant-model-form label,.assistant-model-form small { overflow-wrap:anywhere; }
+.assistant-model-form button,.assistant-model-form select,.assistant-info { min-height:44px;min-width:44px;cursor:pointer; }
+.assistant-model-form button:disabled { cursor:default; }
+.assistant-model-form input[type=checkbox] { width:24px;height:24px;vertical-align:middle; }
+#assistantModelInfo { max-width:min(340px,calc(100vw - 40px));padding:18px;background:#19140f;color:#ffebbd;border:1px solid #605139;border-radius:14px; }
+#assistantModelInfo button { min-height:44px;cursor:pointer; }
+#assistantLatest { align-self:center;min-width:44px;min-height:44px;border-radius:50%;margin:2px; }
+.assistant-copy[aria-pressed=true] { background:#6a521f;outline:2px solid #ffc640; }

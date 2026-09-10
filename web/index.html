@@ -741,6 +741,19 @@
             </div>
           </section>
 
+          <section id="assistantModelSettings" class="settings-section" aria-labelledby="assistantModelSettingsTitle">
+            <div class="settings-section-title" id="assistantModelSettingsTitle">Assistant
+              <button type="button" popovertarget="assistantModelInfo" class="assistant-info" aria-label="About Assistant model settings">ⓘ</button>
+            </div>
+            <div id="assistantModelInfo" popover>
+              <p>Reasoning effort can affect response time and weekly usage. Changes apply to subsequent turns and reviews; current work finishes with its original settings.</p>
+              <p>Research settings choose the reviewer that plans continuations. Project agents keep their own models, objectives and allowance limits.</p>
+              <button type="button" popovertarget="assistantModelInfo" popovertargetaction="hide">Done</button>
+            </div>
+            <div data-rows></div>
+            <button data-refresh type="button" class="detail-action-button">Refresh models</button>
+            <div role="status" class="settings-root-meta"></div>
+          </section>
           <section class="settings-section" aria-labelledby="settingsSpeechTitle">
             <div id="settingsSpeechTitle" class="settings-section-title">Voice &amp; Playback</div>
             <p class="settings-root-meta">Choose the voice used by ClawDad and Remote Assist. Speech is generated locally on this computer.</p>

@@ -2,6 +2,96 @@ import XCTest
 
 @MainActor
 final class AssistantUITests: XCTestCase {
+  func testAssistantModelSettings() { checkModelSettings(largeText: false) }
+  func testAssistantModelSettingsLargeText() { checkModelSettings(largeText: true) }
+  private func checkModelSettings(largeText: Bool) {
+    continueAfterFailure = false
+    let app = XCUIApplication()
+    app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-assistant-test", "--clawdad-assistant-reset-draft"]
+    if largeText { app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXL"] }
+    app.launch(); XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 15)); app.buttons["Settings"].tap()
+    func reveal(_ item: XCUIElement) { for _ in 0..<20 where !item.isHittable { app.swipeUp() }; XCTAssertTrue(item.isHittable) }
+    let main = app.buttons["clawdad.settings.assistant.main"]
+    reveal(main); main.tap()
+    let model = app.buttons["clawdad.settings.assistant.model"]
+    XCTAssertTrue(model.waitForExistence(timeout: 5)); model.tap()
+    app.buttons["gpt-5.6-sol"].firstMatch.tap()
+    let effort = app.buttons["clawdad.settings.assistant.effort"]; effort.tap()
+    app.buttons["High"].firstMatch.tap()
+    let save = app.buttons["clawdad.settings.assistant.save"]; reveal(save)
+    saveScreenshot(app, largeText ? "Assistant models large text" : "Assistant model and supported reasoning")
+    save.tap(); XCTAssertTrue(main.waitForExistence(timeout: 5)); main.tap()
+    XCTAssertTrue(model.label.contains("gpt-5.6-sol") || app.staticTexts["gpt-5.6-sol"].exists)
+    XCTAssertTrue(effort.label.contains("High") || app.staticTexts["High"].exists)
+    app.buttons["Back"].firstMatch.tap()
+    let individual = app.buttons["clawdad.settings.assistant.fixture-reviewer"]; reveal(individual); individual.tap()
+    let inherited = app.switches["clawdad.settings.assistant.inherit"]
+    XCTAssertTrue(inherited.waitForExistence(timeout: 5)); XCTAssertEqual(inherited.value as? String, "1")
+    inherited.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+    XCTAssertEqual(inherited.value as? String, "0")
+    reveal(save); save.tap()
+    reveal(individual); individual.tap(); XCTAssertEqual(inherited.value as? String, "0")
+    inherited.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap(); reveal(save); save.tap()
+    XCTAssertFalse(app.buttons["End voice conversation"].exists)
+  }
+  func testMessagePlaybackAndJumpToLatest() { checkMessagePlaybackAndLatest(largeText: false) }
+  func testMessagePlaybackAndJumpToLatestLargeText() { checkMessagePlaybackAndLatest(largeText: true) }
+  private func checkMessagePlaybackAndLatest(largeText: Bool) {
+    continueAfterFailure = false
+    let app = XCUIApplication()
+    app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-assistant-test", "--clawdad-assistant-long-history", "--clawdad-assistant-reset-draft"]
+    if largeText { app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXL"] }
+    app.launch(); XCTAssertTrue(app.buttons["clawdad.assistant.chat"].waitForExistence(timeout: 15)); app.buttons["clawdad.assistant.chat"].tap()
+    let history = app.scrollViews["clawdad.assistant.history"]
+    XCTAssertTrue(history.waitForExistence(timeout: 5))
+    let latest = app.buttons["clawdad.assistant.latest"]
+    func scrollOlder() {
+      // The scroll view extends behind the translucent navigation bar. Drag
+      // only through its visible region, especially with the SE keyboard open.
+      let top = max(history.frame.minY, app.navigationBars.firstMatch.frame.maxY) + 8
+      let bottom = history.frame.maxY - 8
+      let origin = app.coordinate(withNormalizedOffset: .zero)
+      let start = origin.withOffset(CGVector(dx: history.frame.minX + 12, dy: top))
+      let end = origin.withOffset(CGVector(dx: history.frame.minX + 12, dy: bottom))
+      start.press(forDuration: 0.05, thenDragTo: end)
+    }
+    func visibleSpeaker() -> XCUIElement {
+      for _ in 0..<12 {
+        if let found = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "clawdad.assistant.speak.")).allElementsBoundByIndex.first(where: { $0.isHittable }) { return found }
+        scrollOlder()
+      }
+      XCTFail("No message header reached by scrolling")
+      return app.buttons["clawdad.assistant.speak.history-29"]
+    }
+    scrollOlder(); scrollOlder(); XCTAssertTrue(latest.waitForExistence(timeout: 5))
+    XCTAssertGreaterThanOrEqual(latest.frame.width, 44); XCTAssertGreaterThanOrEqual(latest.frame.height, 44)
+    app.buttons["Pause control"].tap() // Disposable fixture grows a response on each snapshot.
+    Thread.sleep(forTimeInterval: 2)
+    XCTAssertTrue(latest.isHittable, "New streaming text must not pull the reader to the bottom")
+    saveScreenshot(app, largeText ? "Older history and latest at large text" : "Streaming keeps older history in place")
+    latest.tap()
+    let hidden = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: latest); wait(for: [hidden], timeout: 5)
+    let playing = visibleSpeaker()
+    playing.tap(); XCTAssertEqual(playing.label, "Stop reading message"); XCTAssertFalse(app.buttons["End voice conversation"].exists)
+    XCTAssertGreaterThanOrEqual(playing.frame.width, 44); XCTAssertGreaterThanOrEqual(playing.frame.height, 44)
+    playing.tap(); XCTAssertEqual(playing.label, "Read message aloud")
+    app.buttons["clawdad.assistant.start-voice"].tap()
+    let mic = app.buttons["clawdad.assistant.mute"]
+    XCTAssertTrue(mic.waitForExistence(timeout: 5)); mic.tap(); let muted = mic.value as? String
+    scrollOlder(); latest.tap()
+    let speaker = visibleSpeaker()
+    speaker.tap(); XCTAssertEqual(mic.value as? String, muted)
+    XCTAssertTrue(app.buttons["End voice conversation"].exists)
+    saveScreenshot(app, largeText ? "Message playback muted call large text" : "Message playback preserves muted call")
+    speaker.tap()
+    let input = app.textFields["clawdad.assistant.composer"]
+    XCTAssertTrue(input.exists); input.tap(); input.typeText("Unsent review draft")
+    saveScreenshot(app, largeText ? "Large text keyboard and preserved draft" : "Keyboard and preserved draft")
+    scrollOlder(); XCTAssertTrue(latest.waitForExistence(timeout: 3)); XCTAssertTrue(latest.isHittable)
+    saveScreenshot(app, largeText ? "Large text keyboard latest control" : "Keyboard latest control")
+    latest.tap()
+    XCTAssertEqual(input.value as? String, "Unsent review draft")
+  }
   func testDestinationAcrossTextCallWorkspaceAndNavigation() {
     checkDestinationControls(largeText: false)
   }
@@ -621,7 +711,8 @@ final class AssistantUITests: XCTestCase {
     let gone = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.buttons["clawdad.assistant.image-preview"])
     wait(for: [gone], timeout: 5)
     XCTAssertTrue(messageText(app, "Please inspect my attached screenshot.").exists)
-    XCTAssertEqual(app.staticTexts.matching(identifier: "Please inspect my attached screenshot.").count, 1)
+    XCTAssertEqual(app.textViews.matching(NSPredicate(format: "identifier BEGINSWITH 'clawdad.assistant.text.' AND (value == %@ OR label == %@)",
+      "Please inspect my attached screenshot.", "Please inspect my attached screenshot.")).count, 1)
     XCTAssertFalse(app.buttons["End voice conversation"].exists)
     saveScreenshot(app, "Assistant photo message sent once and draft cleared after acceptance")
   }

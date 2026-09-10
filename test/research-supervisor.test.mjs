@@ -5,6 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import {ResearchBudget} from '../lib/research-budget.mjs';
 import {ResearchSupervisor} from '../lib/research-supervisor.mjs';
+import {AssistantModelSettings} from '../lib/assistant-model-settings.mjs';
 import {researchEvidence,validateResearchDecision} from '../lib/research-evidence.mjs';
 import {AssistantRuntime} from '../lib/assistant-runtime.mjs';
 import {runAssistantMCP} from '../lib/assistant-mcp.mjs';
@@ -53,6 +54,22 @@ async function fixture(t,{realRuntime=false}={}){
 test('installation stays off and consumes no review/usage calls; conversation has a separate coordinator',async t=>{
   const f=await fixture(t);await f.supervisor.tick();
   assert.equal(f.reviewCount(),0);assert.equal(f.readCount(),0);assert.equal((await f.supervisor.snapshot()).threads.length,0);
+});
+test('review uses exact override snapshot and a settings change preserves active review, thread state and budget',async t=>{
+  const f=await fixture(t),thread=await f.enable();
+  const settings=new AssistantModelSettings({file:path.join(f.root,'models.json'),readCatalog:async()=>({authenticated:true,models:[
+    {model:'gpt-6-astra',supportedReasoningEfforts:['low','medium']},{model:'review-model',supportedReasoningEfforts:['high']} ]})});
+  f.supervisor.modelSettings=settings;
+  await settings.update({scope:'supervisor',threadId:thread.id,selection:{model:'review-model',reasoningEffort:'high'},expectedRevision:0},'override',(await f.supervisor.snapshot()).threads);
+  let finish,began;const started=new Promise(r=>began=r);let reviewed;
+  f.setReview(async args=>{reviewed=args;began();return new Promise(r=>finish=()=>r(review()));});
+  const tick=f.supervisor.tick();await started;
+  const revision=thread.revision,enabled=thread.enabled,budget=structuredClone(f.budget.state);
+  await settings.update({scope:'supervisor',threadId:thread.id,inherit:true,expectedRevision:1},'inherit',(await f.supervisor.snapshot()).threads);
+  assert.equal(reviewed.modelConfig.model,'review-model');assert.equal(reviewed.modelConfig.reasoningEffort,'high');
+  assert.equal(thread.revision,revision);assert.equal(thread.enabled,enabled);assert.deepEqual(f.budget.state,budget);
+  finish();await tick;assert.equal(f.deliveries.length,1);assert.equal(thread.decisions[0].modelConfig.model,'review-model');
+  assert.equal((await settings.resolve('research',thread.id)).reasoningEffort,'medium');
 });
 test('save stopped, start, steer, pause, resume, stop, restart and clear retain one durable setup and history',async t=>{
   const f=await fixture(t),args={...config,evidenceRoot:f.root,tabId:'tab-A',sessionId:session,agentInstanceId:instance,start:false,confirmed:true};

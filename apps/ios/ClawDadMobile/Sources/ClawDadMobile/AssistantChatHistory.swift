@@ -22,9 +22,10 @@ struct AssistantCopyButton: View {
       copied = true
     } label: {
       Image(systemName: copied ? "checkmark" : "doc.on.doc")
+        .font(.system(size: 18))
         .frame(width: 44, height: 44)
         .overlay(alignment: .leading) {
-          if copied { Text("Copied").font(.caption).fixedSize().offset(x: -44) }
+          if copied { Text("Copied").font(.system(size: 12)).fixedSize().offset(x: -44) }
         }
     }.buttonStyle(.plain).disabled(text.isEmpty)
       .accessibilityLabel(copied ? "Copied" : "Copy \(label)")
@@ -50,6 +51,9 @@ private enum AssistantHistoryItem: Identifiable {
 struct AssistantChatHistory: View {
   let snapshot: AssistantSnapshot?
   var selection: AssistantMessageSelection? = nil
+  var playingMessageID: String? = nil
+  var preparingPlayback = false
+  var play: (String, String) -> Void = { _, _ in }
   var watch: (String) -> Void
   var cancel: (String) -> Void
   private var items: [AssistantHistoryItem] {
@@ -66,6 +70,7 @@ struct AssistantChatHistory: View {
             Text(message.role == "user" ? "You" : "Assistant").font(.caption.bold())
               .foregroundStyle(ClawDadTheme.gold)
             Spacer()
+            speaker(message.text, id: message.id)
             AssistantCopyButton(text: message.text, label: "\(message.role) message", id: message.id)
           }
           AssistantResponseText(text: message.text, id: message.id, selection: selection)
@@ -78,6 +83,7 @@ struct AssistantChatHistory: View {
           HStack {
             Text("\(task.displayName ?? "Terminal agent") · \(task.displayStatus)").font(.subheadline.bold())
             Spacer()
+            speaker(task.requestText ?? task.args["text"]?.string ?? "", id: "request.\(task.id)")
             AssistantCopyButton(text: task.requestText ?? task.args["text"]?.string ?? "",
               label: "task request", id: "request.\(task.id)")
           }
@@ -88,6 +94,7 @@ struct AssistantChatHistory: View {
             HStack {
               Text("Assistant").font(.caption.bold()).foregroundStyle(ClawDadTheme.gold)
               Spacer()
+              speaker(response, id: "result.\(task.id)")
               AssistantCopyButton(text: response, label: "Assistant result", id: "result.\(task.id)")
             }
             AssistantResponseText(text: response, id: "result.\(task.id)", selection: selection)
@@ -100,5 +107,18 @@ struct AssistantChatHistory: View {
           .id(task.id)
       }
     }
+  }
+  private func speaker(_ text: String, id: String) -> some View {
+    let active = playingMessageID == id
+    return Button { play(id, text) } label: {
+      Image(systemName: active ? "stop.circle.fill" : "speaker.wave.2")
+        .font(.system(size: 18))
+        .frame(width: 44, height: 44)
+        .background(active ? ClawDadTheme.gold.opacity(0.18) : .clear, in: Circle())
+    }.buttonStyle(.plain).disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+      .accessibilityLabel(active ? "Stop reading message" : "Read message aloud")
+      .accessibilityValue(active ? (preparingPlayback ? "Preparing audio" : "Playing") : "Stopped")
+      .accessibilityAddTraits(active ? .isSelected : [])
+      .accessibilityIdentifier("clawdad.assistant.speak.\(id)")
   }
 }

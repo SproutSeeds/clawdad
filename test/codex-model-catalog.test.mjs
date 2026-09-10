@@ -23,6 +23,8 @@ process.stdin.on("data", (chunk) => {
     const message = JSON.parse(line);
     if (message.method === "initialize") {
       send({ id: message.id, result: { ok: true } });
+    } else if (message.method === "account/read") {
+      send({ id: message.id, result: { account: { type: "chatgpt", planType: "pro" } } });
     } else if (message.method === "config/read") {
       send({ id: message.id, result: { config: { model: "gpt-5.6-sol", model_reasoning_effort: "ultra" }, origins: {} } });
     } else if (message.method === "model/list") {
@@ -66,8 +68,10 @@ process.stdin.on("data", (chunk) => {
       codexBinary: fakeCodex,
       projectPath: root,
       timeoutMs: 2000,
+      requireAuthenticated: true,
     });
     assert.equal(catalog.configuredModel, "gpt-5.6-sol");
+    assert.equal(catalog.authenticated,true);
     assert.equal(catalog.configuredReasoningEffort, "ultra");
     assert.deepEqual(catalog.models.map((model) => model.model), ["gpt-5.6-sol", "gpt-5.5"]);
     assert.deepEqual(catalog.models[0].supportedReasoningEfforts, ["low", "ultra"]);

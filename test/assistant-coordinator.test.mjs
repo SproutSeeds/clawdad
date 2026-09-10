@@ -6,6 +6,7 @@ import path from 'node:path';
 import {spawn} from 'node:child_process';
 import {AssistantCoordinator,assistantExecArguments,assistantWorkspaceInstructions} from '../lib/assistant-coordinator.mjs';
 import {AssistantRuntime} from '../lib/assistant-runtime.mjs';
+import {AssistantModelSettings} from '../lib/assistant-model-settings.mjs';
 
 const id='01a07d6d-4359-7361-a94b-8a651ca9858b';
 const catalog={revision:7,selectedTabId:'one',tabs:[
@@ -42,6 +43,24 @@ async function ready(runtime){
   await runtime.drainTask;
 }
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
+
+test('settings reach actual Assistant CLI arguments and durable jobs, preserving session and in-flight model',async t=>{
+  const {root,spawns,make}=await fixture(t),runtime=new AssistantRuntime({root,coordinator:make()});t.after(()=>runtime.close());
+  runtime.modelSettings=new AssistantModelSettings({file:path.join(root,'models.json'),readCatalog:async()=>({authenticated:true,models:[
+    {model:'gpt-6-astra',supportedReasoningEfforts:['low','medium']},{model:'test-model',supportedReasoningEfforts:['high']} ]})});
+  await ready(runtime);
+  await runtime.command({action:'message',requestId:'running',text:'two-parts'});
+  while(!(await runtime.command({action:'state'})).coordinator.sessionId)await settle();
+  await runtime.command({action:'settings.update',requestId:'model-change',scope:'main',selection:{model:'test-model',reasoningEffort:'high'},expectedRevision:0});
+  assert.equal(spawns[0].args[spawns[0].args.indexOf('--model')+1],'gpt-6-astra');
+  assert.equal((await runtime.job('running')).modelConfig.reasoningEffort,'low');
+  await runtime.drainTask;
+  await runtime.command({action:'message',requestId:'next',text:'Follow-up.'});await runtime.drainTask;
+  assert.equal(spawns[1].args[spawns[1].args.indexOf('--model')+1],'test-model');
+  assert.ok(spawns[1].args.includes('model_reasoning_effort="high"'));
+  assert.equal((await runtime.job('next')).modelConfig.model,'test-model');
+  assert.equal(spawns[1].args[spawns[1].args.indexOf('resume')+1],id);
+});
 
 test('upgrades refresh only the owned Terminal tool guidance and preserve workspace instructions',async t=>{
   const {root,make}=await fixture(t);

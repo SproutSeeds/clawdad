@@ -9,6 +9,8 @@
     private var state: [String: AssistantValue]
     private var uploads: [String: Data] = [:]
     private var failedSend = false
+    private var settings: [String: AssistantValue]?
+    private var streamRevision = 0
     init() {
       state = [
         "version": .number(1), "conversationMode": .string("background"), "imageAttachments": .bool(true), "enabled": .bool(true), "paused": .bool(false),
@@ -65,11 +67,24 @@
             isBusy: true),
         ])
       state["catalog"] = try? .encode(catalog)
+      if ProcessInfo.processInfo.arguments.contains("--clawdad-assistant-long-history") {
+        state["messages"] = .array((0..<30).map { index in .object([
+          "id": .string("history-\(index)"), "role": .string(index % 2 == 0 ? "user" : "assistant"),
+          "text": .string("Message \(index).\nA multiline history entry for reading, copying and playback.\nKeep the call and draft intact."),
+          "createdAt": .string(String(format: "2026-09-10T10:%02d:00Z", index))
+        ]) })
+      }
     }
     func snapshot() throws -> AssistantSnapshot {
-      try JSONDecoder().decode(AssistantSnapshot.self, from: JSONEncoder().encode(state))
+      if streamRevision > 0, streamRevision < 80 {
+        streamRevision += 1
+        var messages = state["messages"]?.array ?? []
+        if var last = messages.last?.object { last["text"] = .string("A new streaming response. " + String(repeating: "More evidence. ", count: streamRevision)); messages[messages.count - 1] = .object(last); state["messages"] = .array(messages) }
+      }
+      return try JSONDecoder().decode(AssistantSnapshot.self, from: JSONEncoder().encode(state))
     }
     func research(_ action: String, args: [String: AssistantValue], id: String) throws -> [String: AssistantValue] {
+      if action.hasPrefix("settings.") { return try modelSettings(action, args: args) }
       if action == "research.target" { return ["researchTarget": .object(["tabId": args["tabId"] ?? .string("code-one"),
         "tabTitle": .string("Disposable research"), "sessionId": .string("fixture-session"),
         "agentInstanceId": .string("fixture-process"), "directory": .string("/tmp/research-fixture")])] }
@@ -128,6 +143,7 @@
         return try snapshot()
       }
       if action == "pause" { state["paused"] = args["paused"] }
+      if action == "pause", ProcessInfo.processInfo.arguments.contains("--clawdad-assistant-long-history") { streamRevision = 1 }
       if action == "pause", ProcessInfo.processInfo.arguments.contains("--clawdad-assistant-history-test") {
         state["tasks"] = .array((state["tasks"]?.array ?? []).map { value in
           guard var task = value.object, task["id"]?.string == "history-task" else { return value }
@@ -178,6 +194,29 @@
         "uploadId": .string(upload.id), "offset": .number(Double(data.count)),
         "complete": .bool(data.count == upload.size)
       ]))
+    }
+    private func modelSettings(_ action: String, args: [String: AssistantValue]) throws -> [String: AssistantValue] {
+      if settings == nil {
+        let choice: AssistantValue = .object(["model": .string("gpt-6-astra"), "reasoningEffort": .string("low"), "available": .bool(true)])
+        settings = ["revision": .number(0), "main": choice, "researchDefault": choice,
+          "models": .array([("gpt-6-astra", ["low", "medium", "high", "max", "ultra"]), ("gpt-5.6-sol", ["low", "medium", "high", "ultra"]), ("gpt-5.5", ["low", "medium", "high", "xhigh"])].map { model, efforts in .object([
+            "id": .string(model), "model": .string(model), "displayName": .string(model), "defaultReasoningEffort": .string("low"), "supportedReasoningEfforts": .array(efforts.map(AssistantValue.string)) ]) }),
+          "supervisors": .array([.object(["id": .string("fixture-reviewer"), "name": .string("Research project"), "project": .string("/tmp/research-project"), "sessionId": .string("fixture-session"), "status": .string("off"), "inherited": .bool(true), "selection": choice])])]
+      }
+      if action == "settings.update" {
+        guard args["expectedRevision"] == settings?["revision"] else { throw AssistantProtocolError.invalid }
+        let revision = (settings?["revision"]?.number ?? 0) + 1
+        settings?["revision"] = .number(revision)
+        let scope = args["scope"]?.string ?? ""
+        var choice = args["selection"]?.object ?? [:]; choice["available"] = .bool(true)
+        if scope == "supervisor" {
+          var supervisor = settings?["supervisors"]?.array?.first?.object ?? [:]
+          supervisor["inherited"] = args["inherit"]
+          supervisor["selection"] = args["inherit"]?.bool == true ? settings?["researchDefault"] : .object(choice)
+          settings?["supervisors"] = .array([.object(supervisor)])
+        } else { settings?[scope] = .object(choice) }
+      }
+      return ["settings": .object(settings!)]
     }
   }
 #endif

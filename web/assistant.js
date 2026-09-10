@@ -1,4 +1,5 @@
 import {researchSupervisorPanel} from './research-supervisor.js';
+import './assistant-settings.js';
 const $ = (id) => document.getElementById(id);
 const dialog = $('assistantDialog');
 if (dialog) {
@@ -6,6 +7,8 @@ if (dialog) {
   let audio=null, speechEpoch=0, speechAbort=null, spoken=new Set(), uploadQueue=[], uploading=null, transcript=[];
   let pendingMessage=null, sendTail=Promise.resolve(), voiceEpoch=0, startingVoice=false, callVisible=false;
   let speechQueue=[], speechRunner=null;
+  let playingMessage=null;
+  const playbackButtons=new Map();
   const messageNodes=new Map(), taskNodes=new Map(), tabNodes=new Map();
   const hasMessageSelection=()=>{const selection=window.getSelection();return !!selection&&!selection.isCollapsed&&
     (selection.anchorNode?.parentElement?.closest('.assistant-message,.assistant-task')||selection.focusNode?.parentElement?.closest('.assistant-message,.assistant-task'));};
@@ -31,6 +34,20 @@ if (dialog) {
     });
     node.className='assistant-copy';node.title=label;node.setAttribute('aria-label',label);return node;
   }
+  function speakerButton(id,readText){
+    const node=button('🔊',()=>{
+      if(playingMessage===id){stopSpeech();return;}
+      stopSpeech();runSpeech({id,text:readText()});
+    });node.className='assistant-copy';playbackButtons.set(id,{node,readText});updatePlaybackButtons();return node;
+  }
+  function updatePlaybackButtons(){for(const [id,{node,readText}] of playbackButtons){
+    const active=playingMessage===id;node.textContent=active?'■':'🔊';node.disabled=!readText().trim();
+    node.setAttribute('aria-label',active?'Stop reading message':'Read message aloud');node.setAttribute('aria-pressed',String(active));
+  }}
+  const latest=button('↓',()=>{const feed=$('assistantFeed');feed.scrollTo({top:feed.scrollHeight,behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});});
+  latest.id='assistantLatest';latest.setAttribute('aria-label','Jump to latest message');latest.hidden=true;
+  $('assistantComposer').before(latest);
+  $('assistantFeed').addEventListener('scroll',()=>{const feed=$('assistantFeed');latest.hidden=feed.scrollHeight-feed.scrollTop-feed.clientHeight<70;},{passive:true});
   function open(){if(!dialog.open)dialog.showModal();$('assistantCall').hidden=true;$('assistantDraft').focus();refresh();if(!timer)timer=setInterval(refresh,700);}
   function close(){dialog.close();$('assistantCall').hidden=!callVisible;$('assistantOpen').focus();}
   function goBack(){if(!$('assistantWorkspace').hidden){$('assistantWorkspace').hidden=true;$('assistantFeed').hidden=false;$('assistantWorkspaceToggle').setAttribute('aria-pressed','false');$('assistantWorkspaceToggle').focus();}else close();}
@@ -64,7 +81,7 @@ if (dialog) {
         const element=document.createElement('div');element.className='assistant-message';
         const label=document.createElement('strong'),body=document.createElement('span');
         const copy=copyButton(()=>body.textContent,`Copy ${message.role} message`);
-        element.append(label,copy,body);feed.append(element);entry={element,label,body};messageNodes.set(message.id,entry);
+        element.append(label,copy,speakerButton(message.id,()=>body.textContent),body);feed.append(element);entry={element,label,body};messageNodes.set(message.id,entry);
       }
       entry.label.textContent=message.role==='user'?'You':'Assistant';
       if(entry.body.textContent!==message.text)entry.body.textContent=message.text;
@@ -78,7 +95,7 @@ if (dialog) {
         const element=document.createElement('section');element.className='assistant-task';
         const heading=document.createElement('strong'),prompt=document.createElement('p'),detail=document.createElement('p'),response=document.createElement('p');
         const copy=copyButton(()=>prompt.textContent,'Copy task request'),resultCopy=copyButton(()=>response.textContent,'Copy Assistant result');
-        element.append(heading,copy,prompt,detail,response,resultCopy);
+        element.append(heading,copy,speakerButton('request.'+task.id,()=>prompt.textContent),prompt,detail,response,resultCopy,speakerButton('result.'+task.id,()=>response.textContent));
         if(task.args.tabId)element.append(button('Watch in Terminal',()=>watch(task.args.tabId)));
         const cancel=button('Cancel queued task',()=>command('cancel',{jobId:task.id}).catch(e=>error(e.message)));element.append(cancel);
         $('assistantTasks').append(element);entry={element,heading,prompt,detail,cancel,response,resultCopy};taskNodes.set(task.id,entry);
@@ -100,13 +117,14 @@ if (dialog) {
       const before=$('assistantWorkspace').children[index];if(before!==node)$('assistantWorkspace').insertBefore(node,before||null);
     }
     if(nearBottom&&!held)feed.scrollTop=feed.scrollHeight;
+    latest.hidden=feed.scrollHeight-feed.scrollTop-feed.clientHeight<70;updatePlaybackButtons();
     if(voice){
       for(const message of [...(next.messages||[]),...(next.taskUpdates||[])])if(message.role==='assistant'&&!spoken.has(message.id)){
         spoken.add(message.id);speechQueue.push(message);
       }
       drainSpeech();
     }
-    if($('assistantModel'))$('assistantModel').textContent=next.coordinator?.model?`${next.coordinator.model} · Quick conversation`:'';
+    if($('assistantModel'))$('assistantModel').textContent=next.coordinator?.model||'';
   }
   async function refresh(){try{render(await request('/v1/assistant/state'));}catch(e){if(dialog.open||voice)error(e.message);}}
   function send(text,id=null,epoch=null){
@@ -119,25 +137,46 @@ if (dialog) {
   }
   $('assistantComposer').onsubmit=async(event)=>{event.preventDefault();const text=$('assistantDraft').value;if(await send(text)&&$('assistantDraft').value===text)$('assistantDraft').value='';};
   $('assistantDraft').onkeydown=event=>{if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();$('assistantComposer').requestSubmit();}};
-  function stopSpeech(){speechQueue=[];speechEpoch++;speechAbort?.abort();speechAbort=null;if(audio){audio.pause();audio.src='';audio=null;}if(voice)status(muted?'Microphone muted':'Listening…');}
+  function stopSpeech(){
+    const wasPlaying=!!playingMessage;
+    speechQueue=[];const epoch=++speechEpoch;speechAbort?.abort();speechAbort=null;speechRunner=null;playingMessage=null;updatePlaybackButtons();window.speechSynthesis?.cancel();
+    if(audio){audio.pause();audio.src='';audio=null;}
+    if(wasPlaying)setTimeout(()=>{if(epoch===speechEpoch&&!playingMessage)capture?.port.postMessage({muted});},350);
+    else capture?.port.postMessage({muted});
+    if(voice)status(muted?'Microphone muted':'Listening…');
+  }
   function drainSpeech(){
     if(speechRunner||!voice||!speechQueue.length)return;
-    speechRunner=(async()=>{
-      while(voice&&speechQueue.length){
-        const message=speechQueue.shift();
-        try{await speak(message);}catch(e){if(e.name!=='AbortError')error(e.message);}
-      }
-    })().finally(()=>{speechRunner=null;if(voice&&speechQueue.length)drainSpeech();});
+    runSpeech(speechQueue.shift());
+  }
+  function runSpeech(message){
+    let fenced=false;
+    message={...message,text:message.text.split(/\r?\n/).map(line=>{
+      if(/^\s*(```|~~~)/.test(line)){fenced=!fenced;return null;}
+      return fenced?line:line.replace(/^\s{0,3}(?:#{1,6}\s+|>\s?|[-*+]\s+)/,'')
+        .replace(/\*\*(.+?)\*\*|__(.+?)__|`([^`]+)`/g,(_all,a,b,c)=>a||b||c)
+        .replace(/!?\[([^\]]+)\]\(([^)]+)\)/g,'$1 ($2)');
+    }).filter(line=>line!==null).join('\n')};
+    if(!message.text.trim())return;const epoch=speechEpoch;
+    playingMessage=message.id;updatePlaybackButtons();capture?.port.postMessage({muted:true});status('Preparing message…');
+    const runner=speak(message).catch(e=>{if(e.name!=='AbortError'&&epoch===speechEpoch)error('Speech could not finish. The message remains available to read or copy.');}).finally(()=>{
+      if(speechRunner!==runner)return;speechRunner=null;playingMessage=null;updatePlaybackButtons();
+      setTimeout(()=>{if(epoch===speechEpoch&&!playingMessage)capture?.port.postMessage({muted});},350);
+      status(voice?(muted?'Microphone muted':'Listening…'):'Your Mac is connected');drainSpeech();
+    });speechRunner=runner;
   }
   async function speak(message){
     const epoch=speechEpoch,abort=new AbortController();speechAbort=abort;
+    let played=0,poll=false,chunks=[];const deadline=Date.now()+180_000,firstDeadline=Date.now()+12_000;
+    try {
     const settings=await request('/v1/tts/voices',null,{signal:abort.signal});
-    let played=0,poll=false;const deadline=Date.now()+180_000;
-    while(voice&&epoch===speechEpoch&&Date.now()<deadline){
+    while(epoch===speechEpoch&&Date.now()<deadline){
+      if(!played&&Date.now()>=firstDeadline)throw Error('Speech preparation timed out');
       const result=await request('/v1/tts/message',{source:'remote-assist',project:'',text:message.text,kind:'response',prepare:true,poll,requestId:message.id,voiceSelection:settings.selection,executionPreference:'paired-mac-first',allowRemoteFallback:false},{signal:abort.signal});
+      chunks=result.audio?.fallbackChunks||chunks;
       if(result.audio?.state==='failed')throw new Error(result.audio.error||'Local speech is unavailable');
       const parts=result.audio?.parts||[];
-      while(played<parts.length&&voice&&epoch===speechEpoch){
+      while(played<parts.length&&epoch===speechEpoch){
         status('Speaking…');const player=new Audio(parts[played].url);audio=player;
         await new Promise((resolve,reject)=>{
           const cancel=()=>{player.pause();reject(new DOMException('Interrupted','AbortError'));};
@@ -149,6 +188,21 @@ if (dialog) {
       }
       if(result.audio?.state==='ready'&&played){status(muted?'Microphone muted':'Listening…');return;}
       poll=true;await new Promise(resolve=>setTimeout(resolve,700));
+    }
+    if(epoch===speechEpoch)throw Error('Speech preparation timed out');
+    } catch(e) {
+      if(epoch!==speechEpoch||abort.signal.aborted)throw e;
+      const remaining=played?chunks.slice(played).join('\n\n'):message.text;
+      if(!remaining||!window.speechSynthesis)throw e;
+      status('Speaking · device voice');
+      await new Promise((resolve,reject)=>{
+        const utterance=new SpeechSynthesisUtterance(remaining);
+        const cancel=()=>{window.speechSynthesis.cancel();reject(new DOMException('Interrupted','AbortError'));};
+        abort.signal.addEventListener('abort',cancel,{once:true});
+        utterance.onend=()=>{abort.signal.removeEventListener('abort',cancel);resolve();};
+        utterance.onerror=()=>{abort.signal.removeEventListener('abort',cancel);reject(Error('Device speech unavailable'));};
+        window.speechSynthesis.speak(utterance);
+      });
     }
   }
   function wav(samples,rate){
@@ -199,7 +253,7 @@ if (dialog) {
       capture=new AudioWorkletNode(context,'clawdad-assistant-capture');context.createMediaStreamSource(stream).connect(capture);capture.connect(context.destination);
       capture.port.onmessage=event=>{
         if(voiceEpoch!==epoch)return;
-        if(event.data.type==='started')stopSpeech();
+        if(event.data.type==='started'&&!playingMessage)stopSpeech();
         if(event.data.type==='utterance'&&voice){
           uploadQueue.push(event.data);drain();
           if(uploadQueue.length>=30&&!muted){setMuted(true);error('The microphone is paused while your Mac catches up. Your recorded speech is retained.');}
@@ -210,7 +264,7 @@ if (dialog) {
     }catch(e){if(voiceEpoch===epoch){endVoice();callVisible=true;$('assistantCall').hidden=dialog.open;error(e.message);status('Assistant could not connect. Open Messages to retry.');}}finally{if(voiceEpoch===epoch)startingVoice=false;}
   }
   function endVoice(){voiceEpoch++;voice=false;startingVoice=false;callVisible=false;stopSpeech();stream?.getTracks().forEach(t=>t.stop());stream=null;capture?.disconnect();capture=null;context?.close();context=null;uploadQueue=[];transcript=[];$('assistantCall').hidden=true;$('assistantMuteInline').hidden=true;$('assistantTalk').textContent='Call Assistant';status('Conversation saved');window.dispatchEvent(new CustomEvent('clawdad:assistant-voice',{detail:{active:false}}));}
-  function setMuted(value){muted=value;capture?.port.postMessage({muted});for(const id of ['assistantMute','assistantMuteInline'])$(id).textContent=muted?'Unmute':'Mute';status(muted?'Microphone muted':'Listening…');}
+  function setMuted(value){muted=value;capture?.port.postMessage({muted:muted||!!playingMessage});for(const id of ['assistantMute','assistantMuteInline'])$(id).textContent=muted?'Unmute':'Mute';status(muted?'Microphone muted':'Listening…');}
   $('assistantTalk').onclick=()=>voice?endVoice():startVoice();$('assistantEnd').onclick=endVoice;
   $('assistantMute').onclick=()=>setMuted(!muted);
   $('assistantMuteInline').onclick=()=>setMuted(!muted);

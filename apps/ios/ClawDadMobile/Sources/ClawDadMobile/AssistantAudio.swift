@@ -20,6 +20,7 @@ protocol AssistantAudioIO: AnyObject {
   func muteCapture(finishingUtterance: Bool) throws
   func unmuteCapture() async throws
   func setReplyActive(_ active: Bool)
+  func preparePlayback() throws
   func play(_ data: Data) async throws
   func speakFallback(_ text: String) async throws
   func stopPlayback()
@@ -35,6 +36,7 @@ extension AssistantAudioIO {
   func muteCapture() throws { try muteCapture(finishingUtterance: false) }
   func unmuteCapture() async throws { muted = false; resetUtterance() }
   func previewUtterance() {}
+  func preparePlayback() throws {}
   func speakFallback(_ text: String) async throws { throw AssistantProtocolError.invalid }
 }
 
@@ -59,6 +61,7 @@ final class AssistantAudio: AssistantAudioIO {
   }
   private var engine = AVAudioEngine()
   private let replyAudio = AssistantReplyAudio()
+  private var standalonePlayback: UUID?
   private var captureMonitor: Task<Void, Never>?
   private var recovery = AssistantCaptureRecovery()
   private let diagnostics = AssistantAudioDiagnostics.deviceLog()
@@ -234,10 +237,22 @@ final class AssistantAudio: AssistantAudioIO {
     }
   }
   func play(_ data: Data) async throws {
-    guard owner != nil else { throw CancellationError() }
+    guard owner != nil || standalonePlayback != nil else { throw CancellationError() }
     try await replyAudio.play(data)
   }
-  func stopPlayback() { replyAudio.stop() }
+  func preparePlayback() throws {
+    guard owner == nil else { return }
+    if standalonePlayback == nil {
+      standalonePlayback = try MobileAudioSession.shared.reservePlayback { [weak self] in
+        self?.standalonePlayback = nil; self?.replyAudio.stop(); self?.onReplaced?()
+      }
+    }
+    if let standalonePlayback { try MobileAudioSession.shared.activatePlayback(standalonePlayback) }
+  }
+  func stopPlayback() {
+    replyAudio.stop()
+    if let standalonePlayback { self.standalonePlayback = nil; MobileAudioSession.shared.release(standalonePlayback) }
+  }
   func speakFallback(_ text: String) async throws { try await replyAudio.speakFallback(text) }
   func setReplyActive(_ active: Bool) {
     replyActive = active
