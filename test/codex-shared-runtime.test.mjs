@@ -19,6 +19,7 @@ import { createRequire } from "node:module";
 import { WebSocketServer } from "ws";
 
 import {
+  sharedRuntimeUpgradeEligibility,
   codexSharedRemoteUrl,
   codexSharedRuntimeStatus,
   codexSharedSocketPath,
@@ -540,4 +541,15 @@ test("a missing Codex executable is a conclusive auto-mode capability fallback",
   assert.equal(result.mode, "isolated");
   assert.equal(result.state, "unsupported");
   assert.match(result.reason, /was not found/u);
+});
+
+
+test("shared upgrade recovery requires missing launch paths and zero loaded owners", async () => {
+  const owner = {executable: "/removed/codex", cwd: "/stable/home"};
+  const exists = async p => p === owner.cwd;
+  assert.equal(await sharedRuntimeUpgradeEligibility(owner, [], exists), true);
+  assert.equal(await sharedRuntimeUpgradeEligibility(owner, ["idle-thread"], exists), false);
+  assert.equal(await sharedRuntimeUpgradeEligibility(owner, null, exists), false);
+  assert.equal(await sharedRuntimeUpgradeEligibility(owner, [], async () => true), false);
+  assert.equal(await sharedRuntimeUpgradeEligibility({cwd: "/stable/home"}, [], exists), false);
 });

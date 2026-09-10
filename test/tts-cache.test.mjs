@@ -8,6 +8,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import {
+  synthesizeDocReaderSpeechChunk,
   ensureCachedTtsAudio,
   readTtsManifest,
   resolveTtsRuntimeConfig,
@@ -529,7 +530,7 @@ test("Doc Reader TTS falls back from Umbra to Mac Kokoro", async () => {
       },
     });
     assert.equal(result.cached, false);
-    assert.equal(primary.speechCalls.length, 1);
+    assert.equal(primary.speechCalls.length, 2); // One bounded readiness retry before fallback.
     assert.equal(fallback.speechCalls.length, 1);
     const partPath = path.join(
       projectPath,
@@ -775,7 +776,7 @@ test("TTS message endpoint uses direct local speech when library lacks speech se
     assert.equal(payload.audio.state, "ready");
     assert.equal(payload.audio.parts.length, 1);
     assert.equal(fakeLibrary.itemCalls.length, 0);
-    assert.equal(primary.speechCalls.length, 1);
+    assert.equal(primary.speechCalls.length, 2); // One bounded readiness retry before fallback.
     assert.equal(fallback.speechCalls.length, 1);
 
     const audioResponse = await fetch(new URL(payload.audio.parts[0].url, baseUrl), {
@@ -2140,4 +2141,18 @@ test("read endpoint returns saved failed response audio without retrying", async
     await fakeOpenAi.close();
     await rm(root, { recursive: true, force: true });
   }
+});
+
+
+test("local TTS retries one temporary readiness failure and returns one audio result", async () => {
+  let calls = 0;
+  const result = await synthesizeDocReaderSpeechChunk({baseUrl: "http://127.0.0.1:8772", fallbackUrl: "", text: "Fixture", requestTimeoutMs: 3000,
+    fetchImpl: async () => ++calls === 1 ? new Response("warming", {status: 503}) : new Response(Buffer.from("one audio result"))});
+  assert.equal(calls, 2); assert.equal(result.toString(), "one audio result");
+});
+test("local TTS bounds a stalled response body after headers arrive", async () => {
+  const started = Date.now();
+  await assert.rejects(synthesizeDocReaderSpeechChunk({baseUrl: "http://127.0.0.1:8772", fallbackUrl: "", text: "Fixture", requestTimeoutMs: 1000,
+    fetchImpl: async (_url, {signal}) => ({ok: true, arrayBuffer: () => new Promise((_, reject) => signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError'))))})}), /timed out/);
+  assert.ok(Date.now() - started < 2500);
 });
