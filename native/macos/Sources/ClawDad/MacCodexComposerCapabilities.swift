@@ -11,9 +11,9 @@ struct MacCodexComposerCapabilities {
   let adapter: String?
   let enterAdvertised: Bool
 
-  init(screen: String, version: String, viewportRows: Int? = nil) {
+  init(screen: String, version: String, viewportRows: Int? = nil, knownCollapsedDraft: String? = nil) {
     observation = assistantObserveDraft(screen, viewportRows: viewportRows)
-    queue = MacAssistantAgentQueueSnapshot.read(screen)
+    queue = MacAssistantAgentQueueSnapshot.read(screen, knownCollapsedDraft: knownCollapsedDraft)
     adapter = Self.keyAdapter(version: version)
     // Inspect only the current composer footer, never a shortcut quoted in history.
     let lines = screen.components(separatedBy: .newlines)

@@ -21,11 +21,13 @@ final class MacAssistantBridge {
     let identity: String
     let generation: UInt64
     let text: String
+    let knownText: String?
     let foreground: MacAssistantForeground
     let requiresWholeDraftAuthorization: Bool
     let expires: Date
   }
   private var draftInspections: [String: DraftInspection] = [:]
+  private var draftProvenance = MacAssistantDraftProvenance()
   private let workerId = UUID().uuidString
   private let interaction = MacAssistantInteractionGate.shared
   private let nativeInput = MacAssistantTerminalInput()
@@ -124,6 +126,8 @@ final class MacAssistantBridge {
     input?.cancelPendingOperations()
     inspection = nil
     draftInspections.removeAll()
+    nativeInput.invalidate(reason: "The native worker stopped; inspect again after reconnection.")
+    draftProvenance.invalidate()
   }
 
   private func save(_ value: [String: AssistantValue], to name: String) throws {
@@ -148,17 +152,20 @@ final class MacAssistantBridge {
           try? await Task.sleep(for:.seconds(2))
         }
       }
-      defer { heartbeat.cancel();nativeInput.invalidate();draftInspections.removeAll() }
+      defer { heartbeat.cancel();nativeInput.invalidate();draftInspections.removeAll();draftProvenance.invalidate() }
       return try await mainWorkspace.control(action,args:args,requestId:id)
     }
     // A separate native action (including history navigation) invalidates all
     // earlier draft observations, even if an opaque paste has the same length.
     // Local/phone human input is fenced independently by the interaction gate.
-    if action=="terminal.new" { draftInspections.removeAll();nativeInput.invalidate() }
+    if action=="terminal.new" { draftInspections.removeAll();nativeInput.invalidate();draftProvenance.invalidate() }
+    var sameFocusedInput = false
+    let priorPasteRevision = draftProvenance.revision
     defer {
-      if action.hasPrefix("terminal."), !["terminal.observe", "terminal.inspect", "terminal.native.inspect", "terminal.context", "terminal.new"].contains(action) {
+      if action.hasPrefix("terminal."), !["terminal.observe", "terminal.inspect", "terminal.native.inspect", "terminal.context", "terminal.new"].contains(action), !sameFocusedInput {
         draftInspections.removeAll()
-        nativeInput.invalidate()
+        nativeInput.invalidate(reason: "The separate \(action) action invalidated this input inspection.")
+        if draftProvenance.revision == priorPasteRevision { draftProvenance.invalidate() }
       }
     }
     if action == "terminal.observe" { return try await observeResearchTarget(args) }
@@ -203,7 +210,7 @@ final class MacAssistantBridge {
         "catalog": try .encode(catalog), "verification": .string("native-window-and-new-tty"),
         "input": (try? await nativeInput.inspect(tabId: created.id, input: input, ticket: ticket)).map(AssistantValue.object) ?? .null]
     }
-    let editing = ["terminal.clear", "terminal.replace"].contains(action)
+    let editing = ["terminal.clear", "terminal.replace", "terminal.append"].contains(action)
     let editToken = args["token"]?.string ?? ""
     let draftInspection = editing ? draftInspections.removeValue(forKey: editToken) : nil
     if editing {
@@ -213,7 +220,7 @@ final class MacAssistantBridge {
         interaction.isCurrent(draftInspection.generation) else {
         throw MacAssistantError("The draft inspection expired or changed. Inspect the intended tab again; its draft was preserved.")
       }
-      guard !draftInspection.requiresWholeDraftAuthorization || args["allowWholeDraft"]?.bool == true else {
+      guard !draftInspection.requiresWholeDraftAuthorization || action == "terminal.append" || args["allowWholeDraft"]?.bool == true else {
         throw MacAssistantError("This draft includes collapsed text. Clearing or replacing the entire draft requires Cody's explicit authorization and allowWholeDraft=true. Inspect again; the draft was preserved.")
       }
     }
@@ -265,8 +272,15 @@ final class MacAssistantBridge {
       throw MacAssistantDeferred(
         message: "You took control of the Mac. Waiting before selecting the tab.")
     }
+    let priorFocus = action == "terminal.focus" && state.selectedTabId == tabID
+      && NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.Terminal"
+      ? try await tabs.inputIdentity() : nil
     state = try await tabs.focus(tabID: tabID, expectedRevision: state.revision)
-    if action == "terminal.focus" { return ["catalog": try .encode(state)] }
+    if action == "terminal.focus" {
+      sameFocusedInput = assistantSameFocusedInput(before: priorFocus, after: try await tabs.inputIdentity(),
+        generationUnchanged: interaction.isCurrent(ticket))
+      return ["catalog": try .encode(state), "inputInspectionPreserved": .bool(sameFocusedInput)]
+    }
     MacAssistantComposerRendering.shared.invalidate()
     _ = try await MacAssistantComposerRendering.shared.read(ticket: ticket, raw: rawFocusedTerminalText)
     guard let target = tabs.assistantSnapshot(tabID: tabID), !target.tty.isEmpty else {
@@ -285,9 +299,9 @@ final class MacAssistantBridge {
           "screenText": .string(screen), "agentAvailable": .bool(false), "inputState": .string(code),
           "draft": .object(["editable": .bool(false), "reasonCode": .string(code), "reason": .string(error.localizedDescription)])]
       }
-      let capabilities = MacCodexComposerCapabilities(screen: screen, version: binding.version, viewportRows: assistantTerminalRows(target.tty))
       let draft = await inspectDraft(tabId: tabID, tty: target.tty, binding: binding, screen: screen,
         ticket: ticket)
+      let capabilities = MacCodexComposerCapabilities(screen: screen, version: binding.version, viewportRows: assistantTerminalRows(target.tty), knownCollapsedDraft: draft["queueText"]?.string)
       let response = try? await Task.detached { () -> RemoteTerminalResponse? in
         guard let conversation = binding.conversation else { return nil }
         return try MacCodexResponseParser.read(conversation: conversation)
@@ -321,10 +335,17 @@ final class MacAssistantBridge {
       guard binding.continues(draftInspection.binding),
         try await tabs.inputIdentity() == draftInspection.identity,
         let expected = args["expectedText"]?.string,
-        let replacement = action == "terminal.clear" ? "" : args["text"]?.string,
-        expected.utf8.count <= 16 * 1024, replacement.utf8.count <= 16 * 1024,
-        !replacement.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) && $0 != "\n" && $0 != "\t" })
+        let requested = action == "terminal.clear" ? "" : args["text"]?.string
       else { throw MacAssistantError("The Terminal input identity changed or the edit is invalid. Inspect it again.") }
+      let replacement: String
+      if action == "terminal.append" {
+        guard let existing = draftInspection.knownText else {
+          throw MacAssistantError("This hidden draft has no unchanged native paste provenance. It was preserved. Read/expand it in Terminal, or explicitly authorize whole-draft replacement; appending cannot infer its contents.")
+        }
+        replacement = existing + requested
+      } else { replacement = requested }
+      guard expected.utf8.count <= 16 * 1024, replacement.utf8.count <= 16 * 1024,
+        !replacement.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) && $0 != "\n" && $0 != "\t" }) else { throw AssistantProtocolError.invalid }
       guard try await Task.detached(operation: { try MacAssistantForeground.read(tty: target.tty) }).value == draftInspection.foreground else {
         throw MacAssistantError("The foreground agent process changed since inspection. Inspect the exact tab again; its draft was preserved.")
       }
@@ -370,9 +391,13 @@ final class MacAssistantBridge {
           [tabs] in try await tabs.inputIdentity()
         }
       }, verifyInserted: { try await verifyReplacement() })
+      draftProvenance.remember(replacement, context: .init(input: draftInspection.identity, process: binding.instanceId,
+        session: binding.conversation?.sessionId, foreground: draftInspection.foreground.identity, generation: ticket))
       return ["tabId": .string(tabID), "tabTitle": .string(tab.title),
         "sessionId": binding.conversation.map { .string($0.sessionId) } ?? .null, "agentInstanceId": .string(binding.instanceId),
         "draftVerified": .bool(true), "submitted": .bool(false), "text": .string(replacement),
+        "existingDraftPreserved": .bool(action == "terminal.append"),
+        "appendedText": action == "terminal.append" ? .string(requested) : .null,
         "expandedTextReadBack": .bool(!collapsed),
         "wholeDraftAuthorized": .bool(draftInspection.requiresWholeDraftAuthorization),
         "verification": .string(collapsed ? "exact-native-paste-and-collapsed-length" : "rendered-composer")]
@@ -525,6 +550,10 @@ final class MacAssistantBridge {
     guard inserted else {
       throw MacAssistantError("The draft insertion could not be confirmed. Inspect this tab before retrying; Enter and Tab were not pressed.")
     }
+    if let identity, let foreground = try? await Task.detached(operation: { try MacAssistantForeground.read(tty: tty) }).value {
+      draftProvenance.remember(text, context: .init(input: identity, process: binding.instanceId,
+        session: binding.conversation?.sessionId, foreground: foreground.identity, generation: ticket))
+    }
     var result = binding.fields
     result.merge(["tabId": .string(tabId), "tabTitle": .string(tabTitle), "draftVerified": .bool(true), "submitted": .bool(false),
       "text": .string(text), "expandedTextReadBack": .bool(!collapsed),
@@ -563,20 +592,22 @@ final class MacAssistantBridge {
     }
     let identity = try await tabs.inputIdentity()
     let useExisting = args["useExistingDraft"]?.bool == true
+    var knownCollapsedDraft: String?
     if useExisting {
       guard let token = args["token"]?.string, let inspected = draftInspections.removeValue(forKey: token),
         inspected.expires > Date(), inspected.tabId == tabId, inspected.binding.conversation == conversation,
-        inspected.identity == identity, inspected.text == text, !inspected.requiresWholeDraftAuthorization,
+        inspected.identity == identity, inspected.knownText == text,
         try await Task.detached(operation: { try MacAssistantForeground.read(tty: tty) }).value == inspected.foreground,
         interaction.isCurrent(inspected.generation) else {
         throw MacAssistantError("Inspect the existing draft before queuing it. The input was preserved.")
       }
+      if inspected.requiresWholeDraftAuthorization { knownCollapsedDraft = text }
     }
     func allowed(_ expected: String, requireTab: Bool = false) -> Bool {
       var log = MacCodexRequestActivityLog()
       guard interaction.isCurrent(ticket), !MacConsoleSessionState.isLocked(), AXIsProcessTrusted(),
         (try? log.read(conversation.path)) == true, log.turnId == priorTurnId,
-        let current = (try? focusedTerminalText()).flatMap(MacAssistantAgentQueueSnapshot.read),
+        let current = (try? focusedTerminalText()).flatMap({ MacAssistantAgentQueueSnapshot.read($0, knownCollapsedDraft: knownCollapsedDraft) }),
         assistantEditableDraftMatches(current.draft, expected: expected) else { return false }
       return !requireTab || current.tabQueues
     }
@@ -596,7 +627,7 @@ final class MacAssistantBridge {
       }
       let owner = try await Task.detached { try MacTerminalResponseReader().inputBinding(tty: tty) }.value
       guard owner.continues(queueBinding) else { throw MacAssistantError("The agent changed during queue delivery. Inspect the tab and receipt.") }
-      return MacAssistantAgentQueueSnapshot.read(try await MacAssistantComposerRendering.shared.read(ticket: ticket, raw: rawFocusedTerminalText))
+      return MacAssistantAgentQueueSnapshot.read(try await MacAssistantComposerRendering.shared.read(ticket: ticket, raw: rawFocusedTerminalText), knownCollapsedDraft: knownCollapsedDraft)
     }, insert: {
       await input.insertAssistantDraft(text, targetToken: token, isAllowed: { allowed("") }) {
         [tabs] in try await tabs.inputIdentity()
@@ -614,7 +645,7 @@ final class MacAssistantBridge {
     })
     return ["tabId": .string(tabId), "tabTitle": .string(tabTitle), "sessionId": .string(conversation.sessionId),
       "conversationPath": .string(conversation.path.path), "queueAccepted": .bool(true),
-      "submitted": .bool(false), "verification": .string("rendered-agent-queue")]
+      "tabSent": .bool(true), "submitted": .bool(false), "verification": .string("rendered-agent-queue")]
   }
 
   private func inspectDraft(tabId: String, tty: String, binding: MacCodexInputBinding, screen: String,
@@ -646,11 +677,16 @@ final class MacAssistantBridge {
     }
     draftInspections = draftInspections.filter { $0.value.expires > Date() }
     if draftInspections.count >= 20 { draftInspections.removeAll() }
+    let knownText = view.requiresWholeDraftAuthorization ? draftProvenance.text(context: .init(input: identity,
+      process: binding.instanceId, session: binding.conversation?.sessionId, foreground: foreground.identity, generation: ticket), screen: screen) : text
     draftInspections[token] = DraftInspection(tabId: tabId, binding: binding,
-      identity: identity, generation: ticket, text: text, foreground: foreground,
+      identity: identity, generation: ticket, text: text, knownText: knownText, foreground: foreground,
       requiresWholeDraftAuthorization: view.requiresWholeDraftAuthorization, expires: Date().addingTimeInterval(45))
     return ["editable": .bool(capabilities.canClear), "text": .string(text), "token": .string(token),
-      "queueable": .bool(capabilities.canQueue && !view.requiresWholeDraftAuthorization),
+      "queueable": .bool(MacAssistantAgentQueueSnapshot.read(screen, knownCollapsedDraft: knownText) != nil && knownText != nil),
+      "queueText": knownText.map(AssistantValue.string) ?? .null,
+      "canAppend": .bool(capabilities.canClear && knownText != nil),
+      "textProvenance": .string(view.requiresWholeDraftAuthorization ? (knownText == nil ? "opaque" : "unchanged-native-paste") : "rendered-composer"),
       "requiresWholeDraftAuthorization": .bool(view.requiresWholeDraftAuthorization),
       "textIsCollapsedRepresentation": .bool(view.requiresWholeDraftAuthorization),
       "reasonCode": .string(capabilities.canClear ? view.reasonCode : "clear_binding_unverified"),

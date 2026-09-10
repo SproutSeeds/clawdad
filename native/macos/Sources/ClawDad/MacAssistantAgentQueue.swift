@@ -7,8 +7,9 @@ struct MacAssistantAgentQueueSnapshot: Equatable {
   let messages: [String]
   let tabQueues: Bool
 
-  static func read(_ screen: String) -> Self? {
-    guard let draft = assistantEditableDraft(screen, allowQueueFooter: true) else { return nil }
+  static func read(_ screen: String, knownCollapsedDraft: String? = nil) -> Self? {
+    let retained = knownCollapsedDraft.flatMap { assistantCollapsedPasteMatches(screen, payload: $0) ? $0 : nil }
+    guard let draft = assistantEditableDraft(screen, allowQueueFooter: true) ?? retained else { return nil }
     let lines = screen.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }
     guard let prompt = lines.lastIndex(where: { $0.hasPrefix("›") }),
       let working = lines[..<prompt].lastIndex(where: { $0.hasPrefix("• ") && $0.contains("esc to interrupt") }),
@@ -76,5 +77,6 @@ func assistantQueueVerifiedMessage(_ text: String, useExistingDraft: Bool = fals
       zip(current.messages, expected).allSatisfy({ assistantEditableDraftMatches($0, expected: $1) }) { return }
     if attempt < 15 { try await wait() }
   }
-  throw MacAssistantError("Tab was sent once, but the agent queue could not be fully read. Delivery is uncertain; inspect this request and the tab before taking further action.")
+  throw MacAssistantSubmissionFailure(message: "Tab was sent once, but the agent queue could not be fully read. Delivery is uncertain; wait for this receipt to reconcile with its exact accepted turn. Do not repeat Tab.",
+    fields: ["tabSent": .bool(true), "queueAccepted": .bool(false), "verification": .string("native-tab-sent-awaiting-full-queue-or-turn")])
 }

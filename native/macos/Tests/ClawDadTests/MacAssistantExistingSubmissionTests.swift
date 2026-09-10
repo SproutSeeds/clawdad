@@ -61,4 +61,29 @@ import XCTest
     XCTAssertEqual(MacAssistantSubmissionLog.parse(Data((start+item("Startup context")+item("Exact Ω")).utf8),expected:composer("Exact Ω"))?.text,"Exact Ω")
     XCTAssertNil(MacAssistantSubmissionLog.parse(Data((start+item("Wrong")).utf8),expected:composer("Exact Ω")))
   }
+  func testFirstEnterWaitsForPendingMetadataWithoutAnotherDispatch() async throws {
+    let draft = composer("First turn")
+    var keys = 0, reads = 0
+    let receipt = try await assistantSubmitExistingDraft(draft, read: { draft }, prepare: {},
+      dispatch: { keys += 1; return true }, accepted: {
+        reads += 1
+        if reads < 3 { throw MacCodexInputFailure(code: "session_starting", message: "Metadata pending") }
+        return .init(turnId: "first-turn", text: "First turn", completed: true)
+      }, allowPendingFirstConversation: true, wait: {})
+    XCTAssertEqual(keys, 1); XCTAssertEqual(reads, 3)
+    XCTAssertEqual(receipt["turnAccepted"]?.bool, true)
+    for (allow, code) in [(false, "session_starting"), (true, "process_changed"), (true, "ambiguous_session")] {
+      var attempts = 0
+      do {
+        _ = try await assistantSubmitExistingDraft(draft, read: { draft }, prepare: {}, dispatch: { true }, accepted: {
+          attempts += 1; throw MacCodexInputFailure(code: code, message: "Owner not verified")
+        }, allowPendingFirstConversation: allow, wait: {})
+        XCTFail("A changed or established owner must remain uncertain")
+      } catch let failure as MacAssistantSubmissionFailure {
+        XCTAssertEqual(failure.fields["keySent"]?.bool, true)
+        XCTAssertEqual(failure.fields["turnAccepted"]?.bool, false)
+      }
+      XCTAssertEqual(attempts, 1)
+    }
+  }
 }

@@ -17,7 +17,25 @@ final class MacCodexInputBindingTests: XCTestCase {
       XCTAssertEqual(executable, "/opt/pinned/0.153.4/codex")
       XCTAssertEqual(args, ["--version"])
       return "codex-cli 0.153.4\n"
-    }, sessionRoot: root)
+    }, sessionRoot: root, inputArguments: { _ in nil })
+  }
+
+  func testAbsoluteDirectoryOverrideComesFromExactArgvIncludingSpacesAndWrapperOptions() throws {
+    let original = "/tmp/original"
+    for arguments in [["codex", "-c", "features.code_mode_host=true", "-C", "/Volumes/Code_2TB/code/space project"],
+      ["codex", "resume", "conversation", "--cd=/Volumes/Code_2TB/code/space project"],
+      ["codex", "-C/Volumes/Code_2TB/code/space project"]] {
+      XCTAssertEqual(try macCodexInputDirectory(processDirectory: original, arguments: arguments), "/Volumes/Code_2TB/code/space project")
+    }
+    XCTAssertEqual(try macCodexInputDirectory(processDirectory: original, arguments: ["codex", "--", "-C", "/other"]), original)
+    XCTAssertEqual(try macCodexInputDirectory(processDirectory: original, arguments: ["codex", "-c", "note=-C"]), original)
+    XCTAssertEqual(try macCodexInputDirectory(processDirectory: original, arguments: ["codex", "-C", "relative"]), URL(fileURLWithPath: original + "/relative").resolvingSymlinksInPath().path)
+    XCTAssertThrowsError(try macCodexInputDirectory(processDirectory: original, arguments: ["codex", "-C", "/one", "--cd", "/two"]))
+    var count: Int32 = 5
+    var data = withUnsafeBytes(of: &count) { Data($0) }
+    data.append(Data("/opt/codex\0\0codex\0-c\0features.code_mode_host=true\0-C\0/Volumes/Code_2TB/code/space project\0PRIVATE_ENV=must-not-be-returned\0".utf8))
+    XCTAssertEqual(macCodexArgumentsFromProcessData(data), ["codex", "-c", "features.code_mode_host=true", "-C", "/Volumes/Code_2TB/code/space project"])
+    XCTAssertNil(macCodexArgumentsFromProcessData(Data([1, 0])))
   }
 
   func testFreshComposerNeedsNoRolloutOrDirectoryIndex() throws {

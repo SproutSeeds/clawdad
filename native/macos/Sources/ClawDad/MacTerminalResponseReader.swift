@@ -48,6 +48,7 @@ struct MacCodexConversation: Equatable, Sendable {
 struct MacTerminalResponseReader: Sendable {
   var run: @Sendable (String, [String]) throws -> String = { try macTerminalResponseCommand($0, $1) }
   var sessionRoot = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex/sessions")
+  var inputArguments: @Sendable (String) -> [String]? = macCodexProcessArguments
 
   func read(tty: String) throws -> RemoteTerminalResponse {
     let conversation = try resolve(tty: tty)

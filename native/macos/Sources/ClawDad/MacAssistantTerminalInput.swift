@@ -80,7 +80,7 @@ final class MacAssistantTerminalInput {
   }
   private let tabs = MacTerminalTabController.shared
   private let interaction = MacAssistantInteractionGate.shared
-  private var inspections: [String: Inspection] = [:]
+  private var inspections = MacAssistantInputInspections<Inspection>()
   private var verifiedEmptyScreens: [String: String] = [:]
   private struct ShellContinuation {
     let foreground: MacAssistantForeground
@@ -91,7 +91,7 @@ final class MacAssistantTerminalInput {
   }
   private var shellContinuations: [String: ShellContinuation] = [:]
   var observationStep: ((String) -> Void)?
-  func invalidate() { inspections.removeAll() }
+  func invalidate(reason: String = "A separate native input action invalidated this inspection.") { inspections.invalidate(reason) }
 
   private func screen(shellIdentity: String? = nil, allowEmptyTrim: Bool = false) throws -> String {
     guard let app = NSWorkspace.shared.frontmostApplication, app.bundleIdentifier == "com.apple.Terminal" else {
@@ -151,11 +151,10 @@ final class MacAssistantTerminalInput {
     observationStep?("capture")
     guard captured.ok == true, interaction.isCurrent(ticket), try await tabs.inputIdentity() == identity,
       (composer != nil ? MacAssistantSubmissionDraft(try screen(), rows: assistantTerminalRows(tab.tty)) == composer : try screen(shellIdentity:foreground.shell != nil ? identity : nil) == value) else { throw MacAssistantError("The input changed during inspection. Inspect it again.") }
-    inspections = inspections.filter { $0.value.expires > Date() }
-    if inspections.count >= 32 { inspections.removeAll() }
-    inspections[token] = Inspection(tabId: tabId, tty: tab.tty, identity: identity, sessionId: sessionId,
-      foreground: foreground, agent: agent, generation: ticket, expires: Date().addingTimeInterval(45), screen: value,
-      draft: draft, composer: composer, shellPrompt: shellDraft?.prompt)
+    let expires = Date().addingTimeInterval(45)
+    inspections.insert(Inspection(tabId: tabId, tty: tab.tty, identity: identity, sessionId: sessionId,
+      foreground: foreground, agent: agent, generation: ticket, expires: expires, screen: value,
+      draft: draft, composer: composer, shellPrompt: shellDraft?.prompt), token: token, expires: expires)
     observationStep?("inspected")
     return ["tabId": .string(tabId), "inputToken": .string(token), "inputSessionId": .string(sessionId),
       "tty": .string(tab.tty), "windowGroupId": .string(focused.tabs.first { $0.id == tabId }?.windowGroupId ?? ""),
@@ -171,9 +170,10 @@ final class MacAssistantTerminalInput {
   ) async throws -> [String: AssistantValue] {
     defer { invalidate() }
     MacAssistantComposerRendering.shared.invalidate()
-    guard let token = args["inputToken"]?.string, let saved = inspections.removeValue(forKey: token),
-      args["tabId"]?.string == saved.tabId, args["inputSessionId"]?.string == saved.sessionId else {
-      throw MacAssistantError("Inspect the exact native Terminal input before acting.")
+    guard let token = args["inputToken"]?.string else { throw AssistantProtocolError.invalid }
+    let saved = try inspections.consume(token)
+    guard args["tabId"]?.string == saved.tabId, args["inputSessionId"]?.string == saved.sessionId else {
+      throw MacAssistantError("This inspection belongs to another tab or input owner. Inspect the intended tab again; no input was sent.")
     }
     func current(allowEmptyTrim: Bool = false) async throws -> String {
       guard Date() < saved.expires, interaction.isCurrent(saved.generation), !MacConsoleSessionState.isLocked(), AXIsProcessTrusted(),
@@ -369,7 +369,7 @@ final class MacAssistantTerminalInput {
           cursor = MacAssistantSubmissionLog(path: captured.path, fileIdentity: captured.fileIdentity, offset: 0)
         }
         return try cursor?.read(expected:expected)
-      })
+      }, allowPendingFirstConversation: original.conversation == nil)
       result.merge(acceptedOwner.fields) { _, new in new }
       result.merge(submitted) { _, new in new }
       result["intent"] = .string(intent)

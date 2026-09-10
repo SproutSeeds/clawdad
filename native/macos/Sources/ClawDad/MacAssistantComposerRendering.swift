@@ -50,15 +50,16 @@ final class MacAssistantComposerRendering {
   private var generation: UInt64?
   func invalidate() { signature = nil; spaces = []; generation = nil }
   func normalized(_ screen: String) -> String {
-    guard let frame = MacAssistantComposerFrame(screen), frame.hasStars else { return screen }
+    guard let frame = MacAssistantComposerFrame(screen) else { return screen }
     guard frame.signature == signature, let generation,
       MacAssistantInteractionGate.shared.isCurrent(generation) else { return screen }
+    spaces.formUnion(frame.spaces)
     return frame.clean(spaces: spaces) ?? screen
   }
   func read(ticket: UInt64, raw: () throws -> String,
     wait: () async throws -> Void = { try await Task.sleep(nanoseconds: 180_000_000) }) async throws -> String {
     var value = try raw()
-    guard let initial = MacAssistantComposerFrame(value), initial.hasStars else { return value }
+    guard let initial = MacAssistantComposerFrame(value) else { return value }
     if generation != ticket || signature != initial.signature { invalidate(); generation = ticket; signature = initial.signature }
     for _ in 0..<50 {
       guard MacAssistantInteractionGate.shared.isCurrent(ticket), let frame = MacAssistantComposerFrame(value),

@@ -1,6 +1,58 @@
 import ClawDadRemoteAssistProtocol
 import CryptoKit
 import Foundation
+import Darwin
+
+/// Read only argc/argv from the owning process. Environment bytes returned by
+/// KERN_PROCARGS2 are neither decoded nor retained, logged or exposed.
+func macCodexProcessArguments(_ pid: String) -> [String]? {
+  guard let pid = Int32(pid), pid > 0 else { return nil }
+  var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+  var size = 0
+  guard sysctl(&mib, UInt32(mib.count), nil, &size, nil, 0) == 0, size > 4, size <= 2 * 1024 * 1024 else { return nil }
+  var bytes = Data(count: size)
+  let result = bytes.withUnsafeMutableBytes { sysctl(&mib, UInt32(mib.count), $0.baseAddress, &size, nil, 0) }
+  guard result == 0 else { return nil }
+  return macCodexArgumentsFromProcessData(bytes.prefix(size))
+}
+
+func macCodexArgumentsFromProcessData(_ data: Data) -> [String]? {
+  guard data.count > 4 else { return nil }
+  let count = data.prefix(4).withUnsafeBytes { $0.loadUnaligned(as: Int32.self) }
+  guard count > 0, count <= 4096, let executableEnd = data[4...].firstIndex(of: 0) else { return nil }
+  var cursor = executableEnd + 1
+  while cursor < data.count, data[cursor] == 0 { cursor += 1 }
+  var arguments: [String] = []
+  for _ in 0..<count {
+    guard cursor < data.count, let end = data[cursor...].firstIndex(of: 0),
+      let argument = String(data: data[cursor..<end], encoding: .utf8) else { return nil }
+    arguments.append(argument); cursor = end + 1
+  }
+  return arguments
+}
+
+func macCodexInputDirectory(processDirectory: String, arguments: [String]?) throws -> String {
+  guard let arguments else { return processDirectory }
+  var paths: [String] = [], index = 1
+  let values: Set<String> = ["-c", "--config", "-m", "--model", "-p", "--profile", "-s", "--sandbox", "-a", "--ask-for-approval", "--enable", "--disable", "-i", "--image", "--add-dir"]
+  while index < arguments.count {
+    let argument = arguments[index]
+    if argument == "--" { break }
+    if argument == "-C" || argument == "--cd" {
+      guard index + 1 < arguments.count else { throw MacCodexInputFailure(code: "directory_unverified", message: "The running Codex directory option is incomplete. Inspect this process before restoring it.") }
+      index += 1; paths.append(arguments[index])
+    } else if argument.hasPrefix("--cd=") { paths.append(String(argument.dropFirst(5))) }
+    else if argument.hasPrefix("-C"), argument.count > 2 { paths.append(String(argument.dropFirst(2))) }
+    else if values.contains(argument) { index += 1 }
+    index += 1
+  }
+  guard paths.count <= 1 else { throw MacCodexInputFailure(code: "directory_unverified", message: "This process has multiple directory overrides. Its exact workspace needs review; no input was sent.") }
+  guard let path = paths.first else { return processDirectory }
+  guard !path.isEmpty, !path.contains("\0") else {
+    throw MacCodexInputFailure(code: "directory_unverified", message: "The running Codex directory override is invalid. Inspect its exact workspace before restoring it.")
+  }
+  return URL(fileURLWithPath: path, relativeTo: URL(fileURLWithPath: processDirectory, isDirectory: true)).resolvingSymlinksInPath().path
+}
 
 struct MacCodexInputFailure: LocalizedError {
   let code: String
@@ -57,7 +109,7 @@ extension MacTerminalResponseReader {
         if descriptor == "txt", url.lastPathComponent == "codex" { executables.insert(url.path) }
       }
     }
-    guard directories.count == 1, let directory = directories.first,
+    guard directories.count == 1, let processDirectory = directories.first,
       executables.count == 1, let executable = executables.first else {
       throw MacCodexInputFailure(code: "executable_unavailable", message: "The running Codex executable is not yet identifiable. Wait for startup and inspect again; input was preserved.")
     }
@@ -65,6 +117,7 @@ extension MacTerminalResponseReader {
     guard versionOutput.hasPrefix("codex-cli ") else {
       throw MacCodexInputFailure(code: "unsupported_executable", message: "This foreground program is not a verified Codex CLI. Its input was preserved.")
     }
+    let directory = try macCodexInputDirectory(processDirectory: processDirectory, arguments: inputArguments(owner.pid))
     let files = try run("/usr/sbin/lsof", ["-a", "-p", owner.pid, "-Fn"])
     var conversations: [String: MacCodexConversation] = [:]
     var pendingRollout = false

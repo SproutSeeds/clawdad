@@ -6,8 +6,98 @@ import path from 'node:path';
 import {AssistantRuntime} from '../lib/assistant-runtime.mjs';
 import {runAssistantMCP} from '../lib/assistant-mcp.mjs';
 import {Readable, Writable} from 'node:stream';
+import {createServer} from 'node:http';
 
 const queueSession='01a0817d-c8ca-7aa3-9153-74c69e51841d';
+test('busy append reaches native control immediately while dispatch stays serialized',async t=>{
+  const {runtime}=await fixture(t);
+  await runtime.command({action:'terminal.send',requestId:'busy',tabId:'exact',text:'Ongoing task'},{tool:true});
+  await runtime.nativePoll({workerId:'worker'});
+  await runtime.nativeResult({id:'busy',result:{conversationPath:'/test/append-busy.jsonl'}});
+  assert.equal((await runtime.job('busy')).status,'submitted');
+  const args={action:'terminal.append',requestId:'append-while-busy',tabId:'exact',token:'fresh',expectedText:'Existing',text:' More'};
+  await runtime.command(args,{tool:true});
+  assert.equal((await runtime.nativePoll({workerId:'worker'})).job.id,args.requestId);
+  await runtime.command({...args,requestId:'second-edit'},{tool:true});
+  assert.equal((await runtime.nativePoll({workerId:'worker'})).job,null,'Native edits themselves must not overlap');
+  await runtime.nativeResult({id:args.requestId,result:{tabId:'exact',sessionId:queueSession,draftVerified:true,submitted:false,
+    existingDraftPreserved:true,appendedText:' More',text:'Existing More'}});
+  assert.equal((await runtime.job('busy')).status,'submitted');
+  assert.equal((await runtime.nativePoll({workerId:'worker'})).job.id,'second-edit');
+});
+test('native shell token survives actual MCP HTTP serialization and accepted typing is never replayed',async t=>{
+  const {runtime,root}=await fixture(t);await fs.mkdir(path.join(root,'Assistant'));
+  const identity={tabId:'exact-shell',inputToken:'206239AD-6363-405B-9A14-CCC5EB349A9E',inputSessionId:'native-16bdcca32c164c23e76d56269a24a8d17a70efe7534a4dc6803e3b62e00706eb'};
+  const deliveries=[];
+  const server=createServer(async(req,res)=>{
+    try {
+      assert.equal(req.headers.authorization,'Bearer fixture-token');
+      let body='';for await(const part of req)body+=part;
+      let value;
+      if(req.method==='GET')value={job:await runtime.job(new URL(req.url,'http://localhost').searchParams.get('id'))};
+      else {
+        value=await runtime.command(JSON.parse(body),{tool:true});
+        const native=(await runtime.nativePoll({workerId:'worker'})).job;
+        if(native) {
+          deliveries.push(native);
+          const result=native.action==='terminal.native.inspect'
+            ? {...identity,kind:'shell',draftText:'',canTypeDraft:true,expiresInSeconds:45}
+            : {...identity,draftVerified:true,submitted:false,text:native.args.text};
+          await runtime.nativeResult({id:native.id,result});
+          value={job:await runtime.job(native.id)};
+        }
+      }
+      res.setHeader('Content-Type','application/json');res.end(JSON.stringify(value));
+    } catch(error){res.statusCode=400;res.end(JSON.stringify({error:error.message}));}
+  });
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  t.after(()=>new Promise(resolve=>server.close(resolve)));
+  await fs.writeFile(path.join(root,'Assistant/connection.json'),JSON.stringify({baseURL:`http://127.0.0.1:${server.address().port}/`}));
+  await fs.writeFile(path.join(root,'native-server.token'),'fixture-token');
+  async function mcp(name,args){
+    const frames=[];await runAssistantMCP({root,input:Readable.from([JSON.stringify({id:1,method:'tools/call',params:{name,arguments:args}})+'\n']),
+      output:new Writable({write(chunk,_encoding,done){frames.push(JSON.parse(chunk));done();}})});
+    assert.equal(frames[0].result.isError,undefined,JSON.stringify(frames[0]));return JSON.parse(frames[0].result.content[0].text);
+  }
+  const inspected=await mcp('inspect_terminal_input',{tabId:'exact-shell'});
+  const n=(await runtime.job(inspected.job.id)).result;
+  const args={tabId:n.tabId,inputToken:n.inputToken,inputSessionId:n.inputSessionId,requestId:'shell-proof',mode:'insert',expectedText:n.draftText,text:'codex -C /Volumes/Code_2TB/code/erdos-problems'};
+  await mcp('type_terminal_input',args);const claimed=deliveries.at(-1);
+  assert.deepEqual(claimed.args,Object.fromEntries(Object.entries(args).filter(([k])=>k!=='requestId')));
+  assert.equal((await mcp('type_terminal_input',args)).job.status,'inserted');
+  assert.equal((await runtime.nativePoll({workerId:'worker'})).job,null);
+  assert.equal(deliveries.length,2);
+});
+
+test('append requires an inspected draft and an observed combined-text receipt; uncertain edits do not replay',async t=>{
+  const {runtime,root,coordinator}=await fixture(t);
+  const args={action:'terminal.append',tabId:'exact',token:'inspection',expectedText:'Existing',text:'\nMore',requestId:'append-proof'};
+  await assert.rejects(runtime.command({...args,text:undefined},{tool:true}));
+  await assert.rejects(runtime.command({...args,token:''},{tool:true}));
+  await runtime.command(args,{tool:true});await runtime.nativePoll({workerId:'worker'});
+  await runtime.nativeResult({id:args.requestId,result:{tabId:'exact',sessionId:queueSession,draftVerified:true,submitted:false,
+    text:'Existing\nMore',appendedText:'\nMore',existingDraftPreserved:true}});
+  assert.equal((await runtime.command(args,{tool:true})).job.status,'completed');
+  assert.equal((await runtime.nativePoll({workerId:'worker'})).job,null);
+  const uncertain={...args,requestId:'append-uncertain'};await runtime.command(uncertain,{tool:true});await runtime.nativePoll({workerId:'worker'});
+  const restarted=new AssistantRuntime({root,coordinator});t.after(()=>restarted.close());
+  assert.equal((await restarted.command(uncertain,{tool:true})).job.status,'attention');
+  assert.equal((await restarted.nativePoll({workerId:'replacement-worker'})).job,null);
+});
+
+test('clipped native Tab receipt stays uncertain until the exact next accepted text and turn reconcile it',async t=>{
+  const {runtime}=await fixture(t);await prepareQueue(runtime);
+  await runtime.nativeResult({id:'queue-1',error:'Pending queue clipped',result:{tabSent:true,queueAccepted:false}});
+  assert.equal((await runtime.job('queue-1')).result.tabSent,true);
+  await runtime.command(queueRequest(),{tool:true});assert.equal((await runtime.nativePoll({workerId:'worker-1'})).job,null);
+  const timestamp=new Date(Date.now()+1_000).toISOString();
+  runtime.consumeRecord({type:'event_msg',timestamp,payload:{type:'task_started',turn_id:'next-turn'}},'/test/queue.jsonl',{coordinator:false});
+  runtime.consumeRecord({type:'response_item',timestamp,payload:{type:'message',role:'user',content:[{type:'input_text',text:'Wrong text'}]}},'/test/queue.jsonl',{coordinator:false});
+  assert.equal((await runtime.job('queue-1')).status,'attention');
+  runtime.consumeRecord({type:'response_item',timestamp,payload:{type:'message',role:'user',content:[{type:'input_text',text:'Authorized follow-up'}]}},'/test/queue.jsonl',{coordinator:false});
+  assert.equal((await runtime.job('queue-1')).status,'working');
+  assert.equal((await runtime.job('queue-1')).turnId,'next-turn');
+});
 test('existing-draft Enter stores dispatch and exact acceptance separately, including failures and duplicate IDs',async t=>{
   const {runtime}=await fixture(t),agentInstanceId='codex-process-'+ 'a'.repeat(64);
   const request={action:'terminal.key',requestId:'existing-enter',tabId:'target',inputToken:'fresh',inputSessionId:queueSession,key:'enter',intent:'submit'};
@@ -166,6 +256,7 @@ test('MCP covers native inputs, new tabs, special commands, existing queue, loca
     ['type_terminal_input',{tabId:'shell',inputToken:'token',inputSessionId:'process',expectedText:'',text:'draft',mode:'insert',requestId:'type'},'terminal.native.type'],
     ['press_terminal_key',{tabId:'shell',inputToken:'token2',inputSessionId:'process',shortcut:'control_l',intent:'navigation',requestId:'key'},'terminal.key'],
     ['queue_tab_draft',{tabId:'agent',sessionId:queueSession,token:'draft',text:'reviewed',requestId:'queue'},'terminal.queue'],
+    ['append_to_tab_input',{tabId:'agent',token:'draft',expectedText:'Existing',text:'\nAdditional message',requestId:'append'},'terminal.append'],
     ['files',{action:'list',query:'requested deliverable',requestId:'files'},'files.list'],
     ['clipboard',{operation:'read',requestId:'clipboard'},'remote.clipboard']];
   const lines=[],requests=[];

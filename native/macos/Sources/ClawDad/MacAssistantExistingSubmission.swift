@@ -100,6 +100,7 @@ func assistantSubmitExistingDraft(_ expected: MacAssistantSubmissionDraft,
   prepare: () async throws -> Void,
   dispatch: () -> Bool,
   accepted: () async throws -> MacAssistantSubmissionLog.Accepted?,
+  allowPendingFirstConversation: Bool = false,
   wait: () async throws -> Void = { try await Task.sleep(nanoseconds: 200_000_000) }
 ) async throws -> [String: AssistantValue] {
   var sent = false
@@ -113,7 +114,15 @@ func assistantSubmitExistingDraft(_ expected: MacAssistantSubmissionDraft,
     sent = true
     for attempt in 0..<25 {
       try Task.checkCancellation()
-      if let observed = try await accepted() {
+      let observation: MacAssistantSubmissionLog.Accepted?
+      do { observation = try await accepted() }
+      catch let failure as MacCodexInputFailure where allowPendingFirstConversation && failure.code == "session_starting" {
+        // The first Enter can create a rollout before its metadata write is
+        // complete. Retry only this read; dispatch remains outside the loop.
+        // A later successful read still verifies the original process owner.
+        observation = nil
+      }
+      if let observed = observation {
         guard expected.represents(observed.text) else {
           throw MacAssistantError("A new turn was observed, but it does not match the inspected composer. Review this receipt; input will not be repeated.")
         }
