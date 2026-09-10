@@ -63,4 +63,31 @@ final class WeeklyUsageTests: XCTestCase {
     XCTAssertNil(CompletedTurnNotification.parse(data))
     XCTAssertNil(WeeklyUsageNotification.parse(["clawdad": ["version": 1, "kind": "codex_weekly", "eventId": "bad"]]))
   }
+  func testCompactPercentageKeepsFreshnessDetailsInPopover() {
+    let now = Date(timeIntervalSince1970: 1000)
+    var value = WeeklyUsage(status: "current", remainingPercent: 13, resetsAt: 2000, observedAt: nil,
+      validUntil: 1100_000, message: "The Mac could not refresh the account reading.", alerts: [])
+    XCTAssertEqual(value.compactSummary, "13% weekly remaining")
+    XCTAssertNil(value.readingExplanation(now: now))
+    XCTAssertTrue(value.readingExplanation(now: now.addingTimeInterval(101))!.contains("out of date"))
+    value.status = "stale"
+    XCTAssertEqual(value.compactSummary, "13% weekly remaining")
+    XCTAssertTrue(value.readingExplanation(now: now)!.contains("The Mac could not refresh"))
+    for (percent, expected) in [(0.0, "0% weekly remaining"), (99.5, "99.5% weekly remaining"),
+      (-1, "Weekly allowance unavailable"), (101, "Weekly allowance unavailable"), (.nan, "Weekly allowance unavailable")] {
+      let reading = WeeklyUsage(status: "unavailable", remainingPercent: percent, resetsAt: nil, observedAt: nil,
+        validUntil: nil, message: nil, alerts: [])
+      XCTAssertEqual(reading.compactSummary, expected)
+      XCTAssertNotNil(reading.readingExplanation(now: now))
+    }
+  }
+  func testLastRefreshFormatsActualObservationInLocalTimezone() {
+    let zone = TimeZone(identifier: "America/Chicago")!, locale = Locale(identifier: "en_US")
+    let summer = WeeklyUsage.refreshedText("2026-09-10T14:02:03.123Z", timeZone: zone, locale: locale)
+    XCTAssertTrue(summer.contains("Sep 10, 2026")); XCTAssertTrue(summer.contains("9:02:03")); XCTAssertTrue(summer.contains("CDT"))
+    let winter = WeeklyUsage.refreshedText("2026-12-15T01:05:06Z", timeZone: zone, locale: locale)
+    XCTAssertTrue(winter.contains("Dec 14, 2026")); XCTAssertTrue(winter.contains("7:05:06")); XCTAssertTrue(winter.contains("CST"))
+    XCTAssertEqual(WeeklyUsage.refreshedText(nil), "Last refreshed: Not yet available")
+    XCTAssertEqual(WeeklyUsage.refreshedText("invalid"), "Last refreshed: Not yet available")
+  }
 }

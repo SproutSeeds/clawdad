@@ -712,9 +712,13 @@ final class CloudSession: ObservableObject {
     self.hostOnline = true
     self.startupWorkspaceReady = true
     if ProcessInfo.processInfo.arguments.contains("--clawdad-weekly-usage-test") {
-      self.weeklyUsage = WeeklyUsage(status: "current", remainingPercent: 33, resetsAt: 1789435631,
-        observedAt: nil, validUntil: Date().addingTimeInterval(3600).timeIntervalSince1970 * 1000,
-        message: nil, alerts: [])
+      let unavailable = ProcessInfo.processInfo.arguments.contains("--clawdad-weekly-usage-unavailable")
+      let stale = ProcessInfo.processInfo.arguments.contains("--clawdad-weekly-usage-stale")
+      self.weeklyUsage = WeeklyUsage(status: unavailable ? "unavailable" : stale ? "stale" : "current",
+        remainingPercent: unavailable ? nil : 33, resetsAt: unavailable ? nil : 1789435631,
+        observedAt: unavailable ? nil : "2026-09-10T14:02:03.123Z",
+        validUntil: Date().addingTimeInterval(3600).timeIntervalSince1970 * 1000,
+        message: stale ? "The Mac could not refresh the Codex account reading." : nil, alerts: [])
     }
     if ProcessInfo.processInfo.arguments.contains("--clawdad-voice-refresh-test") {
       Task { [weak self] in

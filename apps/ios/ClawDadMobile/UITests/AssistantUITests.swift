@@ -262,10 +262,19 @@ final class AssistantUITests: XCTestCase {
     app.launch()
     let usage = app.buttons["clawdad.weeklyUsage.main"]
     XCTAssertTrue(usage.waitForExistence(timeout: 15))
-    XCTAssertTrue(usage.label.contains("33% weekly remaining"))
-    XCTAssertGreaterThanOrEqual(usage.frame.height, 44)
+    XCTAssertEqual(usage.label, "Weekly allowance details")
+    XCTAssertEqual(usage.value as? String, "33% weekly remaining")
+    XCTAssertEqual(app.staticTexts["clawdad.weeklyUsage.main.summary"].label, "33% weekly remaining")
+    XCTAssertFalse(app.staticTexts["clawdad.weeklyUsage.reset"].exists)
+    XCTAssertFalse(app.staticTexts["clawdad.weeklyUsage.refreshed"].exists)
+    XCTAssertGreaterThanOrEqual(usage.frame.width, 44 - 0.001)
+    XCTAssertGreaterThanOrEqual(usage.frame.height, 44 - 0.001)
+    saveScreenshot(app, "Compact weekly allowance and info icon on main screen")
     usage.tap()
     XCTAssertTrue(app.navigationBars["Weekly allowance"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.staticTexts["clawdad.weeklyUsage.reset"].label.hasPrefix("Resets "))
+    XCTAssertTrue(app.staticTexts["clawdad.weeklyUsage.refreshed"].label.hasPrefix("Last refreshed "))
+    XCTAssertFalse(app.staticTexts["clawdad.weeklyUsage.explanation"].exists)
     saveScreenshot(app, "Weekly allowance with exact reset in local time")
     app.buttons["Done"].tap()
     app.terminate()
@@ -275,13 +284,20 @@ final class AssistantUITests: XCTestCase {
     if controls.waitForExistence(timeout: 2) { controls.tap() }
     let remoteUsage = app.buttons["clawdad.weeklyUsage.remote"]
     XCTAssertTrue(remoteUsage.waitForExistence(timeout: 5))
-    XCTAssertTrue(remoteUsage.label.contains("33% weekly remaining"))
+    XCTAssertEqual(remoteUsage.label, "Weekly allowance details")
+    XCTAssertEqual(remoteUsage.value as? String, "33% weekly remaining")
+    XCTAssertEqual(app.staticTexts["clawdad.weeklyUsage.remote.summary"].label, "33% weekly remaining")
+    XCTAssertGreaterThanOrEqual(remoteUsage.frame.width, 44 - 0.001)
+    XCTAssertGreaterThanOrEqual(remoteUsage.frame.height, 44 - 0.001)
+    XCTAssertFalse(app.staticTexts["clawdad.weeklyUsage.reset"].exists)
     XCTAssertLessThanOrEqual(remoteUsage.frame.maxX, app.frame.maxX - 10)
     saveScreenshot(app, "Compact weekly allowance in Remote Assist menu")
     remoteUsage.tap()
     XCTAssertTrue(app.navigationBars["Weekly allowance"].waitForExistence(timeout: 5))
+    saveScreenshot(app, "Weekly allowance details in Remote Assist popover")
     app.buttons["Done"].tap()
     XCTAssertTrue(app.buttons["Close Remote Assist controls"].exists)
+    XCTAssertFalse(app.staticTexts["clawdad.weeklyUsage.reset"].exists)
   }
 
   func testWeeklyAllowanceAtAccessibilityTextSize() {
@@ -291,10 +307,52 @@ final class AssistantUITests: XCTestCase {
     let usage = app.buttons["clawdad.weeklyUsage.main"]
     XCTAssertTrue(usage.waitForExistence(timeout: 15))
     for _ in 0..<8 where !usage.isHittable { app.swipeUp() }
+    let summary = app.staticTexts["clawdad.weeklyUsage.main.summary"]
+    for _ in 0..<3 where summary.frame.minY < app.frame.minY + 120 {
+      app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+        .press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45)))
+    }
+    XCTAssertGreaterThanOrEqual(usage.frame.width, 44 - 0.001)
+    XCTAssertGreaterThanOrEqual(usage.frame.height, 44 - 0.001)
+    saveScreenshot(app, "Compact weekly allowance at accessibility text size")
     XCTAssertTrue(usage.isHittable); usage.tap()
     XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 5))
+    let detailSummary = app.staticTexts["clawdad.weeklyUsage.detail-summary"]
+    XCTAssertGreaterThanOrEqual(detailSummary.frame.minX, app.frame.minX + 10)
+    XCTAssertLessThanOrEqual(detailSummary.frame.maxX, app.frame.maxX - 10)
     saveScreenshot(app, "Weekly allowance at accessibility text size")
+    let refreshed = app.staticTexts["clawdad.weeklyUsage.refreshed"]
+    for _ in 0..<12 where !refreshed.isHittable {
+      app.scrollViews.element(boundBy: app.scrollViews.count - 1).swipeUp()
+    }
+    XCTAssertTrue(refreshed.isHittable, "Refresh details remain reachable with the largest text setting")
+    XCTAssertTrue(app.buttons["Done"].isHittable, "Dismiss stays visible while details scroll")
+    saveScreenshot(app, "Last refresh remains readable with accessibility text")
     app.buttons["Done"].tap()
+  }
+  func testWeeklyAllowanceStaleAndUnavailableDetailsStayInPopover() {
+    for state in ["stale", "unavailable"] {
+      let app = XCUIApplication()
+      app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-weekly-usage-test", "--clawdad-weekly-usage-\(state)"]
+      app.launch()
+      let info = app.buttons["clawdad.weeklyUsage.main"]
+      XCTAssertTrue(info.waitForExistence(timeout: 15))
+      XCTAssertEqual(app.staticTexts["clawdad.weeklyUsage.main.summary"].label,
+        state == "stale" ? "33% weekly remaining" : "Weekly allowance unavailable")
+      XCTAssertFalse(app.staticTexts["clawdad.weeklyUsage.explanation"].exists)
+      info.tap()
+      XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 5))
+      let explanation = app.staticTexts["clawdad.weeklyUsage.explanation"]
+      XCTAssertTrue(explanation.label.contains(state == "stale" ? "out of date" : "has not arrived"))
+      if state == "unavailable" {
+        XCTAssertEqual(app.staticTexts["clawdad.weeklyUsage.reset"].label, "Reset time: Not yet available")
+        XCTAssertEqual(app.staticTexts["clawdad.weeklyUsage.refreshed"].label, "Last refreshed: Not yet available")
+      }
+      saveScreenshot(app, "Weekly allowance \(state) explanation")
+      app.buttons["Done"].tap()
+      XCTAssertTrue(info.isHittable)
+      app.terminate()
+    }
   }
   func testVoiceTranscriptionEditSaveReopenAndExplicitSend() {
     let app = startTranscriptionReviewFixture()

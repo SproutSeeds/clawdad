@@ -42,9 +42,26 @@ struct WeeklyUsage: Codable, Equatable {
       (resetsAt ?? 0) > now.timeIntervalSince1970 && remainingPercent.map { (0...100).contains($0) } == true
   }
   func summary(now: Date = Date()) -> String {
-    guard let remainingPercent else { return "Weekly allowance unavailable" }
+    guard hasPercentage else { return "Weekly allowance unavailable" }
+    return "\(compactSummary)\(isCurrent(now: now) ? "" : " · Stale")"
+  }
+  private var hasPercentage: Bool {
+    remainingPercent.map { $0.isFinite && (0...100).contains($0) } == true
+  }
+  var compactSummary: String {
+    guard hasPercentage, let remainingPercent else { return "Weekly allowance unavailable" }
     let percent = remainingPercent.formatted(.number.precision(.fractionLength(0...2)))
-    return "\(percent)% weekly remaining\(isCurrent(now: now) ? "" : " · Stale")"
+    return "\(percent)% weekly remaining"
+  }
+  func readingExplanation(now: Date = Date()) -> String? {
+    guard !isCurrent(now: now) else { return nil }
+    let explanation = hasPercentage
+      ? "This is the last known allowance. It is out of date, so the amount available now may be different."
+      : "A current weekly allowance reading has not arrived from your Mac yet."
+    if let guidance = message?.trimmingCharacters(in: .whitespacesAndNewlines), !guidance.isEmpty {
+      return explanation + "\n\n" + guidance
+    }
+    return explanation + "\n\nConnect to your Mac and choose Check allowance to try again."
   }
   static func resetText(_ timestamp: Double, timeZone: TimeZone = .current, locale: Locale = .current) -> String {
     let format = DateFormatter()
@@ -52,13 +69,16 @@ struct WeeklyUsage: Codable, Equatable {
     format.setLocalizedDateFormatFromTemplate("EEEE MMM d yyyy h:mm a z")
     return "Resets \(format.string(from: Date(timeIntervalSince1970: timestamp)))"
   }
-  static func compactResetText(_ timestamp: Double) -> String {
-    let date = Date(timeIntervalSince1970: timestamp), format = DateFormatter()
-    format.locale = .current; format.timeZone = .current
-    format.setLocalizedDateFormatFromTemplate("EEE MMM d yyyy")
-    let day = format.string(from: date)
-    format.setLocalizedDateFormatFromTemplate("h:mm a z")
-    return "Resets \(day)\n\(format.string(from: date))"
+  static func refreshedText(_ observedAt: String?, timeZone: TimeZone = .current, locale: Locale = .current) -> String {
+    guard let observedAt else { return "Last refreshed: Not yet available" }
+    let iso = ISO8601DateFormatter()
+    iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    let date = iso.date(from: observedAt) ?? ISO8601DateFormatter().date(from: observedAt)
+    guard let date else { return "Last refreshed: Not yet available" }
+    let format = DateFormatter()
+    format.locale = locale; format.timeZone = timeZone
+    format.setLocalizedDateFormatFromTemplate("MMM d yyyy h:mm:ss a z")
+    return "Last refreshed \(format.string(from: date))"
   }
 }
 
@@ -69,24 +89,31 @@ struct WeeklyUsageButton: View {
   @State private var showingUsage = false
   var body: some View {
     TimelineView(.periodic(from: .now, by: 30)) { timeline in
-      Button { showingUsage = true; session.requestWeeklyUsage() } label: {
-        VStack(alignment: .leading, spacing: 3) {
-          Text(session.weeklyUsage?.summary(now: timeline.date) ?? "Weekly allowance unavailable")
-            .font(.caption.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
-          if let reset = session.weeklyUsage?.resetsAt {
-            Text(WeeklyUsage.compactResetText(reset)).font(.caption2).fixedSize(horizontal: false, vertical: true)
-          }
+      HStack(spacing: 0) {
+        Text(session.weeklyUsage?.compactSummary ?? "Weekly allowance unavailable")
+          .font(.caption.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
+          .accessibilityIdentifier("clawdad.weeklyUsage.\(location).summary")
+        Button { showingUsage = true; session.requestWeeklyUsage() } label: {
+          Image(systemName: "info.circle").font(.system(size: 16))
+            .frame(width: 44, height: 44).contentShape(Rectangle())
         }
-        .frame(width: width, alignment: .leading)
-        .multilineTextAlignment(.leading).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-        .padding(.vertical, 6).contentShape(Rectangle())
-        .foregroundStyle(ClawDadTheme.cream)
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("clawdad.weeklyUsage.\(location)")
+        .accessibilityLabel("Weekly allowance details")
+        .accessibilityValue(session.weeklyUsage?.summary(now: timeline.date) ?? "Weekly allowance unavailable")
+        .accessibilityHint("Shows the reset time, last successful refresh and reading status")
+        .popover(isPresented: $showingUsage) {
+          WeeklyUsageSheet().frame(idealWidth: 320, maxWidth: 320, idealHeight: 360, maxHeight: 360)
+#if os(iOS)
+            .presentationCompactAdaptation(.popover)
+#endif
+        }
+        Spacer(minLength: 0)
       }
-      .buttonStyle(.plain)
-      .accessibilityIdentifier("clawdad.weeklyUsage.\(location)")
-      .accessibilityHint("Opens the weekly Codex allowance and alerts")
+      .frame(width: width, alignment: .leading)
+      .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+      .multilineTextAlignment(.leading).foregroundStyle(ClawDadTheme.cream)
     }
-    .sheet(isPresented: $showingUsage) { WeeklyUsageSheet() }
   }
 }
 
@@ -96,24 +123,34 @@ struct WeeklyUsageSheet: View {
   var body: some View {
     NavigationStack {
       ScrollView {
-        VStack(alignment: .leading, spacing: 16) {
-          Text(session.weeklyUsage?.summary() ?? "Weekly allowance unavailable").font(.headline)
-          if let reset = session.weeklyUsage?.resetsAt { Text(WeeklyUsage.resetText(reset)) }
-          if let value = session.weeklyUsage, !value.isCurrent() {
-            Text(value.message ?? "Reconnect to your Mac to check the current allowance.")
+        TimelineView(.periodic(from: .now, by: 30)) { timeline in
+          VStack(alignment: .leading, spacing: 16) {
+            Text(session.weeklyUsage?.summary(now: timeline.date) ?? "Weekly allowance unavailable").font(.headline)
+              .accessibilityIdentifier("clawdad.weeklyUsage.detail-summary")
+            Text(session.weeklyUsage?.resetsAt.map { WeeklyUsage.resetText($0) } ?? "Reset time: Not yet available")
+              .accessibilityIdentifier("clawdad.weeklyUsage.reset")
+            Text(WeeklyUsage.refreshedText(session.weeklyUsage?.observedAt))
+              .accessibilityIdentifier("clawdad.weeklyUsage.refreshed")
+            if let explanation = session.weeklyUsage?.readingExplanation(now: timeline.date)
+              ?? (session.weeklyUsage == nil ? "A current weekly allowance reading has not arrived from your Mac yet. Connect to your Mac and choose Check allowance to try again." : nil) {
+              Text(explanation).accessibilityIdentifier("clawdad.weeklyUsage.explanation")
+            }
+            ForEach(session.weeklyUsage?.alerts ?? []) { alert in
+              Label(alert.title, systemImage: "exclamationmark.triangle").font(.subheadline)
+            }
+            Button("Check allowance") { session.requestWeeklyUsage() }.frame(minHeight: 44)
           }
-          ForEach(session.weeklyUsage?.alerts ?? []) { alert in
-            Label(alert.title, systemImage: "exclamationmark.triangle").font(.subheadline)
-          }
-          Button("Check allowance") { session.requestWeeklyUsage() }.frame(minHeight: 44)
-        }.padding()
+          .frame(maxWidth: .infinity, alignment: .leading).padding()
+        }
       }
       .background(ClawDadTheme.background).foregroundStyle(ClawDadTheme.cream)
       .navigationTitle("Weekly allowance")
 #if os(iOS)
       .navigationBarTitleDisplayMode(.inline)
 #endif
-      .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+      .toolbar { ToolbarItem(placement: .confirmationAction) {
+        Button("Done") { dismiss() }.frame(minWidth: 44, minHeight: 44).keyboardShortcut(.cancelAction)
+      } }
     }.preferredColorScheme(.dark)
   }
 }
