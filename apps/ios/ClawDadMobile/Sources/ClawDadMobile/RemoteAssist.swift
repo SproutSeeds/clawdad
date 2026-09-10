@@ -3717,6 +3717,7 @@ struct RemoteAssistView: View {
 
   private var terminalTabControlPanel: some View {
     VStack(alignment: .leading, spacing: 8) {
+      if let assistant { MainWorkspaceButton(controller:assistant,anchorId:controller.selectedRemoteTerminalTabId) }
       HStack(spacing: 8) {
         Button {
           backFromControls()

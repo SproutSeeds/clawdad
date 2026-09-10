@@ -11,6 +11,10 @@
     private var failedSend = false
     private var settings: [String: AssistantValue]?
     private var streamRevision = 0
+    private var mainWorkspace:[String:AssistantValue] = ["revision":.number(1),"status":.string("saved"),"snapshots":.array([]),"entries":.array([
+      .object(["id":.string("fixture-one"),"name":.string("ClawDad"),"kind":.string("codex"),"directory":.string("/fixture/clawdad"),"sessionId":.string("fixture-conversation-one"),"status":.string("saved"),"draftText":.string("A recoverable unsent fixture draft.")]),
+      .object(["id":.string("fixture-two"),"name":.string("Research"),"kind":.string("codex"),"directory":.string("/fixture/research"),"sessionId":.string("fixture-conversation-two"),"status":.string("saved")])])]
+    private var mainWorkspaceJobs:[String:AssistantValue]=[:]
     init() {
       state = [
         "version": .number(1), "conversationMode": .string("background"), "imageAttachments": .bool(true), "enabled": .bool(true), "paused": .bool(false),
@@ -85,6 +89,17 @@
     }
     func research(_ action: String, args: [String: AssistantValue], id: String) throws -> [String: AssistantValue] {
       if action.hasPrefix("settings.") { return try modelSettings(action, args: args) }
+      if action.hasPrefix("mainworkspace.") {
+        if action != "mainworkspace.status",mainWorkspaceJobs[id]==nil {
+          if action=="mainworkspace.restore" {
+            mainWorkspace["status"] = .string("restored")
+            mainWorkspace["entries"] = .array((mainWorkspace["entries"]?.array ?? []).map{value in var entry=value.object ?? [:];entry["status"] = .string("already_open");return .object(entry)})
+          }
+          mainWorkspaceJobs[id] = .object(["id":.string(id),"status":.string("completed")])
+        }
+        let tabs=RemoteTerminalTabState(revision:1,selectedTabId:"fixture-tab",tabs:[RemoteTerminalTabDescriptor(id:"fixture-tab",title:"ClawDad",detail:"Window 1",isSelected:true,isBusy:false,windowTitle:"Window 1",windowGroupId:"window-one")])
+        return ["mainWorkspace":.object(mainWorkspace),"catalog":try .encode(tabs),"job":args["jobId"]?.string.flatMap{mainWorkspaceJobs[$0]} ?? .null]
+      }
       if action == "research.target" { return ["researchTarget": .object(["tabId": args["tabId"] ?? .string("code-one"),
         "tabTitle": .string("Disposable research"), "sessionId": .string("fixture-session"),
         "agentInstanceId": .string("fixture-process"), "directory": .string("/tmp/research-fixture")])] }

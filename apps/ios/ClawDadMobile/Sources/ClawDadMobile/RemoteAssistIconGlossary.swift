@@ -10,6 +10,7 @@ struct RemoteAssistIconGlossary: View {
         Text("The same symbol can act on your iPhone conversation or your Mac. Its location and accessible name identify the action.")
           .font(.callout)
         section("Assistant call bar") {
+          entry("rectangle.3.group", "Main Workspace", "Opens the saved Main Terminal window controls. Restore reuses verified live tabs and opens confirmed missing projects. Save / Update records the chosen window; removal is explicit.", "Restored and already open identify verified tabs. Waiting or needs attention explains missing drives, sessions or uncertain ownership. Previous snapshots and recoverable drafts remain available; restored work is never submitted automatically.")
           VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 12) {
               Image(systemName: "terminal").font(.system(size: 24)).frame(width: 44, height: 44)

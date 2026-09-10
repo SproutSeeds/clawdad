@@ -478,6 +478,7 @@ struct ContentView: View {
         brandHeader
         computerSelector
         WeeklyUsageButton()
+        MainWorkspaceButton(controller:assistant)
         composerPanel
         if !session.pendingApprovals.isEmpty {
           approvalPanel

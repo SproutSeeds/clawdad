@@ -2,6 +2,29 @@ import XCTest
 
 @MainActor
 final class AssistantUITests: XCTestCase {
+  func testMainWorkspaceRestoreAndNavigation() { mainWorkspaceCheck(largeText:false) }
+  func testMainWorkspaceLargeText() { mainWorkspaceCheck(largeText:true) }
+  private func mainWorkspaceCheck(largeText:Bool) {
+    continueAfterFailure=false
+    let app=XCUIApplication()
+    app.launchArguments=["--clawdad-app-store-preview","workspace","--clawdad-assistant-test","--clawdad-assistant-reset-draft"]
+    if largeText { app.launchArguments += ["-UIPreferredContentSizeCategoryName","UICTContentSizeCategoryAccessibilityXL"] }
+    app.launch();let entry=app.buttons["Main Workspace"]
+    XCTAssertTrue(entry.waitForExistence(timeout:15))
+    for _ in 0..<8 where !entry.isHittable { app.swipeUp() }
+    entry.tap()
+    let restore=app.buttons["restore-main-workspace"]
+    XCTAssertTrue(restore.waitForExistence(timeout:10))
+    let ready=NSPredicate(format:"enabled == true")
+    expectation(for:ready,evaluatedWith:restore);waitForExpectations(timeout:10)
+    XCTAssertGreaterThanOrEqual(restore.frame.height,44)
+    restore.tap()
+    let status=app.staticTexts["main-workspace-status"]
+    expectation(for:NSPredicate(format:"label == 'Restored'"),evaluatedWith:status);waitForExpectations(timeout:10)
+    let screenshot=XCTAttachment(screenshot:app.screenshot());screenshot.name=largeText ? "Main Workspace large text":"Main Workspace restored";screenshot.lifetime = .keepAlways;add(screenshot)
+    XCTAssertTrue(app.buttons["Done"].isHittable);app.buttons["Done"].tap()
+    XCTAssertTrue(entry.waitForExistence(timeout:5))
+  }
   func testAssistantModelSettings() { checkModelSettings(largeText: false) }
   func testAssistantModelSettingsLargeText() { checkModelSettings(largeText: true) }
   private func checkModelSettings(largeText: Bool) {

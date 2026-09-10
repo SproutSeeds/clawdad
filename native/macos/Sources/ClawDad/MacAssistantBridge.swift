@@ -29,6 +29,9 @@ final class MacAssistantBridge {
   private let workerId = UUID().uuidString
   private let interaction = MacAssistantInteractionGate.shared
   private let nativeInput = MacAssistantTerminalInput()
+  private lazy var mainWorkspace = MainTerminalWorkspace(
+    root: root.deletingLastPathComponent().appendingPathComponent("MainTerminalWorkspace",isDirectory:true),
+    native: MacMainWorkspaceNative(runtime:runtime))
 
   init(runtime: MacAssistantRuntime) {
     self.runtime = runtime
@@ -48,6 +51,7 @@ final class MacAssistantBridge {
       while !Task.isCancelled {
         do {
           var observation: [String: AssistantValue] = ["workerId": .string(workerId)]
+          await mainWorkspace.automaticSnapshot()
           if inventoryRequested {
             try? await tabs.prewarmActivity()
             do {
@@ -82,7 +86,7 @@ final class MacAssistantBridge {
           observation["bindings"] = .array(bindings)
           let next = try await runtime.json("/v1/assistant/native/poll", observation)
           pendingBindings = next["pendingBindings"]?.array ?? []
-          inventoryRequested = next["enabled"]?.bool == true
+          inventoryRequested = next["inventoryRequested"]?.bool ?? (next["enabled"]?.bool == true)
           if let job = next["job"]?.object, let id = job["id"]?.string {
             let completion: [String: AssistantValue]
             do {
@@ -92,8 +96,14 @@ final class MacAssistantBridge {
               completion = [
                 "id": .string(id), "error": .string(deferred.message), "deferred": .bool(true),
               ]
+            } catch let failure as MacAssistantSubmissionFailure {
+              completion = ["id": .string(id), "error": .string(failure.message), "result": .object(failure.fields)]
             } catch {
-              completion = ["id": .string(id), "error": .string(error.localizedDescription)]
+              var failure:[String:AssistantValue] = ["id": .string(id), "error": .string(error.localizedDescription)]
+              if job["action"]?.string=="terminal.key",job["args"]?.object?["key"]?.string=="enter" {
+                failure["result"] = .object(["keySent":.bool(false),"turnAccepted":.bool(false),"submitted":.bool(false),"verification":.string("enter-not-dispatched")])
+              }
+              completion = failure
             }
             // A failed HTTP receipt is retried, never the native input action.
             while !Task.isCancelled {
@@ -130,12 +140,25 @@ final class MacAssistantBridge {
     let args = job["args"]?.object ?? [:]
     let action = job["action"]?.string ?? ""
     let id = job["id"]?.string ?? ""
+    if action=="mainworkspace.inspect" { return ["catalog":try .encode(await tabs.catalog()),"workspace":.object(mainWorkspace.fields())] }
+    if action.hasPrefix("mainworkspace.") {
+      let heartbeat=Task { [runtime] in
+        while !Task.isCancelled {
+          _=try? await runtime.json("/v1/assistant/native/heartbeat",[:])
+          try? await Task.sleep(for:.seconds(2))
+        }
+      }
+      defer { heartbeat.cancel();nativeInput.invalidate();draftInspections.removeAll() }
+      return try await mainWorkspace.control(action,args:args,requestId:id)
+    }
     // A separate native action (including history navigation) invalidates all
     // earlier draft observations, even if an opaque paste has the same length.
     // Local/phone human input is fenced independently by the interaction gate.
+    if action=="terminal.new" { draftInspections.removeAll();nativeInput.invalidate() }
     defer {
-      if action.hasPrefix("terminal."), !["terminal.observe", "terminal.inspect", "terminal.native.inspect", "terminal.context"].contains(action) {
+      if action.hasPrefix("terminal."), !["terminal.observe", "terminal.inspect", "terminal.native.inspect", "terminal.context", "terminal.new"].contains(action) {
         draftInspections.removeAll()
+        nativeInput.invalidate()
       }
     }
     if action == "terminal.observe" { return try await observeResearchTarget(args) }
@@ -166,7 +189,11 @@ final class MacAssistantBridge {
       return try await nativeInput.inspect(tabId: tabId, input: input, ticket: ticket)
     }
     if ["terminal.native.type", "terminal.key", "terminal.images", "terminal.pointer", "terminal.context"].contains(action) {
-      return try await nativeInput.execute(action, args: args, input: input)
+      return try await nativeInput.execute(action, args: args, input: input) { fields in
+        var prepared = fields
+        prepared["id"] = .string(id)
+        _ = try await self.runtime.json("/v1/assistant/native/prepare", prepared)
+      }
     }
     if action == "terminal.new" {
       guard let anchor = args["tabId"]?.string, let revision = args["expectedRevision"]?.number,

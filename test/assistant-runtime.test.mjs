@@ -8,6 +8,50 @@ import {runAssistantMCP} from '../lib/assistant-mcp.mjs';
 import {Readable, Writable} from 'node:stream';
 
 const queueSession='01a0817d-c8ca-7aa3-9153-74c69e51841d';
+test('existing-draft Enter stores dispatch and exact acceptance separately, including failures and duplicate IDs',async t=>{
+  const {runtime}=await fixture(t),agentInstanceId='codex-process-'+ 'a'.repeat(64);
+  const request={action:'terminal.key',requestId:'existing-enter',tabId:'target',inputToken:'fresh',inputSessionId:queueSession,key:'enter',intent:'submit'};
+  await runtime.command(request,{tool:true});await runtime.nativePoll({workerId:'worker'});
+  await assert.rejects(runtime.nativePrepare({id:request.requestId,sessionId:'wrong',conversationPath:'/fixture',draftRepresentation:'draft'}),/owner changed/);
+  await runtime.nativePrepare({id:request.requestId,sessionId:queueSession,conversationPath:'/fixture',agentInstanceId,tty:'/dev/ttys001',draftRepresentation:'[Pasted Content 4199 chars]',transcriptOffset:120});
+  await assert.rejects(runtime.nativePrepare({id:request.requestId}),/already prepared/);
+  const result={agentSubmission:true,keySent:true,turnAccepted:true,tabId:'target',inputSessionId:queueSession,sessionId:queueSession,
+    conversationPath:'/fixture',agentInstanceId,turnId:'accepted-turn',acceptedText:'Actual transcript text',taskCompletionVerified:false,verification:'native-owning-rollout-new-user-turn'};
+  await runtime.nativeResult({id:request.requestId,result});assert.equal((await runtime.job(request.requestId)).status,'working');
+  assert.equal((await runtime.job(request.requestId)).acceptedText,result.acceptedText);
+  await runtime.command(request,{tool:true});assert.equal((await runtime.nativePoll({workerId:'worker'})).job,null);
+  const uncertain={...request,requestId:'uncertain-enter',inputToken:'next'};
+  await runtime.command(uncertain,{tool:true});await runtime.nativePoll({workerId:'worker'});
+  await runtime.nativeResult({id:uncertain.requestId,error:'No acceptance observed',result:{agentSubmission:true,keySent:true,turnAccepted:false}});
+  const job=await runtime.job(uncertain.requestId);assert.equal(job.status,'attention');assert.equal(job.result.keySent,true);
+  await runtime.command(uncertain,{tool:true});assert.equal((await runtime.nativePoll({workerId:'worker'})).job,null);
+});
+test('Main Workspace controls need no call and repeated restore requests keep one durable native job',async t=>{
+  const {runtime}=await fixture(t);runtime.state.enabled=false;
+  const request={action:'mainworkspace.restore',requestId:'restore'};
+  await runtime.command(request);await runtime.command(request);
+  assert.equal((await runtime.nativePoll({workerId:'worker'})).job.id,'restore');
+  assert.equal((await runtime.nativePoll({workerId:'worker'})).job,null);
+  await runtime.nativeResult({id:'restore',result:{status:'waiting',entries:[{id:'one',status:'waiting'}]}});
+  assert.equal((await runtime.command(request)).job.result.status,'waiting');
+  assert.equal(runtime.state.enabled,false);
+  assert.deepEqual((await runtime.command({action:'mainworkspace.status'})).mainWorkspace.entries,[]);
+});
+test('Main Workspace inventory survives omitted idle polls without enabling a call and expires on close/restart',async t=>{
+  const {runtime,tick}=await fixture(t);runtime.state.enabled=false;
+  const catalog={revision:1,tabs:[{id:'tab',title:'Main'}]};
+  await runtime.command({action:'mainworkspace.status'});
+  let poll=await runtime.nativePoll({workerId:'worker',catalog});
+  assert.equal(poll.enabled,false);assert.equal(poll.inventoryRequested,true);
+  await runtime.nativePoll({workerId:'worker'});
+  assert.deepEqual((await runtime.command({action:'mainworkspace.status'})).catalog,catalog);
+  for(let i=0;i<3;i++)tick();poll=await runtime.nativePoll({workerId:'worker'});assert.equal(poll.inventoryRequested,false);
+  for(let i=0;i<3;i++)tick();assert.equal((await runtime.command({action:'mainworkspace.status'})).catalog,null);
+  await runtime.nativePoll({workerId:'worker',catalog});
+  await runtime.nativePoll({workerId:'new-worker'});
+  assert.equal((await runtime.command({action:'mainworkspace.status'})).catalog,null);
+  assert.equal(runtime.state.enabled,false);
+});
 test('native shell drafts and new tabs require exact identities and survive duplicate/restart without replay',async t=>{
   const {runtime,root,coordinator}=await fixture(t);
   const draft={action:'terminal.native.type',requestId:'native-draft',tabId:'shell-tab',inputToken:'inspection',inputSessionId:'native-process',mode:'insert',expectedText:'',text:'draft only'};
