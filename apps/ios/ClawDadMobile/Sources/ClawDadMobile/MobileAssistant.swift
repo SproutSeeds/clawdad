@@ -1461,8 +1461,8 @@ struct AssistantThinkAloudButton: View {
   @ObservedObject var controller: MobileAssistantController
   var body: some View {
     Button { controller.setWaitForSend(!controller.waitForSend) } label: {
-      Image(systemName: "infinity").font(.system(size: 22, weight: .semibold))
-        .frame(width: 44, height: 44)
+      Image(systemName: "infinity").font(.system(size: 18, weight: .semibold))
+        .frame(width: 36, height: 36)
         .background(controller.waitForSend ? ClawDadTheme.gold.opacity(0.24) : Color.clear, in: Circle())
         .overlay { Circle().stroke(controller.waitForSend ? ClawDadTheme.gold : ClawDadTheme.cream.opacity(0.45), lineWidth: controller.waitForSend ? 2 : 1) }
         .overlay(alignment: .topTrailing) {
@@ -1473,6 +1473,7 @@ struct AssistantThinkAloudButton: View {
           }
         }
         .foregroundStyle(controller.waitForSend ? ClawDadTheme.gold : ClawDadTheme.cream.opacity(0.7))
+        .frame(width: 44, height: 44)
         .contentShape(Circle())
     }.buttonStyle(.plain).disabled(!controller.voiceActive)
       .accessibilityLabel("Think aloud")
