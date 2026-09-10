@@ -112,6 +112,31 @@ public struct AssistantMessage: Codable, Identifiable, Equatable, Sendable {
   public var images: [RemoteImageUpload]? = nil
 }
 
+public enum AssistantChatLimits {
+  public static let textBytes = 128 * 1024
+  public static let legacyTextBytes = 16 * 1024
+  public static func problem(_ text: String, maximum: Int = textBytes) -> String? {
+    if text.contains("\0") { return "This message contains an invalid text character. Your draft is kept; remove that character before sending." }
+    let size = text.utf8.count
+    guard size > maximum else { return nil }
+    if maximum < textBytes {
+      return "This Mac supports messages up to \(maximum.formatted()) UTF-8 bytes. Update ClawDad on your Mac for longer messages. Your complete draft and images are kept."
+    }
+    return "This message is \(size.formatted()) UTF-8 bytes. Assistant supports up to 131,072 bytes (128 KiB) per message. Your text and images are kept; shorten the message before sending."
+  }
+}
+
+public struct AssistantChatCapacity: Codable, Sendable {
+  public let textBytes: Int
+  public let unit: String
+}
+
+public struct AssistantMessageReceipt: Codable, Sendable {
+  public let id: String
+  public let status: String
+  public let error: String?
+}
+
 public struct AssistantTaskRecord: Codable, Identifiable, Equatable, Sendable {
   public let id: String
   public let action: String
@@ -153,10 +178,24 @@ public struct AssistantSnapshot: Codable, Sendable {
   public let nativeOnline: Bool
   public let coordinator: [String: AssistantValue]?
   public let catalog: RemoteTerminalTabState?
-  public let messages: [AssistantMessage]
-  public let tasks: [AssistantTaskRecord]
+  public var messages: [AssistantMessage]
+  public var tasks: [AssistantTaskRecord]
   public var operations: [AssistantTaskRecord]? = nil
   public var taskUpdates: [AssistantMessage]? = nil
   public var research: [String: AssistantValue]? = nil
   public var destination: [String: AssistantValue]? = nil
+  public var chatCapacity: AssistantChatCapacity? = nil
+  public var historyRevision: String? = nil
+  public var historyUnchanged: Bool? = nil
+  public var messageReceipts: [AssistantMessageReceipt]? = nil
+
+  /// A revision acknowledges the exact history already on this connection.
+  /// Catalog/connection updates can arrive without retransmitting large text.
+  public mutating func retainUnchangedHistory(from previous: Self?) throws {
+    guard historyUnchanged == true else { return }
+    guard let previous, previous.historyRevision == historyRevision,
+      previous.destination?["conversationId"] == destination?["conversationId"] else { throw AssistantProtocolError.invalid }
+    messages = previous.messages; tasks = previous.tasks
+    operations = previous.operations; taskUpdates = previous.taskUpdates
+  }
 }

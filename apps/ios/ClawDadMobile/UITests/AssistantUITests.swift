@@ -2,6 +2,49 @@ import XCTest
 
 @MainActor
 final class AssistantUITests: XCTestCase {
+  func testMaximumResearchPasteSurvivesReopenRestartAndOneSend() { capacityPasteCheck(oversize: false) }
+  func testOversizeResearchPasteKeepsDraftAtLargeTextSize() { capacityPasteCheck(oversize: true) }
+  private func capacityPasteCheck(oversize: Bool) {
+    continueAfterFailure = false
+    let app = XCUIApplication()
+    app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-assistant-test", "--clawdad-assistant-reset-draft", "--clawdad-assistant-large-paste"]
+    if oversize { app.launchArguments += ["--capacity-over-limit", "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXL"] }
+    app.launch(); XCTAssertTrue(app.buttons["clawdad.assistant.chat"].waitForExistence(timeout: 15)); app.buttons["clawdad.assistant.chat"].tap()
+    let composer = app.descendants(matching: .any).matching(identifier: "clawdad.assistant.composer").firstMatch
+    composer.tap(); composer.press(forDuration: 1.2)
+    let paste = app.menuItems["Paste"].waitForExistence(timeout: 2) ? app.menuItems["Paste"] : app.buttons["Paste"]
+    XCTAssertTrue(paste.waitForExistence(timeout: 5)); paste.tap()
+    let filled = NSPredicate { _, _ in (composer.value as? String)?.contains("END_IPHONE_PASTE") == true }
+    expectation(for: filled, evaluatedWith: composer); waitForExpectations(timeout: 15)
+    let exact = composer.value as! String
+    XCTAssertEqual(exact.utf8.count, oversize ? 131_073 : 131_072)
+    XCTAssertTrue(exact.hasPrefix("BEGIN_IPHONE_PASTE\r\nResearch 🧪 中文 e\u{0301}"))
+    XCTAssertTrue(exact.hasSuffix("END_IPHONE_PASTE\t \r\n"))
+    saveScreenshot(app, oversize ? "Oversize research paste retained at large text size" : "Maximum research paste in native composer")
+    app.terminate(); app.launchArguments.removeAll { $0 == "--clawdad-assistant-reset-draft" }; app.launch()
+    XCTAssertTrue(app.buttons["clawdad.assistant.chat"].waitForExistence(timeout: 15)); app.buttons["clawdad.assistant.chat"].tap()
+    XCTAssertEqual(composer.value as? String, exact)
+    let send = app.buttons["clawdad.assistant.send-chat"]
+    XCTAssertTrue(send.isHittable); send.tap()
+    if oversize {
+      XCTAssertTrue(app.staticTexts["clawdad.assistant.capacity-warning"].waitForExistence(timeout: 5))
+      XCTAssertEqual(composer.value as? String, exact)
+      app.buttons["Message size details"].tap()
+      XCTAssertTrue(app.alerts["Message size"].waitForExistence(timeout: 5))
+      XCTAssertTrue(app.alerts.staticTexts.containing(NSPredicate(format: "label CONTAINS '131,072 bytes'")).firstMatch.exists)
+      app.buttons["Keep editing"].tap()
+      XCTAssertEqual(composer.value as? String, exact)
+    } else {
+      let cleared = NSPredicate { _, _ in (composer.value as? String)?.contains("END_IPHONE_PASTE") != true }
+      expectation(for: cleared, evaluatedWith: composer); waitForExpectations(timeout: 10)
+      let messages = app.textViews.matching(NSPredicate(format: "identifier BEGINSWITH 'clawdad.assistant.text.'"))
+      let exactMessages = messages.allElementsBoundByIndex.filter { $0.value as? String == exact }
+      XCTAssertEqual(exactMessages.count, 1, "One full user message must be visible in saved history")
+      XCTAssertLessThanOrEqual(exactMessages[0].frame.height, 440, "Long messages use a bounded selectable native viewport")
+    }
+    saveScreenshot(app, oversize ? "Rejected paste stays editable after restart" : "Complete long message delivered without clipping")
+    app.terminate()
+  }
   func testMainWorkspaceRestoreAndNavigation() { mainWorkspaceCheck(largeText:false) }
   func testMainWorkspaceLargeText() { mainWorkspaceCheck(largeText:true) }
   private func mainWorkspaceCheck(largeText:Bool) {
@@ -107,7 +150,7 @@ final class AssistantUITests: XCTestCase {
     XCTAssertTrue(app.buttons["End voice conversation"].exists)
     saveScreenshot(app, largeText ? "Message playback muted call large text" : "Message playback preserves muted call")
     speaker.tap()
-    let input = app.textFields["clawdad.assistant.composer"]
+    let input = app.descendants(matching: .any).matching(identifier: "clawdad.assistant.composer").firstMatch
     XCTAssertTrue(input.exists); input.tap(); input.typeText("Unsent review draft")
     saveScreenshot(app, largeText ? "Large text keyboard and preserved draft" : "Keyboard and preserved draft")
     scrollOlder(); XCTAssertTrue(latest.waitForExistence(timeout: 3)); XCTAssertTrue(latest.isHittable)
@@ -808,7 +851,7 @@ final class AssistantUITests: XCTestCase {
 
   func testInfinityIsSharedAcrossViewsAndChatSendFinishesHeldVoiceWhileMuted() {
     let app = XCUIApplication()
-    app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-assistant-test", "--clawdad-assistant-send-test"]
+    app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-assistant-test", "--clawdad-assistant-send-test", "--clawdad-assistant-reset-draft"]
     app.launch()
     XCTAssertTrue(app.buttons["clawdad.assistant.open"].waitForExistence(timeout: 20))
     app.buttons["clawdad.assistant.open"].tap()

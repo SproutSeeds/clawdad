@@ -65,6 +65,14 @@ final class MobileAssistantController: ObservableObject {
   var canSendChatInput: Bool {
     !sending && !chatDraft.importing && (chatDraft.value.isEmpty ? canSendVoice : connected)
   }
+  var chatCapacityProblem: String? {
+    AssistantChatLimits.problem(chatDraft.value.text, maximum: chatTextLimit)
+  }
+  private var chatTextLimit: Int {
+    guard let snapshot else { return AssistantChatLimits.textBytes }
+    guard let capacity = snapshot.chatCapacity, capacity.unit == "utf8_bytes", capacity.textBytes > 0 else { return AssistantChatLimits.legacyTextBytes }
+    return min(capacity.textBytes, AssistantChatLimits.textBytes)
+  }
   private var microphoneChange = UUID()
   private var inputEpoch = UUID()
   private var foreground = true
@@ -198,6 +206,11 @@ final class MobileAssistantController: ObservableObject {
           }
           preview = AssistantPreview()
           snapshot = try? preview?.snapshot()
+          #if canImport(UIKit)
+          if ProcessInfo.processInfo.arguments.contains("--clawdad-assistant-large-paste") {
+            UIPasteboard.general.string = AssistantPreview.capacityFixtureText
+          }
+          #endif
         }
         connected = true
         if !voiceActive { status = "Your Mac is connected" }
@@ -238,10 +251,17 @@ final class MobileAssistantController: ObservableObject {
       }
     #endif
     let requestedScope = scope
-    let data = try await connection.request(.state)
+    let previousRevision = snapshot?.historyRevision
+    let known = previousRevision.map { ["historyRevision": $0] } ?? [:]
+    let data = try await connection.request(.state, payload: JSONEncoder().encode(known))
     guard requestedScope == scope else { throw CancellationError() }
-    let next = try JSONDecoder().decode(AssistantSnapshot.self, from: data)
+    var next = try JSONDecoder().decode(AssistantSnapshot.self, from: data)
+    // A concurrent Send may have installed newer history while this health
+    // request was in flight. An old unchanged acknowledgment cannot replace it.
+    if next.historyUnchanged == true, snapshot?.historyRevision != previousRevision { return }
+    try next.retainUnchangedHistory(from: snapshot)
     snapshot = next
+    chatDraft.reconcile(next.messageReceipts ?? [])
     assistantReady = next.supportsBackgroundCalls && next.enabled && next.nativeOnline && next.catalog != nil
     if voiceActive {
       for message in next.messages + (next.taskUpdates ?? []) where message.role == "assistant" && !spoken.contains(message.id) {
@@ -401,12 +421,14 @@ final class MobileAssistantController: ObservableObject {
     do {
       let images = try draft.images.map { PreparedRemoteImage(upload: $0, data: try chatDraft.bytes($0, scope: target)) }
       if await send(draft.text, id: draft.id, images: images) {
-        try chatDraft.complete(draft, scope: target)
+        try chatDraft.accept(draft, scope: target)
+        if target == scope { chatDraft.reconcile(snapshot?.messageReceipts ?? []) }
       }
     } catch { self.error = error.localizedDescription }
   }
   @discardableResult func send(_ text: String, id: String? = nil, images: [PreparedRemoteImage] = [], voiceInputEpoch: UUID? = nil) async -> Bool {
     guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty else { return true }
+    if let problem = AssistantChatLimits.problem(text) { error = problem; return false }
     let target = scope
     while sending { do { try await Task.sleep(nanoseconds: 100_000_000) } catch { return false } }
     guard !Task.isCancelled else { return false }
@@ -421,6 +443,9 @@ final class MobileAssistantController: ObservableObject {
       do {
         guard target == scope, voiceInputEpoch == nil || voiceInputEpoch == inputEpoch else { throw CancellationError() }
         try await awaitAssistant(until: deadline)
+        if let problem = AssistantChatLimits.problem(text, maximum: chatTextLimit) {
+          self.error = problem; return false
+        }
         try Task.checkCancellation()
         guard target == scope, voiceInputEpoch == nil || voiceInputEpoch == inputEpoch else { throw CancellationError() }
         if !images.isEmpty {
@@ -443,6 +468,10 @@ final class MobileAssistantController: ObservableObject {
         var args: [String: AssistantValue] = ["text": .string(text)]
         if !images.isEmpty { args["images"] = try .encode(images.map(\.upload)) }
         let receipt = try await command("message", args: args, id: pending.id)
+        if receipt?.status == "attention" || receipt?.status == "interrupted" {
+          self.error = receipt?.error ?? "This saved message needs review before it can be retried. Your draft is kept."
+          return false
+        }
         // The durable receipt remains available after a previously accepted message
         // has aged out of the recent history returned to a reconnected phone.
         guard (receipt?.id == pending.id && receipt?.action == "message")
@@ -1385,7 +1414,7 @@ struct AssistantView: View {
             }
           }
         }
-        if !controller.error.isEmpty {
+        if !controller.error.isEmpty, controller.error != controller.chatCapacityProblem {
           Text(controller.error).font(.footnote).foregroundStyle(ClawDadTheme.gold).padding(
             .horizontal
           ).accessibilityIdentifier("clawdad.assistant.error")

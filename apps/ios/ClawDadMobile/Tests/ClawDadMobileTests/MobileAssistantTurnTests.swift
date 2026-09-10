@@ -598,6 +598,7 @@ final class AssistantTestTransport: AssistantTransport {
   var closes = 0
   var omitRecentMessages = false
   var omitReceipt = false
+  var chatTextBytes = AssistantChatLimits.textBytes
   var stateReads = 0
   var transcriptions = 0
   var syntheses = 0
@@ -659,6 +660,7 @@ final class AssistantTestTransport: AssistantTransport {
   private func snapshot() throws -> Data {
     try JSONSerialization.data(withJSONObject: [
       "version": 1, "conversationMode": "background", "imageAttachments": true, "enabled": true, "paused": false,
+      "chatCapacity": ["textBytes": chatTextBytes, "unit": "utf8_bytes"],
       "nativeOnline": true, "messages": omitRecentMessages ? [] : messages, "tasks": [],
       "catalog": ["revision": 1, "tabs": []],
     ])

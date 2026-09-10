@@ -6,6 +6,15 @@
   /// UI acceptance fixtures never send keyboard events or connect to a real host.
   @MainActor
   final class AssistantPreview {
+    static var capacityFixtureText: String {
+      let size = ProcessInfo.processInfo.arguments.contains("--capacity-over-limit") ? 131_073 : 131_072
+      let start = "BEGIN_IPHONE_PASTE\r\nResearch 🧪 中文 e\u{0301}\n```text\nExact lines stay intact.\n```\n"
+      let end = "\nMIDDLE_IPHONE_PASTE\nEND_IPHONE_PASTE\t \r\n"
+      let line = "Synthetic research evidence for transport verification; no project actions.\n"
+      let remaining = size - start.utf8.count - end.utf8.count
+      return start + String(repeating: line, count: remaining / line.utf8.count)
+        + String(repeating: "x", count: remaining % line.utf8.count) + end
+    }
     private var state: [String: AssistantValue]
     private var uploads: [String: Data] = [:]
     private var failedSend = false
@@ -18,6 +27,7 @@
     init() {
       state = [
         "version": .number(1), "conversationMode": .string("background"), "imageAttachments": .bool(true), "enabled": .bool(true), "paused": .bool(false),
+        "chatCapacity": .object(["textBytes": .number(131_072), "unit": .string("utf8_bytes")]),
         "nativeOnline": .bool(true), "coordinator": .object(["mode": .string("background"), "model": .string("gpt-6-astra"), "status": .string("ready")]),
         "tasks": .array([]),
         "destination": .object(["conversationId": .string("preview-conversation"), "transport": .string("terminal"), "revision": .number(0), "targets": .object([:])]),

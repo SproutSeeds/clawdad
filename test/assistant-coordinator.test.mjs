@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
-import {AssistantCoordinator,assistantExecArguments,assistantWorkspaceInstructions} from '../lib/assistant-coordinator.mjs';
+import {AssistantCoordinator,assistantExecArguments,assistantWorkspaceInstructions,assistantStdinPrompt} from '../lib/assistant-coordinator.mjs';
 import {AssistantRuntime} from '../lib/assistant-runtime.mjs';
 import {AssistantModelSettings} from '../lib/assistant-model-settings.mjs';
 
@@ -43,6 +43,29 @@ async function ready(runtime){
   await runtime.drainTask;
 }
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
+
+test('stdin encoding preserves a literal leading BOM and whitespace image captions use exact positional text',()=>{
+  const text='\uFEFFBEGIN\nexact 🧪\nEND  ';
+  const encoded=Buffer.from(assistantStdinPrompt(text));
+  assert.deepEqual([...encoded.subarray(0,3)],[0xef,0xbb,0xbf]);
+  assert.equal(encoded.subarray(3).toString('utf8'),text);
+  assert.equal(assistantStdinPrompt('  ordinary\r\n'),'  ordinary\r\n');
+  for(const caption of ['', '  \r\n\t', '\uFEFF']){
+    const args=assistantExecArguments({root:'/fixture',images:['/fixture/image.png'],text:caption});
+    assert.equal(args.at(-1),caption);
+  }
+});
+
+test('large Unicode stdin reaches the coordinator subprocess and response without clipping or normalization',async t=>{
+  const {root,make}=await fixture(t),runtime=new AssistantRuntime({root,coordinator:make()});t.after(()=>runtime.close());
+  await ready(runtime);
+  const text='  BEGIN\r\n'+'x'.repeat(110_000)+'\nMIDDLE 🧪 中文 e\u0301\n```code```\nEND  \r\n';
+  await runtime.command({action:'message',requestId:'long-pipe',text});await runtime.drainTask;
+  const state=await runtime.command({action:'state'});
+  assert.equal(state.messages.find(m=>m.id==='long-pipe').text,text);
+  assert.equal(state.messages.find(m=>m.id==='assistant:long-pipe:early').text,'Received: '+text);
+  assert.equal((await runtime.job('long-pipe')).status,'completed');
+});
 
 test('settings reach actual Assistant CLI arguments and durable jobs, preserving session and in-flight model',async t=>{
   const {root,spawns,make}=await fixture(t),runtime=new AssistantRuntime({root,coordinator:make()});t.after(()=>runtime.close());
@@ -129,7 +152,7 @@ test('captioned image turns keep exact text on stdin and whitespace-only caption
     await make().run({text,images:['/fixture/image.png'],onSession:async()=>{},onMessage:async m=>parts.push(m.text)});
     assert.ok(parts.includes(`Received: ${text}`));
   }
-  assert.deepEqual(spawns[0].args.slice(-2),['--','']);
+  assert.deepEqual(spawns[0].args.slice(-2),['--','\n\t  ']);
   assert.equal(spawns[1].args.at(-1),'-');
 });
 

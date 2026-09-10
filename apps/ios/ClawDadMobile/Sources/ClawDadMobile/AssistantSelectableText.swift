@@ -21,6 +21,8 @@ final class AssistantMessageTextView: UITextView, UITextViewDelegate {
   private var touching = false
   private var applying = false
   private var announcedSelection = false
+  var renderedSource: String?
+  var renderedFontSize: CGFloat?
 
   init() {
     super.init(frame: .zero, textContainer: nil)
@@ -94,9 +96,17 @@ struct AssistantSelectableText: UIViewRepresentable {
     view.selectionChanged = { active in
       DispatchQueue.main.async { selection?.changed(id, active: active) }
     }
+    let font = UIFont.preferredFont(forTextStyle: .body)
+    // Calls refresh several times a second. Detect links/format a large message
+    // only when its source or Dynamic Type size actually changes.
+    guard view.renderedSource != text || view.renderedFontSize != font.pointSize else { return }
+    view.renderedSource = text; view.renderedFontSize = font.pointSize
+    // Long messages remain complete native selectable documents. A bounded
+    // viewport prevents enormous outer chat rows and keeps actions reachable.
+    view.isScrollEnabled = text.utf8.count > 8_192
+    view.accessibilityHint = view.isScrollEnabled ? "Scroll within this message to read its complete text. Text selection and Copy are available." : nil
     let content = NSMutableAttributedString(AssistantMessageLinks.text(text))
     let full = NSRange(location: 0, length: content.length)
-    let font = UIFont.preferredFont(forTextStyle: .body)
     content.addAttributes([.font: font, .foregroundColor: UIColor(ClawDadTheme.cream)], range: full)
     // Preserve every source character, including lists and code fences, so the
     // selected range and copied passage always refer to the same text.
@@ -110,6 +120,9 @@ struct AssistantSelectableText: UIViewRepresentable {
   }
   func sizeThatFits(_ proposal: ProposedViewSize, uiView: AssistantMessageTextView, context: Context) -> CGSize? {
     guard let width = proposal.width, width > 0 else { return nil }
+    if uiView.isScrollEnabled {
+      return CGSize(width: width, height: min(420, (uiView.renderedFontSize ?? 20) * 14))
+    }
     return CGSize(width: width, height: ceil(uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height))
   }
   static func dismantleUIView(_ view: AssistantMessageTextView, coordinator: ()) {

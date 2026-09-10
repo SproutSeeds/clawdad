@@ -39,7 +39,16 @@ struct MacAssistantRuntime {
   func respond(_ request: AssistantWireRequest, queuedMs: Double = 0, deviceId: String? = nil) async throws -> Data {
     try request.validate()
     switch request.action {
-    case .state: return try await self.request("/v1/assistant/state")
+    case .state:
+      var path = "/v1/assistant/state"
+      if !request.payload.isEmpty {
+        let value = try JSONDecoder().decode([String: AssistantValue].self, from: request.payload)
+        if let revision = value["historyRevision"]?.string,
+          revision.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil {
+          path += "?historyRevision=\(revision)"
+        }
+      }
+      return try await self.request(path)
     case .command:
       var body = try JSONDecoder().decode([String: AssistantValue].self, from: request.payload)
       body.removeValue(forKey: "imageOwner")

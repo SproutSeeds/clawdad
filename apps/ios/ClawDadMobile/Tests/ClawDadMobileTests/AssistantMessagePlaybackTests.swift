@@ -102,7 +102,7 @@ final class AssistantMessagePlaybackTests: XCTestCase {
   func testFormattingAndLongUnicodeBatchesPreserveContent() {
     let text = "# Results\n- **Passed** 4 checks.\n[Details](https://example.com)\n```swift\nlet code = \"**literal**\"\n```"
     XCTAssertEqual(AssistantMessagePlaybackText.spoken(text), "Results\nPassed 4 checks.\nDetails (https://example.com)\nlet code = \"**literal**\"")
-    let long = String(repeating: "Multiline 🦞 café\n", count: 4000)
+    let long = String(repeating: "Multiline 🦞 café\n", count: 8000)
     let parts = AssistantMessagePlaybackText.batches(long)
     XCTAssertEqual(parts.joined(), long); XCTAssertTrue(parts.allSatisfy { $0.utf8.count <= 24_000 })
   }

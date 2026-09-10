@@ -4,6 +4,21 @@ import UIKit
 
 @MainActor
 final class AssistantSelectionTests: XCTestCase {
+  func testLargeScrollableMessageRetainsCompleteTextAndCopiesItsFinalMultilinePassage() {
+    let ending = "Final verification 🧪\nEND_EXACT"
+    let source = String(repeating: "Research evidence.\n", count: 8_000) + ending
+    let v = view(source)
+    v.isScrollEnabled = true
+    v.selectedRange = (source as NSString).range(of: ending)
+    v.scrollRangeToVisible(v.selectedRange)
+    v.copy(nil)
+    XCTAssertEqual(UIPasteboard.general.string, ending)
+    XCTAssertEqual(v.text, source)
+    v.display(NSAttributedString(string: source + "\nA later update"))
+    v.copy(nil)
+    XCTAssertEqual(UIPasteboard.general.string, ending)
+    XCTAssertFalse(v.isEditable)
+  }
   private func view(_ source: String) -> AssistantMessageTextView {
     let view = AssistantMessageTextView()
     view.frame = CGRect(x: 0, y: 0, width: 320, height: 400)

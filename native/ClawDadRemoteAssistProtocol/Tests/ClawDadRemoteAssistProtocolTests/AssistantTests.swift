@@ -3,6 +3,41 @@ import XCTest
 @testable import ClawDadRemoteAssistProtocol
 
 final class AssistantTests: XCTestCase {
+  func testMaximumTextIncludingWorstJSONEscapingFitsUnchangedPairedWire() throws {
+    for text in [String(repeating: "🧪", count: AssistantChatLimits.textBytes / 4),
+      String(repeating: "\u{0001}", count: AssistantChatLimits.textBytes)] {
+      XCTAssertNil(AssistantChatLimits.problem(text))
+      let data = try JSONEncoder().encode(["action": "message", "requestId": UUID().uuidString, "text": text])
+      let request = AssistantWireRequest(action: .command, payload: data)
+      try request.validate()
+      let wire = try JSONEncoder().encode(request)
+      XCTAssertLessThan(wire.count, 2 * 1024 * 1024)
+      var assembler = RemoteFileAssembler()
+      var assembled: Data?
+      for frame in try RemoteFileFrame.split(wire) {
+        if let complete = try assembler.receive(JSONEncoder().encode(frame)) { assembled = complete }
+      }
+      XCTAssertEqual(assembled, wire)
+      let received = try JSONDecoder().decode(AssistantWireRequest.self, from: XCTUnwrap(assembled))
+      let body = try JSONDecoder().decode([String: String].self, from: received.payload)
+      XCTAssertEqual(body["text"], text)
+      XCTAssertNotNil(AssistantChatLimits.problem(text + "x"))
+    }
+  }
+  func testHistoryDeltaRetainsExactTextAndRejectsWrongRevision() throws {
+    var body: [String: Any] = ["version": 1, "enabled": true, "paused": false, "nativeOnline": true,
+      "messages": [["id": "one", "role": "user", "text": String(repeating: "X", count: 131_072), "createdAt": "now"]],
+      "tasks": [], "historyRevision": "first", "historyUnchanged": false]
+    let previous = try JSONDecoder().decode(AssistantSnapshot.self, from: JSONSerialization.data(withJSONObject: body))
+    body["messages"] = []; body["historyUnchanged"] = true
+    var next = try JSONDecoder().decode(AssistantSnapshot.self, from: JSONSerialization.data(withJSONObject: body))
+    try next.retainUnchangedHistory(from: previous)
+    XCTAssertEqual(next.messages, previous.messages)
+    XCTAssertThrowsError(try next.retainUnchangedHistory(from: nil))
+    body["historyRevision"] = "changed"
+    var wrong = try JSONDecoder().decode(AssistantSnapshot.self, from: JSONSerialization.data(withJSONObject: body))
+    XCTAssertThrowsError(try wrong.retainUnchangedHistory(from: previous))
+  }
   func testQueuedSubmittedWorkingAndCompletedHaveDistinctPhoneLabels() throws {
     for (status, label) in [("queued", "Waiting for delivery"), ("inserted", "Draft inserted"), ("agent_queued", "Queued in agent"),
       ("submitted", "Submitted"), ("working", "Working"), ("completed", "Completed"), ("attention", "Needs attention")] {
