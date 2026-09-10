@@ -127,8 +127,14 @@ enum NativeManagedProcessTerminator {
     }
     if process.isRunning {
       Darwin.kill(process.processIdentifier, SIGKILL)
+      let forcedDeadline = Date().addingTimeInterval(2)
+      while process.isRunning && Date() < forcedDeadline {
+        Thread.sleep(forTimeInterval: 0.05)
+      }
     }
-    process.waitUntilExit()
+    // waitUntilExit can block in a run loop even after isRunning becomes false
+    // when this child was relaunched on a dispatch timer. Keep app shutdown
+    // bounded; the next launch's exact-process reaper handles any survivor.
   }
 }
 

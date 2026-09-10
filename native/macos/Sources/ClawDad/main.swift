@@ -88,9 +88,10 @@ final class ClawDadService {
   let tokenFile: URL
   let token: String
   let runtimeVersion: String
-  private let processLock = NSLock()
-  private var managedServerProcess: Process?
-  private var managedCloudHostProcess: Process?
+  private lazy var managedServer = NativeManagedService(label: "earth.frg.ClawDad.server-recovery",
+    diagnostic: { [weak self] in self?.appendNativeCloudHostDiagnostic("Local server: " + $0) })
+  private lazy var managedCloudHost = NativeManagedService(label: "earth.frg.ClawDad.cloud-recovery",
+    diagnostic: { [weak self] in self?.appendNativeCloudHostDiagnostic("Cloud connector: " + $0) })
 
   init() throws {
     let supportDir = try Self.applicationSupportDir()
@@ -138,7 +139,7 @@ final class ClawDadService {
         }
 
         status("Starting local ClawDad service...")
-        try self.startManagedService(port: port)
+        try self.managedServer.start { [self] in try self.makeManagedServer(port: port) }
         try self.waitForHealth(port: port, status: status)
         self.startManagedCloudHostIfNeeded(port: port, status: status)
         ready(.success(self.baseURL(port: port)))
@@ -156,14 +157,8 @@ final class ClawDadService {
   }
 
   func stop() {
-    processLock.lock()
-    let processes = [managedCloudHostProcess, managedServerProcess].compactMap { $0 }
-    managedCloudHostProcess = nil
-    managedServerProcess = nil
-    processLock.unlock()
-    for process in processes {
-      NativeManagedProcessTerminator.stop(process)
-    }
+    managedCloudHost.stop()
+    managedServer.stop()
     Self.removeManagedService(label: Self.managedCloudServiceLabel)
     Self.removeManagedService(label: Self.managedServiceLabel)
   }
@@ -271,7 +266,7 @@ final class ClawDadService {
     return result == 0
   }
 
-  private func startManagedService(port: Int) throws {
+  private func makeManagedServer(port: Int) throws -> Process {
     let serverPath = repoRoot.appendingPathComponent("lib/server.mjs")
     guard FileManager.default.fileExists(atPath: serverPath.path) else {
       throw NSError(
@@ -286,18 +281,19 @@ final class ClawDadService {
     try FileManager.default.createDirectory(at: logsDir, withIntermediateDirectories: true)
     let stdout = logsDir.appendingPathComponent("native-server.stdout.log")
     let stderr = logsDir.appendingPathComponent("native-server.stderr.log")
-    FileManager.default.createFile(atPath: stdout.path, contents: nil)
-    FileManager.default.createFile(atPath: stderr.path, contents: nil)
+    if !FileManager.default.fileExists(atPath: stdout.path) {
+      FileManager.default.createFile(atPath: stdout.path, contents: nil)
+    }
+    if !FileManager.default.fileExists(atPath: stderr.path) {
+      FileManager.default.createFile(atPath: stderr.path, contents: nil)
+    }
     let stdoutHandle = try FileHandle(forWritingTo: stdout)
-    let stderrHandle = try FileHandle(forWritingTo: stderr)
-    try stdoutHandle.truncate(atOffset: 0)
-    try stderrHandle.truncate(atOffset: 0)
+    try stdoutHandle.seekToEnd()
     stdoutHandle.write(
       Data("Starting ClawDad server with \(nodeURL.path) on \(localHost):\(port)\n".utf8)
     )
     try stdoutHandle.seekToEnd()
     try stdoutHandle.close()
-    try stderrHandle.close()
 
     let environment = Self.serverEnvironment(
       repoRoot: repoRoot,
@@ -319,16 +315,13 @@ final class ClawDadService {
     ]) { _, replacement in replacement }
     let serviceStdoutHandle = try FileHandle(forWritingTo: stdout)
     let serviceStderrHandle = try FileHandle(forWritingTo: stderr)
+    defer { try? serviceStdoutHandle.close(); try? serviceStderrHandle.close() }
     try serviceStdoutHandle.seekToEnd()
     try serviceStderrHandle.seekToEnd()
     process.standardOutput = serviceStdoutHandle
     process.standardError = serviceStderrHandle
     try process.run()
-    try? serviceStdoutHandle.close()
-    try? serviceStderrHandle.close()
-    processLock.lock()
-    managedServerProcess = process
-    processLock.unlock()
+    return process
   }
 
   private func startManagedCloudHostIfNeeded(
@@ -352,13 +345,13 @@ final class ClawDadService {
 
     do {
       status("Connecting paired ClawDad devices...")
-      try startManagedCloudHost(port: port, configURL: cloudConfig)
+      try managedCloudHost.start { [self] in try self.makeManagedCloudHost(port: port, configURL: cloudConfig) }
     } catch {
       appendNativeCloudHostDiagnostic(error.localizedDescription)
     }
   }
 
-  private func startManagedCloudHost(port: Int, configURL: URL) throws {
+  private func makeManagedCloudHost(port: Int, configURL: URL) throws -> Process {
     let serverPath = repoRoot.appendingPathComponent("lib/server.mjs")
     guard FileManager.default.fileExists(atPath: serverPath.path) else {
       throw NSError(
@@ -372,8 +365,12 @@ final class ClawDadService {
     try FileManager.default.createDirectory(at: logsDir, withIntermediateDirectories: true)
     let stdout = logsDir.appendingPathComponent("native-cloud-host.stdout.log")
     let stderr = logsDir.appendingPathComponent("native-cloud-host.stderr.log")
-    FileManager.default.createFile(atPath: stdout.path, contents: nil)
-    FileManager.default.createFile(atPath: stderr.path, contents: nil)
+    if !FileManager.default.fileExists(atPath: stdout.path) {
+      FileManager.default.createFile(atPath: stdout.path, contents: nil)
+    }
+    if !FileManager.default.fileExists(atPath: stderr.path) {
+      FileManager.default.createFile(atPath: stderr.path, contents: nil)
+    }
 
     let environment = Self.serverEnvironment(
       repoRoot: repoRoot,
@@ -394,16 +391,13 @@ final class ClawDadService {
     ]) { _, replacement in replacement }
     let cloudStdoutHandle = try FileHandle(forWritingTo: stdout)
     let cloudStderrHandle = try FileHandle(forWritingTo: stderr)
+    defer { try? cloudStdoutHandle.close(); try? cloudStderrHandle.close() }
     try cloudStdoutHandle.seekToEnd()
     try cloudStderrHandle.seekToEnd()
     process.standardOutput = cloudStdoutHandle
     process.standardError = cloudStderrHandle
     try process.run()
-    try? cloudStdoutHandle.close()
-    try? cloudStderrHandle.close()
-    processLock.lock()
-    managedCloudHostProcess = process
-    processLock.unlock()
+    return process
   }
 
   private func appendNativeCloudHostDiagnostic(_ message: String) {
