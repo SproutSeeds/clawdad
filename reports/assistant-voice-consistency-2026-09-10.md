@@ -54,7 +54,7 @@ The opt-in `MacAssistantSpeechRecoveryLiveTests` passed through real `AssistantW
 
 After installation, the running Mac 120 service generated a second synthetic two-part message in **4.400 seconds**. Both downloaded WAVs matched their published hashes, the selected voice stayed Kokoro/Heart, a second request was a cache hit, and the Assistant conversation hash was unchanged. This verifies code loaded in the installed runtime, separately from compiled fixtures.
 
-**Audible verification remains open.** The complete WAV was produced and offered to Cody for listening. The tool session could not consume audio input, so no claim is made that the full recording was personally heard or judged for voice consistency. Hashes, voice parameters, ASR and player-completion tests do not replace listening.
+**Cody confirmed audible consistency on September 10, 2026.** In response to the complete 2:45 `complete-recovered-heart.wav` recording, Cody reported: “Same voice throughout.” This closes the complete synthetic recording's human listening check. The tool session itself could not consume audio input; the listening evidence is Cody's report. It does not independently verify every physical iPhone route, reconnect or interruption scenario below.
 
 ## Verification results
 
@@ -80,7 +80,7 @@ Mac 120 was installed at **2026-09-11 00:14:33 UTC** (September 10, 7:14:33 PM C
 
 Apple reported the existing nonblocking missing dSYM warning for the bundled WebRTC framework; upload and internal distribution succeeded. No npm publication, public appcast publication, cloud provisioning, subscription change or broad branch push was performed.
 
-Physical iPhone checks still needed with build 85: listen to the full generated recording and long automatic/readback messages; interrupt Wi-Fi/cellular after the first audible part and verify Resume; exercise Bluetooth/headphones and an OS audio interruption; stop or choose another message during recovery; confirm actual mute, echo suppression and VoiceOver behavior. Player offsets and synthetic state tests verify the implementation, while perceptual seams, phone audio routes and audible no-repeat/no-skip behavior require the device. Recovery position is retained in the active controller; force-quitting the phone app ends playback rather than promising cross-relaunch audio resume.
+The complete synthetic recording has Cody's listening confirmation. Physical iPhone checks still needed with build 85: long automatic/readback messages; interrupt Wi-Fi/cellular after the first audible part and verify Resume; exercise Bluetooth/headphones and an OS audio interruption; stop or choose another message during recovery; confirm actual mute, echo suppression and VoiceOver behavior. Player offsets and synthetic state tests verify the implementation, while phone audio routes and audible no-repeat/no-skip behavior require the device. Recovery position is retained in the active controller; force-quitting the phone app ends playback rather than promising cross-relaunch audio resume.
 
 The separate [Terminal audit](assistant-terminal-control-audit-2026-09-10.md) remains at its review boundary. Its proposed input/queue/trust fixes were not implemented in this speech release.
 
