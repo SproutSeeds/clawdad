@@ -23,6 +23,7 @@ final class MobileAssistantController: ObservableObject {
   @Published private(set) var replyAudioActive = false
   @Published private(set) var playingMessageID: String?
   @Published private(set) var messagePlaybackPreparing = false
+  @Published private(set) var messagePlaybackPaused = false
   @Published private(set) var liveTranscript = ""
   @Published private(set) var hearingSpeech = false
   @Published private(set) var transcribingSpeech = false
@@ -89,6 +90,7 @@ final class MobileAssistantController: ObservableObject {
   private var monitor: Task<Void, Never>?
   private var speech: Task<Void, Never>?
   private var playbackEpoch = UUID()
+  private var playback: AssistantSpeechPlayback?
   private var transcribing: Task<Void, Never>?
   private var transcriptionPreview: Task<Void, Never>?
   private var previewEpoch = UUID()
@@ -105,6 +107,7 @@ final class MobileAssistantController: ObservableObject {
   private var connectionError = ""
   #if DEBUG
     private var preview: AssistantPreview?
+    private var previewPausedMessages = Set<String>()
   #endif
 
   init(connection: any AssistantTransport = AssistantConnection(),
@@ -835,6 +838,8 @@ final class MobileAssistantController: ObservableObject {
     activeReplyRequest = nil
     playingMessageID = nil
     messagePlaybackPreparing = false
+    messagePlaybackPaused = false
+    playback?.record("cancelled"); playback = nil
     setReplyActive(false)
     if voiceActive { status = muted ? muteStatus : "Listening…" }
   }
@@ -1184,7 +1189,10 @@ final class MobileAssistantController: ObservableObject {
     }
   }
   func playMessage(id: String, text: String) {
-    if playingMessageID == id { stopMessagePlayback(); return }
+    if playingMessageID == id {
+      if messagePlaybackPaused { resumeMessagePlayback() } else { stopMessagePlayback() }
+      return
+    }
     let spokenText = AssistantMessagePlaybackText.spoken(text)
     guard !spokenText.isEmpty else { return }
     // Drain only already captured samples, then gate the conversation input.
@@ -1200,99 +1208,138 @@ final class MobileAssistantController: ObservableObject {
     updateVoiceDraft()
   }
   private func speakNext() {
-    guard voiceActive, speech == nil, !speechQueue.isEmpty,
+    guard voiceActive, speech == nil, playback == nil, !speechQueue.isEmpty,
       !hearingSpeech, !transcribingSpeech, voiceTurns.isEmpty else { return }
     let message = speechQueue.removeFirst()
     startMessagePlayback(id: message.id, text: AssistantMessagePlaybackText.spoken(message.text), automatic: true)
   }
   private func startMessagePlayback(id: String, text: String, automatic: Bool) {
+    playback = AssistantSpeechPlayback(id: id, text: text, automatic: automatic)
+    resumeMessagePlayback()
+  }
+  func resumeMessagePlayback() {
+    guard let playback, speech == nil else { return }
     automaticSend?.cancel(); automaticSend = nil
-    do { try audio.preparePlayback() }
-    catch {
-      self.error = error.localizedDescription
-      if let draftTurn { scheduleVoiceSend(draftTurn) }
-      return
-    }
     let epoch = UUID(); playbackEpoch = epoch
-    playingMessageID = id; messagePlaybackPreparing = true
+    playingMessageID = playback.id; messagePlaybackPreparing = true; messagePlaybackPaused = false
     setReplyActive(true)
     status = "Preparing message…"
-    let identity = id.split(separator: ":", maxSplits: 2)
-    activeReplyRequest = automatic && identity.count == 3 && identity[0] == "assistant"
+    let identity = playback.id.split(separator: ":", maxSplits: 2)
+    activeReplyRequest = playback.automatic && identity.count == 3 && identity[0] == "assistant"
       && UUID(uuidString: String(identity[1])) != nil ? String(identity[1]) : nil
     if let request = activeReplyRequest { deliveredVoiceTurns[request]?.playbackPreparationAt = ProcessInfo.processInfo.systemUptime }
+    playback.record("startedOrResumed")
     speech = Task { [weak self] in
       guard let self else { return }
-      defer {
-        if playbackEpoch == epoch {
-          speech = nil; activeReplyRequest = nil; playingMessageID = nil; messagePlaybackPreparing = false
-          audio.stopPlayback(); setReplyActive(false)
-          if let draftTurn { scheduleVoiceSend(draftTurn) }
-          updateVoiceDraft()
-          if !voiceActive { status = connected ? "Your Mac is connected" : "Reconnecting to your Mac…" }
-          speakNext()
+      do {
+        try audio.preparePlayback()
+        #if DEBUG
+        if preview != nil {
+          messagePlaybackPreparing = false
+          if ProcessInfo.processInfo.arguments.contains("--clawdad-assistant-speech-recovery"),
+            previewPausedMessages.insert(playback.id).inserted {
+            try await Task.sleep(for: .milliseconds(300))
+            throw AssistantSpeechFailure.synthesisFailed
+          }
+          try await Task.sleep(for: .seconds(60))
+        } else {
+          try await playMessageBatches(playback, epoch: epoch)
         }
-      }
-      #if DEBUG
-      if preview != nil {
-        messagePlaybackPreparing = false
-        try? await Task.sleep(for: .seconds(60))
-        return
-      }
-      #endif
-      let batches = AssistantMessagePlaybackText.batches(text)
-      for (index, batch) in batches.enumerated() {
+        #else
+        try await playMessageBatches(playback, epoch: epoch)
+        #endif
         guard !Task.isCancelled, playbackEpoch == epoch else { return }
-        guard await playMessageBatch(batch, requestId: "message:\(id):\(index)", epoch: epoch) else { return }
+        playback.record("completed")
+        speech = nil; self.playback = nil; activeReplyRequest = nil
+        playingMessageID = nil; messagePlaybackPreparing = false
+        audio.stopPlayback(); setReplyActive(false)
+        if let draftTurn { scheduleVoiceSend(draftTurn) }
+        updateVoiceDraft()
+        if !voiceActive { status = connected ? "Your Mac is connected" : "Reconnecting to your Mac…" }
+        speakNext()
+      } catch {
+        guard !Task.isCancelled, playbackEpoch == epoch else { return }
+        playback.record("paused", reason: speechFailureReason(error))
+        speech = nil; messagePlaybackPreparing = false; messagePlaybackPaused = true
+        // Keep the cursor, exact current clip, remaining text and input gate.
+        // Resume continues this message; Stop/Interject releases the gate.
+        audio.stopPlayback(); status = "Speech paused"
       }
     }
   }
-  private func playMessageBatch(_ text: String, requestId: String, epoch: UUID) async -> Bool {
-    var played = 0, poll = false
-    var voiceSelection: AssistantValue?
-    var fallbackChunks: [String] = []
-    let deadline = Date().addingTimeInterval(180), firstAudioDeadline = Date().addingTimeInterval(12)
-    do {
-      while Date() < deadline {
-        try Task.checkCancellation()
-        guard playbackEpoch == epoch else { return false }
-        if played == 0, Date() >= firstAudioDeadline { throw AssistantProtocolError.timedOut }
-        var payload: [String: AssistantValue] = ["text": .string(text), "requestId": .string(requestId), "poll": .bool(poll)]
-        payload["voiceSelection"] = voiceSelection
-        let result = try await connection.request(.synthesize, payload: JSONEncoder().encode(payload))
-        try Task.checkCancellation()
-        guard playbackEpoch == epoch else { return false }
-        let body = try JSONDecoder().decode([String: AssistantValue].self, from: result)
-        let generated = body["audio"]?.object ?? [:]
-        if let chunks = generated["fallbackChunks"]?.array?.compactMap(\.string), !chunks.isEmpty { fallbackChunks = chunks }
-        voiceSelection = body["voiceSelection"] ?? voiceSelection
-        if generated["state"]?.string == "failed" { throw AssistantProtocolError.invalid }
-        let parts = generated["parts"]?.array ?? []
-        while played < parts.count {
-          guard let url = parts[played].object?["url"]?.string else { throw AssistantProtocolError.invalid }
-          let data = try await connection.request(.audio, payload: Data(url.utf8))
+  private func speechFailureReason(_ error: Error) -> String {
+    if let failure = error as? AssistantSpeechFailure { return failure.reason }
+    if error is CancellationError { return "audioInterrupted" }
+    let value = error as NSError
+    return "\(value.domain):\(value.code)"
+  }
+  private func playMessageBatches(_ cursor: AssistantSpeechPlayback, epoch: UUID) async throws {
+    while cursor.batch < cursor.batches.count {
+      try await playMessageBatch(cursor, epoch: epoch)
+      cursor.nextBatch()
+    }
+  }
+  private func playMessageBatch(_ cursor: AssistantSpeechPlayback, epoch: UUID) async throws {
+    var failures = 0
+    var waitingSince = ProcessInfo.processInfo.systemUptime
+    while true {
+      try Task.checkCancellation()
+      guard playbackEpoch == epoch else { throw CancellationError() }
+      do {
+        if cursor.pendingAudio == nil {
+          cursor.stage = "synthesis"
+          var payload: [String: AssistantValue] = ["text": .string(cursor.batches[cursor.batch]),
+            "requestId": .string(cursor.requestID), "poll": .bool(cursor.poll), "retry": .bool(cursor.retry)]
+          payload["voiceSelection"] = cursor.selection
+          let result = try await connection.request(.synthesize, payload: JSONEncoder().encode(payload))
           try Task.checkCancellation()
-          guard playbackEpoch == epoch else { return false }
-          messagePlaybackPreparing = false; status = "Speaking…"
-          try await audio.play(data)
-          played += 1
+          guard playbackEpoch == epoch else { throw CancellationError() }
+          let generated = try cursor.inspect(JSONDecoder().decode([String: AssistantValue].self, from: result))
+          cursor.poll = true; cursor.retry = false
+          let parts = generated["parts"]?.array?.compactMap(\.object) ?? []
+          if cursor.part < parts.count {
+            cursor.stage = "download"
+            guard let url = parts[cursor.part]["url"]?.string else { throw AssistantSpeechFailure.invalidAudio }
+            let data = try await connection.request(.audio, payload: Data(url.utf8))
+            try Task.checkCancellation()
+            guard playbackEpoch == epoch else { throw CancellationError() }
+            try cursor.verify(data, part: parts[cursor.part])
+            cursor.pendingAudio = data; cursor.position = 0
+            cursor.record("downloaded")
+          } else if generated["state"]?.string == "ready", cursor.part > 0 { return }
+          else if generated["state"]?.string == "failed" { throw AssistantSpeechFailure.synthesisFailed }
+          else {
+            guard ProcessInfo.processInfo.systemUptime - waitingSince < 12 else { throw AssistantSpeechFailure.stalled }
+            try await Task.sleep(for: .milliseconds(350))
+            continue
+          }
         }
-        if generated["state"]?.string == "ready", played > 0 { return true }
-        poll = true; try await Task.sleep(nanoseconds: 700_000_000)
-      }
-      throw AssistantProtocolError.timedOut
-    } catch {
-      if !Task.isCancelled, playbackEpoch == epoch {
-        let remaining = played == 0 ? text : fallbackChunks.dropFirst(played).joined(separator: "\n\n")
-        if !remaining.isEmpty {
-          // A stopped/superseded epoch has no consumer for late primary audio.
-          messagePlaybackPreparing = false; status = "Speaking · device voice"
-          do { try await audio.speakFallback(remaining); return !Task.isCancelled && playbackEpoch == epoch }
-          catch { if !Task.isCancelled, playbackEpoch == epoch { self.error = "Speech could not play. The message remains available to read or copy." } }
-        } else { self.error = "Speech stopped partway through. The full message remains available to read or copy." }
+        if let data = cursor.pendingAudio {
+          cursor.stage = "playback"
+          messagePlaybackPreparing = false; status = "Speaking…"
+          cursor.record("playing")
+          do { try await audio.play(data, from: cursor.position) }
+          catch { cursor.position = audio.playbackPosition; throw error }
+          try Task.checkCancellation()
+          guard playbackEpoch == epoch else { throw CancellationError() }
+          cursor.record("partCompleted")
+          cursor.part += 1; cursor.pendingAudio = nil; cursor.position = 0
+          failures = 0; waitingSince = ProcessInfo.processInfo.systemUptime
+        }
+      } catch {
+        try Task.checkCancellation()
+        guard playbackEpoch == epoch else { throw CancellationError() }
+        failures += 1
+        cursor.record("failed", reason: speechFailureReason(error))
+        // An audio-session interruption requires deliberate Resume. Integrity
+        // changes also pause immediately rather than playing mismatched audio.
+        if error is CancellationError || (error as? AssistantSpeechFailure)?.retryable == false || failures > 2 { throw error }
+        cursor.retry = true
+        messagePlaybackPreparing = true; status = "Recovering speech…"
+        try await Task.sleep(for: .milliseconds(350 * failures))
+        waitingSince = ProcessInfo.processInfo.systemUptime
       }
     }
-    return false
   }
 
 }
@@ -1374,6 +1421,7 @@ struct AssistantView: View {
                 }
                 AssistantChatHistory(snapshot: selectedHistory ?? controller.snapshot, selection: messageSelection,
                   playingMessageID: controller.playingMessageID, preparingPlayback: controller.messagePlaybackPreparing,
+                  pausedPlayback: controller.messagePlaybackPaused,
                   play: { controller.playMessage(id: $0, text: $1) },
                   watch: { controller.watch(tabId: $0, onWatch: onWatch) },
                   cancel: { controller.perform("cancel", args: ["jobId": .string($0)]) })
@@ -1430,6 +1478,7 @@ struct AssistantView: View {
           Text(controller.microphoneNotice).font(.caption).foregroundStyle(ClawDadTheme.gold).padding(.horizontal)
             .accessibilityIdentifier("clawdad.assistant.microphone-notice")
         }
+        if !controller.callVisible { AssistantSpeechRecoveryNotice(controller: controller) }
         AssistantChatComposer(controller: controller, draft: controller.chatDraft).padding(.horizontal)
         if controller.callVisible {
           AssistantCallBar(controller: controller)
@@ -1498,6 +1547,30 @@ struct AssistantView: View {
   }
 }
 
+struct AssistantSpeechRecoveryNotice: View {
+  @ObservedObject var controller: MobileAssistantController
+  var body: some View {
+    if controller.messagePlaybackPaused {
+      VStack(alignment: .leading, spacing: 0) {
+        Text("Speech paused. Your voice and place are saved.")
+          .font(.caption).fixedSize(horizontal: false, vertical: true)
+          .accessibilityIdentifier("clawdad.assistant.speech-paused")
+        HStack {
+          Button("Resume speech", systemImage: "play.fill") { controller.resumeMessagePlayback() }
+            .frame(minHeight: 44).contentShape(Rectangle())
+            .accessibilityHint("Continue the same message and voice from where playback stopped")
+            .accessibilityIdentifier("clawdad.assistant.resume-speech")
+          Spacer(minLength: 8)
+          Button("Stop", systemImage: "stop.fill") { controller.stopMessagePlayback() }
+            .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+            .accessibilityLabel("Stop reading this message")
+        }.font(.subheadline).buttonStyle(.plain).frame(minHeight: 44)
+      }.padding(.horizontal, 12).padding(.top, 6)
+        .foregroundStyle(ClawDadTheme.cream).background(Color.black)
+    }
+  }
+}
+
 struct AssistantCallBar: View {
   @ObservedObject var controller: MobileAssistantController
   @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -1505,6 +1578,7 @@ struct AssistantCallBar: View {
   var body: some View {
     if controller.callVisible {
       VStack(spacing: 0) {
+      AssistantSpeechRecoveryNotice(controller: controller)
       if !controller.microphoneNotice.isEmpty {
         Text(controller.microphoneNotice).font(.caption2).padding(.horizontal, 10).padding(.top, 4)
           .accessibilityIdentifier("clawdad.assistant.microphone-notice")

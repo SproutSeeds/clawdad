@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import http from "node:http";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
@@ -13,6 +14,7 @@ import {
   readTtsManifest,
   resolveTtsRuntimeConfig,
   splitTtsText,
+  splitTtsPlaybackText,
 } from "../lib/tts-cache.mjs";
 import { handleCloudEnvelope } from "../lib/cloud-host-connector.mjs";
 import { generateP256KeyPair, normalizeCloudEnvelope, signCloudEnvelope, verifyCloudEnvelopeSignature } from "../lib/cloud-protocol.mjs";
@@ -186,8 +188,9 @@ async function startFakeDocReaderSpeech({
       body: JSON.parse(body || "{}"),
     });
     await beforeSpeech(speechCalls.length);
-    if (speechStatus >= 400) {
-      res.writeHead(speechStatus, { "content-type": "application/json" });
+    const currentStatus = typeof speechStatus === "function" ? speechStatus(speechCalls.length) : speechStatus;
+    if (currentStatus >= 400) {
+      res.writeHead(currentStatus, { "content-type": "application/json" });
       res.end(errorBody || JSON.stringify({ message: "local speech failed" }));
       return;
     }
@@ -507,6 +510,112 @@ test("cached TTS generation reuses existing Doc Reader audio parts", async () =>
     assert.equal(first.manifest.parts[0].fileName, "part-001.wav");
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+
+test("partial speech retries append immutable chunks and survive cache reopen", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-voice-recovery-"));
+  const text = Array.from({length: 20}, (_, i) => `Section ${i}: The same careful voice reads this complete sentence without changing speakers.`).join("\n\n");
+  const config = {provider: "doc-reader", baseUrl: "http://speech.test", fallbackUrl: "", engine: "kokoro",
+    modelId: "kokoro-82m-v1", voiceId: "af_heart", chunkChars: 300};
+  const chunks = splitTtsPlaybackText(text, {chunkChars: 300});
+  let fail = true;
+  const generated = [];
+  const fetchImpl = async (_url, request) => {
+    const value = JSON.parse(request.body);
+    assert.equal(value.voice, "af_heart"); assert.equal(value.engine, "kokoro");
+    if (fail && generated.length) return new Response("fixture failure", {status: 500});
+    generated.push(value.text);
+    return new Response(Buffer.from(`fixed-voice:${value.text}`), {headers: {"content-type": "audio/wav"}});
+  };
+  try {
+    await assert.rejects(ensureCachedTtsAudio({projectPath: root, text, config, fetchImpl}), /fixture failure/);
+    const dirs = await (await import("node:fs/promises")).readdir(path.join(root, ".clawdad/audio/messages"));
+    const failed = await readTtsManifest(root, dirs[0]);
+    assert.equal(failed.state, "failed"); assert.equal(failed.parts.length, 1);
+    const firstPath = path.join(root, ".clawdad/audio/messages", failed.audioId, failed.parts[0].fileName);
+    const prefix = await readFile(firstPath);
+    fail = false;
+    const recovered = await ensureCachedTtsAudio({projectPath: root, text, config, fetchImpl});
+    assert.equal(recovered.manifest.state, "ready");
+    assert.deepEqual(generated, chunks); // No regenerated successful prefix and no lost text.
+    assert.deepEqual(await readFile(firstPath), prefix);
+    assert.deepEqual(recovered.manifest.parts[0], failed.parts[0]);
+    for (const [index, part] of recovered.manifest.parts.entries()) {
+      assert.equal(part.textHash, crypto.createHash("sha256").update(chunks[index]).digest("hex"));
+      assert.equal(part.audioHash, crypto.createHash("sha256").update(`fixed-voice:${chunks[index]}`).digest("hex"));
+    }
+    const replay = await ensureCachedTtsAudio({projectPath: root, text, config, fetchImpl: () => { throw new Error("service offline"); }});
+    assert.equal(replay.cached, true); assert.equal(generated.length, chunks.length);
+  } finally { await rm(root, {recursive: true, force: true}); }
+});
+
+test("partial speech refuses changed chunk plans and corrupted published bytes", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-voice-integrity-"));
+  const text = "The first sentence is a complete audible prefix. " + "Keep every remaining word. ".repeat(40);
+  const config = {provider: "doc-reader", baseUrl: "http://speech.test", fallbackUrl: "", engine: "kokoro", voiceId: "af_heart", chunkChars: 300};
+  let calls = 0;
+  const fetchImpl = async () => ++calls === 1 ? new Response("original", {headers: {"content-type": "audio/wav"}}) : new Response("fixture", {status: 500});
+  try {
+    await assert.rejects(ensureCachedTtsAudio({projectPath: root, text, config, fetchImpl}));
+    await assert.rejects(ensureCachedTtsAudio({projectPath: root, text, config: {...config, chunkChars: 600}, fetchImpl}), /different voice or chunk plan/);
+    const dirs = await (await import("node:fs/promises")).readdir(path.join(root, ".clawdad/audio/messages"));
+    const manifest = await readTtsManifest(root, dirs[0]);
+    const file = path.join(root, ".clawdad/audio/messages", manifest.audioId, manifest.parts[0].fileName);
+    await writeFile(file, "corrupt");
+    await assert.rejects(ensureCachedTtsAudio({projectPath: root, text, config, fetchImpl}), /integrity check/);
+    assert.equal(await readFile(file, "utf8"), "corrupt"); assert.equal(calls, 2);
+  } finally { await rm(root, {recursive: true, force: true}); }
+});
+
+test("authenticated speech poll retries a failed suffix and replay works with synthesis offline", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "clawdad-voice-http-recovery-"));
+  const home = path.join(root, "home"), projectPath = path.join(root, "project"), configPath = path.join(root, "server.json");
+  let failing = true, serviceClosed = false;
+  const service = await startFakeDocReaderSpeech({speechStatus: index => failing && index > 1 ? 500 : 200});
+  await mkdir(home, {recursive: true}); await mkdir(projectPath, {recursive: true});
+  await writeJson(path.join(home, "state.json"), {version: 3, projects: {[projectPath]: {status: "idle", active_session_id: "fixture",
+    sessions: {fixture: {slug: "Speech fixture", provider: "codex", status: "idle"}}}}});
+  const catalogScript = path.join(root, "catalog-fixture");
+  await writeFile(catalogScript, `#!/usr/bin/env node\nprocess.stdout.write(${JSON.stringify(JSON.stringify({tabs: [{path: projectPath, title: "Speech fixture"}]}))});\n`, {mode: 0o755});
+  const port = await freePort(), baseUrl = `http://127.0.0.1:${port}`;
+  await writeJson(configPath, {host: "127.0.0.1", port, authMode: "token", defaultProject: projectPath});
+  const child = spawn(process.execPath, [serverScript, "serve", "--config", configPath], {cwd: repoRoot,
+    env: {...process.env, CLAWDAD_HOME: home, CLAWDAD_CODEX_HOME: path.join(root, "codex"),
+      CLAWDAD_BIN_PATH: catalogScript, CLAWDAD_SERVER_TOKEN: "recovery-fixture", CLAWDAD_CODEX_APP_SERVER_MODE: "isolated", CLAWDAD_TTS_ENABLED: "true",
+      CLAWDAD_TTS_PROVIDER: "doc-reader", CLAWDAD_DOC_READER_URL: service.baseUrl,
+      CLAWDAD_DOC_READER_TTS_URL: service.baseUrl, CLAWDAD_DOC_READER_TTS_FALLBACK_URL: service.baseUrl}, stdio: "ignore"});
+  const text = "A complete first sentence spoken with the selected voice. " + "The remaining paragraph stays in that voice. ".repeat(30);
+  const request = {source: "remote-assist", project: projectPath, requestId: "same-message", text, prepare: true,
+    executionPreference: "paired-mac-first", allowRemoteFallback: false,
+    voiceSelection: {engine: "kokoro", modelId: "kokoro-82m-v1", voice: "af_heart", speed: 1}};
+  const post = async extra => {
+    const response = await fetch(`${baseUrl}/v1/tts/message`, {method: "POST", headers: {authorization: "Bearer recovery-fixture", "content-type": "application/json"}, body: JSON.stringify({...request, ...extra})});
+    return {status: response.status, body: await response.json()};
+  };
+  try {
+    await waitForHealth(baseUrl, child);
+    const initial = await post({}); assert.equal(initial.status, 202, JSON.stringify(initial.body));
+    const id = initial.body.audio.audioId;
+    await waitForCondition(async () => (await readTtsManifest(projectPath, id))?.state === "failed");
+    const failed = await post({poll: true});
+    assert.equal(failed.body.audio?.state, "failed", JSON.stringify(failed)); assert.equal(failed.body.audio.parts.length, 1);
+    const first = failed.body.audio.parts[0];
+    failing = false;
+    const retry = await post({poll: true, retry: true}); assert.equal(retry.status, 202);
+    await waitForCondition(async () => (await readTtsManifest(projectPath, id))?.state === "ready");
+    const ready = await post({poll: true});
+    assert.equal(ready.status, 200); assert.equal(ready.body.audio.voiceId, "af_heart");
+    assert.equal(ready.body.audio.engine, "kokoro"); assert.deepEqual(ready.body.audio.parts[0], first);
+    assert.equal(service.speechCalls.filter(call => call.body.text === splitTtsPlaybackText(text)[0]).length, 1);
+    await service.close(); serviceClosed = true;
+    const replay = await post({poll: false});
+    assert.equal(replay.status, 200); assert.equal(replay.body.cached, true);
+    assert.deepEqual(replay.body.audio.parts, ready.body.audio.parts);
+  } finally {
+    await stopServer(child); if (!serviceClosed) await service.close();
+    await rm(root, {recursive: true, force: true, maxRetries: 8, retryDelay: 100});
   }
 });
 

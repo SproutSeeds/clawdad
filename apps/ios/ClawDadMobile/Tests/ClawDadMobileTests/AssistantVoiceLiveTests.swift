@@ -151,7 +151,9 @@ private final class AssistantLiveTransport: AssistantTransport {
       body["source"] = .string("remote-assist"); body["project"] = .string(""); body["kind"] = .string("response")
       body["prepare"] = .bool(true); body["executionPreference"] = .string("paired-mac-first"); body["allowRemoteFallback"] = .bool(false)
       if body["voiceSelection"] == nil { body["voiceSelection"] = try await json("/v1/tts/voices")["selection"] }
-      return try await http("/v1/tts/message", body: JSONEncoder().encode(body))
+      var result = try JSONDecoder().decode([String: AssistantValue].self, from: await http("/v1/tts/message", body: JSONEncoder().encode(body)))
+      result["voiceSelection"] = body["voiceSelection"]
+      return try JSONEncoder().encode(result)
     case .audio: return try await http(String(decoding: payload, as: UTF8.self))
     case .imageUpload: throw AssistantProtocolError.invalid
     }

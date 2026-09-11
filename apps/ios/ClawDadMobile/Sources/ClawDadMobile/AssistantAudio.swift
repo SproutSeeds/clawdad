@@ -22,7 +22,8 @@ protocol AssistantAudioIO: AnyObject {
   func setReplyActive(_ active: Bool)
   func preparePlayback() throws
   func play(_ data: Data) async throws
-  func speakFallback(_ text: String) async throws
+  var playbackPosition: TimeInterval { get }
+  func play(_ data: Data, from position: TimeInterval) async throws
   func stopPlayback()
   func resetUtterance()
   func finishUtterance()
@@ -37,7 +38,10 @@ extension AssistantAudioIO {
   func unmuteCapture() async throws { muted = false; resetUtterance() }
   func previewUtterance() {}
   func preparePlayback() throws {}
-  func speakFallback(_ text: String) async throws { throw AssistantProtocolError.invalid }
+  var playbackPosition: TimeInterval { 0 }
+  func play(_ data: Data, from position: TimeInterval) async throws {
+    guard position == 0 else { throw AssistantProtocolError.invalid }; try await play(data)
+  }
 }
 
 @MainActor
@@ -253,7 +257,11 @@ final class AssistantAudio: AssistantAudioIO {
     replyAudio.stop()
     if let standalonePlayback { self.standalonePlayback = nil; MobileAudioSession.shared.release(standalonePlayback) }
   }
-  func speakFallback(_ text: String) async throws { try await replyAudio.speakFallback(text) }
+  var playbackPosition: TimeInterval { replyAudio.position }
+  func play(_ data: Data, from position: TimeInterval) async throws {
+    guard owner != nil || standalonePlayback != nil else { throw CancellationError() }
+    try await replyAudio.play(data, from: position)
+  }
   func setReplyActive(_ active: Bool) {
     replyActive = active
     input.setReplyActive(active, at: ProcessInfo.processInfo.systemUptime)

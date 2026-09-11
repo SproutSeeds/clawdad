@@ -53,6 +53,7 @@ struct AssistantChatHistory: View {
   var selection: AssistantMessageSelection? = nil
   var playingMessageID: String? = nil
   var preparingPlayback = false
+  var pausedPlayback = false
   var play: (String, String) -> Void = { _, _ in }
   var watch: (String) -> Void
   var cancel: (String) -> Void
@@ -111,13 +112,13 @@ struct AssistantChatHistory: View {
   private func speaker(_ text: String, id: String) -> some View {
     let active = playingMessageID == id
     return Button { play(id, text) } label: {
-      Image(systemName: active ? "stop.circle.fill" : "speaker.wave.2")
+      Image(systemName: active ? (pausedPlayback ? "play.circle.fill" : "stop.circle.fill") : "speaker.wave.2")
         .font(.system(size: 18))
         .frame(width: 44, height: 44)
         .background(active ? ClawDadTheme.gold.opacity(0.18) : .clear, in: Circle())
     }.buttonStyle(.plain).disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-      .accessibilityLabel(active ? "Stop reading message" : "Read message aloud")
-      .accessibilityValue(active ? (preparingPlayback ? "Preparing audio" : "Playing") : "Stopped")
+      .accessibilityLabel(active ? (pausedPlayback ? "Resume reading message" : "Stop reading message") : "Read message aloud")
+      .accessibilityValue(active ? (pausedPlayback ? "Paused" : preparingPlayback ? "Preparing audio" : "Playing") : "Stopped")
       .accessibilityAddTraits(active ? .isSelected : [])
       .accessibilityIdentifier("clawdad.assistant.speak.\(id)")
   }

@@ -2,6 +2,43 @@ import XCTest
 
 @MainActor
 final class AssistantUITests: XCTestCase {
+  func testSpeechRecoveryControlsKeepTextConversationAndCallState() { speechRecoveryCheck(largeText: false) }
+  func testSpeechRecoveryControlsAtLargeTextSize() { speechRecoveryCheck(largeText: true) }
+  private func speechRecoveryCheck(largeText: Bool) {
+    continueAfterFailure = false
+    let app = XCUIApplication()
+    app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-assistant-test",
+      "--clawdad-assistant-reset-draft", "--clawdad-assistant-speech-recovery", "--clawdad-assistant-history-test"]
+    if largeText { app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXL"] }
+    app.launch(); XCTAssertTrue(app.buttons["clawdad.assistant.chat"].waitForExistence(timeout: 15)); app.buttons["clawdad.assistant.chat"].tap()
+    let speakers = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'clawdad.assistant.speak.'"))
+    XCTAssertTrue(speakers.firstMatch.waitForExistence(timeout: 5))
+    let first = speakers.allElementsBoundByIndex.first(where: { $0.isHittable })!
+    first.tap()
+    let resume = app.buttons["clawdad.assistant.resume-speech"]
+    XCTAssertTrue(resume.waitForExistence(timeout: 5)); XCTAssertTrue(resume.isHittable)
+    XCTAssertGreaterThanOrEqual(resume.frame.height, 44)
+    XCTAssertFalse(app.buttons["End voice conversation"].exists)
+    saveScreenshot(app, largeText ? "Speech recovery large text" : "Speech recovery text conversation")
+    resume.tap(); XCTAssertFalse(resume.exists)
+    app.buttons["Stop reading message"].firstMatch.tap()
+    app.buttons["clawdad.assistant.start-voice"].tap()
+    let mic = app.buttons["clawdad.assistant.mute"]
+    XCTAssertTrue(mic.waitForExistence(timeout: 5)); mic.tap()
+    for _ in 0..<6 where !speakers.allElementsBoundByIndex.contains(where: { $0.isHittable && $0.identifier != first.identifier }) {
+      app.scrollViews["clawdad.assistant.history"].swipeUp()
+    }
+    let second = speakers.allElementsBoundByIndex.first(where: { $0.isHittable && $0.identifier != first.identifier })!
+    second.tap(); XCTAssertTrue(resume.waitForExistence(timeout: 5))
+    XCTAssertEqual(mic.label, "Unmute Assistant")
+    saveScreenshot(app, largeText ? "Speech recovery muted call large text" : "Speech recovery muted call")
+    let back = app.buttons["clawdad.assistant.back"]
+    back.tap(); XCTAssertTrue(resume.waitForExistence(timeout: 5)); XCTAssertTrue(resume.isHittable)
+    XCTAssertTrue(app.buttons["End voice conversation"].exists)
+    saveScreenshot(app, largeText ? "Shared recovery bar large text" : "Shared recovery bar outside chat")
+    resume.tap(); XCTAssertFalse(resume.exists); XCTAssertEqual(mic.label, "Unmute Assistant")
+    app.buttons["End voice conversation"].tap()
+  }
   func testMaximumResearchPasteSurvivesReopenRestartAndOneSend() { capacityPasteCheck(oversize: false) }
   func testOversizeResearchPasteKeepsDraftAtLargeTextSize() { capacityPasteCheck(oversize: true) }
   private func capacityPasteCheck(oversize: Bool) {

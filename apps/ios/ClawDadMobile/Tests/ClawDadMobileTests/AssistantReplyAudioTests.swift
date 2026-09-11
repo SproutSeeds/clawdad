@@ -32,6 +32,20 @@ final class AssistantReplyAudioTests: XCTestCase {
     do { try await player.play(Data()); XCTFail("Invalid audio must fail") } catch {}
     XCTAssertFalse(started)
   }
+  func testNativePositionSurvivesStopAndSameClipCanResumeWithoutRepeatingItsPrefix() async throws {
+    let player = AssistantReplyAudio(volume: 0)
+    let data = wav(rate: 24000, seconds: 0.7)
+    let first = Task { try await player.play(data) }
+    try await Task.sleep(for: .milliseconds(230))
+    player.stop()
+    let position = player.position
+    XCTAssertGreaterThan(position, 0.1); XCTAssertLessThan(position, 0.7)
+    do { try await first.value; XCTFail("Stopped clip should throw") } catch {}
+    let began = ProcessInfo.processInfo.systemUptime
+    try await player.play(data, from: position)
+    XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - began, 0.65)
+    XCTAssertGreaterThanOrEqual(player.position, 0.65)
+  }
   private func wav(rate: Double, seconds: Double) -> Data {
     var data = assistantWAV(Array(repeating: Float(0), count: Int(rate * seconds)), sampleRate: 16000)
     for (offset, value) in [(24, UInt32(rate)), (28, UInt32(rate) * 2)] {

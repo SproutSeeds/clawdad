@@ -10,14 +10,17 @@ final class AssistantReplyAudio {
   private var delegate: AssistantClipDelegate?
   private var completion: CheckedContinuation<Void, Error>?
   private var epoch = UUID()
-  private let fallback = AssistantDeviceSpeech()
+  private var stoppedPosition: TimeInterval = 0
+  var position: TimeInterval { player?.currentTime ?? stoppedPosition }
   private let volume: Float
   init(volume: Float = 1) { self.volume = volume }
 
-  func play(_ data: Data) async throws {
+  func play(_ data: Data, from position: TimeInterval = 0) async throws {
     try Task.checkCancellation()
     stop()
+    stoppedPosition = position
     let player = try AVAudioPlayer(data: data)
+    guard position.isFinite, position >= 0, position <= player.duration else { throw AssistantReplyAudioError.playbackFailed }
     player.volume = volume
     self.player = player
     let epoch = UUID()
@@ -29,6 +32,7 @@ final class AssistantReplyAudio {
           guard let self, self.epoch == epoch else { return }
           let done = completion
           completion = nil
+          stoppedPosition = (success ? self.player?.duration : self.player?.currentTime) ?? stoppedPosition
           self.player = nil
           self.delegate = nil
           if success { done?.resume() }
@@ -36,7 +40,9 @@ final class AssistantReplyAudio {
         }
         self.delegate = delegate
         player.delegate = delegate
-        guard player.prepareToPlay(), player.play() else {
+        let prepared = player.prepareToPlay()
+        player.currentTime = position
+        guard prepared, player.play() else {
           completion = nil
           self.player = nil
           self.delegate = nil
@@ -54,7 +60,7 @@ final class AssistantReplyAudio {
   }
 
   func stop() {
-    fallback.stop()
+    stoppedPosition = player?.currentTime ?? stoppedPosition
     epoch = UUID()
     let done = completion
     completion = nil
@@ -64,61 +70,6 @@ final class AssistantReplyAudio {
     done?.resume(throwing: CancellationError())
   }
 
-  func speakFallback(_ text: String) async throws {
-    stop()
-    fallback.onStarted = { [weak self] in self?.onStarted?() }
-    try await fallback.speak(text)
-  }
-}
-
-/// Device speech is a per-reply fallback, never a saved voice preference. It
-/// shares the current playback audio session and cannot activate a microphone.
-@MainActor
-private final class AssistantDeviceSpeech: NSObject, AVSpeechSynthesizerDelegate {
-  private let synthesizer = AVSpeechSynthesizer()
-  private var completion: CheckedContinuation<Void, Error>?
-  private var utterance: AVSpeechUtterance?
-  var onStarted: (() -> Void)?
-  override init() { super.init(); synthesizer.delegate = self }
-  func speak(_ text: String) async throws {
-    try Task.checkCancellation()
-    stop()
-    let item = AVSpeechUtterance(string: text)
-    utterance = item
-    let identifier = ObjectIdentifier(item)
-    try await withTaskCancellationHandler {
-      try await withCheckedThrowingContinuation { continuation in
-        completion = continuation
-        synthesizer.speak(item)
-      }
-    } onCancel: { Task { @MainActor [weak self] in
-      guard let self, let active = self.utterance, ObjectIdentifier(active) == identifier else { return }
-      self.stop()
-    } }
-  }
-  func stop() {
-    let done = completion; completion = nil; utterance = nil
-    synthesizer.stopSpeaking(at: .immediate)
-    done?.resume(throwing: CancellationError())
-  }
-  nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
-    let identifier = ObjectIdentifier(utterance)
-    Task { @MainActor [weak self] in guard let self, let active = self.utterance, ObjectIdentifier(active) == identifier else { return }; self.onStarted?() }
-  }
-  nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-    let identifier = ObjectIdentifier(utterance)
-    Task { @MainActor [weak self] in
-      guard let self, let active = self.utterance, ObjectIdentifier(active) == identifier else { return }
-      let done = completion; completion = nil; self.utterance = nil; done?.resume()
-    }
-  }
-  nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-    let identifier = ObjectIdentifier(utterance)
-    Task { @MainActor [weak self] in
-      guard let self, let active = self.utterance, ObjectIdentifier(active) == identifier else { return }
-      let done = completion; completion = nil; self.utterance = nil; done?.resume(throwing: CancellationError())
-    }
-  }
 }
 
 private enum AssistantReplyAudioError: LocalizedError {

@@ -1,4 +1,5 @@
 import XCTest
+import ClawDadRemoteAssistProtocol
 @testable import ClawDadMobile
 
 @MainActor
@@ -83,21 +84,114 @@ final class AssistantMessagePlaybackTests: XCTestCase {
     XCTAssertEqual(connection.sentTexts, ["Preserve final words"])
     XCTAssertFalse(controller.muted); XCTAssertTrue(controller.voiceActive)
   }
-  func testFailedPrimaryUsesOnlyRemainingFallbackAndAStoppedMessageNeverReplays() async throws {
+  func testFailedDownloadResumesSameVoiceAndOnlyRemainingPartAcrossReconnect() async throws {
     let connection = AssistantTestTransport(), audio = AssistantTestAudio()
     let controller = MobileAssistantController(connection: connection, audio: audio, defaults: nil)
     defer { controller.stop() }
+    var failing = true
+    connection.download = { data in if data == Data("two".utf8) && failing { throw AssistantProtocolError.disconnected }; return data }
+    controller.playMessage(id: "recovery", text: "First and second part")
+    try await until { audio.played.count == 1 }; audio.completeClip()
+    try await until { controller.messagePlaybackPaused }
+    XCTAssertEqual(audio.played, [Data("one".utf8)])
+    XCTAssertTrue(audio.fallbackTexts.isEmpty)
+    connection.connected = false; connection.onChange?()
+    controller.open()
+    XCTAssertTrue(controller.messagePlaybackPaused)
+    connection.connected = true; connection.onChange?(); failing = false
+    controller.playMessage(id: "recovery", text: "First and second part")
+    try await until { audio.played.count == 2 }; audio.completeClip()
+    try await until { controller.playingMessageID == nil }
+    XCTAssertEqual(audio.played, [Data("one".utf8), Data("two".utf8)])
+    XCTAssertTrue(connection.synthesisPayloads.dropFirst().allSatisfy { $0["voiceSelection"]?.object?["voice"]?.string == "af_heart" })
+    XCTAssertEqual(audio.starts, 0); XCTAssertTrue(connection.sentTexts.isEmpty)
+  }
+  func testPlaybackInterruptionResumesIdenticalClipAtSavedPositionThenPlaysNext() async throws {
+    let connection = AssistantTestTransport(), audio = AssistantTestAudio()
+    let controller = MobileAssistantController(connection: connection, audio: audio, defaults: nil)
+    defer { controller.stop() }
+    controller.playMessage(id: "position", text: "First and second part")
+    try await until { audio.played.count == 1 }
+    audio.failClip(at: 2.25, interrupted: true)
+    try await until { controller.messagePlaybackPaused }
+    controller.resumeMessagePlayback()
+    try await until { audio.played.count == 2 }
+    XCTAssertEqual(audio.played[0], audio.played[1]); XCTAssertEqual(audio.playbackOffsets, [0, 2.25])
+    audio.completeClip(); try await until { audio.played.count == 3 }; audio.completeClip()
+    try await until { controller.playingMessageID == nil }
+    XCTAssertEqual(audio.played.last, Data("two".utf8))
+  }
+  func testVoiceChangeOrCacheRewritePausesBeforePlayingDifferentAudio() async throws {
+    for changeVoice in [true, false] {
+      let connection = AssistantTestTransport(), audio = AssistantTestAudio()
+      let controller = MobileAssistantController(connection: connection, audio: audio, defaults: nil)
+      defer { controller.stop() }
+      connection.synthesis = {
+        let changed = connection.syntheses > 1
+        var generated: [String: Any] = ["state": "ready", "parts": [["url": changed && !changeVoice ? "rewritten" : "one"], ["url": "two"]]]
+        if changed && changeVoice { generated["voiceId"] = "different" }
+        return ["audio": generated]
+      }
+      controller.playMessage(id: "identity", text: "Use the same voice")
+      try await until { audio.played.count == 1 }; audio.completeClip()
+      try await until { controller.messagePlaybackPaused }
+      XCTAssertEqual(audio.played.count, 1); XCTAssertTrue(audio.fallbackTexts.isEmpty)
+      XCTAssertEqual(connection.syntheses, 2)
+    }
+  }
+  func testVoicePinnedAcrossLongMessageBatchesAndReplayStartsAtBeginning() async throws {
+    let connection = AssistantTestTransport(), audio = AssistantTestAudio()
+    let controller = MobileAssistantController(connection: connection, audio: audio, defaults: nil)
+    defer { controller.stop() }
+    let text = String(repeating: "A long sentence. ", count: 1600)
+    connection.synthesis = { ["audio": ["state": "ready", "parts": [["url": "one"]]]] }
+    controller.playMessage(id: "long", text: text)
+    try await until { audio.played.count == 1 }; audio.completeClip()
+    try await until { audio.played.count == 2 }; audio.completeClip()
+    try await until { controller.playingMessageID == nil }
+    XCTAssertTrue(connection.synthesisPayloads.dropFirst().allSatisfy { $0["voiceSelection"]?.object?["voice"]?.string == "af_heart" })
+    controller.playMessage(id: "long", text: text)
+    try await until { audio.played.count == 3 }
+    XCTAssertEqual(audio.playbackOffsets, [0, 0, 0])
+  }
+  func testDelayedStartupRecoversAutomaticallyAndCancellationDuringBackoffStaysStopped() async throws {
+    let connection = AssistantTestTransport(), audio = AssistantTestAudio()
+    let controller = MobileAssistantController(connection: connection, audio: audio, defaults: nil)
+    defer { controller.stop() }
+    connection.synthesis = {
+      connection.syntheses <= 2 ? ["audio": ["state": "failed"]]
+        : ["audio": ["state": "ready", "parts": [["url": "recovered"]]]]
+    }
+    controller.playMessage(id: "cold-start", text: "Wait briefly for the chosen model")
+    try await until { audio.played.count == 1 }
+    XCTAssertEqual(connection.syntheses, 3); XCTAssertFalse(controller.messagePlaybackPaused)
+    XCTAssertTrue(audio.fallbackTexts.isEmpty)
+    audio.completeClip(); try await until { controller.playingMessageID == nil }
     connection.synthesis = { ["audio": ["state": "failed"]] }
-    controller.playMessage(id: "fallback", text: "**Exact** fallback text.")
-    try await until { !audio.fallbackTexts.isEmpty }
-    XCTAssertEqual(audio.fallbackTexts, ["Exact fallback text."])
+    controller.playMessage(id: "cancel-recovery", text: "Cancel during recovery")
+    try await until { connection.syntheses >= 5 }
     controller.stopMessagePlayback()
-    connection.synthesis = nil
-    controller.playMessage(id: "recovered", text: "Use primary again")
-    try await until { !audio.played.isEmpty }
-    XCTAssertEqual(controller.playingMessageID, "recovered")
-    XCTAssertEqual(audio.fallbackTexts.count, 1)
-    XCTAssertEqual(audio.starts, 0)
+    try await Task.sleep(for: .milliseconds(800))
+    XCTAssertNil(controller.playingMessageID); XCTAssertFalse(controller.replyAudioActive)
+    XCTAssertEqual(audio.played.count, 1); XCTAssertEqual(connection.syntheses, 5)
+  }
+  func testLegacyCacheMetadataSurvivesMacUpgradeButWrongInitialVoiceCannotPlay() async throws {
+    let connection = AssistantTestTransport(), audio = AssistantTestAudio()
+    let controller = MobileAssistantController(connection: connection, audio: audio, defaults: nil)
+    defer { controller.stop() }
+    connection.synthesis = {
+      var first: [String: Any] = ["url": "one"]
+      if connection.syntheses > 1 { first["textHash"] = NSNull(); first["audioHash"] = NSNull() }
+      return ["audio": ["state": "ready", "engine": NSNull(), "parts": [first, ["url": "two"]]]]
+    }
+    controller.playMessage(id: "legacy-cache", text: "Keep playing through a Mac upgrade")
+    try await until { audio.played.count == 1 }; audio.completeClip()
+    try await until { audio.played.count == 2 }; audio.completeClip()
+    try await until { controller.playingMessageID == nil }
+    connection.synthesis = { ["audio": ["state": "ready", "voiceId": "another-voice", "parts": [["url": "wrong"]]]] }
+    controller.playMessage(id: "wrong-voice", text: "Use only my chosen voice")
+    try await until { controller.messagePlaybackPaused }
+    XCTAssertEqual(audio.played.count, 2); XCTAssertTrue(audio.fallbackTexts.isEmpty)
   }
   func testFormattingAndLongUnicodeBatchesPreserveContent() {
     let text = "# Results\n- **Passed** 4 checks.\n[Details](https://example.com)\n```swift\nlet code = \"**literal**\"\n```"
