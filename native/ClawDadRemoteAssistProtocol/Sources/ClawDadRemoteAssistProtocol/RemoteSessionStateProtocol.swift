@@ -12,9 +12,10 @@ public struct RemoteSessionStateMessage: Codable, Equatable, Sendable {
   public var supportsImageAttachments: Bool? = nil
   public var supportsQuickChat: Bool? = nil
   public var supportsTerminalTabClose: Bool? = nil
+  public var supportsKeyChords: Bool? = nil
   public var requestId: String? = nil
 
-  public static func state(screenLocked: Bool, supportsDictation: Bool? = nil, supportsTerminalReadAloud: Bool? = nil, supportsInlineSpeech: Bool? = nil, supportsImageAttachments: Bool? = nil, supportsQuickChat: Bool? = nil, supportsTerminalTabClose: Bool? = nil, requestId: String? = nil) -> RemoteSessionStateMessage {
+  public static func state(screenLocked: Bool, supportsDictation: Bool? = nil, supportsTerminalReadAloud: Bool? = nil, supportsInlineSpeech: Bool? = nil, supportsImageAttachments: Bool? = nil, supportsQuickChat: Bool? = nil, supportsTerminalTabClose: Bool? = nil, supportsKeyChords: Bool? = nil, requestId: String? = nil) -> RemoteSessionStateMessage {
     RemoteSessionStateMessage(
       type: messageType,
       screenLocked: screenLocked,
@@ -24,6 +25,7 @@ public struct RemoteSessionStateMessage: Codable, Equatable, Sendable {
       supportsImageAttachments: supportsImageAttachments,
       supportsQuickChat: supportsQuickChat,
       supportsTerminalTabClose: supportsTerminalTabClose,
+      supportsKeyChords: supportsKeyChords,
       requestId: requestId
     )
   }
@@ -74,6 +76,7 @@ public struct RemoteSessionCapabilities: Equatable, Sendable {
   public private(set) var imageAttachments: Bool?
   public private(set) var quickChat: Bool?
   public private(set) var terminalTabClose: Bool?
+  public private(set) var keyChords: Bool?
 
   public init() {}
 
@@ -92,7 +95,8 @@ public struct RemoteSessionCapabilities: Equatable, Sendable {
     if let value = state.supportsImageAttachments { imageAttachments = value }
     if let value = state.supportsQuickChat { quickChat = value }
     if let value = state.supportsTerminalTabClose { terminalTabClose = value }
-    received = received || state.supportsDictation != nil || state.supportsTerminalReadAloud != nil || state.supportsInlineSpeech != nil || state.supportsImageAttachments != nil || state.supportsQuickChat != nil || state.supportsTerminalTabClose != nil
+    if let value = state.supportsKeyChords { keyChords = value }
+    received = received || state.supportsDictation != nil || state.supportsTerminalReadAloud != nil || state.supportsInlineSpeech != nil || state.supportsImageAttachments != nil || state.supportsQuickChat != nil || state.supportsTerminalTabClose != nil || state.supportsKeyChords != nil
     if received { timedOut = false }
     return true
   }

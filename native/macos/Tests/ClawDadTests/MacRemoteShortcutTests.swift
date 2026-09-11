@@ -1,10 +1,53 @@
 import Carbon.HIToolbox
+import AppKit
 import ClawDadRemoteAssistProtocol
 import CoreGraphics
 import XCTest
 @testable import ClawDad
 
 final class MacRemoteShortcutTests: XCTestCase {
+  @MainActor
+  func testShiftLeftSelectsOnlyPreviousCharacterInDisposableNativeEditor() throws {
+    _ = NSApplication.shared
+    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 120),
+      styleMask: [.borderless], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    let editor = NSTextView(frame: window.contentView!.bounds)
+    window.contentView?.addSubview(editor)
+    editor.string = "ABCDE"; editor.setSelectedRange(NSRange(location: 5, length: 0))
+    window.makeFirstResponder(editor)
+    // The real wire codec and native key plan feed AppKit's normal text-input
+    // interpretation. This isolated window is never shown or made key.
+    let request = try RemoteInputCodec.decode(RemoteInputCodec.encode(
+      .chordRequest(chord: .init(key: "left", modifiers: [.shift]), requestId: "native-editor")))
+    let plan = try XCTUnwrap(macRemoteChordPlan(for: try XCTUnwrap(request.chord)))
+    // The window server normally supplies function-key characters when posted
+    // CGEvents become NSEvents. Supply that translation for this unshown editor.
+    let character = String(UnicodeScalar(NSLeftArrowFunctionKey)!)
+    let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
+      modifierFlags: NSEvent.ModifierFlags(rawValue: UInt(plan.flags.rawValue)), timestamp: 0,
+      windowNumber: window.windowNumber, context: nil, characters: character,
+      charactersIgnoringModifiers: character, isARepeat: false, keyCode: plan.keyCode))
+    editor.keyDown(with: event)
+    XCTAssertEqual(editor.selectedRange(), NSRange(location: 4, length: 1))
+    XCTAssertEqual(editor.string, "ABCDE")
+    window.close()
+  }
+
+  func testShiftLeftAndCustomModifiersUseBalancedExistingNativeEvents() throws {
+    let plan = try XCTUnwrap(macRemoteChordPlan(for: .init(key: "left", modifiers: [.shift])))
+    XCTAssertEqual(plan, .init(keyCode: 123, flags: .maskShift, delivery: .focusedApplication))
+    let steps = macRemoteKeyEventSteps(keyCode: plan.keyCode, flags: plan.flags)
+    XCTAssertEqual(steps.map(\.keyCode), [56, 123, 123, 56])
+    XCTAssertEqual(steps.map(\.keyDown), [true, true, false, false])
+    XCTAssertEqual(steps.last?.flags, [])
+    let custom = try XCTUnwrap(macRemoteChordPlan(for: .init(key: "right", modifiers: [.shift, .option])))
+    XCTAssertEqual(custom.flags, [.maskShift, .maskAlternate])
+    XCTAssertEqual(custom.keyCode, 124)
+    XCTAssertEqual(custom.delivery, .focusedApplication)
+    for key in RemoteKeyChord.namedKeys { XCTAssertNotNil(macRemoteChordPlan(for: .init(key: key))) }
+    XCTAssertNil(macRemoteChordPlan(for: .init(key: "unsupported")))
+  }
   func testControlShortcutsStayInsideTheFocusedApplication() {
     let expected: [(RemoteShortcut, Int)] = [
       (.controlC, kVK_ANSI_C),

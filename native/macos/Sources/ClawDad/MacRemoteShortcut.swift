@@ -43,6 +43,22 @@ private let macRemoteModifierKeys = [
   ),
 ]
 
+func macRemoteChordPlan(for chord: RemoteKeyChord) -> MacRemoteShortcutPlan? {
+  guard chord.isValid else { return nil }
+  let named: [String: CGKeyCode] = [
+    "forward_delete": 117, "home": 115, "end": 119, "page_up": 116, "page_down": 121,
+    "f1": 122, "f2": 120, "f3": 99, "f4": 118, "f5": 96, "f6": 97,
+    "f7": 98, "f8": 100, "f9": 101, "f10": 109, "f11": 103, "f12": 111,
+  ]
+  guard let stroke = assistantKeyStroke(named[chord.key] == nil ? chord.key : "space",
+    modifiers: chord.orderedModifiers.map(\.rawValue)) else { return nil }
+  // Match the two existing system shortcuts; all other combinations retain
+  // the same authorized focused-input path as existing special keys.
+  let system = chord.modifiers == [.command] && ["t", "tab"].contains(chord.key)
+  return .init(keyCode: named[chord.key] ?? stroke.keyCode, flags: stroke.flags,
+    delivery: system ? .system : .focusedApplication)
+}
+
 func macRemoteKeyEventSteps(
   keyCode: CGKeyCode,
   flags: CGEventFlags

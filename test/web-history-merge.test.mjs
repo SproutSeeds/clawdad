@@ -801,7 +801,7 @@ test("iPhone Remote Assist keeps one keyboard-safe launcher in the corner and ne
   assert.match(remoteAssistSource, /RemoteAssistLauncherButtonStyle/u);
   assert.match(remoteAssistSource, /\.frame\(width: 36, height: 36\)/u);
   assert.match(remoteAssistSource, /mainControlPanelWidth: CGFloat = 244/u);
-  assert.match(remoteAssistSource, /shortcutControlPanelWidth: CGFloat = 196/u);
+  assert.match(remoteAssistSource, /shortcutControlPanelWidth: CGFloat = 260/u);
   assert.match(
     remoteAssistSource,
     /\.frame\(width: controlPanelWidth, alignment: \.trailing\)\s*\.padding\(10\)/u,
@@ -821,11 +821,12 @@ test("iPhone Remote Assist keeps one keyboard-safe launcher in the corner and ne
   assert.match(remoteAssistSource, /"Open Remote Assist controls"/u);
   assert.match(remoteAssistSource, /RemoteControlCaption\("Special keys", systemImage: "keyboard\.badge\.ellipsis"\)/u);
   assert.match(remoteAssistSource, /controlPage = \.shortcuts/u);
-  assert.match(remoteAssistSource, /Text\("Special Commands"\)/u);
+  const specialKeysSource = await readFile(path.join(path.dirname(iosRemoteAssistPath), "RemoteSpecialKeys.swift"), "utf8");
+  assert.match(remoteAssistSource, /RemoteSpecialKeysPanel\(store: specialKeys/u);
   assert.match(remoteAssistSource, /accessibilityLabel\("Back to Remote Assist controls"\)/u);
   assert.match(
     remoteAssistSource,
-    /ForEach\(RemoteShortcut\.allCases[\s\S]*collapseControls\(\)[\s\S]*controller\.sendShortcut\(shortcut\)/u,
+    /controller\.sendSpecialKey\(preset\)[\s\S]*collapseControls\(\)/u,
   );
   assert.match(remoteAssistSource, /func collapseControls\(\) \{\s*controlsExpanded = false\s*controlPage = \.primary/u);
   assert.match(inputProtocolSource, /case controlC = "control_c"/u);
@@ -833,10 +834,10 @@ test("iPhone Remote Assist keeps one keyboard-safe launcher in the corner and ne
   assert.match(inputProtocolSource, /case controlL = "control_l"/u);
   assert.match(inputProtocolSource, /case commandT = "command_t"/u);
   assert.match(inputProtocolSource, /case commandTab = "command_tab"/u);
-  assert.match(remoteAssistSource, /case \.commandT: isWindows \? "⌃T" : "⌘T"/u);
-  assert.match(remoteAssistSource, /case \.commandTab: isWindows \? "alt⇥" : "⌘⇥"/u);
+  assert.match(specialKeysSource, /case \.commandT: isWindows \? "⌃T" : "⌘T"/u);
+  assert.match(specialKeysSource, /case \.commandTab: isWindows \? "alt⇥" : "⌘⇥"/u);
   assert.match(
-    remoteAssistSource,
+    specialKeysSource,
     /case \.commandT:[\s\S]*"Control T, open a new tab in the active Windows app"[\s\S]*"Command T, open a new tab in the active Mac app"/u,
   );
   assert.match(

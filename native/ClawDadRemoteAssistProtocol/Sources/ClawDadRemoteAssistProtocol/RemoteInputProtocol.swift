@@ -3,6 +3,7 @@ import Foundation
 public enum RemoteInputAction: String, Codable, Equatable, Sendable {
   case key
   case shortcut
+  case chord
   case text
 }
 
@@ -51,6 +52,12 @@ public struct RemoteInputMessage: Codable, Equatable, Sendable {
   public let ok: Bool?
   public let error: String?
   public let target: RemoteInputTarget?
+  public var chord: RemoteKeyChord? = nil
+
+  public static func chordRequest(chord: RemoteKeyChord, requestId: String) -> Self {
+    Self(type: commandType, action: .chord, requestId: requestId, text: nil, key: nil,
+      shortcut: nil, ok: nil, error: nil, target: nil, chord: chord)
+  }
 
   public static func textRequest(
     text: String,
@@ -161,14 +168,14 @@ public struct RemoteInputMessage: Codable, Equatable, Sendable {
       }
       switch action {
       case .text:
-        guard let text,
+        guard chord == nil, let text,
               !text.isEmpty,
               key == nil,
               shortcut == nil else {
           throw RemoteInputProtocolError.invalidCommand
         }
       case .key:
-        guard text == nil,
+        guard chord == nil, text == nil,
               let key,
               !key.isEmpty,
               shortcut == nil,
@@ -176,14 +183,18 @@ public struct RemoteInputMessage: Codable, Equatable, Sendable {
           throw RemoteInputProtocolError.invalidCommand
         }
       case .shortcut:
-        guard text == nil,
+        guard chord == nil, text == nil,
               key == nil,
               shortcut != nil else {
           throw RemoteInputProtocolError.invalidCommand
         }
+      case .chord:
+        guard text == nil, key == nil, shortcut == nil, let chord, chord.isValid else {
+          throw RemoteInputProtocolError.invalidCommand
+        }
       }
     case Self.resultType:
-      guard text == nil,
+      guard chord == nil, text == nil,
             key == nil,
             shortcut == nil,
             let ok else {

@@ -48,8 +48,17 @@ final class RemoteSpeechPreviewHost {
         let state = RemoteSessionStateMessage.state(screenLocked: false, supportsDictation: true,
           supportsTerminalReadAloud: true, supportsInlineSpeech: true,
           supportsImageAttachments: arguments.contains("--clawdad-image-transfer-test"), supportsQuickChat: true,
-          supportsTerminalTabClose: !arguments.contains("--clawdad-preview-old-close-host"), requestId: request.requestId)
+          supportsTerminalTabClose: !arguments.contains("--clawdad-preview-old-close-host"),
+          supportsKeyChords: !arguments.contains("--clawdad-preview-old-key-host"), requestId: request.requestId)
         if let reply = try? RemoteSessionStateCodec.encode(state) { receive(reply) }
+      } else if let request = try? RemoteInputCodec.decode(data), request.type == RemoteInputMessage.commandType {
+        let expected = arguments.contains("--clawdad-special-keys-expect-shift-left")
+        let valid = !expected || (request.action == .chord && request.chord == RemoteKeyChord(key: "left", modifiers: [.shift]))
+        let result: RemoteInputMessage = valid
+          ? .success(action: request.action, requestId: request.requestId,
+              target: .init(applicationName: "Fixture editor", bundleIdentifier: nil, role: "AXTextArea"))
+          : .failure(action: request.action, requestId: request.requestId, error: "The fixture received a different key combination.")
+        if let reply = try? RemoteInputCodec.encode(result) { receive(reply) }
       } else if let request = try? RemoteQuickChatMessage.decode(data), request.type == "quick.chat" {
         if let (original, receipt) = quickChatReceipts[request.requestId] {
           let response = original == request ? receipt : request.result(error: "Replay changed the preset.")

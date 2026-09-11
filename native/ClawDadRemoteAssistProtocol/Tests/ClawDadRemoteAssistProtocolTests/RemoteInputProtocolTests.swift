@@ -2,6 +2,35 @@ import XCTest
 @testable import ClawDadRemoteAssistProtocol
 
 final class RemoteInputProtocolTests: XCTestCase {
+  func testKeyChordRoundTripAndInvalidMixedPayloads() throws {
+    let chord = RemoteKeyChord(key: "left", modifiers: [.shift, .option])
+    let request = RemoteInputMessage.chordRequest(chord: chord, requestId: "selection-1")
+    XCTAssertEqual(try RemoteInputCodec.decode(RemoteInputCodec.encode(request)), request)
+    XCTAssertEqual(chord.orderedModifiers, [.option, .shift])
+    for invalid in [RemoteKeyChord(key: "execute"), .init(key: "left", modifiers: [.shift, .shift])] {
+      XCTAssertThrowsError(try RemoteInputCodec.encode(.chordRequest(chord: invalid, requestId: "invalid")))
+    }
+    var mixed = RemoteInputMessage.textRequest(text: "preserve", requestId: "mixed")
+    mixed.chord = chord
+    XCTAssertThrowsError(try RemoteInputCodec.encode(mixed))
+    var result = RemoteInputMessage.failure(action: .chord, requestId: "failed", error: "Unsupported")
+    result.chord = chord
+    XCTAssertThrowsError(try RemoteInputCodec.encode(result))
+  }
+
+  func testChordCapabilityIsOptionalAndReconnectCannotRetainOldSupport() throws {
+    var capabilities = RemoteSessionCapabilities()
+    capabilities.begin(requestId: "first")
+    capabilities.receive(.state(screenLocked: false, supportsKeyChords: true, requestId: "first"))
+    XCTAssertEqual(capabilities.keyChords, true)
+    capabilities.receive(.state(screenLocked: true))
+    XCTAssertEqual(capabilities.keyChords, true)
+    capabilities.begin(requestId: "second")
+    XCTAssertNil(capabilities.keyChords)
+    XCTAssertFalse(capabilities.receive(.state(screenLocked: false, supportsKeyChords: true, requestId: "first")))
+    capabilities.receive(.state(screenLocked: false, supportsDictation: true, requestId: "second"))
+    XCTAssertNil(capabilities.keyChords)
+  }
   func testTextRequestRoundTripsMultilineUnicode() throws {
     let message = RemoteInputMessage.textRequest(
       text: "first line\nsecond line with cafe\u{301}",

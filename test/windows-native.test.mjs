@@ -126,8 +126,9 @@ test("iPhone profiles route threads and Remote Assist by selected computer", asy
   assert.match(client, /acceptedHostKey\.isEmpty \|\| hostPublicKeysMatch/u);
   assert.match(content, /Text\(session\.paired \? session\.activeComputerName : "Add a computer"\)/u);
   assert.match(remoteAssist, /cloudSession\.activeComputerSupportsRemoteAssist/u);
-  assert.match(remoteAssist, /isWindows \? "⌃T" : "⌘T"/u);
-  assert.match(remoteAssist, /isWindows \? "alt⇥" : "⌘⇥"/u);
+  const specialKeys = await source("apps/ios/ClawDadMobile/Sources/ClawDadMobile/RemoteSpecialKeys.swift");
+  assert.match(specialKeys, /isWindows \? "⌃T" : "⌘T"/u);
+  assert.match(specialKeys, /isWindows \? "alt⇥" : "⌘⇥"/u);
 });
 
 test("shared desktop web UI supports both WKWebView and WebView2 bridges", async () => {

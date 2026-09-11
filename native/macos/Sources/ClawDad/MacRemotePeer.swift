@@ -455,7 +455,7 @@ final class MacRemotePeer: NSObject {
   static func sessionState(screenLocked: Bool, requestId: String? = nil) -> RemoteSessionStateMessage {
     .state(screenLocked: screenLocked, supportsDictation: true, supportsTerminalReadAloud: true,
            supportsInlineSpeech: true, supportsImageAttachments: true, supportsQuickChat: true,
-           supportsTerminalTabClose: true, requestId: requestId)
+           supportsTerminalTabClose: true, supportsKeyChords: true, requestId: requestId)
   }
 
   private func publishDisplayState() {

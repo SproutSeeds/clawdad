@@ -949,6 +949,27 @@ final class RemoteAssistController: NSObject, ObservableObject {
     restoreKeyboardFocusAfterControl()
   }
 
+  var specialKeysUnavailableReason: String? {
+    if phase != .connected { return "Reconnect to send a special key." }
+    if remoteScreenLocked { return "Unlock the computer to send a special key." }
+    if remoteInputSuppressed || pendingRemoteTerminalTabId != nil { return "Finishing the screen or tab change…" }
+    return nil
+  }
+
+  @discardableResult
+  func sendSpecialKey(_ preset: RemoteSpecialKeyPreset) -> Bool {
+    guard preset.isValid else { return false }
+    if let reason = specialKeysUnavailableReason { showInputError(reason); return false }
+    guard preset.legacyShortcut != nil || sessionCapabilities.keyChords == true else {
+      showInputError("Update ClawDad on your Mac to send this key combination."); return false
+    }
+    flushBufferedText()
+    guard sendInputRequest(preset.request(id: UUID().uuidString.lowercased())) else { return false }
+    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    restoreKeyboardFocusAfterControl()
+    return true
+  }
+
   var quickChatUnavailableReason: String? {
     if phase != .connected { return "Reconnect to send a preset." }
     if remoteScreenLocked { return "Unlock the Mac to send a preset." }
@@ -2092,6 +2113,11 @@ final class RemoteAssistController: NSObject, ObservableObject {
         message.error ?? "The focused app on \(remoteComputerName) did not accept input."
       )
     }
+    #if DEBUG
+    if message.ok == true, ProcessInfo.processInfo.arguments.contains("--clawdad-special-keys-test") {
+      showClipboardNotice("Special key received", isError: false)
+    }
+    #endif
     return true
   }
 
@@ -2911,45 +2937,7 @@ private enum RemoteAssistAccessibilityFocus: Hashable {
   case terminalTabsHeading
 }
 
-private extension RemoteShortcut {
-  func keycap(isWindows: Bool) -> String {
-    switch self {
-    case .controlC: "⌃C"
-    case .controlJ: "⌃J"
-    case .escape: "esc"
-    case .tab: "tab"
-    case .arrowUp: "↑"
-    case .arrowDown: "↓"
-    case .arrowLeft: "←"
-    case .arrowRight: "→"
-    case .controlL: "⌃L"
-    case .commandT: isWindows ? "⌃T" : "⌘T"
-    case .commandTab: isWindows ? "alt⇥" : "⌘⇥"
-    }
-  }
 
-  func accessibilityName(isWindows: Bool) -> String {
-    switch self {
-    case .controlC: "Control C"
-    case .controlJ: "Control J"
-    case .escape: "Escape"
-    case .tab: "Tab"
-    case .arrowUp: "Up Arrow"
-    case .arrowDown: "Down Arrow"
-    case .arrowLeft: "Left Arrow"
-    case .arrowRight: "Right Arrow"
-    case .controlL: "Control L"
-    case .commandT:
-      isWindows
-        ? "Control T, open a new tab in the active Windows app"
-        : "Command T, open a new tab in the active Mac app"
-    case .commandTab:
-      isWindows
-        ? "Alt Tab, switch Windows app"
-        : "Command Tab, switch Mac app"
-    }
-  }
-}
 
 private struct RemoteTerminalTabRow: View {
   let tab: RemoteTerminalTabDescriptor
@@ -3064,6 +3052,7 @@ struct RemoteAssistView: View {
   @Environment(\.scenePhase) private var scenePhase
   @StateObject private var files = MobileFilesController()
   @StateObject private var quickChat = RemoteQuickChatStore()
+  @StateObject private var specialKeys = RemoteSpecialKeyStore()
   var onClose: () -> Void
   @State private var viewportZoomed = false
   @State private var viewportResetToken = 0
@@ -3082,11 +3071,7 @@ struct RemoteAssistView: View {
     count: 3
   )
   private static let mainControlPanelWidth: CGFloat = 244
-  private static let shortcutColumns = Array(
-    repeating: GridItem(.fixed(60), spacing: 8),
-    count: 3
-  )
-  private static let shortcutControlPanelWidth: CGFloat = 196
+  private static let shortcutControlPanelWidth: CGFloat = 260
   private static let screenControlPanelWidth: CGFloat = 228
   private static let terminalTabControlPanelWidth: CGFloat = 260
 
@@ -3512,6 +3497,7 @@ struct RemoteAssistView: View {
           }
           .disabled(controller.phase != .connected || controller.remoteScreenLocked || controller.remoteInputSuppressed)
           .accessibilityLabel("Special commands")
+          .accessibilityIdentifier("clawdad.remote.specialKeys")
 
           if controller.hasMultipleRemoteDisplays {
             Button {
@@ -3570,55 +3556,11 @@ struct RemoteAssistView: View {
   }
 
   private var shortcutControlPanel: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      HStack(spacing: 8) {
-        Button {
-          backFromControls()
-        } label: {
-          Image(systemName: "chevron.left")
-            .font(.system(size: 14, weight: .black))
-            .frame(width: 32, height: 32)
-        }
-        .buttonStyle(RemoteAssistOverlayButtonStyle())
-        .accessibilityLabel("Back to Remote Assist controls")
-        .keyboardShortcut(.escape, modifiers: [])
-
-        Text("Special Commands")
-          .font(.caption.weight(.heavy))
-          .foregroundStyle(ClawDadTheme.cream)
-      }
-
-      LazyVGrid(
-        columns: Self.shortcutColumns,
-        alignment: .trailing,
-        spacing: 8
-      ) {
-        ForEach(RemoteShortcut.allCases, id: \.self) { shortcut in
-          Button {
-            collapseControls()
-            controller.sendShortcut(shortcut)
-          } label: {
-            Text(shortcut.keycap(isWindows: controller.isWindowsComputer))
-              .font(.system(size: 15, weight: .black, design: .rounded))
-              .frame(width: 60, height: 46)
-          }
-          .buttonStyle(RemoteAssistShortcutButtonStyle())
-          .disabled(
-            controller.phase != .connected ||
-              controller.remoteScreenLocked ||
-              controller.remoteInputSuppressed
-          )
-          .accessibilityLabel(
-            shortcut.accessibilityName(
-              isWindows: controller.isWindowsComputer
-            )
-          )
-          .accessibilityHint(
-            "Sends this command to \(controller.remoteComputerName)"
-          )
-        }
-      }
-    }
+    RemoteSpecialKeysPanel(store: specialKeys, isWindows: controller.isWindowsComputer,
+      unavailableReason: controller.specialKeysUnavailableReason,
+      supportsChords: controller.sessionCapabilities.keyChords == true,
+      onSend: { preset in if controller.sendSpecialKey(preset) { collapseControls() } },
+      onBack: { backFromControls() }, maximumHeight: min(480, max(220, viewportHeight - 160)))
   }
 
   private var screenControlPanel: some View {

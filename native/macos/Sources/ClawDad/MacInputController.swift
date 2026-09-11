@@ -977,7 +977,7 @@ final class MacInputController {
   private func executeInput(
     _ message: RemoteInputMessage
   ) async -> RemoteInputMessage {
-    if message.action == .shortcut {
+    if message.action == .shortcut || message.action == .chord {
       guard !MacConsoleSessionState.isLocked() else {
         return .failure(
           action: message.action,
@@ -988,6 +988,17 @@ final class MacInputController {
       if let shortcut = message.shortcut,
          macRemoteShortcutPlan(for: shortcut).delivery == .system {
         return executeSystemShortcut(message, shortcut: shortcut)
+      }
+      if let chord = message.chord, let plan = macRemoteChordPlan(for: chord), plan.delivery == .system {
+        guard AXIsProcessTrusted() else {
+          return .failure(action: message.action, requestId: message.requestId,
+            error: "Allow ClawDad to control this Mac in Privacy & Security settings.")
+        }
+        let target = systemShortcutTarget()
+        guard postKeyEventSteps(macRemoteKeyEventSteps(keyCode: plan.keyCode, flags: plan.flags), targetPID: nil) else {
+          return .failure(action: message.action, requestId: message.requestId, error: "macOS did not accept that special key.", target: target)
+        }
+        return .success(action: message.action, requestId: message.requestId, target: target)
       }
     }
 
@@ -1025,6 +1036,12 @@ final class MacInputController {
           shortcut,
           targetPID: target.pid
         )
+      case .chord:
+        guard let chord = message.chord, let plan = macRemoteChordPlan(for: chord) else {
+          return .failure(action: message.action, requestId: message.requestId,
+            error: "This key combination is unavailable in the current Mac keyboard layout.", target: target.metadata)
+        }
+        accepted = postKeyEventSteps(macRemoteKeyEventSteps(keyCode: plan.keyCode, flags: plan.flags), targetPID: target.pid)
       }
 
       guard accepted else {
