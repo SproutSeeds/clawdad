@@ -115,6 +115,9 @@ final class MacTerminalTabTests: XCTestCase {
     XCTAssertEqual(snapshots[0].tty, "/dev/ttys001")
     XCTAssertTrue(snapshots[0].isSelectedInWindow)
     XCTAssertEqual(snapshots[0].activityWindowTitle, "same-directory — codex — 180×49")
+    row.insert(.init(string: "/a/deliberate/name"), at: 8)
+    let configuredCatalog = NSAppleEventDescriptor.list(); configuredCatalog.insert(row, at: 1)
+    XCTAssertEqual(try MacTerminalAutomation.parseCatalog(configuredCatalog)[0].configuredTitle, "/a/deliberate/name")
   }
   func testCatalogUsesOpaqueStableIdentifiersAndOneGlobalSelection() async throws {
     let automation = StubTerminalAutomation(snapshots: initialSnapshots)

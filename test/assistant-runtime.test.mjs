@@ -252,7 +252,9 @@ test('MCP covers native inputs, new tabs, special commands, existing queue, loca
   const {root}=await fixture(t);await fs.mkdir(path.join(root,'Assistant'));
   await fs.writeFile(path.join(root,'Assistant/connection.json'),JSON.stringify({baseURL:'http://127.0.0.1:4487/'}));
   await fs.writeFile(path.join(root,'native-server.token'),'fixture-token');
-  const calls=[['new_terminal_tab',{tabId:'anchor',expectedRevision:1,requestId:'new'},'terminal.new'],
+  const calls=[['rename_terminal_tab',{tabId:'agent',agentInstanceId:'actual-agent',name:'Project name',requestId:'rename'},'terminal.rename'],
+    ['prepare_project_launch',{tabId:'shell',inputToken:'fresh',inputSessionId:'native',directory:'/a/b',stage:'directory',requestId:'prepare'},'terminal.project.draft'],
+    ['new_terminal_tab',{tabId:'anchor',expectedRevision:1,requestId:'new'},'terminal.new'],
     ['type_terminal_input',{tabId:'shell',inputToken:'token',inputSessionId:'process',expectedText:'',text:'draft',mode:'insert',requestId:'type'},'terminal.native.type'],
     ['press_terminal_key',{tabId:'shell',inputToken:'token2',inputSessionId:'process',shortcut:'control_l',intent:'navigation',requestId:'key'},'terminal.key'],
     ['queue_tab_draft',{tabId:'agent',sessionId:queueSession,token:'draft',text:'reviewed',requestId:'queue'},'terminal.queue'],
@@ -783,4 +785,27 @@ test('fresh draft edits retire the original receipt, missing bindings and queue-
   await runtime.nativeResult({id:'clear',result:{tabId:'fresh',agentInstanceId,draftVerified:true,submitted:false,text:''}});
   assert.equal((await runtime.job(command.requestId)).status,'cleared');
   assert.equal((await runtime.nativePoll({workerId:'one'})).pendingBindings.length,0);
+});
+
+test('project names are verified metadata with durable deduplication and project launch remains an inspected draft',async t=>{
+  const {runtime,root,coordinator}=await fixture(t);
+  const rename={action:'terminal.rename',requestId:'rename-project',tabId:'exact-tab',agentInstanceId:'agent-live',name:'/a/deliberate/path — project'};
+  await assert.rejects(runtime.command({...rename,agentInstanceId:undefined},{tool:true}),/identity/);
+  await runtime.command(rename,{tool:true});
+  assert.equal((await runtime.nativePoll({workerId:'worker'})).job.id,rename.requestId);
+  await runtime.nativeResult({id:rename.requestId,result:{tabId:rename.tabId,name:rename.name,renamed:true,nativeTitleVerified:true,submitted:false,savedWorkspaceEntryUpdated:false}});
+  assert.equal((await runtime.command(rename,{tool:true})).job.status,'completed');
+  assert.equal((await runtime.nativePoll({workerId:'worker'})).job,null);
+  await assert.rejects(runtime.command({...rename,name:'different'},{tool:true}),/different action/);
+  const restored=new AssistantRuntime({root,coordinator});t.after(()=>restored.close());await restored.load();
+  assert.equal((await restored.command(rename,{tool:true})).job.status,'completed');
+  const draft={action:'terminal.project.draft',requestId:'launch-directory',tabId:'shell',inputToken:'fresh',inputSessionId:'exact-shell',directory:"/fixture/日本 ' quoted",stage:'directory'};
+  for(const change of [{inputToken:''},{inputSessionId:''},{directory:'relative'},{directory:'/a\nb'},{stage:'submit'}])await assert.rejects(restored.command({...draft,...change},{tool:true}));
+  await restored.command(draft,{tool:true});
+  assert.equal((await restored.nativePoll({workerId:'worker'})).job.id,draft.requestId);
+  const text="cd -- '/fixture/日本 '\\'' quoted'";
+  await restored.nativeResult({id:draft.requestId,result:{tabId:'shell',inputSessionId:'exact-shell',draftVerified:true,text,launchStage:'directory',directory:draft.directory,submitted:false,enterSent:false}});
+  assert.equal((await restored.job(draft.requestId)).status,'inserted');
+  assert.equal((await restored.command(draft,{tool:true})).job.status,'inserted');
+  assert.equal((await restored.nativePoll({workerId:'worker'})).job,null);
 });

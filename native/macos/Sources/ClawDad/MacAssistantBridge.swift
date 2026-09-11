@@ -155,6 +155,7 @@ final class MacAssistantBridge {
       defer { heartbeat.cancel();nativeInput.invalidate();draftInspections.removeAll();draftProvenance.invalidate() }
       return try await mainWorkspace.control(action,args:args,requestId:id)
     }
+    if action == "terminal.rename" { return try await renameTerminal(args) }
     // A separate native action (including history navigation) invalidates all
     // earlier draft observations, even if an opaque paste has the same length.
     // Local/phone human input is fenced independently by the interaction gate.
@@ -190,6 +191,19 @@ final class MacAssistantBridge {
           "bundleId": .string(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "")]
       default: throw AssistantProtocolError.invalid
       }
+    }
+    if action == "terminal.project.draft" {
+      guard let tabId = args["tabId"]?.string, let directory = args["directory"]?.string,
+        let stage = args["stage"]?.string, let target = tabs.assistantSnapshot(tabID: tabId), !target.tty.isEmpty else { throw AssistantProtocolError.invalid }
+      let metadata = try await Task.detached { try MacTerminalTitleMetadata.read(target.tty) }.value
+      let command = try MacTerminalProjectLaunch.draft(directory: directory, stage: stage, metadata: metadata)
+      var edit = args
+      edit["mode"] = .string("insert"); edit["expectedText"] = .string(""); edit["text"] = .string(command)
+      var result = try await nativeInput.execute("terminal.native.type", args: edit, input: input)
+      result["launchStage"] = .string(stage); result["directory"] = .string(directory)
+      result["submitted"] = .bool(false); result["enterSent"] = .bool(false)
+      result["nextStep"] = .string(stage == "directory" ? "Review and explicitly submit the directory draft with Enter. Inspect the resulting shell directory, then prepare the Codex launch draft." : "Review and explicitly submit the launch draft with Enter. Complete any trust/sign-in prompt yourself, then inspect this exact new agent.")
+      return result
     }
     if action == "terminal.native.inspect" {
       guard let tabId = args["tabId"]?.string else { throw AssistantProtocolError.invalid }
@@ -505,6 +519,41 @@ final class MacAssistantBridge {
       throw MacAssistantError("Terminal ownership changed during observation. No input was sent.")
     }
     return result
+  }
+
+  private func renameTerminal(_ args: [String: AssistantValue]) async throws -> [String: AssistantValue] {
+    guard let tabId = args["tabId"]?.string, let name = args["name"]?.string else { throw AssistantProtocolError.invalid }
+    try MacTerminalProjectTitles.validateName(name)
+    let before = try await tabs.catalog()
+    guard before.tabs.contains(where: { $0.id == tabId }), let tab = tabs.assistantSnapshot(tabID: tabId), !tab.tty.isEmpty else {
+      throw MacAssistantError("Inspect the exact tab to verify its TTY before renaming. A name never selects a destination.")
+    }
+    let metadata = try await Task.detached { try MacTerminalTitleMetadata.read(tab.tty) }.value
+    let owner = try await Task.detached { try MacAssistantForeground.read(tty: tab.tty) }.value
+    var sessionId: String?, directory = metadata.directory
+    if metadata.kind == "codex" {
+      let agent = try await Task.detached { try MacTerminalResponseReader().inputBinding(tty: tab.tty) }.value
+      guard agent.accepts(sessionId: args["sessionId"]?.string, instanceId: args["agentInstanceId"]?.string) else {
+        throw MacAssistantError("The inspected agent identity changed. Reinspect the exact tab before naming it.")
+      }
+      sessionId = agent.conversation?.sessionId; directory = agent.directory
+    } else {
+      guard args["inputSessionId"]?.string == owner.identity else { throw MacAssistantError("Inspect this native shell's process identity before naming it.") }
+    }
+    guard try await Task.detached(operation: { try MacAssistantForeground.read(tty: tab.tty) }).value == owner else { throw MacAssistantError("The tab process changed before renaming.") }
+    try await MacTerminalProjectTitles.shared.rename(tty: tab.tty, name: name, expectedLifetime: metadata.lifetime)
+    var verified = false
+    for _ in 0..<10 {
+      _ = try await tabs.catalog()
+      guard let current = tabs.assistantSnapshot(tabID: tabId), current.tty == tab.tty, current.windowID == tab.windowID else { break }
+      if current.customTitle == name { verified = true; break }
+      try await Task.sleep(for: .milliseconds(100))
+    }
+    guard verified else { throw MacAssistantError("The approved name was saved, but Terminal's displayed tab title still needs verification. Inspect the same tab; no input was sent.") }
+    let updated = try mainWorkspace.renameExisting(name: name, sessionId: sessionId, directory: directory, owner: owner.identity, tty: tab.tty)
+    return ["tabId": .string(tabId), "tty": .string(tab.tty), "name": .string(name), "renamed": .bool(true),
+      "nativeTitleVerified": .bool(true), "savedWorkspaceEntryUpdated": .bool(updated), "submitted": .bool(false),
+      "verification": .string("exact-process-and-native-tab-title"), "catalog": try .encode(await tabs.catalog())]
   }
 
   private func insertInAgent(id: String, args: [String: AssistantValue], tabId: String, tabTitle: String,

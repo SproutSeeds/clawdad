@@ -59,6 +59,9 @@ final class MacNativeTerminalTabs {
     let label: String
   }
   private var closePrompt: ClosePrompt?
+  private lazy var titleNotifications = MacTerminalTitleNotifications { tty, title, generated, userEdited in
+    Task { @MainActor in MacTerminalProjectTitles.shared.nativeTitleChanged(tty: tty, value: title, generated: generated, userEdited: userEdited) }
+  }
 
   init(readAttribute: ((AXUIElement, String) throws -> CFTypeRef?)? = nil,
        now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
@@ -306,7 +309,20 @@ final class MacNativeTerminalTabs {
         customTitle: tab.title, tty: shell?.tty ?? "",
         isSelectedInWindow: tab.selected, hasUnreadActivity: tab.unread,
         visibleGroupID: tab.groupID, visibleTabIndex: tab.position, nativeTabID: tab.id,
-        reorderAvailable: tab.canReorder, activityTTYs: activityTTYs)
+        reorderAvailable: tab.canReorder, activityWindowTitle: shell?.activityWindowTitle, activityTTYs: activityTTYs,
+        generatedTitle: !activityTTYs.isEmpty && liveShells.values.contains { candidate in activityTTYs.contains(candidate.tty) && candidate.activityWindowTitle.map { MacTerminalProjectTitles.isGenerated(tab.title, window: $0, windowCustomTitle: candidate.customTitle) } == true },
+        windowCustomTitle: shell?.customTitle, configuredTitle: shell?.configuredTitle)
+    }
+    if readAttribute == nil {
+      let watched = candidate.compactMap { tab -> (AXUIElement, String, String?)? in
+        guard let shell = candidateShells[tab.id], !shell.tty.isEmpty else { return nil }
+        return (tab.control, shell.tty, liveShells[shell.tty]?.activityWindowTitle)
+      }
+      var pid: pid_t = 0
+      if AXUIElementGetPid(application, &pid) == .success {
+        let notifications = titleNotifications
+        DispatchQueue.main.async { notifications.update(pid: pid, bindings: watched) }
+      }
     }
     bindings = candidate
     groups = nextGroups.filter { usedGroups.contains($0.id) }

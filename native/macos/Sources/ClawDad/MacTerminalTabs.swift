@@ -11,6 +11,9 @@ struct MacTerminalTabSnapshot: Equatable, Sendable {
   let tabIndex: Int
   let customTitle: String
   let tty: String
+  let generatedTitle: Bool
+  let windowCustomTitle: String?
+  let configuredTitle: String?
   let isSelectedInWindow: Bool
   let hasUnreadActivity: Bool
   let visibleGroupID: Int?
@@ -36,7 +39,10 @@ struct MacTerminalTabSnapshot: Equatable, Sendable {
     nativeTabID: String? = nil,
     reorderAvailable: Bool = true,
     activityWindowTitle: String? = nil,
-    activityTTYs: Set<String>? = nil
+    activityTTYs: Set<String>? = nil,
+    generatedTitle: Bool = true,
+    windowCustomTitle: String? = nil,
+    configuredTitle: String? = nil
   ) {
     self.windowID = windowID
     self.nativeTabID = nativeTabID
@@ -44,6 +50,9 @@ struct MacTerminalTabSnapshot: Equatable, Sendable {
     self.tabIndex = tabIndex
     self.customTitle = customTitle
     self.tty = tty
+    self.generatedTitle = generatedTitle
+    self.windowCustomTitle = windowCustomTitle
+    self.configuredTitle = configuredTitle
     self.isSelectedInWindow = isSelectedInWindow
     self.hasUnreadActivity = hasUnreadActivity
     self.visibleGroupID = visibleGroupID
@@ -210,7 +219,7 @@ final class MacTerminalTabController {
           target.nativeTabID != nil || refreshed.revision == request.expectedRevision else {
       throw MacTerminalResponseFailure(message: "The selected Terminal tab changed while reading. Try again.")
     }
-    return request.success(tabTitle: macTerminalTabTitle(target.customTitle), response: response)
+    return request.success(tabTitle: refreshed.tabs.first { $0.id == request.tabId }?.title ?? macTerminalTabTitle(target.customTitle), response: response)
   }
 
   init(
@@ -249,6 +258,7 @@ final class MacTerminalTabController {
         state: nil
       )
     }
+    if automation is MacTerminalAutomation { MacTerminalProjectTitles.shared.refresh(snapshots) }
     return apply(snapshots)
   }
 
@@ -412,7 +422,7 @@ final class MacTerminalTabController {
       }
       return RemoteTerminalTabDescriptor(
         id: identifier,
-        title: macTerminalTabTitle(snapshot.customTitle),
+        title: automation is MacTerminalAutomation ? MacTerminalProjectTitles.shared.title(for: snapshot) : macTerminalTabTitle(snapshot.customTitle, generated: snapshot.generatedTitle),
         detail: "Window \(windowNumbers[snapshot.groupID] ?? 1) • Tab \(snapshot.position)",
         isSelected: isSelected,
         isBusy: !snapshot.activityTTYs.isEmpty && snapshot.activityTTYs.isSubset(of: busyTTYs),
@@ -444,14 +454,14 @@ final class MacTerminalTabController {
   }
 }
 
-func macTerminalTabTitle(_ value: String) -> String {
+func macTerminalTabTitle(_ value: String, generated: Bool = true) -> String {
   // Terminal's native tab title starts with its full working directory, followed
   // by an em dash and process/status text. Use that directory only as a label.
   let prefix = value.components(separatedBy: " — ").first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
   let display: String
-  if prefix.hasPrefix("/") || prefix.hasPrefix("~/") {
+  if generated && (prefix.hasPrefix("/") || prefix.hasPrefix("~/")) {
     display = (prefix as NSString).lastPathComponent
-  } else if prefix.hasPrefix("file://"), let url = URL(string: prefix), url.isFileURL {
+  } else if generated && prefix.hasPrefix("file://"), let url = URL(string: prefix), url.isFileURL {
     display = url.lastPathComponent
   } else {
     display = value.trimmingCharacters(in: CharacterSet(charactersIn: "\u{2800}"..."\u{28FF}").union(.whitespacesAndNewlines))
@@ -810,6 +820,7 @@ final class MacTerminalAutomation: MacTerminalAutomating, @unchecked Sendable {
     set tabRows to {}
     set windowIds to id of windows
     set titlesByWindow to custom title of tabs of windows
+    set configuredTitlesByWindow to custom title of current settings of tabs of windows
     set windowTitles to name of windows
     set ttysByWindow to tty of tabs of windows
     set selectedByWindow to selected of tabs of windows
@@ -817,14 +828,17 @@ final class MacTerminalAutomation: MacTerminalAutomating, @unchecked Sendable {
     repeat with windowIndex from 1 to count of windowIds
       set windowId to item windowIndex of windowIds
       set tabTitles to item windowIndex of titlesByWindow
+      set configuredTitles to item windowIndex of configuredTitlesByWindow
       set tabTTYs to item windowIndex of ttysByWindow
       set tabSelected to item windowIndex of selectedByWindow
       repeat with tabIndex from 1 to count of tabTTYs
         set tabTitle to item tabIndex of tabTitles
         if tabTitle is missing value then set tabTitle to ""
+        set configuredTitle to item tabIndex of configuredTitles
+        if configuredTitle is missing value then set configuredTitle to ""
         set activityTitle to ""
         if (count of tabTTYs) is 1 then set activityTitle to item windowIndex of windowTitles
-        set end of tabRows to {windowId as integer, windowIndex, tabIndex, tabTitle as text, item tabIndex of tabTTYs, item tabIndex of tabSelected, activityTitle as text}
+        set end of tabRows to {windowId as integer, windowIndex, tabIndex, tabTitle as text, item tabIndex of tabTTYs, item tabIndex of tabSelected, activityTitle as text, configuredTitle as text}
       end repeat
     end repeat
     return tabRows
@@ -1006,7 +1020,7 @@ final class MacTerminalAutomation: MacTerminalAutomating, @unchecked Sendable {
     }
     for rowIndex in 1...rowCount {
       guard let row = descriptor.atIndex(rowIndex),
-            row.numberOfItems == 7,
+            [7, 8].contains(row.numberOfItems),
             let customTitle = row.atIndex(4)?.stringValue,
             let activityWindowTitle = row.atIndex(7)?.stringValue,
             let ttyDescriptor = row.atIndex(5) else {
@@ -1025,7 +1039,8 @@ final class MacTerminalAutomation: MacTerminalAutomating, @unchecked Sendable {
         customTitle: customTitle,
         tty: tty,
         isSelectedInWindow: row.atIndex(6)?.booleanValue ?? false,
-        activityWindowTitle: activityWindowTitle.isEmpty ? nil : activityWindowTitle
+        activityWindowTitle: activityWindowTitle.isEmpty ? nil : activityWindowTitle,
+        configuredTitle: row.atIndex(8)?.stringValue
       ))
     }
     guard snapshots.allSatisfy({

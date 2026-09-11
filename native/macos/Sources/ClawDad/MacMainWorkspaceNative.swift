@@ -233,8 +233,8 @@ import Foundation
         }
         output.append(MainWorkspaceLiveTab(tabId:descriptor.id,group:String(tab.groupID),tty:tab.tty,owner:agent?.instanceId ?? owner.identity,
           directory:directory,kind:agent != nil ? "codex":owner.shell != nil ? "shell":"unsupported",sessionId:agent?.conversation?.sessionId,
-          conversationPath:agent?.conversation?.path.path,executable:agent?.executable,name:names[tab.tty].flatMap{$0.isEmpty ? nil:$0} ?? descriptor.title,
-          position:tab.position,selected:selections[descriptor.id] ?? false,fullScreen:focused ? fullScreen():false,draft:draft,model:config?.model,effort:config?.effort,pendingReceipts:receiptIds))
+          conversationPath:agent?.conversation?.path.path,executable:agent?.executable,name:MacTerminalProjectTitles.shared.explicitName(tty: tab.tty) ?? (names[tab.tty]?.hasPrefix("ClawDad Restore ")==true ? names[tab.tty]! : (tab.generatedTitle && !directory.isEmpty ? URL(fileURLWithPath: directory).lastPathComponent : descriptor.title)),
+          position:tab.position,selected:selections[descriptor.id] ?? false,fullScreen:focused ? fullScreen():false,draft:draft,model:config?.model,effort:config?.effort,pendingReceipts:receiptIds,nameIsExplicit:MacTerminalProjectTitles.shared.explicitName(tty: tab.tty) != nil))
       }
     } catch {
       if let ticket,interaction.isCurrent(ticket),let selected,let state=try? await tabs.catalog() { _=try? await tabs.focus(tabID:selected,expectedRevision:state.revision) }
@@ -366,7 +366,8 @@ import Foundation
   }
   func recoverDraft(_ tab:MainWorkspaceLiveTab,entry:MainWorkspaceEntry) async throws {
     let identified=try await verified(tab,entry:entry)
-    try await title(entry.name,tty:identified.tty)
+    let metadata = try await Task.detached { try MacTerminalTitleMetadata.read(identified.tty) }.value
+    try await MacTerminalProjectTitles.shared.rename(tty: identified.tty, name: entry.name, expectedLifetime: metadata.lifetime)
     guard let draft=entry.draft,let text=draft.text,!text.isEmpty else { return }
     let tab=try await verified(identified,entry:entry)
     // Any accepted user turn after capture makes a saved draft unsafe to replay.

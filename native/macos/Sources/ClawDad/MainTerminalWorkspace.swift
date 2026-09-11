@@ -26,6 +26,7 @@ struct MainWorkspaceLiveTab: Codable, Equatable {
   var model: String? = nil
   var effort: String? = nil
   var pendingReceipts: [String]? = nil
+  var nameIsExplicit: Bool? = nil
 }
 struct MainWorkspaceEntry: Codable, Equatable, Identifiable {
   var id: String
@@ -121,6 +122,25 @@ extension MainWorkspaceNative {
     guard flock(fd,LOCK_EX|LOCK_NB)==0 else { close(fd);throw MacAssistantError("Main Workspace is already being updated. Check its progress.") }
     return fd
   }
+  /// Rename only an already-approved exact member; never adopts a live tab.
+  func renameExisting(name: String, sessionId: String?, directory: String?, owner: String, tty: String) throws -> Bool {
+    let fd = try lock(); defer { flock(fd, LOCK_UN); close(fd) }
+    var state = try read()
+    let matches = state.roster.entries.indices.filter { i in
+      let entry = state.roster.entries[i]
+      if let sessionId { return entry.sessionId == sessionId && entry.directory == directory }
+      return entry.sessionId == nil && entry.binding?.owner == owner && entry.binding?.tty == tty && entry.directory == directory
+    }
+    guard matches.count <= 1 else { throw MacAssistantError("More than one saved entry matches this conversation. Its live name was updated; review the saved roster.") }
+    guard let index = matches.first else { return false }
+    if state.roster.entries[index].name == name { return true }
+    archive(&state)
+    state.roster.entries[index].name = name
+    state.roster.entries[index].binding?.name = name
+    state.revision += 1
+    try write(state)
+    return true
+  }
   func fields() -> [String:AssistantValue] {
     do {
       let state=try read()
@@ -177,6 +197,7 @@ extension MainWorkspaceNative {
       for index in state.roster.entries.indices {
         let matches=live.filter { Self.matches(state.roster.entries[index],$0) }
         guard matches.count==1,let tab=matches.first else { continue }
+        if tab.nameIsExplicit == true { state.roster.entries[index].name = tab.name }
         state.roster.entries[index].binding=tab
         state.roster.entries[index].pendingReceipts=tab.pendingReceipts
         if state.roster.entries[index].sessionId==nil,let session=tab.sessionId {

@@ -22,7 +22,7 @@ struct MacTerminalActivityCandidates {
     return Set(shells.map(\.tty))
   }
 
-  private static func key(_ title: String) -> String {
+  static func key(_ title: String) -> String {
     var parts = title.components(separatedBy: " — ")
     // Terminal's window title uses the directory basename and adds dimensions;
     // its native tab tooltip uses the full directory and omits dimensions.

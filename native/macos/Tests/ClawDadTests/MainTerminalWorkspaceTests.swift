@@ -47,6 +47,21 @@ import ClawDadRemoteAssistProtocol
   }
   func save(_ store:MainTerminalWorkspace) async throws { _=try await store.control("mainworkspace.save",args:["tabId":.string("tab-1"),"expectedRevision":.number(Double(try store.read().revision))],requestId:"save") }
   func restore(_ store:MainTerminalWorkspace,_ id:String) async throws -> [String:AssistantValue] { try await store.control("mainworkspace.restore",args:[:],requestId:id) }
+  func testRenameUpdatesOnlyExactApprovedConversationAndSurvivesReload() async throws {
+    let (store, native, root) = try fixture(); try await save(store)
+    let before = try store.read()
+    XCTAssertTrue(try store.renameExisting(name: "Cancer Research", sessionId: "session-1", directory: "/same", owner: "owner-1", tty: "tty-original-1"))
+    let updated = try MainTerminalWorkspace(root: root, native: native).read()
+    XCTAssertEqual(updated.roster.entries.map(\.name), ["Project 0", "Cancer Research", "Project 2"])
+    XCTAssertEqual(updated.roster.entries.map(\.draft), before.roster.entries.map(\.draft))
+    XCTAssertEqual(updated.roster.entries.map(\.pendingReceipts), before.roster.entries.map(\.pendingReceipts))
+    XCTAssertEqual(updated.roster.selectedId, before.roster.selectedId)
+    XCTAssertEqual(updated.previous.last, before.roster)
+    XCTAssertFalse(try store.renameExisting(name: "Ran the Credit Man", sessionId: "not-in-roster", directory: "/same", owner: "another", tty: "new"))
+    XCTAssertFalse(try store.renameExisting(name: "wrong", sessionId: "session-1", directory: "/other", owner: "owner-1", tty: "tty-original-1"))
+    XCTAssertEqual(try store.read().revision, updated.revision)
+    XCTAssertEqual(native.creates, 0); XCTAssertEqual(native.launches, 0)
+  }
   func testOneWindowDoubleTapConcurrentRequestsAndExactSameDirectoryConversations() async throws {
     let (store,native,_)=try fixture();try await save(store);native.live=[]
     async let a=restore(store,"restore-a");async let b=restore(store,"restore-b");_=try await (a,b)

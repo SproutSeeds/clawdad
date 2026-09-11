@@ -156,7 +156,10 @@ final class MacAssistantTerminalInput {
       foreground: foreground, agent: agent, generation: ticket, expires: expires, screen: value,
       draft: draft, composer: composer, shellPrompt: shellDraft?.prompt), token: token, expires: expires)
     observationStep?("inspected")
-    return ["tabId": .string(tabId), "inputToken": .string(token), "inputSessionId": .string(sessionId),
+    let project = try? await Task.detached { try MacTerminalTitleMetadata.read(tab.tty) }.value
+    return ["directory": (agent?.directory ?? project?.directory).map(AssistantValue.string) ?? .null,
+      "tabLifetime": project.map { .string($0.lifetime) } ?? .null,
+      "tabId": .string(tabId), "inputToken": .string(token), "inputSessionId": .string(sessionId),
       "tty": .string(tab.tty), "windowGroupId": .string(focused.tabs.first { $0.id == tabId }?.windowGroupId ?? ""),
       "kind": .string(agent != nil ? "agent" : foreground.shell != nil ? "shell" : "native"),
       "shell": foreground.shell.map(AssistantValue.string) ?? .null,
