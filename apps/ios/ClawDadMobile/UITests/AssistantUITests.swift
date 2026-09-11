@@ -84,6 +84,33 @@ final class AssistantUITests: XCTestCase {
   }
   func testMainWorkspaceRestoreAndNavigation() { mainWorkspaceCheck(largeText:false) }
   func testMainWorkspaceLargeText() { mainWorkspaceCheck(largeText:true) }
+  func testNamedSnapshotControlsAndWholeWindowCloseCancel() { namedWorkspaceCheck(largeText:false) }
+  func testNamedSnapshotControlsAndWholeWindowCloseLargeText() { namedWorkspaceCheck(largeText:true) }
+  private func namedWorkspaceCheck(largeText:Bool) {
+    continueAfterFailure=false
+    let app=XCUIApplication();app.launchArguments=["--clawdad-app-store-preview","workspace","--clawdad-assistant-test"]
+    if largeText { app.launchArguments += ["-UIPreferredContentSizeCategoryName","UICTContentSizeCategoryAccessibilityXL"] }
+    app.launch();let open=app.buttons["Main Workspace"];XCTAssertTrue(open.waitForExistence(timeout:15))
+    for _ in 0..<8 where !open.isHittable { app.swipeUp() };open.tap()
+    XCTAssertTrue(app.buttons["restore-main-workspace"].waitForExistence(timeout:10))
+    let name=app.textFields["main-workspace-name"]
+    for _ in 0..<8 where !name.isHittable { app.swipeUp() }
+    XCTAssertTrue(name.isHittable);XCTAssertTrue(app.buttons["main-workspace-save-new"].exists)
+    saveScreenshot(app,largeText ? "Named setups accessibility text":"Named snapshot controls")
+    let close=app.buttons["Close chosen window…"]
+    for _ in 0..<8 where !close.isHittable { app.swipeUp() };XCTAssertTrue(close.isHittable);close.tap()
+    let confirm=app.buttons["confirm-close-terminal-window"]
+    XCTAssertTrue(app.staticTexts["Terminal Window 1"].waitForExistence(timeout:10))
+    for _ in 0..<8 where !confirm.exists || !confirm.isHittable { app.swipeUp() }
+    XCTAssertTrue(confirm.exists)
+    XCTAssertGreaterThanOrEqual(confirm.frame.height,44);confirm.tap()
+    let alert=app.alerts["Close this exact Terminal window?"];XCTAssertTrue(alert.waitForExistence(timeout:5))
+    XCTAssertTrue(alert.staticTexts.containing(NSPredicate(format:"label CONTAINS 'stops running work'")).firstMatch.exists)
+    saveScreenshot(app,largeText ? "Window close confirmation large text":"Window close exact confirmation")
+    alert.buttons["Cancel"].tap();XCTAssertTrue(confirm.exists)
+    app.navigationBars.buttons["Cancel"].tap();XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout:5));app.buttons["Done"].tap()
+    XCTAssertTrue(open.waitForExistence(timeout:5))
+  }
   private func mainWorkspaceCheck(largeText:Bool) {
     continueAfterFailure=false
     let app=XCUIApplication()

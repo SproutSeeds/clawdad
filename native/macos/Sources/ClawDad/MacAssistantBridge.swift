@@ -31,9 +31,14 @@ final class MacAssistantBridge {
   private let workerId = UUID().uuidString
   private let interaction = MacAssistantInteractionGate.shared
   private let nativeInput = MacAssistantTerminalInput()
-  private lazy var mainWorkspace = MainTerminalWorkspace(
-    root: root.deletingLastPathComponent().appendingPathComponent("MainTerminalWorkspace",isDirectory:true),
-    native: MacMainWorkspaceNative(runtime:runtime))
+  private lazy var mainWorkspace:MainTerminalWorkspace = {
+    let native=MacMainWorkspaceNative(runtime:runtime)
+    native.retainedDraft={ [weak self] binding,identity,foreground,screen,generation in
+      self?.draftProvenance.text(context:.init(input:identity,process:binding.instanceId,session:binding.conversation?.sessionId,
+        foreground:foreground.identity,generation:generation),screen:screen)
+    }
+    return MainTerminalWorkspace(root:root.deletingLastPathComponent().appendingPathComponent("MainTerminalWorkspace",isDirectory:true),native:native)
+  }()
 
   init(runtime: MacAssistantRuntime) {
     self.runtime = runtime
@@ -144,7 +149,7 @@ final class MacAssistantBridge {
     let args = job["args"]?.object ?? [:]
     let action = job["action"]?.string ?? ""
     let id = job["id"]?.string ?? ""
-    if action=="mainworkspace.inspect" { return ["catalog":try .encode(await tabs.catalog()),"workspace":.object(mainWorkspace.fields())] }
+    if action=="mainworkspace.inspect" { return ["catalog":try .encode(await tabs.catalog()),"workspace":.object(try await mainWorkspace.control(action,args:args,requestId:id))] }
     if action.hasPrefix("mainworkspace.") {
       let heartbeat=Task { [runtime] in
         while !Task.isCancelled {

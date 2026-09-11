@@ -20,7 +20,8 @@
     private var failedSend = false
     private var settings: [String: AssistantValue]?
     private var streamRevision = 0
-    private var mainWorkspace:[String:AssistantValue] = ["revision":.number(1),"status":.string("saved"),"snapshots":.array([]),"entries":.array([
+    private var mainWorkspace:[String:AssistantValue] = ["revision":.number(1),"status":.string("saved"),"selectedSnapshotId":.string("fixture-setup"),
+      "namedSnapshots":.array([.object(["id":.string("fixture-setup"),"name":.string("Research setup"),"revision":.number(1),"count":.number(2)])]),"snapshots":.array([]),"entries":.array([
       .object(["id":.string("fixture-one"),"name":.string("ClawDad"),"kind":.string("codex"),"directory":.string("/fixture/clawdad"),"sessionId":.string("fixture-conversation-one"),"status":.string("saved"),"draftText":.string("A recoverable unsent fixture draft.")]),
       .object(["id":.string("fixture-two"),"name":.string("Research"),"kind":.string("codex"),"directory":.string("/fixture/research"),"sessionId":.string("fixture-conversation-two"),"status":.string("saved")])])]
     private var mainWorkspaceJobs:[String:AssistantValue]=[:]
@@ -105,7 +106,16 @@
             mainWorkspace["status"] = .string("restored")
             mainWorkspace["entries"] = .array((mainWorkspace["entries"]?.array ?? []).map{value in var entry=value.object ?? [:];entry["status"] = .string("already_open");return .object(entry)})
           }
-          mainWorkspaceJobs[id] = .object(["id":.string(id),"status":.string("completed")])
+          var result=mainWorkspace
+          if action=="mainworkspace.close.inspect" {
+            result=["closePlan":.object(["token":.string("fixture-close"),"status":.string("confirmation_required"),"tabs":.array([
+              .object(["name":.string("ClawDad"),"directory":.string("/fixture/clawdad"),"draft":.object(["text":.string("")])]),
+              .object(["name":.string("Research"),"directory":.string("/fixture/research"),"draft":.object(["text":.string("Review before continuing")])])])]),
+              "windowTitle":.string("Terminal Window 1"),"tabCount":.number(2),"runningAgents":.number(1),"unsentDrafts":.number(1),"unrecoverableDrafts":.number(0),
+              "confirmation":.string("Closing stops running work in these 2 tabs. Reopening restores saved conversation history, not an in-memory computation. Other windows and saved snapshots remain intact.")]
+          }
+          if action=="mainworkspace.close" { result=["closePlan":.object(["status":.string("closed")]),"message":.string("The exact fixture window is closed. Saved snapshots and histories are preserved.")] }
+          mainWorkspaceJobs[id] = .object(["id":.string(id),"status":.string("completed"),"result":.object(result)])
         }
         let tabs=RemoteTerminalTabState(revision:1,selectedTabId:"fixture-tab",tabs:[RemoteTerminalTabDescriptor(id:"fixture-tab",title:"ClawDad",detail:"Window 1",isSelected:true,isBusy:false,windowTitle:"Window 1",windowGroupId:"window-one")])
         return ["mainWorkspace":.object(mainWorkspace),"catalog":try .encode(tabs),"job":args["jobId"]?.string.flatMap{mainWorkspaceJobs[$0]} ?? .null]

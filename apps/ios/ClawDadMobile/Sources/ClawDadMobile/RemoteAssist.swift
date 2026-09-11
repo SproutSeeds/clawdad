@@ -3747,7 +3747,7 @@ struct RemoteAssistView: View {
         .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
         .padding(.horizontal, 4)
       } else {
-        RemoteTerminalWindowPicker(controller: controller, expansion: $terminalWindowExpansion)
+        RemoteTerminalWindowPicker(controller: controller, expansion: $terminalWindowExpansion,assistant:assistant)
 
         if let error = controller.terminalTabError {
           Text(error)

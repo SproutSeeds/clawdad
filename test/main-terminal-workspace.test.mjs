@@ -4,13 +4,33 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {readMainWorkspace,workspaceProjection,MainWorkspaceResumeClaims} from '../lib/main-terminal-workspace.mjs';
+import {assistantTools} from '../lib/assistant-mcp.mjs';
+test('named snapshots expose exact membership and independent progress without rewriting captures',()=>{
+  const first={id:'one',name:'Research',revision:2,roster:{savedAt:5,entries:[{id:'a',kind:'codex',sessionId:'thread-a',directory:'/same',draft:{text:'Exact Ω'}}]},previous:[]};
+  const second={id:'two',name:'Other',revision:1,roster:{entries:[{id:'b',kind:'shell',directory:'/home',identityIssue:'Legacy shell needs review'}]},previous:[]};
+  const state={version:2,revision:9,status:'restored',message:'Research restored',activeRequest:'research-restore',selectedSnapshotId:'one',snapshots:[first,second],operations:{one:{progress:{a:{phase:'already_open'}}}}};
+  const bytes=JSON.stringify(state),a=workspaceProjection(state),b=workspaceProjection(state,'two');
+  assert.equal(a.entries[0].draftText,'Exact Ω');assert.equal(a.entries[0].status,'already_open');
+  assert.equal(a.namedSnapshots[1].needsReview,true);assert.equal(b.entries.length,1);assert.equal(b.entries[0].identityIssue,'Legacy shell needs review');
+  assert.equal(b.status,'needs_review');assert.equal(b.message,null);assert.equal(b.activeRequest,null);
+  assert.equal(JSON.stringify(state),bytes);assert.equal(workspaceProjection(state,'missing').status,'needs_attention');
+});
+test('Assistant exposes named save/update, exact restore, and separate inspect/confirmed close tools',()=>{
+  const tool=name=>{const t=assistantTools.find(t=>t[0]===name);return t&&{name:t[0],description:t[1],inputSchema:t[2]};};
+  for(const name of ['main_terminal_workspace','save_main_terminal_workspace','restore_main_terminal_workspace','inspect_terminal_window_close','close_terminal_window'])assert.ok(tool(name),name);
+  assert.ok(tool('save_main_terminal_workspace').inputSchema.properties.snapshotId);
+  assert.ok(tool('restore_main_terminal_workspace').inputSchema.required.includes('snapshotId'));
+  assert.deepEqual(tool('close_terminal_window').inputSchema.required,['confirmationToken','confirm','requestId']);
+  assert.match(tool('save_main_terminal_workspace').description,/NEVER authorizes closing/);
+});
 test('workspace projection preserves exact separate conversations and exposes recoverable drafts and progress',()=>{
   const state={revision:7,status:'waiting',activeRequest:'restore',observedAt:100,roster:{savedAt:1,fullScreen:true,entries:[
     {id:'a',name:'One',directory:'/same',sessionId:'session-one',kind:'codex',draft:{text:'Exact Ω\nsecond line'}},
     {id:'b',name:'Two',directory:'/same',sessionId:'session-two',kind:'codex',draft:{limitation:'Hidden paste is unavailable'}}]},
     progress:{a:{phase:'restored'},b:{phase:'waiting',message:'Mount the drive'}},previous:[{savedAt:0,entries:[{id:'old'}]}]};
   const view=workspaceProjection(state);
-  assert.equal(view.savedAt,'2001-01-01T00:00:01.000Z');assert.equal(view.fullScreen,true);
+  assert.equal(view.savedAt,'2001-01-01T00:00:01.000Z');assert.equal(view.fullScreen,false);
+  assert.equal(view.capturedFullScreen,true);assert.equal(view.windowPresentation,'fillAvailableDisplay');
   assert.equal(view.entries[0].draftText,'Exact Ω\nsecond line');assert.equal(view.entries[1].draftText,null);
   assert.equal(view.entries[1].message,'Mount the drive');assert.equal(view.snapshots[0].count,1);
 });

@@ -40,15 +40,20 @@ import SwiftUI
 struct RemoteTerminalWindowPicker: View {
   @ObservedObject var controller: RemoteAssistController
   @Binding var expansion: RemoteTerminalWindowExpansion
+  var assistant:MobileAssistantController? = nil
+  @State private var closing:RemoteTerminalWindowGroup?
   private var groups: [RemoteTerminalWindowGroup] { RemoteTerminalWindowGroup.make(controller.remoteTerminalTabs) }
 
   var body: some View {
     RemoteTerminalTabList(controller: controller, groups: groups,
       expanded: Set(groups.filter { expansion.isExpanded($0.id) }.map(\.id)),
-      onToggleGroup: { expansion.toggle($0) })
+      onToggleGroup: { expansion.toggle($0) },onCloseGroup:assistant==nil ? nil:{ closing=$0 })
     .frame(height: 300)
     .onAppear { reconcile() }
     .onChange(of: controller.remoteTerminalTabs) { _, _ in reconcile() }
+    .sheet(item:$closing) { group in
+      if let assistant,let id=group.tabs.first?.id { TerminalWorkspaceCloseView(controller:assistant,tabId:id) }
+    }
   }
 
   private func reconcile() { expansion.reconcile(groups, selected: controller.selectedRemoteTerminalTabId) }

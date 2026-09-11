@@ -11,6 +11,7 @@ struct RemoteTerminalTabList: UIViewRepresentable {
   let groups: [RemoteTerminalWindowGroup]
   let expanded: Set<String>
   let onToggleGroup: (String) -> Void
+  var onCloseGroup:((RemoteTerminalWindowGroup)->Void)? = nil
 
   func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -137,6 +138,12 @@ struct RemoteTerminalTabList: UIViewRepresentable {
           .buttonStyle(.plain)
           .accessibilityIdentifier("clawdad.remote.window.\(group.id)")
           .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+          .accessibilityActions {
+            if self.parent.onCloseGroup != nil { Button("Close window") { [weak self] in self?.parent.onCloseGroup?(group) } }
+          }
+          .contextMenu {
+            if self.parent.onCloseGroup != nil { Button("Close window…",systemImage:"xmark.rectangle",role:.destructive) { [weak self] in self?.parent.onCloseGroup?(group) } }
+          }
           .padding(.vertical, 8).padding(.horizontal, 2)
         }.margins(.all, 0)
       } else {
@@ -172,6 +179,14 @@ struct RemoteTerminalTabList: UIViewRepresentable {
     }
 
     func closeActions(at path: IndexPath) -> UISwipeActionsConfiguration? {
+      if path.item==0,movingTabID==nil,presentation.enabled,presentation.groups.indices.contains(path.section),parent.onCloseGroup != nil {
+        let group=presentation.groups[path.section]
+        let action=UIContextualAction(style:.destructive,title:"Close window") { [weak self] _,_,finish in
+          finish(true);self?.parent.onCloseGroup?(group)
+        }
+        action.image=UIImage(systemName:"xmark.rectangle")
+        let configuration=UISwipeActionsConfiguration(actions:[action]);configuration.performsFirstActionWithFullSwipe=false;return configuration
+      }
       guard movingTabID == nil, presentation.canClose, presentation.groups.indices.contains(path.section),
             path.item > 0, presentation.groups[path.section].tabs.indices.contains(path.item - 1) else { return nil }
       let id = presentation.groups[path.section].tabs[path.item - 1].id

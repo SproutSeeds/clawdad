@@ -35,6 +35,26 @@ final class MacTerminalTabTests: XCTestCase {
     let finished = try await controller.catalog()
     XCTAssertFalse(finished.tabs.contains(where: \.isBusy))
   }
+  func testWindowMemberCloseUsesExactTabAndChecksOwnerBeforeNativeConfirmation() async throws {
+    for changed in [false,true] {
+      let automation=StubTerminalAutomation(snapshots:initialSnapshots)
+      let controller=makeController(automation:automation),state=try await controller.catalog()
+      let target=state.tabs[1].id
+      var checks=0
+      do {
+        try await controller.assistantCloseInspectedWindowTab(tabId:target) {
+          checks += 1
+          if changed { throw MacAssistantError("Owner changed") }
+        }
+        XCTAssertFalse(changed)
+      } catch { XCTAssertTrue(changed) }
+      XCTAssertEqual(automation.closeTargets,["/dev/ttys002"])
+      XCTAssertEqual(checks,1)
+      XCTAssertEqual(automation.closeAccepts,changed ? 0:1)
+      XCTAssertEqual(automation.closeCancels,changed ? 1:0)
+      XCTAssertEqual(automation.snapshots.map(\.tty),changed ? ["/dev/ttys001","/dev/ttys002"]:["/dev/ttys001"])
+    }
+  }
 
   func testFocusingAnIdleAgentDoesNotMarkAnyTabBusy() async throws {
     let automation = StubTerminalAutomation(snapshots: initialSnapshots)
@@ -546,6 +566,16 @@ private final class StubTerminalAutomation: MacTerminalAutomating {
   var ignoreMove = false
   var readError: Error?
   var focusError: Error?
+  var closeTargets:[String]=[],closeAccepts=0,closeCancels=0
+  func closeTab(_ snapshot:MacTerminalTabSnapshot) async throws -> MacTerminalNativeCloseOutcome {
+    closeTargets.append(snapshot.tty)
+    return .confirmation(token:"owned-modal",prompt:"End this process?",button:"Terminate")
+  }
+  func resolveTabClose(token:String,confirm:Bool) async throws -> MacTerminalNativeCloseOutcome {
+    XCTAssertEqual(token,"owned-modal");XCTAssertTrue(confirm);closeAccepts += 1
+    snapshots.removeAll{$0.tty==closeTargets.last};return .closed
+  }
+  func cancelTabClose() async { closeCancels += 1 }
 
   init(
     snapshots: [MacTerminalTabSnapshot],

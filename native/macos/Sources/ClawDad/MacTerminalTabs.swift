@@ -177,6 +177,19 @@ final class MacTerminalTabController {
   private var nextWindowNumber = 1
   private var lastState: RemoteTerminalTabState?
   func assistantSnapshot(tabID: String) -> MacTerminalTabSnapshot? { snapshotsByIdentifier[tabID] }
+  func assistantCloseInspectedWindowTab(tabId:String,beforeConfirmation:() async throws -> Void) async throws {
+    _=try await catalog()
+    guard let target=assistantSnapshot(tabID:tabId),!target.tty.isEmpty else { throw MacAssistantError("The inspected window tab is unavailable.") }
+    do {
+      var outcome=try await automation.closeTab(target)
+      if case .confirmation(let token,_,_)=outcome {
+        try await beforeConfirmation()
+        outcome=try await automation.resolveTabClose(token:token,confirm:true)
+      }
+      guard case .closed=outcome else { throw MacAssistantError("Terminal did not confirm this window tab closed. Review its current state.") }
+      // The workspace caller independently verifies the TTY/login has ended.
+    } catch { await automation.cancelTabClose();throw error }
+  }
   func assistantIdentifier(tty: String) -> String? {
     let matches = snapshotsByIdentifier.filter { !$0.value.tty.isEmpty && $0.value.tty == tty }
     return matches.count == 1 ? matches.first?.key : nil

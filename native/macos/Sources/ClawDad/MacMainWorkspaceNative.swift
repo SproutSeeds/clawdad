@@ -3,13 +3,80 @@ import ApplicationServices
 import ClawDadRemoteAssistProtocol
 import Foundation
 
+/// Terminal can retain a closed Settings window as a missing-value scripting
+/// entry. Bulk reads represent it as empty tab lists; dereferencing it fails.
+/// Fence both window order and TTY membership around the independent name read.
+enum MainWorkspaceTitleCensus {
+  static let source="""
+  with timeout of 3 seconds
+  tell application "Terminal"
+    set idsBefore to id of windows
+    set ttysBefore to tty of tabs of windows
+    set titlesByWindow to custom title of tabs of windows
+    set ttysAfter to tty of tabs of windows
+    set idsAfter to id of windows
+    return {idsBefore, ttysBefore, titlesByWindow, ttysAfter, idsAfter}
+  end tell
+  end timeout
+  """
+  private static func invalid(_ reason:String) -> MacAssistantError {
+    MacAssistantError("Terminal's window inventory \(reason). Refresh its remaining windows.")
+  }
+  private static func items(_ value:NSAppleEventDescriptor?) throws -> [NSAppleEventDescriptor] {
+    guard let value,value.descriptorType==typeAEList,value.numberOfItems<=128 else { throw invalid("has an unsupported list") }
+    return try (0..<value.numberOfItems).map { index in
+      guard let item=value.atIndex(index+1) else { throw invalid("has an unreadable item") };return item
+    }
+  }
+  private static func missing(_ value:NSAppleEventDescriptor) -> Bool {
+    value.descriptorType==typeType && value.typeCodeValue==0x6d736e67 // AppleScript 'msng'
+  }
+  private static func windowIDs(_ value:NSAppleEventDescriptor?) throws -> [Int32?] {
+    try items(value).map { item in
+      if missing(item) { return nil }
+      guard [typeSInt16,typeSInt32,typeSInt64,typeUInt32].contains(item.descriptorType),item.int32Value>0 else { throw invalid("has an unverified window identity") }
+      return item.int32Value
+    }
+  }
+  private static func strings(_ value:NSAppleEventDescriptor,allowMissing:Bool) throws -> [String] {
+    try items(value).map { item in
+      if allowMissing && missing(item) { return "" }
+      guard let text=item.stringValue else { throw invalid("has an unreadable tab field") };return text
+    }
+  }
+  static func rows(_ descriptor:NSAppleEventDescriptor) throws -> [(String,String)] {
+    let groups=try items(descriptor)
+    guard groups.count==5 else { throw invalid("has an unsupported response") }
+    let before=try windowIDs(groups[0]),after=try windowIDs(groups[4])
+    let ttysBefore=try items(groups[1]).map { try strings($0,allowMissing:false) }
+    let names=try items(groups[2]).map { try strings($0,allowMissing:true) }
+    let ttysAfter=try items(groups[3]).map { try strings($0,allowMissing:false) }
+    guard before==after,ttysBefore==ttysAfter,before.count==ttysBefore.count,before.count==names.count else { throw invalid("changed during inspection") }
+    var result:[(String,String)]=[]
+    for index in before.indices {
+      let ttys=ttysBefore[index],titles=names[index]
+      guard ttys.count==titles.count else { throw invalid("has mismatched tab fields") }
+      guard before[index] != nil || ttys.isEmpty else { throw invalid("contains tabs without a verified window") }
+      for (tty,title) in zip(ttys,titles) {
+        guard tty.range(of:#"^/dev/tty[A-Za-z0-9]+$"#,options:.regularExpression) != nil else { throw invalid("has an unverified Terminal device") }
+        result.append((tty,title))
+      }
+    }
+    guard result.count<=128 else { throw invalid("exceeds the supported tab count") }
+    return result
+  }
+}
+
 @MainActor final class MacMainWorkspaceNative: MainWorkspaceNative {
   private let tabs=MacTerminalTabController.shared
   private let controls=MacAssistantTerminalInput()
   private let interaction=MacAssistantInteractionGate.shared
   private let input=MacInputController()
   private let runtime: MacAssistantRuntime
+  private let bindings=MainWorkspaceAgentBindings(file:FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/ClawDad/MainTerminalWorkspace/verified-agent-bindings.json"))
+  var retainedDraft: ((MacCodexInputBinding,String,MacAssistantForeground,String,UInt64)->String?)?
   private var exitedFullScreen:(tty:String,owner:String,ticket:UInt64)?
+  private var closingWindow=false
   init(runtime: MacAssistantRuntime) { self.runtime=runtime }
   private func ensure() throws -> UInt64 {
     guard AXIsProcessTrusted(),!MacConsoleSessionState.isLocked() else { throw MacAssistantError("Unlock the Mac and allow Terminal control to restore this workspace.") }
@@ -50,33 +117,104 @@ import Foundation
     guard let window=try? focusedWindow() else { return false };var value:CFTypeRef?
     return AXUIElementCopyAttributeValue(window,"AXFullScreen" as CFString,&value) == .success && (value as? Bool)==true
   }
-  private func customTitles() async throws -> [String:String] {
-    try await Task.detached {
-      let source="""
-      tell application "Terminal"
-        set resultRows to {}
-        repeat with w in windows
-          repeat with t in tabs of w
-            set labelText to custom title of t
-            if labelText is missing value then set labelText to ""
-            set end of resultRows to {tty of t, labelText as text}
-          end repeat
-        end repeat
-        return resultRows
-      end tell
-      """
-      guard let script=NSAppleScript(source:source) else { throw AssistantProtocolError.invalid }
-      var failure:NSDictionary?
-      let result=script.executeAndReturnError(&failure)
-      guard failure==nil,result.numberOfItems<=128 else { throw MacAssistantError("Terminal tab names could not be read safely. Refresh its windows.") }
-      var rows:[(String,String)]=[]
-      for index in 0..<result.numberOfItems {
-        guard let row=result.atIndex(index+1),let tty=row.atIndex(1)?.stringValue,let name=row.atIndex(2)?.stringValue,
-          tty.hasPrefix("/dev/tty") else { throw MacAssistantError("Terminal tab names have unavailable identities. Refresh before restoring.") }
-        rows.append((tty,name))
+  func closeWindow(_ expected:[MainWorkspaceLiveTab]) async throws {
+    closingWindow=true
+    do {
+      try await closeMembers(expected)
+      closingWindow=false;await endRestore()
+    } catch {
+      closingWindow=false;await endRestore();throw error
+    }
+  }
+  private func closeMembers(_ expected:[MainWorkspaceLiveTab]) async throws {
+    let ticket=try ensure()
+    guard !expected.isEmpty else { throw AssistantProtocolError.invalid }
+    // Close the verified original members right to left. Terminal's whole-window
+    // shortcut can remove shell tabs before presenting a later process dialog;
+    // single-tab commands retain the exact native target through each confirmation.
+    var remaining=expected.sorted{$0.position<$1.position}
+    while let original=remaining.last {
+      let fresh=try await inspectRemainingForClose(original,ticket:ticket)
+      guard let anchor=fresh.tabs.first(where:{$0.tabId==fresh.anchorId}) else { throw AssistantProtocolError.invalid }
+      let current=fresh.tabs.filter{$0.group==anchor.group}.sorted{$0.position<$1.position}
+      guard MainTerminalWorkspace.sameWindow(remaining,current,drafts:true),interaction.isCurrent(ticket),
+        let target=current.first(where:{$0.tty==original.tty}) else {
+        throw MacAssistantError("The remaining window's tabs, owners or input changed. Earlier closures are preserved; inspect before continuing.")
       }
-      return try Self.uniqueTitles(rows)
-    }.value
+      try await tabs.assistantCloseInspectedWindowTab(tabId:target.tabId) { [self] in
+        guard interaction.isCurrent(ticket),
+          try await Task.detached(operation:{try MacTerminalTitleMetadata.currentLifetime(original.tty)}).value==original.lifetime else {
+          throw MacAssistantError("The tab owner changed during its close confirmation. Close was cancelled.")
+        }
+        if original.kind=="codex",original.historical != true {
+          let agent=try await Task.detached(operation:{try MacTerminalResponseReader().inputBinding(tty:original.tty)}).value
+          guard agent.instanceId==original.owner,agent.conversation?.sessionId==original.sessionId,agent.directory==original.directory else {
+            throw MacAssistantError("The agent changed during its close confirmation. Close was cancelled.")
+          }
+        } else {
+          guard try await Task.detached(operation:{try MacAssistantForeground.read(tty:original.tty)}).value.identity==original.owner else {
+            throw MacAssistantError("The shell changed during its close confirmation. Close was cancelled.")
+          }
+        }
+      }
+      // AX can temporarily omit a tab while a modal dialog is open. Require an
+      // independent scripting census and ended login lifetime, never absence from AX.
+      var ended=false
+      for _ in 0..<20 {
+        if try await areClosed([original]) { ended=true;break }
+        try await Task.sleep(for:.milliseconds(100))
+      }
+      guard ended else { throw MacAssistantError("The original Terminal session is still present. Review its dialog or remaining tab; close will not repeat automatically.") }
+      remaining.removeLast()
+    }
+  }
+  private func inspectRemainingForClose(_ original:MainWorkspaceLiveTab,ticket:UInt64) async throws -> MainWorkspaceWindowSnapshot {
+    // After one member closes, AppKit can invalidate the window/strip while it
+    // selects the next member. Only re-observe/re-focus; never repeat a close.
+    for attempt in 0..<4 {
+      guard interaction.isCurrent(ticket) else { throw MacAssistantError("You changed Terminal during closing. Inspect its remaining tabs before continuing.") }
+      do {
+        _=try await tabs.catalog()
+        guard let id=tabs.assistantIdentifier(tty:original.tty) else { throw MacAssistantError("A remaining tab is still being identified. Inspect the window before continuing.") }
+        return try await snapshot(windowContaining:id)
+      } catch {
+        guard attempt<3,interaction.isCurrent(ticket) else { throw error }
+        try await Task.sleep(for:.milliseconds(250*(attempt+1)))
+      }
+    }
+    throw MacAssistantError("Terminal's remaining window has not settled. Earlier closures are preserved; no close will repeat automatically.")
+  }
+  func areClosed(_ expected:[MainWorkspaceLiveTab]) async throws -> Bool {
+    let names=try await customTitles()
+    for old in expected {
+      guard !names.keys.contains(old.tty) else { return false }
+      if let lifetime=try? await Task.detached(operation:{try MacTerminalTitleMetadata.currentLifetime(old.tty)}).value {
+        guard let previous=old.lifetime,lifetime != previous else { return false }
+      }
+    }
+    return true
+  }
+  private func customTitles() async throws -> [String:String] {
+    for attempt in 0..<3 {
+      do {
+        return try await Task.detached {
+          guard let script=NSAppleScript(source:MainWorkspaceTitleCensus.source) else { throw AssistantProtocolError.invalid }
+          var failure:NSDictionary?
+          let result=script.executeAndReturnError(&failure)
+          if let failure {
+            let code=failure["NSAppleScriptErrorNumber"] as? Int ?? 0
+            if code == -1743 { throw MacAssistantError("Allow ClawDad to control Terminal in System Settings > Privacy & Security > Automation.") }
+            throw MacAssistantError("Terminal's window inventory could not be read (automation \(code)). Refresh its remaining windows.")
+          }
+          return try Self.uniqueTitles(MainWorkspaceTitleCensus.rows(result))
+        }.value
+      } catch {
+        guard attempt<2 else { throw error }
+        // Re-read only. A census retry never repeats a native close or creation.
+        try await Task.sleep(for:.milliseconds(100*(attempt+1)))
+      }
+    }
+    throw AssistantProtocolError.invalid
   }
   nonisolated static func uniqueTitles(_ rows:[(String,String)]) throws -> [String:String] {
     var names:[String:String]=[:]
@@ -111,7 +249,7 @@ import Foundation
     guard let id=state.selectedTabId,let selected=tabs.assistantSnapshot(tabID:id),!selected.tty.isEmpty else { throw MacAssistantError("Show the Main Terminal window and retry so its full-screen identity can be verified.") }
     let owner=try await Task.detached{try MacAssistantForeground.read(tty:selected.tty)}.value
     if let savingTabId {
-      guard savingTabId==id else { throw MacAssistantError("Leave full screen or choose its selected tab before saving that window.") }
+      guard savingTabId==id || tabs.assistantSnapshot(tabID:savingTabId)?.groupID==selected.groupID else { throw MacAssistantError("Choose the visible full-screen window or leave full screen before inspecting another window.") }
     } else {
       let agent=try? await Task.detached{try MacTerminalResponseReader().inputBinding(tty:selected.tty)}.value
       guard entries?.contains(where:{entry in
@@ -154,9 +292,9 @@ import Foundation
       guard let group=tabs.assistantSnapshot(tabID:anchor)?.groupID else { throw MacAssistantError("The chosen Main window changed. Refresh and choose it again.") }
       var captured=try await inventory(captureDrafts:true,captureGroup:group)
       if original != nil { for i in captured.indices where captured[i].group==String(group) { captured[i].fullScreen=true } }
-      await endRestore()
+      if !closingWindow { await endRestore() }
       return MainWorkspaceWindowSnapshot(anchorId:anchor,tabs:captured)
-    } catch { await endRestore();throw error }
+    } catch { if !closingWindow { await endRestore() };throw error }
   }
   func inventory(captureDrafts: Bool) async throws -> [MainWorkspaceLiveTab] {
     try await inventory(captureDrafts:captureDrafts,captureGroup:nil)
@@ -206,10 +344,15 @@ import Foundation
         }
         let owner=try? await Task.detached{try MacAssistantForeground.read(tty:tab.tty)}.value
         guard let owner else { if requiresIdentity { throw MacAssistantError("\(descriptor.detail)'s foreground process could not be identified. Complete startup before saving.") };continue }
-        let agent=try? await Task.detached{try MacTerminalResponseReader().inputBinding(tty:tab.tty)}.value
-        let directory: String
+        let lifetime=try? await Task.detached{try MacTerminalTitleMetadata.currentLifetime(tab.tty)}.value
+        var bindingIssue:String?
+        let agent:MacCodexInputBinding?
+        do { agent=try await Task.detached{try MacTerminalResponseReader().inputBinding(tty:tab.tty)}.value }
+        catch { agent=nil;if owner.shell==nil { bindingIssue=error.localizedDescription } }
+        var directory: String
         if let agent { directory=agent.directory } else { directory=(try? await shellDirectory(tab.tty)) ?? "" }
         var draft:MainWorkspaceDraft?
+        var screen:String?
         let focused = shouldCapture || (!captureDrafts && selected==descriptor.id)
         let expectedIdentity=focused ? try? await tabs.inputIdentity():nil
         if focused,NSWorkspace.shared.frontmostApplication?.bundleIdentifier=="com.apple.Terminal",
@@ -218,11 +361,29 @@ import Foundation
           let value=try? await MacAssistantComposerRendering.shared.read(ticket:readTicket,raw:{ try self.focusedText() }),
           interaction.isCurrent(readTicket),(try? await tabs.inputIdentity())==expectedIdentity,
           (try? await tabs.catalog())?.selectedTabId==descriptor.id {
+          screen=value
           let observation=agent != nil ? assistantObserveDraft(value,viewportRows:assistantTerminalRows(tab.tty)) : nil
-          let text=observation?.requiresWholeDraftAuthorization==true ? nil : observation?.text ?? (owner.shell != nil ? MacAssistantShellDraft.read(value)?.text:nil)
+          let known=agent.flatMap{retainedDraft?($0,expectedIdentity,owner,value,readTicket)}
+          let text=observation?.requiresWholeDraftAuthorization==true ? known : observation?.text ?? (owner.shell != nil ? MacAssistantShellDraft.read(value)?.text:nil)
           let offset=agent?.conversation.flatMap{try? MacAssistantSubmissionLog.capture($0.path).offset}
           draft=MainWorkspaceDraft(text:text,limitation:text==nil ? (observation?.reason ?? "This input cannot be recovered automatically."):nil,capturedAt:Date(),transcriptOffset:offset)
         }
+        var historical:MainWorkspaceAgentBindings.Record?
+        if let agent,let conversation=agent.conversation,let lifetime {
+          try bindings.remember(.init(tty:tab.tty,lifetime:lifetime,process:agent.instanceId,directory:agent.directory,
+            sessionId:conversation.sessionId,path:conversation.path.path,executable:agent.executable))
+        } else if agent==nil,owner.shell != nil,let lifetime,let screen,
+          let previous=bindings.exited(tty:tab.tty,lifetime:lifetime,screen:screen),
+          (try? MacCodexConversation.load(path:URL(fileURLWithPath:previous.path),sessionRoot:MacTerminalResponseReader().sessionRoot))?.sessionId==previous.sessionId {
+          historical=previous;directory=previous.directory
+          draft=MainWorkspaceDraft(text:"",capturedAt:Date(),transcriptOffset:(try? MacAssistantSubmissionLog.capture(URL(fileURLWithPath:previous.path)).offset))
+        }
+        if agent==nil,historical==nil,owner.shell != nil,let lifetime,
+          let known=bindings.known(tty:tab.tty,lifetime:lifetime) {
+          bindingIssue="Codex previously owned this same live tab, but its final exit receipt cannot be verified. Resume exact conversation \(known.sessionId) or show its native exit receipt before saving. Its known project will not be replaced by the shell directory."
+        }
+        if agent != nil && agent?.conversation==nil { bindingIssue="Codex is fresh and has not persisted a resumable conversation. Finish your first intended turn, then save this window." }
+        if requiresIdentity,lifetime==nil { bindingIssue="This tab's login lifetime could not be verified. Refresh before saving." }
         let config=agent?.conversation.flatMap{Self.resumeConfiguration($0.path)}
         var receiptIds:[String]=[]
         if let conversation=agent?.conversation {
@@ -232,9 +393,10 @@ import Foundation
           }
         }
         output.append(MainWorkspaceLiveTab(tabId:descriptor.id,group:String(tab.groupID),tty:tab.tty,owner:agent?.instanceId ?? owner.identity,
-          directory:directory,kind:agent != nil ? "codex":owner.shell != nil ? "shell":"unsupported",sessionId:agent?.conversation?.sessionId,
-          conversationPath:agent?.conversation?.path.path,executable:agent?.executable,name:MacTerminalProjectTitles.shared.explicitName(tty: tab.tty) ?? (names[tab.tty]?.hasPrefix("ClawDad Restore ")==true ? names[tab.tty]! : (tab.generatedTitle && !directory.isEmpty ? URL(fileURLWithPath: directory).lastPathComponent : descriptor.title)),
-          position:tab.position,selected:selections[descriptor.id] ?? false,fullScreen:focused ? fullScreen():false,draft:draft,model:config?.model,effort:config?.effort,pendingReceipts:receiptIds,nameIsExplicit:MacTerminalProjectTitles.shared.explicitName(tty: tab.tty) != nil))
+          directory:directory,kind:agent != nil || historical != nil ? "codex":owner.shell != nil ? "shell":"unsupported",sessionId:agent?.conversation?.sessionId ?? historical?.sessionId,
+          conversationPath:agent?.conversation?.path.path ?? historical?.path,executable:agent?.executable ?? historical?.executable,name:MacTerminalProjectTitles.shared.explicitName(tty: tab.tty) ?? (names[tab.tty]?.hasPrefix("ClawDad Restore ")==true ? names[tab.tty]! : (tab.generatedTitle && !directory.isEmpty ? URL(fileURLWithPath: directory).lastPathComponent : descriptor.title)),
+          position:tab.position,selected:selections[descriptor.id] ?? false,fullScreen:focused ? fullScreen():false,draft:draft,model:config?.model,effort:config?.effort,pendingReceipts:receiptIds,nameIsExplicit:MacTerminalProjectTitles.shared.explicitName(tty: tab.tty) != nil,
+          lifetime:lifetime,identityIssue:bindingIssue,historical:historical != nil,isBusy:descriptor.isBusy))
       }
     } catch {
       if let ticket,interaction.isCurrent(ticket),let selected,let state=try? await tabs.catalog() { _=try? await tabs.focus(tabID:selected,expectedRevision:state.revision) }
@@ -254,6 +416,13 @@ import Foundation
       guard let id=entry.sessionId,UUID(uuidString:id) != nil,let path=entry.conversationPath,
         FileManager.default.fileExists(atPath:path),let executable=entry.executable,FileManager.default.isExecutableFile(atPath:executable) else {
         throw MacAssistantError("The saved Codex conversation or executable is unavailable. Restore that session or save its current identified tab; no substitute conversation was started.")
+      }
+      guard let session=try? MacCodexConversation.load(path:URL(fileURLWithPath:path),sessionRoot:MacTerminalResponseReader().sessionRoot),session.sessionId==id else {
+        throw MacAssistantError("The saved transcript header does not verify this exact CLI conversation. If it was archived, restore its original history first; no replacement conversation was started.")
+      }
+      let help=try MacTerminalResponseReader().run(executable,["resume","--help"])
+      guard help.contains("SESSION_ID"),help.contains("--cd") else {
+        throw MacAssistantError("This saved Codex executable does not expose verified resume-by-session and directory options. Update or restore the original compatible executable; the conversation was not replaced.")
       }
     }
   }
@@ -293,12 +462,27 @@ import Foundation
     } else {
       tty=try await script("tell application \"Terminal\"\nlaunch\nset t to do script \"\"\nset custom title of t to \(Self.appleString(marker))\nactivate\nreturn tty of t\nend tell")
     }
-    let after=try await inventory(captureDrafts:false)
+    var after=try await inventory(captureDrafts:false)
+    if (try? Self.verifiedCreation(before:before,after:after,tty:tty,marker:marker,anchor:anchor))==nil {
+      // New Tab and its marker title can replace native AX controls, leaving
+      // the old standalone tab temporarily unbound. Re-identify those controls
+      // by native focus/readback; never request another tab to repair visibility.
+      after=try await inventory(captureDrafts:true)
+    }
+    return try Self.verifiedCreation(before:before,after:after,tty:tty,marker:marker,anchor:anchor)
+  }
+  static func verifiedCreation(before:[MainWorkspaceLiveTab],after:[MainWorkspaceLiveTab],tty:String,marker:String,anchor:MainWorkspaceLiveTab?) throws -> MainWorkspaceLiveTab {
     let additions=after.filter{tab in !before.contains{$0.tty==tab.tty}}
-    guard additions.count==1,let created=additions.first,created.tty==tty,created.name==marker,
-      anchor==nil || created.group==anchor?.group,
-      before.allSatisfy({old in after.contains{$0.tty==old.tty}}) else {
-      throw MacAssistantError("Creation was requested once. Its window or tab identity needs review; it will not be repeated automatically.")
+    guard additions.count==1,let created=additions.first,created.tty==tty,created.name==marker else {
+      throw MacAssistantError("Creation was requested once, but the new tab's exact TTY and restore marker are not uniquely visible. Reinspect this receipt; another tab will not be created.")
+    }
+    if let anchor {
+      guard let current=after.first(where:{$0.tty==anchor.tty && $0.owner==anchor.owner && $0.lifetime==anchor.lifetime}),current.group==created.group else {
+        throw MacAssistantError("The new tab exists, but its original window anchor is still unbound or changed. Refresh to reconcile its identity; no second tab will be created.")
+      }
+    }
+    guard before.allSatisfy({old in after.contains{$0.tty==old.tty}}) else {
+      throw MacAssistantError("The new tab exists, but Terminal temporarily omitted an original tab. Reinspect to reconcile the complete window; creation will not repeat.")
     }
     return created
   }
@@ -321,7 +505,8 @@ import Foundation
       guard receipt["allowed"]?.bool==true,let token=receipt["token"]?.string else { throw MacAssistantError("The saved thread's live ownership could not be verified.") };lease=token
     }
     do {
-      let settings=(entry.model.map{" --model \(Self.quoted($0))"} ?? "") + (entry.effort.map{" -c \(Self.quoted("model_reasoning_effort=\"\($0)\""))"} ?? "")
+      let latest=entry.conversationPath.flatMap{Self.resumeConfiguration(URL(fileURLWithPath:$0))}
+      let settings=((latest?.model ?? entry.model).map{" --model \(Self.quoted($0))"} ?? "") + ((latest?.effort ?? entry.effort).map{" -c \(Self.quoted("model_reasoning_effort=\"\($0)\""))"} ?? "")
       let command="cd -- \(Self.quoted(entry.directory))" + (entry.kind=="codex" ? " && \(Self.quoted(entry.executable!)) resume \(Self.quoted(entry.sessionId!)) --cd \(Self.quoted(entry.directory))\(settings)":"")
       var target:[String:AssistantValue]=["tabId":.string(tab.tabId),"inputToken":inspected["inputToken"]!,"inputSessionId":inspected["inputSessionId"]!,"mode":.string("insert"),"expectedText":.string(""),"text":.string(command)]
       _=try await controls.execute("terminal.native.type",args:target,input:input)
@@ -366,6 +551,11 @@ import Foundation
   }
   func recoverDraft(_ tab:MainWorkspaceLiveTab,entry:MainWorkspaceEntry) async throws {
     let identified=try await verified(tab,entry:entry)
+    // A creation marker is reconciliation metadata, not the restored window's
+    // permanent title. Replace only our exact marker after ownership is known.
+    if try await customTitles()[identified.tty]=="ClawDad Restore \(entry.id)" {
+      try await title(entry.name,tty:identified.tty)
+    }
     let metadata = try await Task.detached { try MacTerminalTitleMetadata.read(identified.tty) }.value
     try await MacTerminalProjectTitles.shared.rename(tty: identified.tty, name: entry.name, expectedLifetime: metadata.lifetime)
     guard let draft=entry.draft,let text=draft.text,!text.isEmpty else { return }
@@ -405,7 +595,7 @@ import Foundation
       },terminalIdentity:{[tabs] in try await tabs.inputIdentity()}) else { throw MacAssistantError("Draft recovery was requested once but could not be verified. Inspect the tab; Enter and Tab were not sent.") }
     }
   }
-  func finish(_ ordered:[MainWorkspaceLiveTab],selectedId:String?,fullScreen:Bool) async throws {
+  func finish(_ ordered:[MainWorkspaceLiveTab],selectedId:String?) async throws {
     guard !ordered.isEmpty else { return };let ticket=try ensure()
     let selectedOwner=ordered.first{$0.tabId==selectedId}?.owner ?? ordered[0].owner
     func rebound() async throws -> [MainWorkspaceLiveTab] {
@@ -433,12 +623,106 @@ import Foundation
     let state=try await tabs.catalog()
     guard state.tabs.filter({currentOrder.map(\.tabId).contains($0.id)}).map(\.id)==currentOrder.map(\.tabId) else { throw MacAssistantError("The saved tab order has not been confirmed. Show the full tab bar and retry.") }
     _=try await tabs.focus(tabID:currentOrder.first{$0.owner==selectedOwner}?.tabId ?? currentOrder[0].tabId,expectedRevision:state.revision)
-    let window=try focusedWindow()
-    if self.fullScreen() != fullScreen {
-      guard interaction.isCurrent(ticket),AXUIElementSetAttributeValue(window,"AXFullScreen" as CFString,fullScreen ? kCFBooleanTrue:kCFBooleanFalse) == .success else { throw MacAssistantError("Set the Main window's full-screen preference manually, then retry verification.") }
-      for _ in 0..<20 { if self.fullScreen()==fullScreen { exitedFullScreen=nil;return };try await Task.sleep(for:.milliseconds(100)) }
-      throw MacAssistantError("Terminal has not confirmed its full-screen state yet.")
-    }
+    // Check every exact TTY/name before sizing the normal window.
+    try await verifyNativeNames(currentOrder,ticket:ticket)
+    try await fillAvailableDisplay(ticket:ticket)
     exitedFullScreen=nil
+  }
+  private func windowBounds(_ window:AXUIElement) throws -> CGRect {
+    var positionRaw:CFTypeRef?,sizeRaw:CFTypeRef?
+    guard AXUIElementCopyAttributeValue(window,kAXPositionAttribute as CFString,&positionRaw) == .success,
+      AXUIElementCopyAttributeValue(window,kAXSizeAttribute as CFString,&sizeRaw) == .success,
+      let positionRaw,let sizeRaw,CFGetTypeID(positionRaw)==AXValueGetTypeID(),CFGetTypeID(sizeRaw)==AXValueGetTypeID() else {
+      throw MacAssistantError("Terminal's window size is unavailable. Its restored tabs remain intact.")
+    }
+    var position=CGPoint.zero,size=CGSize.zero
+    guard AXValueGetValue(unsafeBitCast(positionRaw,to:AXValue.self),.cgPoint,&position),
+      AXValueGetValue(unsafeBitCast(sizeRaw,to:AXValue.self),.cgSize,&size) else { throw AssistantProtocolError.invalid }
+    return CGRect(origin:position,size:size)
+  }
+  private func fillAvailableDisplay(ticket:UInt64) async throws {
+    var window=try focusedWindow()
+    if fullScreen() {
+      guard interaction.isCurrent(ticket),AXUIElementSetAttributeValue(window,"AXFullScreen" as CFString,kCFBooleanFalse) == .success else {
+        throw MacAssistantError("Leave Terminal full screen, then retry sizing the restored window.")
+      }
+      for _ in 0..<30 { if !fullScreen() { break };try await Task.sleep(for:.milliseconds(100)) }
+      guard !fullScreen() else { throw MacAssistantError("Terminal is still leaving full screen. Its restored tabs remain intact; retry after the transition.") }
+      window=try focusedWindow()
+    }
+    let screens=NSScreen.screens
+    guard let primary=screens.first,let target=MainWorkspaceDisplayGeometry.target(
+      window:try windowBounds(window),screens:screens.map{($0.frame,$0.visibleFrame)},primaryTop:primary.frame.maxY) else {
+      throw MacAssistantError("The current display's available area is unavailable. Resize the restored window manually.")
+    }
+    // AX uses a top-left origin, AppKit screen frames use a bottom-left origin.
+    // Setting bounds avoids macOS Full Screen/Spaces and adapts to this display,
+    // its current menu bar/Dock, and Terminal's character-grid size increments.
+    for attempt in 0..<3 {
+      guard interaction.isCurrent(ticket),CFEqual(window,try focusedWindow()),!fullScreen() else {
+        throw MacAssistantError("The active window changed during sizing. Its tabs were preserved; inspect before retrying.")
+      }
+      var position=target.origin,size=target.size
+      guard let sizeValue=AXValueCreate(.cgSize,&size),let positionValue=AXValueCreate(.cgPoint,&position),
+        AXUIElementSetAttributeValue(window,kAXSizeAttribute as CFString,sizeValue) == .success,
+        AXUIElementSetAttributeValue(window,kAXPositionAttribute as CFString,positionValue) == .success else {
+        throw MacAssistantError("Terminal could not fill the display. Its tabs and drafts are restored; resize the window or retry.")
+      }
+      for _ in 0..<10 {
+        guard interaction.isCurrent(ticket),CFEqual(window,try focusedWindow()),!fullScreen() else { throw MacAssistantError("The window changed during size verification. Its restored work was preserved.") }
+        if MainWorkspaceDisplayGeometry.fills(try windowBounds(window),target:target) { return }
+        try await Task.sleep(for:.milliseconds(100))
+      }
+      if attempt==2 { throw MacAssistantError("Terminal has not confirmed that its normal window fills the available display. Its restored tabs remain intact; check the window size and retry.") }
+    }
+  }
+  private func verifyNativeNames(_ currentOrder:[MainWorkspaceLiveTab],ticket:UInt64) async throws {
+    // The picker can already display a durable approved name while Terminal
+    // still displays the shell's resume-command title. Verify native AX names
+    // after launch/reordering settles before reporting the setup restored.
+    let named=currentOrder.compactMap { tab -> (MainWorkspaceLiveTab,String)? in
+      MacTerminalProjectTitles.shared.explicitName(tty:tab.tty).map{(tab,$0)}
+    }
+    for attempt in 0..<10 {
+      guard interaction.isCurrent(ticket) else { throw MacAssistantError("You changed Terminal during restoration. Inspect its saved names before continuing.") }
+      _=try await tabs.catalog()
+      let unmatched=named.filter { tab,name in
+        guard let id=tabs.assistantIdentifier(tty:tab.tty),let native=tabs.assistantSnapshot(tabID:id) else { return true }
+        return native.customTitle != name
+      }
+      if unmatched.isEmpty { return }
+      if attempt==0 {
+        for (tab,name) in unmatched {
+          guard let lifetime=tab.lifetime else { throw MacAssistantError("The restored tab lifetime needs verification before naming.") }
+          try await MacTerminalProjectTitles.shared.rename(tty:tab.tty,name:name,expectedLifetime:lifetime)
+        }
+      }
+      try await Task.sleep(for:.milliseconds(200))
+    }
+    throw MacAssistantError("The conversations and drafts are restored, but Terminal has not confirmed its saved tab names. Refresh to verify the same tabs; they will not be recreated.")
+  }
+}
+
+enum MainWorkspaceDisplayGeometry {
+  static func accessibilityRect(_ rect:CGRect,primaryTop:CGFloat) -> CGRect {
+    CGRect(x:rect.minX,y:primaryTop-rect.maxY,width:rect.width,height:rect.height)
+  }
+  static func target(window:CGRect,screens:[(frame:CGRect,visibleFrame:CGRect)],primaryTop:CGFloat) -> CGRect? {
+    guard window.width>0,window.height>0,!screens.isEmpty else { return nil }
+    let valid=screens.filter{$0.frame.width>0 && $0.frame.height>0 && $0.visibleFrame.width>0 && $0.visibleFrame.height>0}
+    func score(_ frame:CGRect) -> (CGFloat,CGFloat) {
+      let rect=accessibilityRect(frame,primaryTop:primaryTop),overlap=window.intersection(rect)
+      let area=overlap.isNull ? 0:overlap.width*overlap.height
+      let dx=max(rect.minX-window.midX,0,window.midX-rect.maxX),dy=max(rect.minY-window.midY,0,window.midY-rect.maxY)
+      return (area,-(dx*dx+dy*dy))
+    }
+    guard let screen=valid.max(by:{score($0.frame)<score($1.frame)}) else { return nil }
+    return accessibilityRect(screen.visibleFrame,primaryTop:primaryTop)
+  }
+  static func fills(_ actual:CGRect,target:CGRect) -> Bool {
+    // The character grid can round the requested size down by a row/column.
+    abs(actual.minX-target.minX)<=2 && abs(actual.minY-target.minY)<=2 &&
+      actual.width<=target.width+2 && actual.height<=target.height+2 &&
+      actual.width>=target.width-48 && actual.height>=target.height-48
   }
 }

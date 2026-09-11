@@ -79,13 +79,26 @@
           <h2 id="mainWorkspaceTitle">Main Workspace</h2><button id="mainWorkspaceClose" type="button">Done</button>
         </header>
         <p id="mainWorkspaceStatus" role="status">Loading…</p><p id="mainWorkspaceError" role="alert"></p>
-        <button id="mainWorkspaceRestore" type="button" disabled>Restore Main Workspace</button>
+        <label for="mainWorkspaceNamed">Saved setup</label><select id="mainWorkspaceNamed"><option value="">Choose a snapshot</option></select>
+        <button id="mainWorkspaceRestore" type="button" disabled>Restore selected setup</button>
         <button id="mainWorkspaceRetry" type="button" hidden>Check / retry this request</button>
         <p>Running work stays in its current tab. Restore never replays submitted prompts or enables supervisors.</p>
         <label for="mainWorkspaceWindow">Main Terminal window</label><select id="mainWorkspaceWindow"><option value="">Choose a window</option></select>
-        <button id="mainWorkspaceSave" type="button" disabled>Save / Update Main Workspace</button><button id="mainWorkspaceScan" type="button">Refresh Terminal windows</button>
+        <label for="mainWorkspaceName">Snapshot name</label><input id="mainWorkspaceName" type="text" maxlength="80" value="Main Workspace">
+        <button id="mainWorkspaceSave" type="button" disabled>Save new named snapshot</button>
+        <button id="mainWorkspaceUpdate" type="button" disabled>Update selected snapshot…</button>
+        <button id="mainWorkspaceReuse" type="button" disabled>Reuse chosen window for restore…</button>
+        <button id="mainWorkspaceSeparate" type="button" disabled>Restore in a separate window…</button>
+        <button id="mainWorkspaceCloseWindow" type="button" disabled>Close chosen window…</button>
+        <button id="mainWorkspaceScan" type="button">Refresh Terminal windows</button>
+        <section id="mainWorkspaceClosePlan" hidden aria-labelledby="mainWorkspaceClosePlanTitle">
+          <h3 id="mainWorkspaceClosePlanTitle">Close window</h3><p id="mainWorkspaceCloseDescription"></p>
+          <button id="mainWorkspaceSaveClose" type="button">Save snapshot and close…</button>
+          <button id="mainWorkspaceConfirmClose" type="button">Close window…</button>
+          <button id="mainWorkspaceCancelClose" type="button">Cancel</button>
+        </section>
         <h3>Saved projects</h3><div id="mainWorkspaceEntries"></div>
-        <h3>Previous snapshots</h3><div id="mainWorkspaceSnapshots"></div><p>Recovering a snapshot updates the saved record. Tap Restore to reopen its projects. Remove projects explicitly; closing Terminal never removes them.</p>
+        <h3>Previous versions of this setup</h3><div id="mainWorkspaceSnapshots"></div><p>Save captures only the chosen window. Update replaces the selected lineup and keeps its previous version. Closing Terminal never changes saved setups. Restore resumes the latest persisted history without sending a task.</p>
       </dialog>
       <style>#mainWorkspaceDialog{border:1px solid #58462d;border-radius:16px;padding:20px;background:#111;color:#ffedc2}#mainWorkspaceDialog header{align-items:center;padding-bottom:12px;background:#111!important}#mainWorkspaceTitle{margin:0;flex:1}#mainWorkspaceClose{width:auto;flex:none;padding:10px 20px}#mainWorkspaceDialog button,#mainWorkspaceDialog select,#mainWorkspaceDialog summary{min-height:44px;cursor:pointer}#mainWorkspaceDialog button:disabled{cursor:default}#mainWorkspaceDialog button+button,#mainWorkspaceDialog select+button{margin-top:8px}#mainWorkspaceDialog pre{white-space:pre-wrap;overflow-wrap:anywhere}#mainWorkspaceDialog details{padding:12px 0}#mainWorkspaceDialog p{white-space:pre-wrap}</style>
       <dialog id="weeklyUsageDialog" class="weekly-usage-dialog" aria-labelledby="weeklyUsageTitle">
