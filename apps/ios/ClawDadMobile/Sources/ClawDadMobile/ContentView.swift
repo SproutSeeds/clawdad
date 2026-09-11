@@ -12,6 +12,7 @@ struct ContentView: View {
   @EnvironmentObject private var subscription: SubscriptionManager
   @Environment(\.scenePhase) private var scenePhase
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
   @State private var showingSettings = false
   @State private var showingWeeklyUsage = false
   @State private var showingScanner = false
@@ -472,13 +473,22 @@ struct ContentView: View {
 #endif
   }
 
+  private var workspaceUtilityLayout: AnyLayout {
+    dynamicTypeSize.isAccessibilitySize
+      ? AnyLayout(VStackLayout(alignment: .trailing, spacing: 0))
+      : AnyLayout(HStackLayout(spacing: 8))
+  }
+
   private var workspaceSurface: some View {
     ScrollView {
       VStack(spacing: 16) {
         brandHeader
         computerSelector
-        WeeklyUsageButton()
-        MainWorkspaceButton(controller:assistant)
+        workspaceUtilityLayout {
+          WeeklyUsageButton()
+          MainWorkspaceButton(controller: assistant)
+            .fixedSize(horizontal: !dynamicTypeSize.isAccessibilitySize, vertical: true)
+        }
         composerPanel
         if !session.pendingApprovals.isEmpty {
           approvalPanel
