@@ -212,4 +212,14 @@ final class AssistantMessagePlaybackTests: XCTestCase {
     state.interaction(true); state.geometry(distanceFromBottom: 100); state.geometry(distanceFromBottom: 20)
     XCTAssertTrue(state.following); XCTAssertFalse(state.showLatest)
   }
+  func testExactReplyOpeningIgnoresTransientBottomGeometryAndYieldsToReading() {
+    var state = AssistantHistoryFollowing()
+    state.openExactMessage(); state.geometry(distanceFromBottom: 0)
+    XCTAssertFalse(state.following); XCTAssertTrue(state.openingExact)
+    state.interaction(true); state.geometry(distanceFromBottom: 400)
+    XCTAssertFalse(state.openingExact); XCTAssertFalse(state.following)
+    state.openExactMessage(); state.cancelExactOpening() // Selecting text owns the reading position.
+    XCTAssertFalse(state.openingExact); XCTAssertTrue(state.showLatest)
+    state.latest(); XCTAssertTrue(state.following); XCTAssertFalse(state.showLatest)
+  }
 }

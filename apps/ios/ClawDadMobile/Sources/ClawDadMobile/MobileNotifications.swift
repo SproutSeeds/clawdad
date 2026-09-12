@@ -18,6 +18,7 @@ struct CompletedTurnNotification: Codable, Equatable, Sendable, Identifiable {
 
   static func parse(_ userInfo: [AnyHashable: Any]) -> Self? {
     guard let value = userInfo["clawdad"] as? [String: Any],
+      value["kind"] == nil,
       let data = try? JSONSerialization.data(withJSONObject: value),
       let result = try? JSONDecoder().decode(Self.self, from: data), result.version == 1,
       result.eventId.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil,
@@ -49,7 +50,7 @@ struct CompletedTurnNotification: Codable, Equatable, Sendable, Identifiable {
 final class MobileNotificationController: ObservableObject {
   static let shared = MobileNotificationController()
   @Published private(set) var enabled: Bool
-  @Published private(set) var status = "Get an alert when a Terminal agent finishes responding."
+  @Published private(set) var status = "Get an alert when Assistant or a Terminal agent finishes responding."
   @Published private(set) var denied = false
   @Published var pendingOpen: CompletedTurnNotification?
   @Published var pendingUsageOpen: WeeklyUsageNotification?
@@ -224,22 +225,31 @@ final class ClawDadPushAppDelegate: NSObject, UIApplicationDelegate, UNUserNotif
   func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
     MobileNotificationController.shared.registrationFailed()
   }
-  nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
-    withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
-    completionHandler([.banner, .list, .sound])
+  nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+    let target = AssistantReplyNotification.parse(notification.request.content.userInfo)
+    return await MainActor.run {
+      target.map { AssistantReplyNavigation.shared.suppressInterruption($0) } == true
+        ? [.list] : [.banner, .list, .sound]
+    }
   }
-  nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
-    withCompletionHandler completionHandler: @escaping () -> Void) {
+  nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+    guard response.actionIdentifier == UNNotificationDefaultActionIdentifier else { return }
+    if let target = AssistantReplyNotification.parse(response.notification.request.content.userInfo),
+      response.actionIdentifier == UNNotificationDefaultActionIdentifier {
+      await MainActor.run {
+        AssistantReplyNavigation.shared.receive(target)
+      }
+      return
+    }
     if let notification = CompletedTurnNotification.parse(response.notification.request.content.userInfo) {
-      Task { @MainActor in MobileNotificationController.shared.pendingOpen = notification }
+      await MainActor.run { MobileNotificationController.shared.pendingOpen = notification }
     }
     if let usage = WeeklyUsageNotification.parse(response.notification.request.content.userInfo) {
-      Task { @MainActor in
+      await MainActor.run {
         if usage.kind == "research" { MobileNotificationController.shared.pendingResearchOpen = usage }
         else { MobileNotificationController.shared.pendingUsageOpen = usage }
       }
     }
-    completionHandler()
   }
 }
 #endif
@@ -252,7 +262,7 @@ struct NotificationSettingsPanel: View {
         Toggle("Response and allowance notifications", isOn: Binding(get: { notifications.enabled }, set: { value in notifications.setEnabled(value) }))
           .font(.subheadline.weight(.bold))
           .tint(ClawDadTheme.gold)
-        Text("Agent completions and weekly Codex allowance alerts at 5% and 0%. Tap an alert to open its conversation or allowance.")
+        Text("Assistant replies, agent completions, and weekly Codex allowance alerts at 5% and 0%. An Assistant reply alert opens and reads that saved reply without starting the microphone.")
           .font(.caption).foregroundStyle(ClawDadTheme.peach.opacity(0.8))
         Text(notifications.status).font(.caption).foregroundStyle(ClawDadTheme.cream)
         if notifications.denied && notifications.enabled {

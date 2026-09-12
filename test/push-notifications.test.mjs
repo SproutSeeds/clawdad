@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import crypto from 'node:crypto';
-import {PushNotificationService,normalizeCompletion,completionPayload} from '../cloud/push-notifications.mjs';
+import {PushNotificationService,normalizeCompletion,completionPayload,normalizeAssistantNotification,assistantNotificationPayload} from '../cloud/push-notifications.mjs';
 import {WorkspaceRelay} from '../cloud/worker.mjs';
 
 const at=Date.parse('2026-09-07T12:00:00Z');
 const completion={id:'a'.repeat(64),sessionId:'11111111-1111-4111-8111-111111111111',directory:'BioSentinel',completedAt:new Date(at+1000).toISOString()};
 const identity={hostName:'Studio Mac',hostId:'mac',workspaceId:'work',accountId:'account'};
+const assistantEvent={...identity,id:'e'.repeat(64),kind:'assistant_reply',conversationId:completion.sessionId,requestId:'main-request',
+  replyId:'assistant:main-request:final',completedAt:completion.completedAt};
 const credentials=()=>({CLAWDAD_APNS_KEY_ID:'ABCDE12345',CLAWDAD_APNS_TEAM_ID:'4QV4WR9G32',CLAWDAD_APNS_PRIVATE_KEY:crypto.generateKeyPairSync('ec',{namedCurve:'prime256v1'}).privateKey.export({format:'pem',type:'pkcs8'})});
 function storage() {
   const values=new Map(); const alarms=[];
@@ -32,6 +34,33 @@ test('push payload names the exact conversation, local completion time, and cont
   assert.equal(JSON.stringify(payload).includes('private text'),false);
   assert.throws(()=>normalizeCompletion({...completion,directory:'/private/code'},at+2000));
   assert.throws(()=>normalizeCompletion({...completion,completedAt:new Date(at-25*60*60*1000).toISOString()},at));
+});
+test('main Assistant alert carries every exact destination identity without private reply text',()=>{
+  const event=normalizeAssistantNotification({...assistantEvent,text:'private response',directory:'/private/project'},at+2000);
+  const payload=assistantNotificationPayload(event,{timeZone:'America/Chicago',locale:'en-US'},identity);
+  assert.equal(payload.aps.alert.title,'Assistant replied');assert.match(payload.aps.alert.body,/7:00/);
+  for(const key of ['conversationId','requestId','replyId'])assert.equal(payload.clawdad[key],assistantEvent[key]);
+  for(const key of ['accountId','workspaceId','hostId'])assert.equal(payload.clawdad[key],identity[key]);
+  assert.equal(payload.clawdad.eventId,assistantEvent.id);
+  assert.equal(JSON.stringify(payload).includes('private'),false);
+  assert.throws(()=>normalizeAssistantNotification({...assistantEvent,replyId:'assistant:other:final'},at+2000));
+  assert.throws(()=>normalizeAssistantNotification({...assistantEvent,completedAt:new Date(at-25*3600000).toISOString()},at));
+});
+test('Assistant final notification retries durably once per phone and shares existing permission controls',async()=>{
+  let failing=true;const f=await fixture({respond:()=>failing?new Response(null,{status:503}):new Response(null,{status:200})});
+  f.advance(2000);
+  assert.equal((await f.service.submit(assistantEvent,identity)).accepted,true);
+  assert.equal((await f.service.submit(assistantEvent,identity)).duplicate,true);
+  await assert.rejects(f.service.submit(assistantEvent,{...identity,accountId:'other-account'}),/different original/);
+  await f.service.alarm();assert.equal(f.sent.length,1);
+  assert.equal((await f.service.status()).recentEvents[0].acceptedByApple,0);
+  failing=false;f.advance(20000);f.service=f.restart();await f.service.alarm();await f.service.alarm();
+  assert.equal(f.sent.length,2);assert.equal((await f.service.status()).recentEvents[0].acceptedByApple,1);
+  const payload=JSON.parse(f.sent[1].options.body);assert.equal(payload.clawdad.kind,'assistant_reply');
+  assert.equal(payload.clawdad.replyId,assistantEvent.replyId);
+  assert.equal((await f.service.submit(assistantEvent,identity)).duplicate,true);
+  const g=await fixture();g.advance(2000);await g.service.submit(assistantEvent,identity);
+  await g.service.register('phone',{enabled:false});await g.service.alarm();assert.equal(g.sent.length,0);
 });
 test('completion is durably queued once and APNs receives the correct environment, topic and signature',async()=>{
   const f=await fixture(); f.advance(2000);

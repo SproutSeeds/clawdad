@@ -598,6 +598,10 @@ final class AssistantTestTransport: AssistantTransport {
   var transcriptions = 0
   var syntheses = 0
   var beforeSynthesis: (() async -> Void)?
+  var beforeMessage: (() async -> Void)?
+  var replyHandler: (([String: AssistantValue]) async throws -> Data)?
+  var conversationID = "11111111-1111-4111-8111-111111111111"
+  var receiptStatus = "completed"
   var synthesis: (() -> [String: Any])?
   var synthesisPayloads: [[String: AssistantValue]] = []
   var download: ((Data) throws -> Data)?
@@ -620,7 +624,9 @@ final class AssistantTestTransport: AssistantTransport {
     case .command:
       let body = try JSONDecoder().decode([String: AssistantValue].self, from: payload)
       commands.append(body["action"]?.string ?? "")
+      if body["action"]?.string == "reply", let replyHandler { return try await replyHandler(body) }
       if body["action"]?.string == "message", let text = body["text"]?.string {
+        await beforeMessage?()
         let id = body["requestId"]!.string!
         messageIDs.append(id)
         if !messages.contains(where: { $0["id"] as? String == id }) {
@@ -637,7 +643,7 @@ final class AssistantTestTransport: AssistantTransport {
       if body["action"]?.string == "voice.timing", let value = body["metrics"]?.object { timings.append(value) }
       var response = try JSONSerialization.jsonObject(with: snapshot()) as! [String: Any]
       if body["action"]?.string == "message", !omitReceipt {
-        response["job"] = ["id": body["requestId"]!.string!, "action": "message", "status": "completed", "args": [:]] as [String: Any]
+        response["job"] = ["id": body["requestId"]!.string!, "action": "message", "status": receiptStatus, "args": [:]] as [String: Any]
       }
       return try JSONSerialization.data(withJSONObject: response)
     case .transcribe:
@@ -667,6 +673,8 @@ final class AssistantTestTransport: AssistantTransport {
   private func snapshot() throws -> Data {
     try JSONSerialization.data(withJSONObject: [
       "version": 1, "conversationMode": "background", "imageAttachments": true, "enabled": true, "paused": false,
+      "conversationId": conversationID,
+      "messageReceipts": messages.filter { $0["role"] as? String == "user" }.map { ["id": $0["id"]!, "status": receiptStatus] },
       "chatCapacity": ["textBytes": chatTextBytes, "unit": "utf8_bytes"],
       "nativeOnline": true, "messages": omitRecentMessages ? [] : messages, "tasks": [],
       "catalog": ["revision": 1, "tabs": []],

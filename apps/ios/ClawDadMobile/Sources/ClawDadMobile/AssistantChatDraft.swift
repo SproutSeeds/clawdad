@@ -6,6 +6,7 @@ import ClawDadRemoteAssistProtocol
 struct AssistantRecoveredVoice: Codable, Equatable, Identifiable, Sendable {
   let id: String
   let text: String
+  var deliveryUncertain: Bool? = nil
 }
 
 struct AssistantChatDraft: Codable, Equatable, Sendable {
@@ -21,6 +22,7 @@ struct AssistantChatDraft: Codable, Equatable, Sendable {
 struct AssistantAcceptedDraft: Codable, Identifiable, Equatable, Sendable {
   let draft: AssistantChatDraft
   var failure: String?
+  var awaitingAcceptance: Bool? = nil
   var id: String { draft.id }
 }
 
@@ -37,6 +39,7 @@ final class AssistantChatDraftStore: ObservableObject {
   private var drafts: [String: AssistantChatDraft] = [:]
   private var bound = false
   private var accepted: [String: [AssistantAcceptedDraft]] = [:]
+  private var voiceCheckpoints: [String: [AssistantRecoveredVoice]] = [:]
 
   init(root: URL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
     .appendingPathComponent("ClawDad/AssistantDrafts", isDirectory: true)) { self.root = root }
@@ -99,6 +102,19 @@ final class AssistantChatDraftStore: ObservableObject {
     catch { value = AssistantChatDraft(); self.error = "The saved Assistant draft could not be opened: \(error.localizedDescription)" }
     do { unprocessed = try readAccepted(next).filter { $0.failure != nil } }
     catch { unprocessed = []; self.error = "The saved recovery messages could not be opened. Your current draft is kept." }
+    let voiceFile = directory(next).appendingPathComponent("voice-turns.json")
+    if let data = try? Data(contentsOf: voiceFile), let voice = try? JSONDecoder().decode([AssistantRecoveredVoice].self, from: data) {
+      voiceCheckpoints[next] = voice
+      for turn in voice { recoverVoice(turn.text, id: turn.id, deliveryUncertain: turn.deliveryUncertain == true) }
+    }
+  }
+  func checkpointVoice(_ turns: [AssistantRecoveredVoice]) {
+    guard voiceCheckpoints[scope] != turns else { return }
+    do {
+      try FileManager.default.createDirectory(at: directory(scope), withIntermediateDirectories: true)
+      try JSONEncoder().encode(turns).write(to: directory(scope).appendingPathComponent("voice-turns.json"), options: .atomic)
+      voiceCheckpoints[scope] = turns
+    } catch { self.error = "Your displayed words could not be saved on this device. Keep the conversation open until sending finishes." }
   }
   func setText(_ text: String) {
     guard value.text != text else { return }
@@ -109,17 +125,28 @@ final class AssistantChatDraftStore: ObservableObject {
     do { try write(value, scope: scope); error = "" }
     catch { self.error = "Your draft could not be saved on this device: \(error.localizedDescription)" }
   }
-  func recoverVoice(_ text: String, id: String) {
-    guard !text.isEmpty, !(value.recoveredVoice ?? []).contains(where: { $0.id == id }) else { return }
-    value.recoveredVoice = (value.recoveredVoice ?? []) + [AssistantRecoveredVoice(id: id, text: text)]
+  func recoverVoice(_ text: String, id: String, deliveryUncertain: Bool = false) {
+    guard !text.isEmpty else { return }
+    let turn = AssistantRecoveredVoice(id: id, text: text, deliveryUncertain: deliveryUncertain)
+    if let index = value.recoveredVoice?.firstIndex(where: { $0.id == id }) {
+      guard value.recoveredVoice?[index] != turn else { return }
+      value.recoveredVoice?[index] = turn
+    } else { value.recoveredVoice = (value.recoveredVoice ?? []) + [turn] }
     saveRecovery()
   }
   func discardRecoveredVoice(_ id: String) {
     value.recoveredVoice?.removeAll { $0.id == id }
+    checkpointVoice((voiceCheckpoints[scope] ?? []).filter { $0.id != id })
     saveRecovery()
   }
   func useRecoveredVoice(_ id: String) {
     guard let voice = value.recoveredVoice?.first(where: { $0.id == id }) else { return }
+    if voice.deliveryUncertain == true {
+      guard value.isEmpty else { error = "Keep this unsent voice message separate until its original Mac receipt is checked. Your typed draft is preserved."; return }
+      value.text = voice.text; value.id = voice.id
+      discardRecoveredVoice(id)
+      return
+    }
     value.text = [value.text, voice.text].filter { !$0.isEmpty }.joined(separator: "\n\n")
     value.id = UUID().uuidString.lowercased()
     discardRecoveredVoice(id)
@@ -172,6 +199,15 @@ final class AssistantChatDraftStore: ObservableObject {
   func clear() {
     do { try complete(value, scope: scope) } catch { self.error = error.localizedDescription }
   }
+  func stageAttempt(_ draft: AssistantChatDraft, scope target: String) throws {
+    var saved = try readAccepted(target)
+    if let existing = saved.first(where: { $0.id == draft.id }) {
+      guard existing.draft.text == draft.text, existing.draft.images == draft.images else { throw AssistantProtocolError.invalid }
+    } else {
+      saved.append(AssistantAcceptedDraft(draft: draft, failure: "Waiting for Mac acceptance. Reconnect and retry with this saved message; its original ID prevents duplicate delivery.", awaitingAcceptance: true))
+      try writeAccepted(saved, scope: target)
+    }
+  }
   func accept(_ sent: AssistantChatDraft, scope target: String) throws {
     var saved = try readAccepted(target)
     if !saved.contains(where: { $0.id == sent.id }) {
@@ -180,10 +216,20 @@ final class AssistantChatDraftStore: ObservableObject {
       // model generation succeeded. Keep exact text, retry ID and image bytes.
       try writeAccepted(saved, scope: target)
     }
+    if let index = saved.firstIndex(where: { $0.id == sent.id }), saved[index].failure != nil {
+      saved[index].failure = nil; saved[index].awaitingAcceptance = false; try writeAccepted(saved, scope: target)
+    }
     try complete(sent, scope: target)
   }
   func reconcile(_ receipts: [AssistantMessageReceipt]) {
     do {
+      let known = Set(receipts.map(\.id))
+      if let checkpoint = voiceCheckpoints[scope], checkpoint.contains(where: { known.contains($0.id) }) {
+        checkpointVoice(checkpoint.filter { !known.contains($0.id) })
+      }
+      if value.recoveredVoice?.contains(where: { known.contains($0.id) }) == true {
+        value.recoveredVoice?.removeAll { known.contains($0.id) }; saveRecovery()
+      }
       let original = try readAccepted(scope)
       guard !original.isEmpty else { return }
       var finished: [AssistantAcceptedDraft] = []
@@ -191,6 +237,8 @@ final class AssistantChatDraftStore: ObservableObject {
         guard let receipt = receipts.first(where: { $0.id == item.id }) else { return item }
         if receipt.status == "completed" { finished.append(item); return nil }
         var next = item
+        next.awaitingAcceptance = false
+        if ["queued", "running"].contains(receipt.status) { next.failure = nil }
         if ["attention", "interrupted", "cancelled"].contains(receipt.status) {
           next.failure = receipt.error ?? "The Assistant did not finish this message. Review its saved draft before retrying."
         }
@@ -198,6 +246,9 @@ final class AssistantChatDraftStore: ObservableObject {
       }
       guard saved != original else { return }
       try writeAccepted(saved, scope: scope)
+      for item in original where receipts.contains(where: { $0.id == item.id && ["queued", "running", "completed"].contains($0.status) }) {
+        try complete(item.draft, scope: scope)
+      }
       for item in finished { for image in item.draft.images { removeUnusedImage(image, scope: scope) } }
     } catch { self.error = "An unprocessed message could not be updated on this device. Its saved copy is kept." }
   }
@@ -210,7 +261,9 @@ final class AssistantChatDraftStore: ObservableObject {
       next.recoveredVoice = value.recoveredVoice
       try write(next, scope: scope)
       value = next
-      try writeAccepted(saved.filter { $0.id != id }, scope: scope)
+      // Keep the original receipt record if the phone lost its acknowledgment.
+      // Editing produces a separate draft; it cannot erase uncertain delivery.
+      if item.awaitingAcceptance != true { try writeAccepted(saved.filter { $0.id != id }, scope: scope) }
       error = item.failure ?? ""
     } catch { self.error = error.localizedDescription }
   }

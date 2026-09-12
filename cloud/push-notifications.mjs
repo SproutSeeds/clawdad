@@ -76,6 +76,23 @@ export function completionPayload(event,registration,identity) {
     clawdad:{version:1,eventId:event.id,sessionId:event.sessionId,directory:event.directory,completedAt:event.completedAt,
       accountId:identity.accountId,workspaceId:identity.workspaceId,hostId:identity.hostId}};
 }
+export function normalizeAssistantNotification(value,now=Date.now()) {
+  const when=Date.parse(value?.completedAt);
+  if(value?.kind!=='assistant_reply'||!/^[a-f\d]{64}$/.test(value.id||'')||!uuid(value.conversationId)
+    ||!['accountId','workspaceId','hostId'].every(key=>text(value[key],160)&&!/[\x00-\x1f]/.test(value[key]))
+    ||!text(value.requestId,128)||/[\x00-\x1f]/.test(value.requestId)||!text(value.replyId,512)
+    ||/[\x00-\x1f]/.test(value.replyId)||!value.replyId.startsWith(`assistant:${value.requestId}:`)
+    ||!Number.isFinite(when)||when<now-day||when>now+60_000)throw Error('Invalid Assistant reply notification');
+  return {id:value.id,kind:'assistant_reply',conversationId:value.conversationId,requestId:value.requestId,
+    replyId:value.replyId,completedAt:new Date(when).toISOString(),accountId:value.accountId,workspaceId:value.workspaceId,hostId:value.hostId};
+}
+export function assistantNotificationPayload(event,registration,identity) {
+  const at=new Intl.DateTimeFormat(registration.locale,{hour:'numeric',minute:'2-digit',timeZone:registration.timeZone}).format(new Date(event.completedAt));
+  return {aps:{alert:{title:'Assistant replied',subtitle:identity.hostName||'ClawDad',body:`Completed at ${at} · Tap to open and listen`},
+    sound:'default','thread-id':`${identity.hostId}:assistant:${event.conversationId}`,category:'ASSISTANT_REPLY'},
+    clawdad:{version:1,kind:'assistant_reply',eventId:event.id,conversationId:event.conversationId,requestId:event.requestId,
+      replyId:event.replyId,completedAt:event.completedAt,accountId:identity.accountId,workspaceId:identity.workspaceId,hostId:identity.hostId}};
+}
 export class PushNotificationService {
   constructor(state,env,{fetchImpl=fetch,clock=Date.now}={}) {
     this.state=state; this.env=env; this.clock=clock; this.pending=Promise.resolve();
@@ -112,7 +129,8 @@ export class PushNotificationService {
   async revoke(deviceId) { return this.exclusive(()=>this.state.storage.delete(registrationPrefix+deviceId)); }
   async submit(value,identity) {
     return this.exclusive(async()=>{
-      const event=value?.kind === 'research' ? normalizeResearchNotification(value,this.clock()) : value?.kind === 'codex_weekly' ? normalizeWeeklyNotification(value,this.clock()) : normalizeCompletion(value,this.clock());
+      const event=value?.kind === 'assistant_reply' ? normalizeAssistantNotification(value,this.clock()) : value?.kind === 'research' ? normalizeResearchNotification(value,this.clock()) : value?.kind === 'codex_weekly' ? normalizeWeeklyNotification(value,this.clock()) : normalizeCompletion(value,this.clock());
+      if(event.kind==='assistant_reply'&&['accountId','workspaceId','hostId'].some(key=>event[key]!==identity[key]))throw Error('Assistant notification belongs to a different original computer or account');
       const devices=await this.state.storage.list({prefix:registrationPrefix});
       const targets=[...devices.values()].filter(device=>Date.parse(event.completedAt)>=device.enabledSince).map(device=>device.deviceId);
       if (!targets.length) return {accepted:true,recipients:0};
@@ -149,7 +167,7 @@ export class PushNotificationService {
             const response=await this.fetch(`https://${device.environment==='development'?'api.sandbox.push.apple.com':'api.push.apple.com'}/3/device/${device.token}`,{
               method:'POST',headers:{authorization:`bearer ${token}`,'apns-topic':topic,'apns-push-type':'alert','apns-priority':'10',
                 'apns-expiration':String(Math.floor((Date.parse(event.completedAt)+day)/1000)),'apns-collapse-id':event.id,'content-type':'application/json'},
-              body:JSON.stringify(event.kind === 'research' ? researchNotificationPayload(event,device,event.identity) : event.kind === 'codex_weekly' ? weeklyNotificationPayload(event,device,event.identity) : completionPayload(event,device,event.identity)),signal:AbortSignal.timeout(10_000)});
+              body:JSON.stringify(event.kind === 'assistant_reply' ? assistantNotificationPayload(event,device,event.identity) : event.kind === 'research' ? researchNotificationPayload(event,device,event.identity) : event.kind === 'codex_weekly' ? weeklyNotificationPayload(event,device,event.identity) : completionPayload(event,device,event.identity)),signal:AbortSignal.timeout(10_000)});
             delivered=response.ok; httpStatus=response.status;
             const providerReason=delivered?'':(await response.json().catch(()=>({}))).reason;
             reason=delivered?'':(/^[A-Za-z]{1,64}$/.test(providerReason || '')?providerReason:'ProviderError');

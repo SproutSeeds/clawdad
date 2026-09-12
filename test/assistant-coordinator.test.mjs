@@ -44,6 +44,18 @@ async function ready(runtime){
 }
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
 
+test('explicit main cancellation terminates the owned exec and releases its conversation lock',async t=>{
+  const {root,make}=await fixture(t),coordinator=make();
+  const runtime=new AssistantRuntime({root,coordinator});t.after(()=>runtime.close());
+  await ready(runtime);await runtime.command({action:'message',requestId:'cancel-exec',text:'wait'});
+  while(!coordinator.child)await settle();const pid=coordinator.child.pid;
+  await runtime.command({action:'cancel',requestId:'cancel-control',jobId:'cancel-exec'});await runtime.drainTask;
+  assert.equal((await runtime.job('cancel-exec')).status,'cancelled');
+  assert.throws(()=>process.kill(pid,0));assert.deepEqual(await runtime.notificationOutbox(),[]);
+  await runtime.command({action:'message',requestId:'after-cancel',text:'A different explicit message'});await runtime.drainTask;
+  assert.equal((await runtime.job('after-cancel')).status,'completed');
+});
+
 test('stdin encoding preserves a literal leading BOM and whitespace image captions use exact positional text',()=>{
   const text='\uFEFFBEGIN\nexact 🧪\nEND  ';
   const encoded=Buffer.from(assistantStdinPrompt(text));
@@ -214,6 +226,59 @@ test('a second runtime cannot start a concurrent conversation process',async t=>
   while(!first.child)await settle();
   await assert.rejects(second.run({text:'second',onSession:async()=>{},onMessage:async()=>{}}),/already processing/);
   assert.equal(spawns.length,1);first.stop();await assert.rejects(running);
+});
+
+test('actual service death preserves interrupted work and blocks an orphaned child until it exits',async t=>{
+  const {root,make,spawns}=await fixture(t);
+  const parent=spawn(process.execPath,['--input-type=module','-e',`
+    import {spawn} from 'node:child_process';
+    import {AssistantCoordinator} from ${JSON.stringify(new URL('../lib/assistant-coordinator.mjs',import.meta.url).href)};
+    import {AssistantRuntime} from ${JSON.stringify(new URL('../lib/assistant-runtime.mjs',import.meta.url).href)};
+    const root=${JSON.stringify(root)};
+    const coordinator=new AssistantCoordinator({root,codexPath:process.execPath,
+      spawnImpl:(command,args,options)=>spawn(command,[root+'/fixture.mjs',...args],options)});
+    const runtime=new AssistantRuntime({root,coordinator});
+    await runtime.command({action:'start',requestId:'start'});
+    await runtime.nativePoll({catalog:${JSON.stringify(catalog)}});
+    await runtime.command({action:'message',requestId:'interrupted-main',text:'wait'});
+    setInterval(()=>{},1000);
+  `],{stdio:'ignore'});
+  let orphan;
+  t.after(()=>{parent.kill('SIGKILL');if(orphan)try{process.kill(orphan,'SIGTERM');}catch{}});
+  for(let i=0;i<500;i++){
+    const lease=JSON.parse(await fs.readFile(path.join(root,'conversation.lock'),'utf8').catch(()=>'{}'));
+    const state=JSON.parse(await fs.readFile(path.join(root,'state.json'),'utf8').catch(()=>'{}'));
+    if(lease.childPid&&state.jobs?.find(job=>job.id==='interrupted-main')?.sessionId===id){orphan=lease.childPid;break;}
+    await new Promise(resolve=>setTimeout(resolve,10));
+  }
+  assert.ok(orphan,'The child must have received the prompt and entered its long turn before this crash fixture');
+  const parentExit=new Promise(resolve=>parent.once('exit',resolve));parent.kill('SIGKILL');await parentExit;
+  assert.doesNotThrow(()=>process.kill(orphan,0),'The fixture must actually exercise a surviving child');
+  const runtime=new AssistantRuntime({root,coordinator:make()});t.after(()=>runtime.close());
+  await runtime.command({action:'state'});
+  assert.equal((await runtime.job('interrupted-main')).status,'interrupted');
+  await assert.rejects(runtime.command({action:'terminal.send',requestId:'old-context',tabId:'one',text:'never',coordinatorRequestId:'interrupted-main'},{tool:true}),/no longer active/);
+  await runtime.nativePoll({catalog});
+  await runtime.command({action:'message',requestId:'while-orphaned',text:'Do not start alongside the old process'});await runtime.drainTask;
+  assert.equal((await runtime.job('while-orphaned')).status,'attention');
+  assert.match((await runtime.job('while-orphaned')).error,/previous background Assistant process/);assert.equal(spawns.length,0);
+  process.kill(orphan,'SIGTERM');
+  let alive=true;
+  for(let i=0;i<500&&alive;i++){try{process.kill(orphan,0);}catch(error){if(error.code==='ESRCH')alive=false;}if(alive)await new Promise(resolve=>setTimeout(resolve,10));}
+  assert.equal(alive,false);orphan=null;
+  await runtime.command({action:'message',requestId:'explicit-after-recovery',text:'A new explicit continuation'});await runtime.drainTask;
+  assert.equal((await runtime.job('explicit-after-recovery')).status,'completed');assert.equal(spawns.length,1);
+  assert.equal((await runtime.job('interrupted-main')).status,'interrupted','The old work is never replayed');
+});
+
+test('an interrupted lease without a recorded child stays uncertain instead of being guessed away',async t=>{
+  const {root,make,spawns}=await fixture(t);
+  const exited=spawn(process.execPath,['-e',''],{stdio:'ignore'});const pid=exited.pid;
+  await new Promise(resolve=>exited.once('exit',resolve));
+  const file=path.join(root,'conversation.lock');
+  const lease=JSON.stringify({pid,id:'incomplete-start',phase:'starting'});await fs.writeFile(file,lease);
+  await assert.rejects(make().run({text:'preserve',onSession:async()=>{},onMessage:async()=>{}}),/child-process identity/);
+  assert.equal(await fs.readFile(file,'utf8'),lease);assert.equal(spawns.length,0);
 });
 
 test('shutdown kills only the owned process and releases its conversation lock',async t=>{

@@ -6,6 +6,19 @@
   /// UI acceptance fixtures never send keyboard events or connect to a real host.
   @MainActor
   final class AssistantPreview {
+    static let replyConversation = "11111111-1111-4111-8111-111111111111"
+    static let replyRequest = "22222222-2222-4222-8222-222222222222"
+    static let replyID = "assistant:\(replyRequest):final"
+    static func notification(session: CloudSession) -> AssistantReplyNotification {
+      AssistantReplyNotification(version: 1, kind: "assistant_reply", eventId: String(repeating: "c", count: 64),
+        conversationId: replyConversation, requestId: replyRequest, replyId: replyID, completedAt: "2026-09-11T20:52:00Z",
+        accountId: session.accountId, workspaceId: session.workspaceId, hostId: session.hostId)
+    }
+    func replyPayload() throws -> Data {
+      try JSONSerialization.data(withJSONObject: ["assistantReply": ["conversationId": Self.replyConversation, "requestId": Self.replyRequest,
+        "message": ["id": Self.replyID, "role": "assistant", "text": "Exact completed Assistant reply.\nYour work finished while the phone was away.", "createdAt": "2026-09-06T20:52:00Z"],
+        "userMessage": ["id": Self.replyRequest, "role": "user", "text": "Keep working after I hang up.", "createdAt": "2026-09-06T20:49:00Z"]]])
+    }
     static var capacityFixtureText: String {
       let size = ProcessInfo.processInfo.arguments.contains("--capacity-over-limit") ? 131_073 : 131_072
       let start = "BEGIN_IPHONE_PASTE\r\nResearch 🧪 中文 e\u{0301}\n```text\nExact lines stay intact.\n```\n"
@@ -27,7 +40,7 @@
     private var mainWorkspaceJobs:[String:AssistantValue]=[:]
     init() {
       state = [
-        "version": .number(1), "conversationMode": .string("background"), "imageAttachments": .bool(true), "enabled": .bool(true), "paused": .bool(false),
+        "version": .number(1), "conversationId": .string(Self.replyConversation), "conversationMode": .string("background"), "imageAttachments": .bool(true), "enabled": .bool(true), "paused": .bool(false),
         "chatCapacity": .object(["textBytes": .number(131_072), "unit": .string("utf8_bytes")]),
         "nativeOnline": .bool(true), "coordinator": .object(["mode": .string("background"), "model": .string("gpt-6-astra"), "status": .string("ready")]),
         "tasks": .array([]),

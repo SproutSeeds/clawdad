@@ -148,10 +148,11 @@ public struct AssistantTaskRecord: Codable, Identifiable, Equatable, Sendable {
   public var displayName: String? = nil
   public var requestText: String? = nil
   public var createdAt: String? = nil
+  public var progress: [String: AssistantValue]? = nil
   public var displayStatus: String {
     switch status {
     case "queued": "Waiting for delivery"
-    case "running": "Delivering"
+    case "running": action == "message" ? "Working" : "Delivering"
     case "inserted": "Draft inserted"
     case "cleared": "Draft cleared"
     case "replaced": "Draft replaced"
@@ -170,6 +171,7 @@ public struct AssistantTaskRecord: Codable, Identifiable, Equatable, Sendable {
 
 public struct AssistantSnapshot: Codable, Sendable {
   public let version: Int
+  public var conversationId: String? = nil
   public let conversationMode: String?
   public var imageAttachments: Bool? = nil
   public var supportsBackgroundCalls: Bool { conversationMode == "background" }

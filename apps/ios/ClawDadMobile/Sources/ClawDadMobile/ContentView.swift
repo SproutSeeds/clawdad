@@ -39,6 +39,7 @@ struct ContentView: View {
   @StateObject private var files = MobileFilesController()
   @StateObject private var assistant = MobileAssistantController()
   @ObservedObject private var notifications = MobileNotificationController.shared
+  @ObservedObject private var assistantNotifications = AssistantReplyNavigation.shared
   @AppStorage("clawdad.threadScope") private var threadScopeRaw = MobileThreadScope.project.rawValue
   @FocusState private var messageEditorFocused: Bool
 
@@ -219,6 +220,7 @@ struct ContentView: View {
       }
       .onChange(of: session.pairedComputers.map { "\($0.id)|\($0.pairedAt)|\($0.cloudUrl)" }) { _, _ in notifications.bind(session) }
       .onChange(of: notifications.pendingOpen) { _, _ in openPendingNotification() }
+      .onChange(of: assistantNotifications.pending) { _, _ in openPendingAssistantNotification() }
       .onChange(of: notifications.pendingUsageOpen) { _, _ in openPendingUsageNotification() }
       .onChange(of: notifications.pendingResearchOpen) { _, _ in openPendingResearchNotification() }
   }
@@ -401,9 +403,15 @@ struct ContentView: View {
     remoteAssist.bind(to: session)
     session.connectIfPaired()
     presentAppStorePreviewIfNeeded()
+    #if DEBUG
+    if ProcessInfo.processInfo.arguments.contains("--clawdad-assistant-notification-test") {
+      assistantNotifications.receive(AssistantPreview.notification(session: session))
+    }
+    #endif
   }
 
   private func openPendingNotification() {
+    openPendingAssistantNotification()
     openPendingResearchNotification()
     openPendingUsageNotification()
     guard let notification = notifications.pendingOpen else { return }
@@ -416,6 +424,21 @@ struct ContentView: View {
     showingRemoteAssist = false
     selectedThreadSelection = nil
     session.openNotification(notification)
+  }
+  private func openPendingAssistantNotification() {
+    guard let target = assistantNotifications.pending else { return }
+    guard let computer = session.pairedComputers.first(where: { target.matches($0) }) else {
+      session.notificationError = "This Assistant reply belongs to a computer that is no longer paired. Pair the original computer to open it."
+      return
+    }
+    session.cancelNotificationOpen()
+    showingSettings = false; showingFiles = false; showingTools = false
+    showingProjectPicker = false; showingRemoteAssist = false
+    if session.activeComputerId != computer.id || !session.ready { session.switchComputer(to: computer.id) }
+    assistant.bind(session)
+    showingAssistant = true
+    assistant.open()
+    assistant.openReplyNotification(target)
   }
 
   private func openPendingUsageNotification() {

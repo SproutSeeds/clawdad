@@ -2,6 +2,36 @@ import XCTest
 
 @MainActor
 final class AssistantUITests: XCTestCase {
+  func testNotificationOpensExactOldReplyWithoutStartingCall() { notificationCheck(largeText: false) }
+  func testNotificationReadbackControlsAtLargeTextSize() { notificationCheck(largeText: true) }
+  private func notificationCheck(largeText: Bool) {
+    continueAfterFailure = false
+    let app = XCUIApplication()
+    app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-assistant-test",
+      "--clawdad-assistant-long-history", "--clawdad-assistant-notification-test", "--clawdad-assistant-notification-reset", "--clawdad-assistant-reset-draft"]
+    if largeText { app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXL"] }
+    app.launch()
+    let reply = app.textViews["clawdad.assistant.text.assistant:22222222-2222-4222-8222-222222222222:final"]
+    XCTAssertTrue(reply.waitForExistence(timeout: 20))
+    let visible = NSPredicate { _, _ in reply.frame.intersects(app.scrollViews["clawdad.assistant.history"].frame) }
+    expectation(for: visible, evaluatedWith: reply); waitForExpectations(timeout: 5)
+    XCTAssertEqual(reply.value as? String, "Exact completed Assistant reply.\nYour work finished while the phone was away.")
+    let pause = app.buttons["Pause speech"]
+    XCTAssertTrue(pause.waitForExistence(timeout: 8)); XCTAssertTrue(pause.isHittable)
+    XCTAssertGreaterThanOrEqual(pause.frame.height, 44)
+    XCTAssertFalse(app.buttons["End voice conversation"].exists)
+    XCTAssertTrue(app.buttons["clawdad.assistant.start-voice"].exists)
+    saveScreenshot(app, largeText ? "Assistant notification reply large text" : "Assistant notification exact reply")
+    pause.tap()
+    let resume = app.buttons["clawdad.assistant.resume-speech"]
+    XCTAssertTrue(resume.waitForExistence(timeout: 5)); XCTAssertTrue(resume.isHittable)
+    resume.tap(); XCTAssertTrue(pause.waitForExistence(timeout: 5))
+    app.buttons["Stop reading this message"].firstMatch.tap()
+    XCTAssertFalse(pause.exists)
+    app.terminate(); app.launchArguments.removeAll { $0 == "--clawdad-assistant-notification-reset" }; app.launch()
+    XCTAssertTrue(reply.waitForExistence(timeout: 20)); XCTAssertFalse(pause.exists, "The same callback after cold launch must not replay")
+    XCTAssertFalse(app.buttons["End voice conversation"].exists)
+  }
   func testSpeechRecoveryControlsKeepTextConversationAndCallState() { speechRecoveryCheck(largeText: false) }
   func testSpeechRecoveryControlsAtLargeTextSize() { speechRecoveryCheck(largeText: true) }
   private func speechRecoveryCheck(largeText: Bool) {
@@ -187,7 +217,7 @@ final class AssistantUITests: XCTestCase {
     }
     func visibleSpeaker() -> XCUIElement {
       for _ in 0..<12 {
-        if let found = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "clawdad.assistant.speak.")).allElementsBoundByIndex.first(where: { $0.isHittable }) { return found }
+        if let found = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "clawdad.assistant.speak.")).allElementsBoundByIndex.first(where: { $0.isHittable }) { return app.buttons[found.identifier] }
         scrollOlder()
       }
       XCTFail("No message header reached by scrolling")
@@ -202,7 +232,10 @@ final class AssistantUITests: XCTestCase {
     latest.tap()
     let hidden = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: latest); wait(for: [hidden], timeout: 5)
     let playing = visibleSpeaker()
-    playing.tap(); XCTAssertEqual(playing.label, "Stop reading message"); XCTAssertFalse(app.buttons["End voice conversation"].exists)
+    playing.tap()
+    expectation(for: NSPredicate(format: "label == %@", "Stop reading message"), evaluatedWith: playing)
+    waitForExpectations(timeout: 5)
+    XCTAssertFalse(app.buttons["End voice conversation"].exists)
     XCTAssertGreaterThanOrEqual(playing.frame.width, 44); XCTAssertGreaterThanOrEqual(playing.frame.height, 44)
     playing.tap(); XCTAssertEqual(playing.label, "Read message aloud")
     app.buttons["clawdad.assistant.start-voice"].tap()

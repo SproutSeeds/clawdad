@@ -37,7 +37,7 @@ struct AssistantChatComposer: View {
           Text("The complete text and attached images are saved. Recover the message to edit it.").font(.caption)
           ForEach(saved.draft.images, id: \.id) { Label($0.fileName, systemImage: "photo").font(.caption) }
           Text("Check the original message before resending. Recovery keeps its request ID; editing creates a new draft.").font(.caption)
-          Button("Recover to draft") { draft.recoverAccepted(saved.id) }
+          Button("Check receipt and recover") { Task { await controller.recoverUnprocessedMessage(saved.id) } }
             .frame(minHeight: 44).disabled(controller.sending || !draft.value.isEmpty)
           if !draft.value.isEmpty { Text("Send or clear your current draft first.").font(.caption) }
         }

@@ -24,6 +24,15 @@ final class MobileAssistantController: ObservableObject {
   @Published private(set) var playingMessageID: String?
   @Published private(set) var messagePlaybackPreparing = false
   @Published private(set) var messagePlaybackPaused = false
+  @Published private(set) var notificationNotice = ""
+  @Published private(set) var notificationScrollTarget: String?
+  @Published private(set) var notificationScrollRevision = 0
+  @Published private(set) var notificationTarget: AssistantReplyNotification?
+  private let replyNavigation: AssistantReplyNavigation
+  private var notificationOpen: Task<Void, Never>?
+  private var notificationMessages: [AssistantMessage] = []
+  private var notificationConversationId: String?
+  private var conversationVisible = false
   @Published private(set) var liveTranscript = ""
   @Published private(set) var hearingSpeech = false
   @Published private(set) var transcribingSpeech = false
@@ -113,11 +122,13 @@ final class MobileAssistantController: ObservableObject {
   init(connection: any AssistantTransport = AssistantConnection(),
     audio: any AssistantAudioIO = AssistantAudio(), defaults: UserDefaults? = .standard,
     automaticSendDelay: UInt64 = 2_000_000_000, chatDraft: AssistantChatDraftStore = AssistantChatDraftStore(),
+    replyNavigation: AssistantReplyNavigation? = nil,
     confirmMicrophoneChange: @escaping @MainActor () -> Void = assistantMicrophoneConfirmation) {
     self.chatDraft = chatDraft
     self.connection = connection
     self.audio = audio
     self.defaults = defaults
+    self.replyNavigation = replyNavigation ?? (defaults == nil ? AssistantReplyNavigation(defaults: nil) : .shared)
     self.automaticSendDelay = automaticSendDelay
     waitForSend = defaults?.bool(forKey: "assistant.thinkAloud") ?? false
     self.confirmMicrophoneChange = confirmMicrophoneChange
@@ -136,6 +147,7 @@ final class MobileAssistantController: ObservableObject {
         error = ""
         connectionError = ""
       }
+      if connected, foreground, notificationTarget != nil, notificationOpen == nil { retryReplyNotification() }
     }
     audio.onSpeechStarted = { [weak self] in
       guard let self, voiceActive, !muted, !replyAudioActive, !transcriptionCapturePaused else { return }
@@ -166,7 +178,7 @@ final class MobileAssistantController: ObservableObject {
       }
       // A hardware interruption pauses capture, not the connected conversation.
       // Preserve already displayed, unsent words for explicit review. Never
-      // retain a turn whose delivery may already have been accepted.
+      // resend a turn whose delivery may already have been accepted.
       preserveVoiceForReview()
       muteMicrophone(confirm: false, preservingTurn: false)
       microphoneNotice = failure.localizedDescription
@@ -192,6 +204,8 @@ final class MobileAssistantController: ObservableObject {
     if scope != next {
       stop()
       snapshot = nil
+      notificationOpen?.cancel(); notificationOpen = nil
+      notificationMessages = []; notificationConversationId = nil; notificationScrollTarget = nil
       pendingMessage = nil
       spoken = []
       silencedReplies = []
@@ -249,7 +263,9 @@ final class MobileAssistantController: ObservableObject {
   func refresh() async throws {
     #if DEBUG
       if let preview {
-        snapshot = try preview.snapshot()
+        var next = try preview.snapshot()
+        retainNotificationMessages(in: &next)
+        snapshot = next
         return
       }
     #endif
@@ -263,7 +279,9 @@ final class MobileAssistantController: ObservableObject {
     // request was in flight. An old unchanged acknowledgment cannot replace it.
     if next.historyUnchanged == true, snapshot?.historyRevision != previousRevision { return }
     try next.retainUnchangedHistory(from: snapshot)
+    retainNotificationMessages(in: &next)
     snapshot = next
+    if conversationVisible { replyNavigation.visibleConversationId = next.conversationId }
     chatDraft.reconcile(next.messageReceipts ?? [])
     assistantReady = next.supportsBackgroundCalls && next.enabled && next.nativeOnline && next.catalog != nil
     if voiceActive {
@@ -300,7 +318,9 @@ final class MobileAssistantController: ObservableObject {
     let requestedScope = scope
     let data = try await connection.request(.command, payload: JSONEncoder().encode(body))
     guard requestedScope == scope else { throw CancellationError() }
-    snapshot = try JSONDecoder().decode(AssistantSnapshot.self, from: data)
+    var next = try JSONDecoder().decode(AssistantSnapshot.self, from: data)
+    retainNotificationMessages(in: &next)
+    snapshot = next
     return try JSONDecoder().decode(AssistantCommandReceipt.self, from: data).job
   }
   func researchRequest(_ action: String, args: [String: AssistantValue] = [:],
@@ -424,10 +444,30 @@ final class MobileAssistantController: ObservableObject {
     do {
       let images = try draft.images.map { PreparedRemoteImage(upload: $0, data: try chatDraft.bytes($0, scope: target)) }
       if await send(draft.text, id: draft.id, images: images) {
-        try chatDraft.accept(draft, scope: target)
         if target == scope { chatDraft.reconcile(snapshot?.messageReceipts ?? []) }
       }
     } catch { self.error = error.localizedDescription }
+  }
+  func recoverUnprocessedMessage(_ id: String) async {
+    let target = scope
+    do {
+      let args: [String: AssistantValue] = ["action": .string("receipt"),
+        "requestId": .string(UUID().uuidString.lowercased()), "messageRequestId": .string(id)]
+      let data = try await connection.request(.command, payload: JSONEncoder().encode(args))
+      struct Result: Decodable { let messageReceipt: AssistantMessageReceipt? }
+      let receipt = try JSONDecoder().decode(Result.self, from: data).messageReceipt
+      guard target == scope else { return }
+      if let receipt {
+        chatDraft.reconcile([receipt])
+        if ["queued", "running", "completed"].contains(receipt.status) {
+          status = receipt.status == "completed" ? "The original message already finished" : "The Mac already accepted this message"
+          try await refresh(); return
+        }
+      }
+      chatDraft.recoverAccepted(id)
+    } catch {
+      self.error = "Reconnect to the original Mac to check this message before recovering it. Its complete saved draft and request ID are kept."
+    }
   }
   @discardableResult func send(_ text: String, id: String? = nil, images: [PreparedRemoteImage] = [], voiceInputEpoch: UUID? = nil) async -> Bool {
     guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty else { return true }
@@ -441,6 +481,9 @@ final class MobileAssistantController: ObservableObject {
       id.map { (text, $0) }
       ?? (pendingMessage?.text == text ? pendingMessage! : (text, UUID().uuidString.lowercased()))
     pendingMessage = pending
+    let durableDraft = AssistantChatDraft(id: pending.id, text: text, images: images.map(\.upload))
+    do { try chatDraft.stageAttempt(durableDraft, scope: target) }
+    catch { self.error = "Save this message on the iPhone before sending: \(error.localizedDescription)"; return false }
     let deadline = Date().addingTimeInterval(60)
     for attempt in 0..<2 {
       do {
@@ -472,6 +515,7 @@ final class MobileAssistantController: ObservableObject {
         if !images.isEmpty { args["images"] = try .encode(images.map(\.upload)) }
         let receipt = try await command("message", args: args, id: pending.id)
         if receipt?.status == "attention" || receipt?.status == "interrupted" {
+          chatDraft.reconcile(snapshot?.messageReceipts ?? [])
           self.error = receipt?.error ?? "This saved message needs review before it can be retried. Your draft is kept."
           return false
         }
@@ -482,6 +526,8 @@ final class MobileAssistantController: ObservableObject {
           throw AssistantProtocolError.invalid
         }
         pendingMessage = nil
+        try chatDraft.accept(durableDraft, scope: target)
+        if target == scope { chatDraft.reconcile(snapshot?.messageReceipts ?? []) }
         error = ""
         if !replyAudioActive { status = voiceActive ? "Thinking…" : "Message sent" }
         return true
@@ -585,8 +631,8 @@ final class MobileAssistantController: ObservableObject {
     else { muteMicrophone() }
   }
   private func preserveVoiceForReview() {
-    for turn in voiceTurns where turn.submittedAt == nil {
-      chatDraft.recoverVoice(turn.displayText, id: turn.id)
+    for turn in voiceTurns where !turn.displayText.isEmpty {
+      chatDraft.recoverVoice(turn.displayText, id: turn.id, deliveryUncertain: turn.submittedAt != nil)
     }
   }
   private func discardUnsentVoice() {
@@ -819,6 +865,88 @@ final class MobileAssistantController: ObservableObject {
     // Background audio keeps the user-started call alive. Foreground changes
     // never reactivate a manually muted microphone or consult retired settings.
     foreground = active
+    replyNavigation.foreground = active
+    if active, notificationTarget != nil, notificationOpen == nil { retryReplyNotification() }
+  }
+  func conversationVisibility(_ visible: Bool, followingLatest: Bool = true) {
+    conversationVisible = visible
+    replyNavigation.visibleScope = visible ? scope : nil
+    replyNavigation.visibleConversationId = visible ? snapshot?.conversationId : nil
+    replyNavigation.viewingLatest = visible && followingLatest
+  }
+  func openReplyNotification(_ target: AssistantReplyNotification) {
+    guard target.valid else { return }
+    replyNavigation.receive(target)
+    if notificationTarget == target, notificationOpen != nil { return }
+    notificationOpen?.cancel(); notificationOpen = nil
+    notificationTarget = target
+    retryReplyNotification()
+  }
+  private func retainNotificationMessages(in next: inout AssistantSnapshot) {
+    guard next.conversationId == notificationConversationId else { return }
+    for message in notificationMessages where !next.messages.contains(where: { $0.id == message.id }) { next.messages.append(message) }
+    next.messages.sort { ($0.createdAt, $0.id) < ($1.createdAt, $1.id) }
+  }
+  func retryReplyNotification() {
+    guard let target = notificationTarget, notificationOpen == nil else { return }
+    notificationNotice = "Opening Assistant reply…"
+    notificationOpen = Task { [weak self] in
+      guard let self else { return }
+      defer { if notificationTarget == target || notificationTarget == nil { notificationOpen = nil } }
+      do {
+        let deadline = Date().addingTimeInterval(60)
+        while !connected && Date() < deadline {
+          try Task.checkCancellation()
+          guard notificationTarget == target, scope == target.scope else { throw CancellationError() }
+          connection.connect()
+          try await Task.sleep(for: .milliseconds(250))
+        }
+        guard connected, scope == target.scope, notificationTarget == target else { throw AssistantProtocolError.disconnected }
+        try await refresh()
+        let args: [String: AssistantValue] = ["action": .string("reply"), "requestId": .string(UUID().uuidString.lowercased()),
+          "conversationId": .string(target.conversationId), "messageRequestId": .string(target.requestId), "replyId": .string(target.replyId)]
+        let data: Data
+        #if DEBUG
+        if let preview { data = try preview.replyPayload() }
+        else { data = try await connection.request(.command, payload: JSONEncoder().encode(args)) }
+        #else
+        data = try await connection.request(.command, payload: JSONEncoder().encode(args))
+        #endif
+        struct Reply: Decodable {
+          struct Saved: Decodable { let conversationId: String; let requestId: String; let message: AssistantMessage; let userMessage: AssistantMessage? }
+          let assistantReply: Saved
+        }
+        let result = try JSONDecoder().decode(Reply.self, from: data).assistantReply
+        try Task.checkCancellation()
+        guard scope == target.scope, notificationTarget == target, result.conversationId == target.conversationId,
+          result.requestId == target.requestId, result.message.id == target.replyId, result.message.role == "assistant",
+          snapshot?.conversationId == target.conversationId else { throw AssistantProtocolError.invalid }
+        notificationMessages = [result.userMessage, result.message].compactMap { $0 }
+        notificationConversationId = target.conversationId
+        for message in notificationMessages where snapshot?.messages.contains(where: { $0.id == message.id }) != true { snapshot?.messages.append(message) }
+        snapshot?.messages.sort { ($0.createdAt, $0.id) < ($1.createdAt, $1.id) }
+        notificationScrollTarget = target.replyId
+        notificationScrollRevision += 1
+        notificationNotice = ""
+        if foreground, replyNavigation.beginPlayback(target) {
+          spoken.insert(result.message.id)
+          if playingMessageID != result.message.id { playMessage(id: result.message.id, text: result.message.text) }
+        }
+        // If the phone backgrounded while loading, keep the tap pending so it
+        // opens and plays only after returning to the foreground.
+        if foreground { replyNavigation.finishOpening(target); notificationTarget = nil }
+      } catch is CancellationError { }
+      catch {
+        if notificationTarget == target {
+          notificationNotice = "Keep the original Mac awake with ClawDad running to open this saved reply. Reconnect and tap Retry; the exact reply is kept as your destination."
+        }
+      }
+    }
+  }
+  func cancelReplyNotification() {
+    notificationOpen?.cancel(); notificationOpen = nil
+    if let target = notificationTarget { replyNavigation.finishOpening(target) }
+    notificationTarget = nil; notificationNotice = ""
   }
   func interject() {
     guard voiceActive, replyAudioActive else { return }
@@ -854,7 +982,7 @@ final class MobileAssistantController: ObservableObject {
     }
   }
   func endVoice() {
-    if transcriptionReview != .listening { preserveVoiceForReview() }
+    preserveVoiceForReview()
     microphoneChange = UUID()
     inputEpoch = UUID()
     changingMicrophone = false
@@ -882,7 +1010,7 @@ final class MobileAssistantController: ObservableObject {
     transcribingSpeech = false
     resetTranscriptionReview()
     audio.stop()
-    status = "Conversation saved"
+    status = "Call ended · Accepted work continues on your Mac"
   }
   func stop() {
     endVoice()
@@ -968,6 +1096,11 @@ final class MobileAssistantController: ObservableObject {
     processVoiceQueue()
   }
   private func updateVoiceDraft() {
+    if voiceActive {
+      chatDraft.checkpointVoice(voiceTurns.filter { !$0.displayText.isEmpty }.map {
+        AssistantRecoveredVoice(id: $0.id, text: $0.displayText, deliveryUncertain: $0.submittedAt != nil)
+      })
+    }
     canSendVoice = voiceActive && !replyAudioActive && draftTurn != nil && clearTranscriptionTurn == nil
       && (!transcriptionEdited || !(draftTurn?.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true))
     transcribingSpeech = !voiceQueue.isEmpty
@@ -1180,7 +1313,7 @@ final class MobileAssistantController: ObservableObject {
         let result = try JSONDecoder().decode([String: AssistantValue].self, from: data)
         if let text = result["text"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines) {
           let combined = (turn.parts + [text]).joined(separator: " ").trimmingCharacters(in: .whitespaces)
-          if !combined.isEmpty { turn.previewText = text; liveTranscript = combined }
+          if !combined.isEmpty { turn.previewText = text; updateVoiceDraft() }
           turn.ending.transcript(combined, capturedAt: capturedAt,
             receivedAt: ProcessInfo.processInfo.systemUptime)
           scheduleVoiceSend(turn)
@@ -1206,6 +1339,14 @@ final class MobileAssistantController: ObservableObject {
     interruptSpeech()
     if let draftTurn { scheduleVoiceSend(draftTurn) }
     updateVoiceDraft()
+  }
+  func pauseMessagePlayback() {
+    guard let playback, speech != nil else { return }
+    if playback.pendingAudio != nil { playback.position = audio.playbackPosition }
+    playbackEpoch = UUID(); speech?.cancel(); speech = nil
+    audio.stopPlayback(); messagePlaybackPreparing = false; messagePlaybackPaused = true
+    playback.record("paused", reason: "userPaused")
+    status = "Speech paused"
   }
   private func speakNext() {
     guard voiceActive, speech == nil, playback == nil, !speechQueue.isEmpty,
@@ -1424,7 +1565,9 @@ struct AssistantView: View {
                   pausedPlayback: controller.messagePlaybackPaused,
                   play: { controller.playMessage(id: $0, text: $1) },
                   watch: { controller.watch(tabId: $0, onWatch: onWatch) },
-                  cancel: { controller.perform("cancel", args: ["jobId": .string($0)]) })
+                  cancel: { controller.perform("cancel", args: ["jobId": .string($0)]) },
+                  replyScrollTarget: historyFollowing.openingExact && messageSelection.activeID == nil ? controller.notificationScrollTarget : nil,
+                  replyScrollRevision: controller.notificationScrollRevision)
                 if controller.hearingSpeech || controller.transcribingSpeech || !controller.liveTranscript.isEmpty || controller.transcriptionReview != .listening {
                   AssistantVoiceTranscription(controller: controller).id("live-transcript")
                 }
@@ -1460,7 +1603,26 @@ struct AssistantView: View {
               if !Task.isCancelled, historyFollowing.following, messageSelection.activeID == nil,
                 controller.transcriptionReview != .editing { proxy.scrollTo("assistant-history-bottom", anchor: .bottom) }
             }
+            .task(id: controller.notificationScrollRevision) {
+              guard let target = controller.notificationScrollTarget else { return }
+              selectedHistory = nil
+              historyFollowing.openExactMessage()
+              // Materialize the lazy row; its native text anchor aligns the
+              // actual text once UIKit's multiline measurements have settled.
+              await Task.yield()
+              guard !Task.isCancelled, historyFollowing.openingExact else { return }
+              proxy.scrollTo(target, anchor: .top)
+            }
           }
+        }
+        if !controller.notificationNotice.isEmpty {
+          VStack(alignment: .leading, spacing: 4) {
+            Text(controller.notificationNotice).font(.footnote)
+            HStack {
+              Button("Retry", action: controller.retryReplyNotification)
+              Button("Cancel", action: controller.cancelReplyNotification)
+            }.frame(minHeight: 44)
+          }.padding(.horizontal).accessibilityIdentifier("clawdad.assistant.notification-notice")
         }
         if !controller.error.isEmpty, controller.error != controller.chatCapacityProblem {
           Text(controller.error).font(.footnote).foregroundStyle(ClawDadTheme.gold).padding(
@@ -1520,16 +1682,22 @@ struct AssistantView: View {
       }
       .onAppear {
         controller.open()
+        controller.conversationVisibility(true, followingLatest: historyFollowing.following && !showingWorkspace)
         if controller.researchRequested { showingWorkspace = true; controller.researchRequested = false }
       }
       .onChange(of: controller.researchRequested) { _, requested in
         if requested { showingWorkspace = true; controller.researchRequested = false }
       }
       .onChange(of: messageSelection.activeID) { _, id in
-        if id != nil, selectedHistory == nil { selectedHistory = controller.snapshot }
+        if id != nil {
+          historyFollowing.cancelExactOpening()
+          if selectedHistory == nil { selectedHistory = controller.snapshot }
+        }
         if id == nil { selectedHistory = nil }
       }
-      .onDisappear { controller.leaveTranscriptionEditor() }
+      .onChange(of: historyFollowing.following) { _, following in controller.conversationVisibility(true, followingLatest: following && !showingWorkspace) }
+      .onChange(of: showingWorkspace) { _, showing in controller.conversationVisibility(true, followingLatest: historyFollowing.following && !showing) }
+      .onDisappear { controller.leaveTranscriptionEditor(); controller.conversationVisibility(false) }
       .sheet(isPresented: Binding(get: { researchTab != nil }, set: { if !$0 { researchTab = nil } })) {
         if let researchTab { ResearchSupervisorView(controller: controller, tabId: researchTab) }
       }
@@ -1549,6 +1717,15 @@ struct AssistantView: View {
 
 struct AssistantSpeechRecoveryNotice: View {
   @ObservedObject var controller: MobileAssistantController
+  @Environment(\.dynamicTypeSize) private var textSize
+  @ViewBuilder private func controlLabel(_ title: String, symbol: String) -> some View {
+    if textSize.isAccessibilitySize {
+      Label(title, systemImage: symbol).labelStyle(.iconOnly)
+        .font(.system(size: 24)).frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+    } else {
+      Label(title, systemImage: symbol).frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+    }
+  }
   var body: some View {
     if controller.messagePlaybackPaused {
       VStack(alignment: .leading, spacing: 0) {
@@ -1556,16 +1733,31 @@ struct AssistantSpeechRecoveryNotice: View {
           .font(.caption).fixedSize(horizontal: false, vertical: true)
           .accessibilityIdentifier("clawdad.assistant.speech-paused")
         HStack {
-          Button("Resume speech", systemImage: "play.fill") { controller.resumeMessagePlayback() }
-            .frame(minHeight: 44).contentShape(Rectangle())
+          Button(action: controller.resumeMessagePlayback) {
+            controlLabel("Resume speech", symbol: "play.fill")
+          }
             .accessibilityHint("Continue the same message and voice from where playback stopped")
             .accessibilityIdentifier("clawdad.assistant.resume-speech")
           Spacer(minLength: 8)
-          Button("Stop", systemImage: "stop.fill") { controller.stopMessagePlayback() }
-            .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+          Button(action: controller.stopMessagePlayback) {
+            controlLabel("Stop", symbol: "stop.fill")
+          }
             .accessibilityLabel("Stop reading this message")
         }.font(.subheadline).buttonStyle(.plain).frame(minHeight: 44)
       }.padding(.horizontal, 12).padding(.top, 6)
+        .foregroundStyle(ClawDadTheme.cream).background(Color.black)
+    } else if controller.playingMessageID != nil {
+      HStack {
+        Button(action: controller.pauseMessagePlayback) {
+          controlLabel("Pause speech", symbol: "pause.fill")
+        }
+          .accessibilityIdentifier("clawdad.assistant.pause-speech")
+        Spacer()
+        Button(action: controller.stopMessagePlayback) {
+          controlLabel("Stop", symbol: "stop.fill")
+        }
+          .accessibilityLabel("Stop reading this message")
+      }.font(.subheadline).buttonStyle(.plain).frame(minHeight: 44).padding(.horizontal, 12)
         .foregroundStyle(ClawDadTheme.cream).background(Color.black)
     }
   }

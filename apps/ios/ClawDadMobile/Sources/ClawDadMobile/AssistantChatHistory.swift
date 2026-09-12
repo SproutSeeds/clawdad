@@ -57,9 +57,11 @@ struct AssistantChatHistory: View {
   var play: (String, String) -> Void = { _, _ in }
   var watch: (String) -> Void
   var cancel: (String) -> Void
+  var replyScrollTarget: String?
+  var replyScrollRevision = 0
   private var items: [AssistantHistoryItem] {
     ((snapshot?.messages ?? []).map(AssistantHistoryItem.message)
-      + (snapshot?.tasks ?? []).filter { $0.action.hasPrefix("terminal.") || $0.status == "attention" }
+      + (snapshot?.tasks ?? []).filter { $0.action.hasPrefix("terminal.") || $0.action == "message" || $0.status == "attention" }
         .map(AssistantHistoryItem.task)).sorted { ($0.date, $0.id) < ($1.date, $1.id) }
   }
   var body: some View {
@@ -75,6 +77,7 @@ struct AssistantChatHistory: View {
             AssistantCopyButton(text: message.text, label: "\(message.role) message", id: message.id)
           }
           AssistantResponseText(text: message.text, id: message.id, selection: selection)
+            .assistantReplyScrollAnchor(active: replyScrollTarget == message.id, revision: replyScrollRevision)
           ForEach(message.images ?? [], id: \.id) { image in
             Label(image.fileName, systemImage: "photo").font(.footnote)
           }
@@ -91,7 +94,11 @@ struct AssistantChatHistory: View {
           AssistantSelectableText(text: task.requestText ?? task.args["text"]?.string ?? "",
             id: "request.\(task.id)", selection: selection)
           if let error = task.error { Text(error).foregroundStyle(ClawDadTheme.gold).font(.footnote) }
-          if let response = task.response, !response.isEmpty {
+          if task.action == "message", task.status == "running", task.progress?["stage"]?.string == "quiet" {
+            Text("The Mac has not reported new progress recently. You can keep waiting or cancel this response.")
+              .font(.footnote).foregroundStyle(.secondary)
+          }
+          if task.action != "message", let response = task.response, !response.isEmpty {
             HStack {
               Text("Assistant").font(.caption.bold()).foregroundStyle(ClawDadTheme.gold)
               Spacer()
@@ -103,6 +110,10 @@ struct AssistantChatHistory: View {
           HStack {
             if let tab = task.args["tabId"]?.string { Button("Watch in Terminal") { watch(tab) } }
             if task.status == "queued" { Button("Cancel") { cancel(task.id) } }
+            if task.action == "message", task.status == "running" {
+              Button("Cancel response") { cancel(task.id) }.frame(minHeight: 44)
+                .accessibilityHint("Stops this Assistant response. Already accepted project work continues.")
+            }
           }.font(.footnote)
         }.padding(12).background(ClawDadTheme.cream.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
           .id(task.id)
