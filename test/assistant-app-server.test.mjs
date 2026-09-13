@@ -21,6 +21,9 @@ async function fixture(t){
     const thread=threads.get(args.threadId);
     if(method==='thread/list')return {data:args.archived?[]:[...threads.values()],nextCursor:null};
     if(method==='thread/loaded/list')return {data:[...loaded],nextCursor:null};
+    if(method==='account/read')return {account:{type:'chatgpt'}};
+    if(method==='config/read')return {config:{model:'test-model',model_reasoning_effort:'high'}};
+    if(method==='model/list')return {data:[{model:'test-model',defaultReasoningEffort:'low',supportedReasoningEfforts:[{reasoningEffort:'low'},{reasoningEffort:'high'}],inputModalities:['text','image']}],nextCursor:null};
     if(method==='thread/read'){if(!thread)throw Error('Unknown thread');return {thread};}
     if(method==='thread/turns/list')return {data:thread.turns,nextCursor:null};
     if(method==='thread/queue/list')return {data:queue.get(args.threadId)||[],nextCursor:null};
@@ -31,11 +34,17 @@ async function fixture(t){
     if(method==='thread/queue/add'){
       const entry={id:id(),...args};queue.set(args.threadId,[...(queue.get(args.threadId)||[]),entry]);
       if(loseReply){loseReply=false;throw Object.assign(Error('Lost acknowledgement'),{uncertain:true});}return {queuedSubmission:entry};
+    }
+    if(method==='turn/start'){
+      assert.equal(thread.status.type,'idle','configured sends cannot steer active work');
+      const turn={id:id(),status:'inProgress',items:[{type:'userMessage',clientId:args.clientUserMessageId,content:args.input}]};
+      thread.turns.push(turn);thread.status={type:'active'};
+      if(loseReply){loseReply=false;throw Object.assign(Error('Lost acknowledgement'),{uncertain:true});}return {turn};
     }throw Error('Unexpected '+method);
   }};
-  const options={root,client,workspaces:async()=>({roots:[{path:root}]}),readIndex:async()=>[...threads.values()],readOwners:async()=>owners,lease:async()=>({release:async()=>{}})};
+  const options={root,client,workspaces:async()=>({roots:[{path:root}]}),readIndex:async()=>[...threads.values()],readOwners:async()=>owners,lease:async()=>({release:async()=>{}}),deliveryLease:async()=>({release:async()=>{}})};
   const app=new AssistantAppServer(options);t.after(()=>app.close());
-  return {root,threadId,other,threads,loaded,queue,calls,app,options,foreign(){owners.push({pid:80,tty:'ttys012',socket:false,threads:[threadId]});},restart(){owners[0].pid++;},lose(){loseReply=true;}};
+  return {root,threadId,other,threads,loaded,queue,calls,app,options,foreign(){owners.push({pid:80,tty:'ttys012',socket:false,threads:[threadId]});},exitForeign(){owners=owners.filter(p=>p.socket);},restart(){owners[0].pid++;},lose(){loseReply=true;}};
 }
 
 test('owner proof keeps shared history independent of Terminal or background owners',()=>{
@@ -151,4 +160,85 @@ test('archived restoration is explicit, owner-bound and separate from resume or 
   const again=await f.app.inspect(f.threadId);assert.equal(again.capabilities.resume,true);
   await f.app.control('appserver.resume',{threadId:f.threadId,targetToken:again.targetToken},id());
   assert.equal(f.calls.filter(c=>c.method==='thread/resume').length,1);
+});
+
+test('inaccessible histories stay visible, JSON subagents are filtered, and live metadata wins',async t=>{
+  const f=await fixture(t),missing=id(),internal=id();
+  f.app.readIndex=async()=>[{id:f.threadId,cwd:'/stale/cwd',source:'cli'},
+    {id:missing,cwd:f.root,source:'cli',title:'Missing retained history'},
+    {id:internal,cwd:f.root,source:'{"subAgent":{"thread_spawn":{}}}'}];
+  await assert.rejects(f.app.history({threadId:missing}));
+  const result=await f.app.inventory();
+  assert.equal(result.threads.find(v=>v.id===missing).historyStatus,'unavailable');
+  assert.equal(result.threads.some(v=>v.id===internal),false);
+  assert.equal(result.threads.find(v=>v.id===f.threadId).cwd,f.root);
+  assert.equal(result.threads.find(v=>v.id===f.threadId).metadataStale,true);
+  const inspect=await f.app.inspect(missing);assert.equal(inspect.reasonCode,'history_read_failed');
+  assert.equal(inspect.targetToken,undefined);assert.equal(inspect.capabilities.send,false);
+  assert.ok((await f.app.inventory({includeInternal:true})).threads.some(v=>v.id===internal));
+});
+
+test('owner proof ignores unrelated guardian handles and fresh inspection permits explicit handoff after owner exits',async t=>{
+  const f=await fixture(t),server={pid:1,socket:true,tty:'??',threads:[]};
+  const owner=(extra)=>classifyThreadOwner(f.threadId,[server,{pid:2,socket:false,tty:'ttys005',threads:[f.threadId,...extra]}],[f.threadId]);
+  assert.deepEqual(owner([]),owner([id()]));
+  f.foreign();f.loaded.delete(f.threadId);
+  const before=await f.app.inspect(f.threadId);assert.equal(before.capabilities.resume,false);
+  f.exitForeign();
+  const stale=await f.app.control('appserver.resume',{threadId:f.threadId,targetToken:before.targetToken},id());assert.equal(stale.job.status,'attention');
+  const fresh=await f.app.inspect(f.threadId);assert.equal(fresh.owner.kind,'saved');
+  const resumed=await f.app.control('appserver.resume',{threadId:f.threadId,targetToken:fresh.targetToken},id());
+  assert.equal(resumed.job.result.threadId,f.threadId);assert.equal(resumed.job.result.owner.kind,'app_server');
+});
+
+test('selected model/effort reaches one accepted turn after existing work and native queue, in order',async t=>{
+  const f=await fixture(t);f.threads.get(f.threadId).status={type:'active'};
+  const model=await f.app.modelOptions(f.root);assert.equal(model.configuredReasoningEffort,'high');
+  await f.app.control('appserver.draft',{threadId:f.threadId,text:'BEGIN\nRésumé 🦞\nEND',expectedRevision:0},id());
+  const first=id(),args={threadId:f.threadId,targetToken:(await f.app.inspect(f.threadId)).targetToken,draftRevision:1,model:'test-model',reasoningEffort:'high'};
+  let result=await f.app.control('appserver.queue',args,first);assert.equal(result.job.status,'queued');assert.equal(result.job.result.nativeAccepted,false);
+  await f.app.poll();assert.equal(f.calls.some(c=>c.method==='turn/start'),false);
+  f.threads.get(f.threadId).status={type:'idle'};f.queue.set(f.threadId,[{id:id(),clientUserMessageId:id()}]);
+  await f.app.poll();assert.equal(f.calls.some(c=>c.method==='turn/start'),false);
+  f.queue.set(f.threadId,[]);await f.app.poll();
+  result=await f.app.control('appserver.queue',args,first);assert.equal(result.job.status,'working');assert.equal(result.job.result.nativeAccepted,true);
+  const sent=f.calls.filter(c=>c.method==='turn/start');assert.equal(sent.length,1);
+  assert.equal(sent[0].args.model,'test-model');assert.equal(sent[0].args.effort,'high');assert.equal(sent[0].args.clientUserMessageId,first);
+  assert.equal(sent[0].args.input[0].text,'BEGIN\nRésumé 🦞\nEND');assert.equal((await f.app.inspect(f.threadId)).draft.text,'');
+  const second=id(),third=id();
+  await f.app.control('appserver.queue',{threadId:f.threadId,targetToken:(await f.app.inspect(f.threadId)).targetToken,text:'second',model:'test-model',reasoningEffort:'low'},second);
+  await f.app.control('appserver.queue',{threadId:f.threadId,targetToken:(await f.app.inspect(f.threadId)).targetToken,text:'third'},third);
+  for(const expected of [second,third]){
+    const thread=f.threads.get(f.threadId);thread.turns.at(-1).status='completed';thread.status={type:'idle'};
+    await f.app.poll();assert.equal(f.calls.filter(c=>c.method==='turn/start').at(-1).args.clientUserMessageId,expected);
+  }
+});
+
+test('configured queue survives restart and pause, cancels before dispatch, and preserves later draft edits',async t=>{
+  const f=await fixture(t);let allowed=false;f.app.mayDispatch=()=>allowed;
+  await f.app.control('appserver.draft',{threadId:f.threadId,text:'captured',expectedRevision:0},id());
+  const requestId=id(),args={threadId:f.threadId,targetToken:(await f.app.inspect(f.threadId)).targetToken,draftRevision:1,model:'test-model',reasoningEffort:'high'};
+  await f.app.control('appserver.queue',args,requestId);await f.app.poll();assert.equal(f.calls.some(c=>c.method==='turn/start'),false);
+  const restored=new AssistantAppServer({...f.options,mayDispatch:()=>allowed});t.after(()=>restored.close());
+  await restored.load();await restored.control('appserver.draft',{threadId:f.threadId,text:'Keep later edits',expectedRevision:1,replace:true},id());
+  allowed=true;await restored.poll();assert.equal(restored.state.jobs.find(j=>j.id===requestId).status,'working');
+  assert.equal((await restored.inspect(f.threadId)).draft.text,'Keep later edits');
+  const cancelled=id();await restored.control('appserver.queue',{threadId:f.threadId,targetToken:(await restored.inspect(f.threadId)).targetToken,draftRevision:2,model:'test-model'},cancelled);
+  await restored.cancelWaiting(cancelled);await restored.cancelWaiting(cancelled);
+  f.threads.get(f.threadId).status={type:'idle'};await restored.poll();assert.equal(f.calls.filter(c=>c.method==='turn/start').length,1);
+  assert.equal((await restored.inspect(f.threadId)).draft.text,'Keep later edits');
+});
+
+test('unavailable settings reject safely and lost configured acknowledgement reconciles without replay',async t=>{
+  const f=await fixture(t);let token=(await f.app.inspect(f.threadId)).targetToken;
+  assert.match((await f.app.control('appserver.send',{threadId:f.threadId,targetToken:token,text:'keep',model:'missing'},id())).job.error,/unavailable/);
+  token=(await f.app.inspect(f.threadId)).targetToken;
+  assert.match((await f.app.control('appserver.send',{threadId:f.threadId,targetToken:token,text:'keep',model:'test-model',reasoningEffort:'impossible'},id())).job.error,/Unsupported reasoning/);
+  await f.app.control('appserver.draft',{threadId:f.threadId,text:'Retain until proven',expectedRevision:0},id());
+  const requestId=id(),args={threadId:f.threadId,targetToken:(await f.app.inspect(f.threadId)).targetToken,draftRevision:1,model:'test-model'};
+  await f.app.control('appserver.send',args,requestId);f.lose();await f.app.poll();
+  assert.equal(f.app.state.jobs.find(j=>j.id===requestId).uncertain,true);assert.equal((await f.app.inspect(f.threadId)).draft.text,'Retain until proven');
+  await f.app.control('appserver.send',args,requestId);await f.app.control('appserver.reconcile',{deliveryRequestId:requestId},id());
+  assert.equal(f.app.state.jobs.find(j=>j.id===requestId).status,'working');assert.equal((await f.app.inspect(f.threadId)).draft.text,'');
+  assert.equal(f.calls.filter(c=>c.method==='turn/start').length,1);
 });
