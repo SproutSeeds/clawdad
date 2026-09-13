@@ -8,9 +8,11 @@ import Foundation
 final class MacAssistantBridge {
   private let runtime: MacAssistantRuntime
   private let root: URL
+  private let observeWorkspaces: Bool
   private let tabs = MacTerminalTabController.shared
   private let input = MacInputController()
   private var loop: Task<Void, Never>?
+  var diagnosticStep: ((String) -> Void)?
   private var inventoryRequested = false
   private var pendingBindings: [AssistantValue] = []
   private var inspection:
@@ -40,10 +42,11 @@ final class MacAssistantBridge {
     return MainTerminalWorkspace(root:root.deletingLastPathComponent().appendingPathComponent("MainTerminalWorkspace",isDirectory:true),native:native)
   }()
 
-  init(runtime: MacAssistantRuntime) {
+  init(runtime: MacAssistantRuntime, root: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(
+    "Library/Application Support/ClawDad/Assistant", isDirectory: true), observeWorkspaces: Bool = true) {
     self.runtime = runtime
-    root = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(
-      "Library/Application Support/ClawDad/Assistant", isDirectory: true)
+    self.root = root
+    self.observeWorkspaces = observeWorkspaces
   }
 
   func start() {
@@ -57,11 +60,14 @@ final class MacAssistantBridge {
       } catch { return }
       while !Task.isCancelled {
         do {
+          diagnosticStep?("cycle")
           var observation: [String: AssistantValue] = ["workerId": .string(workerId)]
-          await mainWorkspace.automaticSnapshot()
+          if observeWorkspaces { await mainWorkspace.automaticSnapshot() }
           if inventoryRequested {
-            try? await tabs.prewarmActivity()
+            diagnosticStep?("activity")
+            if observeWorkspaces { try? await tabs.prewarmActivity() }
             do {
+              diagnosticStep?("catalog")
               observation["catalog"] = try .encode(await tabs.catalog())
             } catch {
               observation["catalogError"] = .string(error.localizedDescription)
@@ -86,15 +92,20 @@ final class MacAssistantBridge {
               else if let conversation = owner.conversation {
                 receipt["sessionId"] = .string(conversation.sessionId)
                 receipt["conversationPath"] = .string(conversation.path.path)
+                let matches = (observation["catalog"]?.object?["tabs"]?.array ?? []).compactMap { $0.object?["id"]?.string }
+                  .filter { tabs.assistantSnapshot(tabID: $0)?.tty == tty }
+                if matches.count == 1 { receipt["tabId"] = .string(matches[0]) }
               }
             }
             bindings.append(.object(receipt))
           }
           observation["bindings"] = .array(bindings)
+          diagnosticStep?("poll")
           let next = try await runtime.json("/v1/assistant/native/poll", observation)
           pendingBindings = next["pendingBindings"]?.array ?? []
           inventoryRequested = next["inventoryRequested"]?.bool ?? (next["enabled"]?.bool == true)
           if let job = next["job"]?.object, let id = job["id"]?.string {
+            diagnosticStep?("execute:" + (job["action"]?.string ?? "unknown"))
             let completion: [String: AssistantValue]
             do {
               let result = try await execute(job)
@@ -120,7 +131,8 @@ final class MacAssistantBridge {
               } catch { try? await Task.sleep(nanoseconds: 1_000_000_000) }
             }
           }
-        } catch { /* Durable pending requests remain on the local runtime. */  }
+        } catch { diagnosticStep?("observation-error") /* Durable pending requests remain on the local runtime. */ }
+        diagnosticStep?("sleep")
         try? await Task.sleep(nanoseconds: 1_500_000_000)
       }
     }
@@ -207,15 +219,40 @@ final class MacAssistantBridge {
       var result = try await nativeInput.execute("terminal.native.type", args: edit, input: input)
       result["launchStage"] = .string(stage); result["directory"] = .string(directory)
       result["submitted"] = .bool(false); result["enterSent"] = .bool(false)
-      result["nextStep"] = .string(stage == "directory" ? "Review and explicitly submit the directory draft with Enter. Inspect the resulting shell directory, then prepare the Codex launch draft." : "Review and explicitly submit the launch draft with Enter. Complete any trust/sign-in prompt yourself, then inspect this exact new agent.")
+      result["nextStep"] = .string(stage == "directory" ? "Review and explicitly submit the directory draft with Enter. Inspect the resulting shell directory, then prepare the Codex launch draft." : "Review and explicitly submit the launch draft with Enter. Inspect any startup prompt; use respond_terminal_prompt for an explicitly authorized supported choice. Sign-in retains its user flow. Then inspect this exact new agent.")
       return result
     }
     if action == "terminal.native.inspect" {
       guard let tabId = args["tabId"]?.string else { throw AssistantProtocolError.invalid }
+      if args["tty"] != nil || args["inputSessionId"] != nil || args["foregroundIdentity"] != nil {
+        guard let tty = args["tty"]?.string, let expected = args["inputSessionId"]?.string,
+          let foreground = args["foregroundIdentity"]?.string else {
+          throw assistantTerminalFailure("rebind_identity_incomplete", "Rebinding requires the previous native inspection's TTY, inputSessionId and foregroundIdentity together.")
+        }
+        let catalog = try await tabs.catalog()
+        let matches = catalog.tabs.filter { tabs.assistantSnapshot(tabID: $0.id)?.tty == tty }
+        guard try await Task.detached(operation: { try MacAssistantForeground.read(tty: tty) }).value.identity == foreground else {
+          throw assistantTerminalFailure("stale_identity", "The original native process is unavailable or changed. Inspect the intended current input; no target was substituted.")
+        }
+        guard matches.count == 1 else {
+          throw assistantTerminalFailure("catalog_binding_unresolved", "The process is still present, but this fresh catalog has not verified its native tab binding. Inspect the intended current tab, verify its TTY and process against the previous receipt, then use its new inspection token. No input was sent.")
+        }
+        let owner = try? await Task.detached { try MacTerminalResponseReader().inputBinding(tty: tty) }.value
+        guard expected == foreground || expected == owner?.instanceId || expected == owner?.conversation?.sessionId else {
+          throw assistantTerminalFailure("stale_identity", "The original Terminal session changed. Its input and saved receipt were preserved.")
+        }
+        var result = try await nativeInput.inspect(tabId: matches[0].id, input: input, ticket: ticket)
+        guard result["foregroundIdentity"]?.string == foreground,
+          result["inputSessionId"]?.string == expected || owner?.instanceId == expected else {
+          throw assistantTerminalFailure("stale_identity", "The native owner changed during reinspection. No key was sent.")
+        }
+        result["previousTabId"] = .string(tabId); result["identityRebound"] = .bool(matches[0].id != tabId)
+        return result
+      }
       return try await nativeInput.inspect(tabId: tabId, input: input, ticket: ticket)
     }
-    if ["terminal.native.type", "terminal.key", "terminal.images", "terminal.pointer", "terminal.context"].contains(action) {
-      return try await nativeInput.execute(action, args: args, input: input) { fields in
+    if ["terminal.native.type", "terminal.key", "terminal.prompt", "terminal.images", "terminal.pointer", "terminal.context"].contains(action) {
+      return try await nativeInput.execute(action, args: args, input: input, authorization: job["authorization"]?.object) { fields in
         var prepared = fields
         prepared["id"] = .string(id)
         _ = try await self.runtime.json("/v1/assistant/native/prepare", prepared)
@@ -294,6 +331,7 @@ final class MacAssistantBridge {
     let priorFocus = action == "terminal.focus" && state.selectedTabId == tabID
       && NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.Terminal"
       ? try await tabs.inputIdentity() : nil
+    diagnosticStep?("focus:" + action)
     state = try await tabs.focus(tabID: tabID, expectedRevision: state.revision)
     if action == "terminal.focus" {
       sameFocusedInput = assistantSameFocusedInput(before: priorFocus, after: try await tabs.inputIdentity(),
@@ -301,6 +339,7 @@ final class MacAssistantBridge {
       return ["catalog": try .encode(state), "inputInspectionPreserved": .bool(sameFocusedInput)]
     }
     MacAssistantComposerRendering.shared.invalidate()
+    diagnosticStep?("render:" + action)
     _ = try await MacAssistantComposerRendering.shared.read(ticket: ticket, raw: rawFocusedTerminalText)
     guard let target = tabs.assistantSnapshot(tabID: tabID), !target.tty.isEmpty else {
       throw MacAssistantError(
@@ -310,6 +349,7 @@ final class MacAssistantBridge {
       let screen = try focusedTerminalText()
       let binding: MacCodexInputBinding
       do {
+        diagnosticStep?("binding:" + action)
         binding = try await Task.detached { try MacTerminalResponseReader().inputBinding(tty: target.tty) }.value
       } catch {
         let code = (error as? MacCodexInputFailure)?.code ?? "process_inspection_failed"
@@ -318,9 +358,11 @@ final class MacAssistantBridge {
           "screenText": .string(screen), "agentAvailable": .bool(false), "inputState": .string(code),
           "draft": .object(["editable": .bool(false), "reasonCode": .string(code), "reason": .string(error.localizedDescription)])]
       }
+      diagnosticStep?("draft:" + action)
       let draft = await inspectDraft(tabId: tabID, tty: target.tty, binding: binding, screen: screen,
         ticket: ticket)
       let capabilities = MacCodexComposerCapabilities(screen: screen, version: binding.version, viewportRows: assistantTerminalRows(target.tty), knownCollapsedDraft: draft["queueText"]?.string)
+      diagnosticStep?("response:" + action)
       let response = try? await Task.detached { () -> RemoteTerminalResponse? in
         guard let conversation = binding.conversation else { return nil }
         return try MacCodexResponseParser.read(conversation: conversation)
@@ -334,8 +376,10 @@ final class MacAssistantBridge {
         "screenText": .string(screen), "draft": .object(draft),
         "queue": .object(["supported": .bool(capabilities.canQueue),
           "ready": .bool(capabilities.canQueue && binding.conversation != nil && capabilities.queue?.draft == ""),
+          "readyForNewMessage": .bool(capabilities.canQueue && binding.conversation != nil && capabilities.queue?.draft == ""),
+          "readyForExistingDraft": .bool(binding.conversation != nil && capabilities.queue?.tabQueues == true && draft["queueText"]?.string?.isEmpty == false),
           "cliVersion": .string(binding.version),
-          "requires": .string("Native Tab queue needs an already working turn and its real sessionId. Fresh idle input supports draft insertion or separately authorized Enter submission.")])], uniquingKeysWith: { _, new in new })
+          "requires": .string("ready refers to inserting a new message into an empty composer; readyForExistingDraft refers to queue_tab_draft. Native Tab queue needs an already working turn and its real sessionId. Fresh idle input supports draft insertion or separately authorized Enter submission.")])], uniquingKeysWith: { _, new in new })
       return result
     }
     let binding = try await Task.detached { try MacTerminalResponseReader().inputBinding(tty: target.tty) }.value
@@ -496,7 +540,12 @@ final class MacAssistantBridge {
     }
     guard candidates.count == 1, let tab = candidates.first,
       let target = tabs.assistantSnapshot(tabID: tab.id) else {
-      throw MacAssistantError("This exact Terminal process is unavailable or ambiguous. Autonomy is paused; inspect its identity.")
+      if let expectedTTY, let expectedInstance, let expectedSession,
+        let owner = try? await Task.detached(operation: { try MacTerminalResponseReader().inputBinding(tty: expectedTTY) }).value,
+        owner.instanceId == expectedInstance, owner.conversation?.sessionId == expectedSession {
+        throw assistantTerminalFailure("catalog_binding_unresolved", "The exact agent is still present, but its native tab binding has not been verified in this fresh catalog. Inspect the intended current tab and verify its TTY, process and session against the original receipt. Observation did not select another tab or send input.")
+      }
+      throw assistantTerminalFailure("stale_identity", "This exact Terminal process is unavailable or ambiguous. Inspect the intended live identity; no input was sent.")
     }
     let binding = try await Task.detached { try MacTerminalResponseReader().inputBinding(tty: target.tty) }.value
     guard expectedInstance == nil || expectedInstance == binding.instanceId,
@@ -644,7 +693,7 @@ final class MacAssistantBridge {
     guard try activity.read(conversation.path), let priorTurnId = activity.turnId else {
       throw MacAssistantError("This agent is idle. Native queue requires a working agent; use send_to_tab only if the user authorized immediate submission.")
     }
-    let identity = try await tabs.inputIdentity()
+    guard let identity = try await tabs.inputIdentity() else { throw assistantTerminalFailure("queue_input_identity_unavailable", "Inspect the exact native Terminal input before queuing.") }
     let useExisting = args["useExistingDraft"]?.bool == true
     var knownCollapsedDraft: String?
     if useExisting {
@@ -657,13 +706,37 @@ final class MacAssistantBridge {
       }
       if inspected.requiresWholeDraftAuthorization { knownCollapsedDraft = text }
     }
-    func allowed(_ expected: String, requireTab: Bool = false) -> Bool {
+    let foreground = try await Task.detached { try MacAssistantForeground.read(tty: tty) }.value
+    func basicAllowed() -> Bool {
+      interaction.isCurrent(ticket) && !MacConsoleSessionState.isLocked() && AXIsProcessTrusted()
+    }
+    func observed() async throws -> MacAssistantAgentQueueSnapshot? {
+      guard basicAllowed(), try await tabs.inputIdentity() == identity else {
+        throw assistantTerminalFailure("queue_input_identity_changed", "The selected native input or manual-control generation changed. Tab was not sent.")
+      }
+      let owner = try await Task.detached { try MacTerminalResponseReader().inputBinding(tty: tty) }.value
+      guard owner.continues(queueBinding), try await Task.detached(operation: { try MacAssistantForeground.read(tty: tty) }).value == foreground else {
+        throw assistantTerminalFailure("queue_owner_changed", "The exact queue process or session changed. Tab was not sent.")
+      }
       var log = MacCodexRequestActivityLog()
-      guard interaction.isCurrent(ticket), !MacConsoleSessionState.isLocked(), AXIsProcessTrusted(),
-        (try? log.read(conversation.path)) == true, log.turnId == priorTurnId,
-        let current = (try? focusedTerminalText()).flatMap({ MacAssistantAgentQueueSnapshot.read($0, knownCollapsedDraft: knownCollapsedDraft) }),
-        assistantEditableDraftMatches(current.draft, expected: expected) else { return false }
-      return !requireTab || current.tabQueues
+      guard try log.read(conversation.path), log.turnId == priorTurnId else {
+        throw assistantTerminalFailure("queue_turn_ended", "The inspected working turn ended before native queuing. The draft remains; inspect it and choose the next action. Tab and Enter were not sent.",
+          fields: ["priorTurnId": .string(priorTurnId), "observedTurnId": log.turnId.map(AssistantValue.string) ?? .null])
+      }
+      let frame = try await MacAssistantComposerRendering.shared.read(ticket: ticket, raw: rawFocusedTerminalText)
+      guard basicAllowed() else { throw assistantTerminalFailure("manual_control_changed", "Manual control changed while reading the draft. It was preserved.") }
+      return MacAssistantAgentQueueSnapshot.read(frame, knownCollapsedDraft: knownCollapsedDraft)
+    }
+    func checked(_ expected: String, requireTab: Bool = false) async throws {
+      guard let value = try await observed() else {
+        throw assistantTerminalFailure("queue_composer_unreadable", "The working composer or pending queue could not be read. Preserve the draft and inspect this same tab again.")
+      }
+      guard assistantEditableDraftMatches(value.draft, expected: expected) else {
+        throw assistantTerminalFailure("queue_draft_changed", "The queue draft changed. Its current text was preserved; Tab was not sent.")
+      }
+      guard !requireTab || value.tabQueues else {
+        throw assistantTerminalFailure("queue_binding_unavailable", "This input does not currently show the native Tab queue binding. Its draft was preserved; Tab was not sent.")
+      }
     }
     func capture() async throws -> String {
       let capture = await input.captureDictationTarget(.request(.captureTarget, requestId: UUID().uuidString)) {
@@ -674,29 +747,41 @@ final class MacAssistantBridge {
     }
     defer { input.invalidateDictationTarget() }
     let token = try await capture()
-    try await assistantQueueVerifiedMessage(text, useExistingDraft: useExisting, read: { [self] in
-      guard interaction.isCurrent(ticket), !MacConsoleSessionState.isLocked(), AXIsProcessTrusted(),
-        try await tabs.inputIdentity() == identity else {
-        throw MacAssistantError("The targeted input changed. Inspect this request; its input will not be repeated.")
-      }
-      let owner = try await Task.detached { try MacTerminalResponseReader().inputBinding(tty: tty) }.value
-      guard owner.continues(queueBinding) else { throw MacAssistantError("The agent changed during queue delivery. Inspect the tab and receipt.") }
-      return MacAssistantAgentQueueSnapshot.read(try await MacAssistantComposerRendering.shared.read(ticket: ticket, raw: rawFocusedTerminalText), knownCollapsedDraft: knownCollapsedDraft)
-    }, insert: {
-      await input.insertAssistantDraft(text, targetToken: token, isAllowed: { allowed("") }) {
-        [tabs] in try await tabs.inputIdentity()
-      }
+    var queueFailure: Error?
+    do {
+    try await assistantQueueVerifiedMessage(text, useExistingDraft: useExisting, read: observed, insert: {
+      let inserted = await input.insertAssistantDraft(text, targetToken: token, isAllowed: basicAllowed, verifyPaste: {
+        guard basicAllowed(), (try? await self.tabs.inputIdentity()) == identity,
+          (try? await Task.detached(operation: { try MacAssistantForeground.read(tty: tty) }).value) == foreground,
+          let frame = try? await MacAssistantComposerRendering.shared.read(ticket: ticket, raw: self.rawFocusedTerminalText) else { return false }
+        guard assistantDraftMatches(frame, expected: text, viewportRows: assistantTerminalRows(tty)) || assistantCollapsedPasteMatches(frame, payload: text) else { return false }
+        knownCollapsedDraft = text
+        self.draftProvenance.remember(text, context: .init(input: identity, process: queueBinding.instanceId,
+          session: conversation.sessionId, foreground: foreground.identity, generation: ticket))
+        return true
+      }, terminalIdentity: {
+        do { try await checked(""); return try await self.tabs.inputIdentity() }
+        catch { queueFailure = error; throw error }
+      })
+      return inserted
     }, prepare: { [runtime] in
-      guard allowed(text, requireTab: true) else { throw MacAssistantError("The agent finished or the draft changed. Tab was not sent; inspect the inserted draft.") }
+      try await checked(text, requireTab: true)
+      if knownCollapsedDraft == text {
+        self.draftProvenance.remember(text, context: .init(input: identity, process: queueBinding.instanceId,
+          session: conversation.sessionId, foreground: foreground.identity, generation: ticket))
+      }
       _ = try await runtime.json("/v1/assistant/native/prepare", ["id": .string(id),
         "conversationPath": .string(conversation.path.path), "sessionId": .string(conversation.sessionId),
+        "agentInstanceId": .string(queueBinding.instanceId), "tty": .string(tty),
         "tabTitle": .string(tabTitle), "priorTurnId": .string(priorTurnId)])
     }, pressTab: {
       guard let token = try? await capture() else { return false }
-      return await input.queueAssistantDraft(targetToken: token, isAllowed: { allowed(text, requireTab: true) }) {
-        [tabs] in try await tabs.inputIdentity()
+      return await input.queueAssistantDraft(targetToken: token, isAllowed: basicAllowed) {
+        do { try await checked(text, requireTab: true); return try await self.tabs.inputIdentity() }
+        catch { queueFailure = error; throw error }
       }
     })
+    } catch { throw queueFailure ?? error }
     return ["tabId": .string(tabId), "tabTitle": .string(tabTitle), "sessionId": .string(conversation.sessionId),
       "conversationPath": .string(conversation.path.path), "queueAccepted": .bool(true),
       "tabSent": .bool(true), "submitted": .bool(false), "verification": .string("rendered-agent-queue")]
@@ -710,7 +795,7 @@ final class MacAssistantBridge {
     let view = assistantObserveDraft(screen, viewportRows: assistantTerminalRows(tty))
     guard let text = view.text else {
       if binding.conversation == nil, ["composer_not_visible", "unresolved_prompt"].contains(view.reasonCode) {
-        return unavailable("startup_pending", "Finish Codex trust, sign-in or loading in this tab. Wait for its ordinary composer, then inspect again; no first message is required.")
+        return unavailable("startup_pending", "Inspect this same tab with inspect_terminal_input. A supported trust or menu choice can use respond_terminal_prompt with Cody’s existing instruction; sign-in and unsupported prompts retain their user flow. Wait for loading to finish, then inspect again; no first message is required.")
       }
       return unavailable(view.reasonCode, view.reason)
     }

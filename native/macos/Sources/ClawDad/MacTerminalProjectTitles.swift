@@ -309,15 +309,30 @@ final class MacTerminalProjectTitles {
 
 /// Event-driven repair avoids a polling race with Codex's animated OSC title.
 /// All elements come from the already verified native tab catalog.
+struct MacTerminalTitleEventBatch {
+  private var pending: [String] = []
+  var hasPending: Bool { !pending.isEmpty }
+  mutating func enqueue(_ tty: String) {
+    if !pending.contains(tty), pending.count < 128 { pending.append(tty) }
+  }
+  mutating func take(_ count: Int) -> [String] {
+    let result = Array(pending.prefix(max(0, count))); pending.removeFirst(result.count); return result
+  }
+}
+
 final class MacTerminalTitleNotifications {
   private var observer: AXObserver?
   private var processId: pid_t?
   private var watched: [(AXUIElement, String, String?)] = []
+  private var batch = MacTerminalTitleEventBatch()
+  private var scheduled: DispatchWorkItem?
+  private var lastTitle: [String: String] = [:]
   private let callback: @Sendable (String, String, Bool, Bool) -> Void
   init(callback: @escaping @Sendable (String, String, Bool, Bool) -> Void) { self.callback = callback }
   func update(pid: pid_t, bindings: [(AXUIElement, String, String?)]) {
     if processId != pid {
       if let observer { CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes) }
+      scheduled?.cancel(); scheduled = nil; batch = .init(); lastTitle = [:]
       observer = nil; watched = []; processId = pid
     }
     if observer == nil {
@@ -325,7 +340,7 @@ final class MacTerminalTitleNotifications {
       guard AXObserverCreate(pid, { _, element, _, context in
         guard let context else { return }
         let owner = Unmanaged<MacTerminalTitleNotifications>.fromOpaque(context).takeUnretainedValue()
-        owner.changed(element)
+        owner.enqueue(element)
       }, &result) == .success, let result else { return }
       observer = result
       CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(result), .commonModes)
@@ -335,13 +350,37 @@ final class MacTerminalTitleNotifications {
     watched = bindings
     for (element, _, _) in bindings {
       _ = AXObserverAddNotification(observer, element, kAXTitleChangedNotification as CFString, Unmanaged.passUnretained(self).toOpaque())
-      changed(element) // Reconcile cold starts and a missed native notification.
+      enqueue(element) // Reconcile cold starts and a missed native notification.
     }
+  }
+  private func enqueue(_ element: AXUIElement) {
+    guard let entry = watched.first(where: { CFEqual($0.0, element) }) else { return }
+    batch.enqueue(entry.1)
+    schedule()
+  }
+  private func schedule() {
+    guard scheduled == nil, batch.hasPending else { return }
+    let item = DispatchWorkItem { [weak self] in
+      guard let self else { return }
+      scheduled = nil
+      // An AX title callback must never synchronously scan all Terminal
+      // windows/Inspector on every animation frame. Yield between small batches
+      // so composer inspection, native key dispatch and manual control can run.
+      for tty in batch.take(4) {
+        if let entry = watched.first(where: { $0.1 == tty }) { changed(entry.0) }
+      }
+      schedule()
+    }
+    scheduled = item
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: item)
   }
   private func changed(_ element: AXUIElement) {
     guard let entry = watched.first(where: { CFEqual($0.0, element) }) else { return }
     var raw: CFTypeRef?
+    AXUIElementSetMessagingTimeout(element, 0.05)
     guard AXUIElementCopyAttributeValue(element, kAXTitleAttribute as CFString, &raw) == .success, let title = raw as? String else { return }
+    guard lastTitle[entry.1] != title else { return }
+    lastTitle[entry.1] = title
     let generated = entry.2.map { MacTerminalProjectTitles.isGenerated(title, window: $0, windowCustomTitle: nil) } == true
     callback(entry.1, title, generated, !generated && explicitTitleEdit(title, tty: entry.1))
   }
@@ -366,7 +405,7 @@ final class MacTerminalTitleNotifications {
     }
     return exactTTY && editedTitle
   }
-  deinit { if let observer { CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes) } }
+  deinit { scheduled?.cancel(); if let observer { CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes) } }
 }
 
 @MainActor

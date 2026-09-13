@@ -186,6 +186,9 @@ final class MacInputController {
     guard AXIsProcessTrusted(), !MacConsoleSessionState.isLocked(),
       NSWorkspace.shared.frontmostApplication?.processIdentifier == targetPID else { return false }
     if let shortcut = command.shortcut { return pressRemoteShortcut(shortcut, targetPID: targetPID) }
+    if let chord = command.chord, let plan = macRemoteChordPlan(for: chord), plan.delivery == .focusedApplication {
+      return postKeyEventSteps(macRemoteKeyEventSteps(keyCode: plan.keyCode, flags: plan.flags), targetPID: targetPID)
+    }
     return pressKey(command.key ?? "", targetPID: targetPID)
   }
 

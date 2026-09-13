@@ -63,6 +63,14 @@ func assistantTerminalRows(_ tty: String) -> Int? {
   return Int(size.ws_row)
 }
 
+func assistantTerminalCanonicalEcho(_ tty: String) -> Bool {
+  guard tty.range(of: #"^/dev/tty[A-Za-z0-9]+$"#, options: .regularExpression) != nil else { return false }
+  let fd = open(tty, O_RDONLY | O_NOCTTY | O_NONBLOCK)
+  guard fd >= 0 else { return false }; defer { close(fd) }
+  var settings = termios()
+  return tcgetattr(fd, &settings) == 0 && settings.c_lflag & tcflag_t(ICANON | ECHO) == tcflag_t(ICANON | ECHO)
+}
+
 /// Fresh observations and native tab identities guard each individual edit or
 /// key. Durable job receipts in AssistantRuntime own replay prevention.
 @MainActor
@@ -77,6 +85,7 @@ final class MacAssistantTerminalInput {
     let draft: String?
     let composer: MacAssistantSubmissionDraft?
     let shellPrompt: String?
+    let prompt: MacAssistantTerminalPrompt?
   }
   private let tabs = MacTerminalTabController.shared
   private let interaction = MacAssistantInteractionGate.shared
@@ -145,6 +154,7 @@ final class MacAssistantTerminalInput {
     }
     let draft = shellDraft?.text ?? (agent == nil ? nil : assistantEditableDraft(value, allowQueueFooter: true))
     let composer = agent == nil ? nil : MacAssistantSubmissionDraft(value, rows: assistantTerminalRows(tab.tty))
+    let prompt = MacAssistantTerminalPrompt.read(value, codexDirectory: agent?.directory, foregroundShell: foreground.shell != nil)
     let sessionId = agent?.conversation?.sessionId ?? agent?.instanceId ?? foreground.identity
     let token = UUID().uuidString
     let captured = await input.captureDictationTarget(.request(.captureTarget, requestId: token)) { [tabs] in try await tabs.inputIdentity() }
@@ -154,7 +164,7 @@ final class MacAssistantTerminalInput {
     let expires = Date().addingTimeInterval(45)
     inspections.insert(Inspection(tabId: tabId, tty: tab.tty, identity: identity, sessionId: sessionId,
       foreground: foreground, agent: agent, generation: ticket, expires: expires, screen: value,
-      draft: draft, composer: composer, shellPrompt: shellDraft?.prompt), token: token, expires: expires)
+      draft: draft, composer: composer, shellPrompt: shellDraft?.prompt, prompt: prompt), token: token, expires: expires)
     observationStep?("inspected")
     let project = try? await Task.detached { try MacTerminalTitleMetadata.read(tab.tty) }.value
     return ["directory": (agent?.directory ?? project?.directory).map(AssistantValue.string) ?? .null,
@@ -162,13 +172,18 @@ final class MacAssistantTerminalInput {
       "tabId": .string(tabId), "inputToken": .string(token), "inputSessionId": .string(sessionId),
       "tty": .string(tab.tty), "windowGroupId": .string(focused.tabs.first { $0.id == tabId }?.windowGroupId ?? ""),
       "kind": .string(agent != nil ? "agent" : foreground.shell != nil ? "shell" : "native"),
+      "prompt": prompt.map { .object($0.fields) } ?? .null,
+      "inputState": .string(prompt != nil ? "interactive_prompt" : composer != nil ? "agent_composer" : shellDraft != nil ? "shell_composer" : "unsupported_input"),
+      "reasonCode": .string(prompt != nil || composer != nil || shellDraft != nil ? "ready" : "unsupported_ui"),
+      "foregroundIdentity": .string(foreground.identity),
       "shell": foreground.shell.map(AssistantValue.string) ?? .null,
       "canTypeDraft": .bool(shellDraft != nil), "draftText": draft.map(AssistantValue.string) ?? .null,
       "screenText": .string(value), "expiresInSeconds": .number(45),
-      "guidance": .string(shellDraft != nil ? "Type a single-line shell draft without Enter or Tab. Existing text requires explicit replacement." : "Use agent draft/queue tools for Codex. Explicit keys require this token; unsupported drafts are preserved.")]
+      "guidance": .string(prompt != nil ? "This is an interactive decision, not a message composer. Use respond_terminal_prompt with its exact prompt/choice and Cody's existing authorization." : shellDraft != nil ? "Type a single-line shell draft without Enter or Tab. Existing text requires explicit replacement." : composer != nil ? "Use agent draft/queue tools for Codex. Explicit keys require this token; unsupported drafts are preserved." : "No supported composer or interactive-choice adapter was observed. Preserve this input; inspect the visible prompt or use its user-operated Terminal control. Passwords and sign-in challenges require their existing user flow.")]
   }
 
   func execute(_ action: String, args: [String: AssistantValue], input: MacInputController,
+    authorization: [String: AssistantValue]? = nil,
     prepareSubmission: ([String: AssistantValue]) async throws -> Void = { _ in throw MacAssistantError("A durable submission receipt is required.") }
   ) async throws -> [String: AssistantValue] {
     defer { invalidate() }
@@ -176,13 +191,13 @@ final class MacAssistantTerminalInput {
     guard let token = args["inputToken"]?.string else { throw AssistantProtocolError.invalid }
     let saved = try inspections.consume(token)
     guard args["tabId"]?.string == saved.tabId, args["inputSessionId"]?.string == saved.sessionId else {
-      throw MacAssistantError("This inspection belongs to another tab or input owner. Inspect the intended tab again; no input was sent.")
+      throw assistantTerminalFailure("stale_identity", "This inspection belongs to another tab or input owner. Inspect the intended tab again; no input was sent.")
     }
     func current(allowEmptyTrim: Bool = false) async throws -> String {
       guard Date() < saved.expires, interaction.isCurrent(saved.generation), !MacConsoleSessionState.isLocked(), AXIsProcessTrusted(),
         try await tabs.inputIdentity() == saved.identity,
         try await Task.detached(operation: { try MacAssistantForeground.read(tty: saved.tty) }).value == saved.foreground else {
-        throw MacAssistantError("The targeted tab, process or input changed. It was preserved; inspect it again.")
+        throw assistantTerminalFailure("stale_identity", "The targeted tab, process, focus or manual-input generation changed. It was preserved; inspect it again.")
       }
       if let agent = saved.agent {
         let owner = try await Task.detached { try MacTerminalResponseReader().inputBinding(tty: saved.tty) }.value
@@ -196,10 +211,68 @@ final class MacAssistantTerminalInput {
     }
     let before = try await current()
     guard saved.composer != nil ? MacAssistantSubmissionDraft(before, rows: assistantTerminalRows(saved.tty)) == saved.composer : (saved.draft != nil ? draft(before) == saved.draft : before == saved.screen) else {
-      throw MacAssistantError("The inspected draft changed. It was preserved.")
+      throw assistantTerminalFailure(saved.prompt == nil ? "draft_changed" : "prompt_changed", "The inspected input changed. It was preserved; inspect it again.")
     }
     defer { input.invalidateDictationTarget() }
     var result: [String: AssistantValue] = ["tabId": .string(saved.tabId), "inputSessionId": .string(saved.sessionId)]
+    if action == "terminal.prompt" {
+      guard authorization?["source"]?.string == "user_message", authorization?["userRequestId"]?.string != nil,
+        authorization?["quoteHash"]?.string != nil else {
+        throw assistantTerminalFailure("authorization_missing", "Use Cody's explicit instruction for this exact prompt choice. No decision was sent.")
+      }
+      guard let expected = saved.prompt, expected.id == args["promptId"]?.string, let choice = args["choiceId"]?.string else {
+        throw assistantTerminalFailure("unsupported_ui", "Inspect a supported interactive prompt and choose one of its exact options. No key was sent.")
+      }
+      guard !expected.lineInput || assistantTerminalCanonicalEcho(saved.tty) else {
+        throw assistantTerminalFailure("unsupported_line_mode", "This confirmation does not expose a canonical, echoing line input. Use the visible Terminal control; no key was sent.")
+      }
+      let outcome = try await assistantRespondToPrompt(expected, choiceId: choice, read: {
+        MacAssistantTerminalPrompt.read(try await current(), codexDirectory: saved.agent?.directory, foregroundShell: saved.foreground.shell != nil)
+      }, prepare: {
+        try await prepareSubmission(["nativeControl": .bool(true), "inputSessionId": .string(saved.sessionId),
+          "promptId": .string(expected.id), "choiceId": .string(choice), "tty": .string(saved.tty),
+          "inputIdentity": .string(saved.identity), "foregroundIdentity": .string(saved.foreground.identity)])
+      }, key: { name in
+        guard self.interaction.isCurrent(saved.generation), !MacConsoleSessionState.isLocked(),
+          (try? await self.tabs.inputIdentity()) == saved.identity,
+          (try? await Task.detached { try MacAssistantForeground.read(tty: saved.tty) }.value) == saved.foreground,
+          let app = NSWorkspace.shared.frontmostApplication, app.bundleIdentifier == "com.apple.Terminal" else { return false }
+        return input.sendAssistantKey(name, modifiers: [], targetPID: app.processIdentifier)
+      }, verifyLineChoice: { letter in
+        for _ in 0..<8 {
+          let value = try await current()
+          let last = value.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }.last(where: { !$0.isEmpty })
+          if assistantTerminalCanonicalEcho(saved.tty), last == expected.text + letter || last == expected.text + " " + letter { return true }
+          try await Task.sleep(for: .milliseconds(100))
+        }
+        return false
+      }, observeResult: {
+        guard self.interaction.isCurrent(saved.generation), !MacConsoleSessionState.isLocked(),
+          try await self.tabs.inputIdentity() == saved.identity else { throw assistantTerminalFailure("stale_identity", "The Terminal destination changed after the decision.") }
+        let foreground = try await Task.detached { try MacAssistantForeground.read(tty: saved.tty) }.value
+        let frame = try self.screen(shellIdentity: foreground.shell != nil ? saved.identity : nil)
+        let owner = try? await Task.detached { try MacTerminalResponseReader().inputBinding(tty: saved.tty) }.value
+        if expected.kind == "codex_directory_trust", choice != "1", foreground.shell != nil,
+          owner == nil, MacAssistantShellDraft.read(frame) != nil {
+          return ["trustAccepted": .bool(false), "trustDeclined": .bool(true), "resultVerified": .bool(true),
+            "verification": .string("trust-declined-returned-to-shell"), "screenText": .string(frame)]
+        }
+        if expected.kind != "codex_directory_trust", foreground.shell != nil, MacAssistantShellDraft.read(frame) != nil {
+          return ["resultVerified": .bool(true), "screenText": .string(frame), "verification": .string("confirmation-returned-to-shell")]
+        }
+        guard foreground == saved.foreground, saved.agent == nil || owner?.continues(saved.agent!) == true else { return nil }
+        let next = MacAssistantTerminalPrompt.read(frame, codexDirectory: owner?.directory, foregroundShell: foreground.shell != nil)
+        guard next?.id != expected.id, frame != saved.screen else { return nil }
+        let composerVisible = owner != nil && MacAssistantSubmissionDraft(frame, rows: assistantTerminalRows(saved.tty)) != nil
+        let ready = composerVisible && frame.range(of: #"model:\s+loading\b"#, options: .regularExpression) == nil
+        if !composerVisible && next == nil { return nil }
+        return ["trustAccepted": .bool(expected.kind == "codex_directory_trust" && choice == "1"),
+          "resultVerified": .bool(true), "readyForAgentInput": .bool(ready), "screenText": .string(frame),
+          "nextPrompt": next.map { .object($0.fields) } ?? .null,
+          "verification": .string(ready ? "decision-observed-agent-composer" : "decision-observed-next-terminal-state")]
+      })
+      result.merge(outcome) { _, new in new }; return result
+    }
     if action == "terminal.context" {
       let source = args["source"]?.string ?? "auto"
       guard ["auto","selection","latest"].contains(source) else { throw AssistantProtocolError.invalid }
@@ -331,10 +404,13 @@ final class MacAssistantTerminalInput {
       let command = MacAssistantTerminalKey(args: args), command.permits(intent: intent) else {
       throw MacAssistantError("Choose an explicit Remote Assist key and its intended effect.")
     }
+    if saved.prompt != nil {
+      throw assistantTerminalFailure("prompt_decision_required", "This input is an interactive prompt. Use respond_terminal_prompt with its exact observed choice and Cody's existing instruction; composer submission sends no key here.")
+    }
     if intent == "submit", let original = saved.agent {
       guard command.key == "enter", let expected = saved.composer,
         MacCodexComposerCapabilities(screen: before, version: original.version, viewportRows: assistantTerminalRows(saved.tty)).canSubmit else {
-        throw MacAssistantError("Inspect a supported composer and use the verified Enter key. No key was sent.")
+        throw assistantTerminalFailure("submit_capability_unavailable", "An ordinary supported agent composer and verified Enter binding are required for message submission. Inspect prompt for a separate interactive decision; no key was sent.")
       }
       var cursor: MacAssistantSubmissionLog?
       var acceptedOwner = original
@@ -378,8 +454,24 @@ final class MacAssistantTerminalInput {
       result["intent"] = .string(intent)
       return result
     }
+    guard saved.composer != nil || saved.shellPrompt != nil else {
+      throw assistantTerminalFailure("unsupported_ui", "This process has no supported composer or prompt adapter. Preserve its input and use the observed Terminal control.")
+    }
+    if intent == "edit", assistantObserveDraft(before, viewportRows: assistantTerminalRows(saved.tty)).requiresWholeDraftAuthorization {
+      throw assistantTerminalFailure("opaque_draft_edit", "This draft contains collapsed text. Use the verified clear/replace/append tools with explicit authorization; single-key editing cannot verify hidden content.")
+    }
+    if command.shortcut == .controlJ, intent == "newline", saved.agent == nil {
+      throw assistantTerminalFailure("newline_would_submit", "Control-J submits a shell line. Use explicit Enter with intent submit if that is authorized; no key was sent.")
+    }
+    if command.editsQueuedDraft, before.contains("edit last queued message") {
+      guard intent == "edit_queue", MacAssistantAgentQueueSnapshot.read(before)?.draft == "" else {
+        throw assistantTerminalFailure("queue_edit_authorization_required", "Shift-Left can recall an accepted queued message into this empty composer. Use intent edit_queue only when Cody requested editing that queue entry.")
+      }
+    } else if intent == "edit_queue" {
+      throw assistantTerminalFailure("queue_edit_binding_unavailable", "The exact empty composer and Shift-Left queue-edit hint are required. Its pending messages were preserved.")
+    }
     // Agent queue acceptance needs its own exact draft and log verification.
-    if command.shortcut == .tab, let owner = saved.agent?.conversation {
+    if command.isTab, let owner = saved.agent?.conversation {
       var activity = MacCodexRequestActivityLog()
       if try activity.read(owner.path) {
         throw MacAssistantError("Use queue_tab_draft for this working agent's existing draft, or queue_in_tab for a new message. Native queue acceptance must be verified.")
@@ -409,13 +501,37 @@ final class MacAssistantTerminalInput {
 struct MacAssistantTerminalKey {
   let shortcut: RemoteShortcut?
   let key: String?
+  let chord: RemoteKeyChord?
   init?(args: [String: AssistantValue]) {
     shortcut = args["shortcut"]?.string.flatMap(RemoteShortcut.init(rawValue:))
     key = args["key"]?.string
-    guard args["shortcut"] == nil || shortcut != nil,
-      (shortcut != nil) != (key != nil), key == nil || ["enter", "delete", "backspace"].contains(key!), shortcut != .commandT else { return nil }
+    if let value = args["chord"]?.object, let name = value["key"]?.string {
+      let raw = value["modifiers"]?.array?.compactMap(\.string) ?? []
+      let modifiers = raw.compactMap(RemoteKeyModifier.init(rawValue:))
+      let candidate = RemoteKeyChord(key: name, modifiers: modifiers)
+      guard raw.count == modifiers.count, candidate.isValid else { return nil }
+      chord = candidate
+    } else { chord = nil }
+    guard [args["shortcut"], args["key"], args["chord"]].compactMap({ $0 }).count == 1,
+      args["shortcut"] == nil || shortcut != nil, args["chord"] == nil || chord != nil,
+      key == nil || ["enter", "delete", "backspace"].contains(key!), shortcut != .commandT else { return nil }
   }
+  var isTab: Bool { shortcut == .tab }
+  var editsQueuedDraft: Bool { chord?.key == "left" && chord?.modifiers == [.shift] }
   func permits(intent: String) -> Bool {
+    if let chord {
+      let mods = Set(chord.modifiers)
+      if editsQueuedDraft && intent == "edit_queue" { return true }
+      if ["left","right","up","down","home","end","page_up","page_down"].contains(chord.key),
+        !mods.contains(.command) { return intent == "navigation" }
+      if mods == [.control], ["a","e","l"].contains(chord.key) { return intent == "navigation" }
+      if mods == [.control], ["k","u","w"].contains(chord.key) { return intent == "edit" }
+      if mods == [.control], ["r","p","n"].contains(chord.key) { return intent == "history" }
+      if mods.isEmpty, ["backspace","forward_delete"].contains(chord.key) { return intent == "edit" }
+      // Submission, queue, interrupt, clipboard and window operations retain
+      // their dedicated paths; custom chords cannot bypass those adapters.
+      return false
+    }
     if key == "enter" { return intent == "submit" }
     if key != nil { return intent == "edit" }
     switch shortcut {

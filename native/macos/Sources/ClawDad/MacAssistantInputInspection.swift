@@ -17,13 +17,13 @@ struct MacAssistantInputInspections<Value> {
   }
   mutating func consume(_ token: String) throws -> Value {
     guard let entry = entries.removeValue(forKey: token) else {
-      throw MacAssistantError((reasons[token] ?? "This input inspection is unavailable in the current native worker or was already consumed.")
+      throw assistantTerminalFailure("inspection_unavailable", (reasons[token] ?? "This input inspection is unavailable in the current native worker or was already consumed.")
         + " Focus the intended tab first, then inspect_terminal_input and use that new token. No input was sent.")
     }
     remember(token, "This single-use input inspection was already consumed.")
     guard entry.expires > now() else {
       remember(token, "The input inspection expired after 45 seconds.")
-      throw MacAssistantError("The input inspection expired after 45 seconds. Inspect the same tab again; no input was sent.")
+      throw assistantTerminalFailure("inspection_expired", "The input inspection expired after 45 seconds. Inspect the same tab again; no input was sent.")
     }
     return entry.value
   }

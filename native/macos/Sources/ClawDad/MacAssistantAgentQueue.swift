@@ -50,7 +50,7 @@ func assistantQueueVerifiedMessage(_ text: String, useExistingDraft: Bool = fals
     if attempt < 7 { try await wait() }
   }
   guard let before = initial, useExistingDraft ? before.draft == text : before.draft.isEmpty else {
-    throw MacAssistantError("Native queue unsupported in this input state. Its draft and pending messages were preserved. Inspect the working Codex tab.")
+    throw assistantTerminalFailure("queue_initial_draft_unavailable", "Native queue unsupported in this input state. Its draft and pending messages were preserved. Inspect the working Codex tab.")
   }
   if !useExistingDraft {
     guard await insert() else { throw MacAssistantError("The input changed before insertion. The message was not queued.") }
@@ -64,7 +64,7 @@ func assistantQueueVerifiedMessage(_ text: String, useExistingDraft: Bool = fals
     if attempt < 11 { try await wait() }
   }
   guard verified else {
-    throw MacAssistantError("The draft or Tab queue binding could not be verified. The inserted text remains for inspection; Tab and Enter were not sent.")
+    throw assistantTerminalFailure("queue_paste_or_binding_unverified", "The draft or Tab queue binding could not be verified. The inserted text remains for inspection; Tab and Enter were not sent.")
   }
   try await prepare()
   guard let current = try await read(), current.messages == before.messages, current.tabQueues,
@@ -73,10 +73,12 @@ func assistantQueueVerifiedMessage(_ text: String, useExistingDraft: Bool = fals
   }
   let expected = before.messages + [text]
   for attempt in 0..<16 {
-    if let current = try await read(), current.draft.isEmpty, current.messages.count == expected.count,
+    // Once Tab has been dispatched, a turn transition or read failure is an
+    // uncertain receipt, never evidence that no key was sent.
+    if let current = try? await read(), current.draft.isEmpty, current.messages.count == expected.count,
       zip(current.messages, expected).allSatisfy({ assistantEditableDraftMatches($0, expected: $1) }) { return }
-    if attempt < 15 { try await wait() }
+    if attempt < 15 { try? await wait() }
   }
   throw MacAssistantSubmissionFailure(message: "Tab was sent once, but the agent queue could not be fully read. Delivery is uncertain; wait for this receipt to reconcile with its exact accepted turn. Do not repeat Tab.",
-    fields: ["tabSent": .bool(true), "queueAccepted": .bool(false), "verification": .string("native-tab-sent-awaiting-full-queue-or-turn")])
+    fields: ["reasonCode": .string("queue_acceptance_uncertain"), "tabSent": .bool(true), "queueAccepted": .bool(false), "verification": .string("native-tab-sent-awaiting-full-queue-or-turn")])
 }

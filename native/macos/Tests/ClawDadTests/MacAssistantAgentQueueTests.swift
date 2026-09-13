@@ -2,6 +2,36 @@ import XCTest
 @testable import ClawDad
 
 final class MacAssistantAgentQueueTests: XCTestCase {
+  @MainActor func testNewCollapsedPasteRetainsExactPayloadThroughPrepareAndQueue() async throws {
+    let text = String(repeating: "Long native queue Ω line\n", count: 120)
+    var current = screen(), retained: String?, dispatches = 0
+    try await assistantQueueVerifiedMessage(text, read: {
+      MacAssistantAgentQueueSnapshot.read(current, knownCollapsedDraft: retained)
+    }, insert: {
+      current = self.screen(draft: "[Pasted Content \(text.count) chars]")
+      retained = text // Only after the native paste itself and collapsed length are verified.
+      return true
+    }, prepare: {
+      XCTAssertEqual(MacAssistantAgentQueueSnapshot.read(current, knownCollapsedDraft: retained)?.draft, text)
+    }, pressTab: {
+      dispatches += 1; current = self.screen(queue: [text]); return true
+    }, wait: {})
+    XCTAssertEqual(dispatches, 1)
+  }
+  @MainActor func testTurnEndsAfterTabStillReportsAnUncertainDispatchedReceipt() async throws {
+    var sent = false, current = screen()
+    do {
+      try await assistantQueueVerifiedMessage("Follow-up", read: {
+        if sent { throw assistantTerminalFailure("queue_turn_ended", "Prior turn finished") }
+        return MacAssistantAgentQueueSnapshot.read(current)
+      }, insert: { current = self.screen(draft: "Follow-up"); return true }, prepare: {},
+        pressTab: { sent = true; return true }, wait: {})
+      XCTFail()
+    } catch let error as MacAssistantSubmissionFailure {
+      XCTAssertEqual(error.fields["tabSent"], .bool(true)); XCTAssertEqual(error.fields["queueAccepted"], .bool(false))
+      XCTAssertEqual(error.fields["reasonCode"], .string("queue_acceptance_uncertain"))
+    }
+  }
   private func screen(draft: String = "", queue: [String] = [], binding: String = "tab") -> String {
     "Earlier answer\n• Working (3s • esc to interrupt)\n" +
       (queue.isEmpty ? "" : "• Queued follow-up inputs\n" + queue.map { "  ↳ \($0)" }.joined(separator: "\n") + "\n    shift + ← edit last queued message\n") +
