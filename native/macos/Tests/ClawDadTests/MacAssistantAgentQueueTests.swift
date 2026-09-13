@@ -84,7 +84,7 @@ final class MacAssistantAgentQueueTests: XCTestCase {
       try await assistantQueueVerifiedMessage("New", read: { MacAssistantAgentQueueSnapshot.read(self.screen(draft: "Cody's unsent draft")) },
         insert: { XCTFail("Preserve draft"); return false }, prepare: { XCTFail() }, pressTab: { XCTFail(); return false }, wait: {})
       XCTFail()
-    } catch { XCTAssertTrue(error.localizedDescription.contains("preserved")) }
+    } catch { XCTAssertEqual((error as? MacAssistantSubmissionFailure)?.fields["reasonCode"], .string("queue_initial_draft_mismatch")) }
   }
 
   @MainActor func testRemappedTabLeavesOneInsertedDraftAndDoesNotPressTab() async {
@@ -93,7 +93,7 @@ final class MacAssistantAgentQueueTests: XCTestCase {
       try await assistantQueueVerifiedMessage("New", read: { MacAssistantAgentQueueSnapshot.read(self.screen(draft: draft, binding: "ctrl+q")) },
         insert: { draft = "New"; pastes += 1; return true }, prepare: { XCTFail() }, pressTab: { XCTFail(); return false }, wait: {})
       XCTFail()
-    } catch { XCTAssertTrue(error.localizedDescription.contains("Tab and Enter were not sent")) }
+    } catch { XCTAssertEqual((error as? MacAssistantSubmissionFailure)?.fields["reasonCode"], .string("queue_binding_unavailable")) }
     XCTAssertEqual(draft, "New"); XCTAssertEqual(pastes, 1)
   }
 
@@ -104,7 +104,7 @@ final class MacAssistantAgentQueueTests: XCTestCase {
         insert: { draft = "New"; return true }, prepare: { draft = "Cody's new draft" },
         pressTab: { XCTFail("Preserve changed input"); return false }, wait: {})
       XCTFail()
-    } catch { XCTAssertTrue(error.localizedDescription.contains("changed before Tab")) }
+    } catch { XCTAssertEqual((error as? MacAssistantSubmissionFailure)?.fields["reasonCode"], .string("queue_draft_changed")) }
     XCTAssertEqual(draft, "Cody's new draft")
   }
 

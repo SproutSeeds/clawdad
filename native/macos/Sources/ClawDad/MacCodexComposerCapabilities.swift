@@ -10,6 +10,7 @@ struct MacCodexComposerCapabilities {
   let queue: MacAssistantAgentQueueSnapshot?
   let adapter: String?
   let enterAdvertised: Bool
+  let tabQueueAdvertised: Bool
 
   init(screen: String, version: String, viewportRows: Int? = nil, knownCollapsedDraft: String? = nil) {
     observation = assistantObserveDraft(screen, viewportRows: viewportRows)
@@ -20,6 +21,9 @@ struct MacCodexComposerCapabilities {
     let prompt = lines.lastIndex { $0.trimmingCharacters(in: .whitespaces).hasPrefix("›") }
     enterAdvertised = prompt.map { lines.dropFirst($0 + 1).contains {
       $0.trimmingCharacters(in: .whitespaces).range(of: #"^enter to (?:send|submit)\b"#, options: .caseInsensitive.union(.regularExpression)) != nil
+    }} ?? false
+    tabQueueAdvertised = prompt.map { lines.dropFirst($0 + 1).contains {
+      $0.trimmingCharacters(in: .whitespaces).range(of: #"^tab to queue message\b"#, options: .regularExpression) != nil
     }} ?? false
   }
 
@@ -38,7 +42,8 @@ struct MacCodexComposerCapabilities {
      "inspectDraft": .bool(observation.text != nil), "insertDraft": .bool(canInsert),
      "clearDraft": .bool(canClear), "replaceDraft": .bool(canClear),
      "submitEnter": .bool(canSubmit), "nativeQueue": .bool(canQueue),
-     "tabBindingObserved": .bool(queue?.tabQueues == true),
+     "tabBindingObserved": .bool(tabQueueAdvertised),
+     "queueReason": .string(queue != nil ? "The native queue and current draft are readable." : tabQueueAdvertised ? "The Tab binding is visible, but the complete draft or pending queue cannot be verified. Preserve this input; inspect exact paste provenance or use an explicitly authorized whole-draft replacement." : "The current composer does not advertise Tab queueing. Wait for a working turn and inspect again."),
      "keyAdapter": adapter.map(AssistantValue.string) ?? .null,
      "clearReason": .string(canClear ? observation.reason : observation.text == nil ? observation.reason : Self.clearRecovery),
      "submitReason": .string(canSubmit ? "Enter binding verified by the composer adapter or current footer." : "The Enter submit binding is not verifiable. Keep the draft and submit manually, or update ClawDad's key adapter.")]

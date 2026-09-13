@@ -49,28 +49,36 @@ func assistantQueueVerifiedMessage(_ text: String, useExistingDraft: Bool = fals
     if let observed = try await read() { initial = observed; break }
     if attempt < 7 { try await wait() }
   }
-  guard let before = initial, useExistingDraft ? before.draft == text : before.draft.isEmpty else {
-    throw assistantTerminalFailure("queue_initial_draft_unavailable", "Native queue unsupported in this input state. Its draft and pending messages were preserved. Inspect the working Codex tab.")
+  guard let before = initial else { throw assistantTerminalFailure("queue_composer_unavailable", "The working composer or pending queue could not be read. Inspect the exact tab; its input was preserved.") }
+  guard useExistingDraft ? before.draft == text : before.draft.isEmpty else {
+    throw assistantTerminalFailure("queue_initial_draft_mismatch", "The current draft does not match this queue request. Inspect and preserve it; no new input was inserted.")
+  }
+  func verify(_ current: MacAssistantAgentQueueSnapshot?) throws {
+    guard let current else { throw assistantTerminalFailure("queue_composer_unavailable", "The working composer or pending queue cannot be read. Tab was not sent; inspect the existing draft.") }
+    guard current.messages == before.messages else { throw assistantTerminalFailure("queue_entries_changed", "The pending native queue changed. Tab was not sent; inspect the existing draft and queue.") }
+    guard assistantEditableDraftMatches(current.draft, expected: text) else { throw assistantTerminalFailure("queue_draft_changed", "The draft no longer matches the authorized message. Tab was not sent; inspect it.") }
+    guard current.tabQueues else { throw assistantTerminalFailure("queue_binding_unavailable", "The current footer does not advertise Tab queueing. Tab was not sent; inspect the working state.") }
   }
   if !useExistingDraft {
     guard await insert() else { throw MacAssistantError("The input changed before insertion. The message was not queued.") }
   }
   var verified = false
+  var lastObserved: MacAssistantAgentQueueSnapshot?
   for attempt in 0..<12 {
-    if let current = try await read(), current.messages == before.messages,
+    lastObserved = try await read()
+    if let current = lastObserved, current.messages == before.messages,
       assistantEditableDraftMatches(current.draft, expected: text), current.tabQueues {
       verified = true; break
     }
     if attempt < 11 { try await wait() }
   }
   guard verified else {
-    throw assistantTerminalFailure("queue_paste_or_binding_unverified", "The draft or Tab queue binding could not be verified. The inserted text remains for inspection; Tab and Enter were not sent.")
+    try verify(lastObserved)
+    throw assistantTerminalFailure("queue_observation_unstable", "The draft observation did not stabilize. Tab was not sent; inspect the existing input.")
   }
   try await prepare()
-  guard let current = try await read(), current.messages == before.messages, current.tabQueues,
-    assistantEditableDraftMatches(current.draft, expected: text), await pressTab() else {
-    throw MacAssistantError("The agent or input changed before Tab. Inspect the draft and this request; it will not be sent again automatically.")
-  }
+  try verify(try await read())
+  guard await pressTab() else { throw assistantTerminalFailure("queue_dispatch_guard_failed", "The final native owner, draft or key dispatch guard failed. Inspect this receipt and the input before another action.") }
   let expected = before.messages + [text]
   for attempt in 0..<16 {
     // Once Tab has been dispatched, a turn transition or read failure is an

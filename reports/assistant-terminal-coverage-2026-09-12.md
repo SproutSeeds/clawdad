@@ -1,6 +1,8 @@
 # Assistant-native Terminal coverage — September 12, 2026
 
-Status: implementation and live verification in progress. Release evidence is appended after signing and installation.
+Status: Mac 136 is installed and notarized; native queue verification is still in progress. A live cold-selection defect was reproduced after installation and is being repaired before the final handoff.
+
+Release coordination update: the speech lane reserved Mac 137 and committed `3dd73e8` on top of this lane's `564c53d`. This lane reserves **Mac 138** for the observed-selection follow-up. Its isolated release source must preserve the already committed speech checkpoint. Do not downgrade a newer installed build. Native QA is still active; installation requires an idle Assistant and no pending native delivery.
 
 Release coordination: this Terminal lane reserves **Mac 136**, with no iPhone build required. The concurrent speech/settings lane is documented in `reports/speech-boost-2026-09-12.md`; its edits are preserved, including its separate import/early-dispatch hunks in `lib/assistant-runtime.mjs`. Terminal packaging will use an isolated export/worktree of the scoped verified Terminal commit so pending speech changes are not accidentally included. Reinspect installed versions before installation; do not downgrade another completed release.
 

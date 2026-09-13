@@ -4,6 +4,30 @@ import ApplicationServices
 import XCTest
 
 final class MacNativeTerminalTabTests: XCTestCase {
+  func testColdSelectionCannotCompleteIsVerifiedWithoutSecondPress() throws {
+    let graph=TerminalGraph()
+    let native=MacNativeTerminalTabs(readAttribute:graph.read)
+    let rows=try native.snapshots(application:graph.app){graph.shells}
+    var count=0
+    native.performAction={ element,action in
+      XCTAssertEqual(action,kAXPressAction);XCTAssertTrue(CFEqual(element,graph.controls[0]))
+      count += 1;graph.selected=0;return .cannotComplete
+    }
+    try native.focus(try XCTUnwrap(rows[0].nativeTabID),application:graph.app)
+    XCTAssertEqual(count,1);XCTAssertEqual(graph.selected,0)
+    try native.focus(try XCTUnwrap(rows[0].nativeTabID),application:graph.app)
+    XCTAssertEqual(count,1,"An already selected native control needs no press")
+  }
+  func testColdSelectionCannotCompleteWithoutExactSelectionRemainsUncertain() throws {
+    for selectedAfter in [1,2] {
+      let graph=TerminalGraph();var clock:Double=0
+      let native=MacNativeTerminalTabs(readAttribute:graph.read,now:{clock += 0.0005;return clock})
+      let rows=try native.snapshots(application:graph.app){graph.shells};var count=0
+      native.performAction={ _,_ in count += 1;graph.selected=selectedAfter;return .cannotComplete }
+      XCTAssertThrowsError(try native.focus(try XCTUnwrap(rows[0].nativeTabID),application:graph.app))
+      XCTAssertEqual(count,1);XCTAssertEqual(graph.selected,selectedAfter)
+    }
+  }
   func testColdCatalogFindsActivityForUnvisitedTabsWithoutLearningInputIdentities() throws {
     let graph = TerminalGraph()
     graph.titles = ["/work/duplicate — codex --one", "/work/duplicate — codex --two", "/other/project — -zsh"]

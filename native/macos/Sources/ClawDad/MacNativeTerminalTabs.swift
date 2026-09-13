@@ -362,18 +362,22 @@ final class MacNativeTerminalTabs {
       guard raised == .success else { throw failure("Terminal could not raise that window.") }
     }
     if !CFEqual(target.control, target.window) {
+      if target.selected && target.focused { return }
       try prepare(target.control)
       let selected = performAction?(target.control, kAXPressAction) ?? AXUIElementPerformAction(target.control, kAXPressAction as CFString)
-      guard selected == .success else { throw failure("Terminal could not select that tab.") }
-      let confirmationDeadline = min(deadline, now() + 0.6)
+      // AppKit can replace the selected AXWindow while handling AXPress and
+      // return cannotComplete although the exact tab was selected. Dispatch
+      // once, then verify the same control in the resulting native layout.
+      guard selected == .success || selected == .cannotComplete else {
+        throw failure("Terminal's tab selection action returned \(selected.rawValue). Refresh and inspect the selected tab; selection was not verified.")
+      }
+      let confirmationDeadline = min(deadline, now() + 1.0)
       repeat {
-        if let parent = try value(target.control, kAXParentAttribute),
-           CFGetTypeID(parent) == AXUIElementGetTypeID(),
-           let selected = try value(unsafeBitCast(parent, to: AXUIElement.self), kAXValueAttribute),
-           CFEqual(selected, target.control) { return }
+        if let confirmed = try? capture(application: application),
+          confirmed.contains(where: { $0.id == target.id && $0.groupID == target.groupID && $0.selected && $0.focused }) { return }
         Thread.sleep(forTimeInterval: 0.025)
       } while now() < confirmationDeadline
-      throw failure("Terminal has not confirmed the requested tab.")
+      throw failure("Terminal's selection action was sent once, but the exact selected tab is not verified. Refresh before another action.")
     }
     // The controller also verifies the selected TTY with a transactional catalog.
   }

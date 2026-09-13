@@ -374,7 +374,7 @@ final class MacAssistantBridge {
         "capabilities": .object(capabilities.fields),
         "inputState": .string(draft["editable"]?.bool == true ? (binding.conversation == nil ? "ready_before_first_turn" : "ready") : draft["reasonCode"]?.string ?? "input_unavailable"),
         "screenText": .string(screen), "draft": .object(draft),
-        "queue": .object(["supported": .bool(capabilities.canQueue),
+        "queue": .object(["supported": .bool(capabilities.tabQueueAdvertised),
           "ready": .bool(capabilities.canQueue && binding.conversation != nil && capabilities.queue?.draft == ""),
           "readyForNewMessage": .bool(capabilities.canQueue && binding.conversation != nil && capabilities.queue?.draft == ""),
           "readyForExistingDraft": .bool(binding.conversation != nil && capabilities.queue?.tabQueues == true && draft["queueText"]?.string?.isEmpty == false),

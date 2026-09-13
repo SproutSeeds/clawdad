@@ -2,6 +2,13 @@ import XCTest
 @testable import ClawDad
 
 final class MacCodexComposerCapabilitiesTests: XCTestCase {
+  func testVisibleTabBindingIsIndependentFromOpaqueDraftReadiness() {
+    let screen="• Working (2m 02s • esc to interrupt)\n\n› [Pasted Content 1628 chars]\n\n  tab to queue message                  92% context left\n"
+    let observed=MacCodexComposerCapabilities(screen:screen,version:"0.154.0")
+    XCTAssertTrue(observed.tabQueueAdvertised)
+    XCTAssertFalse(observed.canQueue,"Visible Tab binding cannot establish hidden draft contents")
+    XCTAssertEqual(observed.fields["tabBindingObserved"],.bool(true))
+  }
   func screen(_ text: String = "Ask Codex to do anything", busy: Bool = false, footer: String = "gpt-6-astra max") -> String {
     (busy ? "• Working (4s • esc to interrupt)\n" : "Completed answer\n") + "› \(text)\n  \(footer)\n"
   }
