@@ -1,6 +1,6 @@
 # Terminal display repair — September 13, 2026
 
-Status: implementation verified; Mac 140 packaging/install verification pending. This report will be updated after installation.
+Status: Mac **0.7.0 (140)** signed, notarized, installed and verified through the installed Assistant MCP/native worker at 21:34 UTC. Source checkpoint: `f58c60c`.
 
 ## Cause and scope
 
@@ -36,7 +36,9 @@ Evidence: `native/macos/dist/candidates/terminal-display-repair-2026-09-13/`. Lo
 
 ## Release and preservation
 
-This is a Mac-only native repair. Existing iPhone/TestFlight speech work is preserved; a new iPhone build is unnecessary for this lane. Mac install must verify matching embedded/loaded runtime, original Terminal agent PIDs, saved Assistant/research/budget data, native Assistant inspection and selection, and one running installed app.
+This is a Mac-only native repair. Existing iPhone/TestFlight speech work is preserved; a new iPhone build is unnecessary for this lane. Installed Mac 140 became native-ready in **9.421 seconds**, with one installed app, matching embedded/loaded runtime, all 14 pre-install Terminal Codex process rows intact, and Assistant/research/budget data preserved. App notarization `14014f8b-9908-4e5b-86de-bf20ee64f05d` and DMG notarization `5788e3cc-2b5f-4ad8-9c76-e62ef2cc35b5` were accepted; signing, stapling and Gatekeeper verification passed.
+
+The installed Assistant MCP verified both exact disposable input owners and completed another **12 alternating switches**, preserving `(29, 262, 597, 421)` on every switch. Native worker: `08186F57-8B05-4C2C-9433-E524F6CC7BF4`. An initial inspection returned attention before the assertions; reinspection succeeded and all actions used current identities. No input was inserted by this check. The dedicated whole-window close path then verified and closed only the two empty disposable tabs (TTYs 002 and 006). Receipt and confirmation plan are retained in `close-fixture-receipt.json`; no snapshot membership was added or deleted. Unused QA profile artifacts remain inert and documented rather than risking alteration of a real profile. Melody Companion's existing owner was also repaired at 21:25 UTC, returning to its verified empty composer.
 
 Scoped paths: the Terminal title/geometry/selection/launch sources, their native tests, the runtime's exact prepared-launch receipt check and its test, and this report. The nine unrelated workflow/storage/plugin/branding/cloud/marketing paths present at the start remain classified and unmodified by this lane. Build scripts are pre-existing release workflow changes; the dirty plugin and exploration directories are outside the packaged runtime inputs.
 
