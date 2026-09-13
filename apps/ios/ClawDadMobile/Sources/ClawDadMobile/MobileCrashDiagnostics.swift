@@ -8,7 +8,7 @@ import UIKit
 /// transcripts or arbitrary application errors, and never uploads diagnostics.
 final class MobileCrashDiagnostics: NSObject, @unchecked Sendable {
   static let shared = MobileCrashDiagnostics()
-  enum Event: String { case launch, foreground, background, memoryWarning, termination, playbackStart, playbackPart, playbackPause, playbackStop }
+  enum Event: String { case launch, foreground, background, memoryWarning, termination, playbackStart, playbackPart, playbackPause, playbackStop, notificationReceived, notificationHandled }
   private let queue = DispatchQueue(label: "earth.frg.clawdad.local-diagnostics", qos: .utility)
   private var events: [[String: Any]] = []
   private var started = false

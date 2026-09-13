@@ -411,6 +411,9 @@ struct ContentView: View {
     if ProcessInfo.processInfo.arguments.contains("--clawdad-assistant-notification-test") {
       assistantNotifications.receive(AssistantPreview.notification(session: session))
     }
+    #if targetEnvironment(simulator)
+    AssistantPreview.scheduleNotificationDelegateFixture(session: session)
+    #endif
     #endif
   }
 

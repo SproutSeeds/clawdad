@@ -2,6 +2,9 @@
   import Foundation
   import ClawDadRemoteAssistProtocol
   import CryptoKit
+  #if os(iOS)
+  import UserNotifications
+  #endif
 
   /// UI acceptance fixtures never send keyboard events or connect to a real host.
   @MainActor
@@ -14,6 +17,35 @@
         conversationId: replyConversation, requestId: replyRequest, replyId: replyID, completedAt: "2026-09-11T20:52:00Z",
         accountId: session.accountId, workspaceId: session.workspaceId, hostId: session.hostId)
     }
+    #if targetEnvironment(simulator)
+    /// Exercise the OS notification delegate, rather than injecting navigation.
+    /// Restricted to a synthetic simulator launch; never requests phone consent.
+    static func scheduleNotificationDelegateFixture(session: CloudSession) {
+      let prefix = "--clawdad-notification-delegate-fixture="
+      guard session.isAppStorePreview,
+        let argument = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix(prefix) }) else { return }
+      let identifier = String(argument.dropFirst(prefix.count))
+      let key = "clawdad.notification-fixture.\(identifier)"
+      guard !UserDefaults.standard.bool(forKey: key) else { return }
+      UserDefaults.standard.set(true, forKey: key)
+      let target = notification(session: session)
+      Task {
+        let center = UNUserNotificationCenter.current()
+        guard (try? await center.requestAuthorization(options: [.alert, .sound])) == true else {
+          print("Notification delegate fixture: permission unavailable"); return
+        }
+        let content = UNMutableNotificationContent()
+        content.title = "ClawDad notification regression"
+        content.body = "Open the exact synthetic Assistant reply."
+        content.userInfo = ["clawdad": (try? JSONSerialization.jsonObject(with: JSONEncoder().encode(target))) ?? [:]]
+        do {
+          try await center.add(UNNotificationRequest(identifier: identifier, content: content,
+            trigger: UNTimeIntervalNotificationTrigger(timeInterval: 7, repeats: false)))
+          print("Notification delegate fixture: scheduled")
+        } catch { print("Notification delegate fixture: scheduling failed") }
+      }
+    }
+    #endif
     func replyPayload() throws -> Data {
       try JSONSerialization.data(withJSONObject: ["assistantReply": ["conversationId": Self.replyConversation, "requestId": Self.replyRequest,
         "message": ["id": Self.replyID, "role": "assistant", "text": "Exact completed Assistant reply.\nYour work finished while the phone was away.", "createdAt": "2026-09-06T20:52:00Z"],

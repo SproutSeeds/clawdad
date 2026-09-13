@@ -90,3 +90,7 @@ Source checkpoints: `5cf5f24` (Assistant project runtime/tools) and `1c85f95` (i
 | `native/macos/build-app.sh`, `native/macos/package-release.sh`, `native/macos/storage-workflow.sh` | Retain the existing native build/storage lane for its own audited checkpoint. |
 | `assets/wordmark-explorations/` | Preserve design exploration pending its design review. |
 | `cloud/native/`, `marketing-site/` | Preserve the separate cloud/marketing lane; no deployment in this repair. |
+
+## Physical follow-up
+
+On September 13, Cody confirmed that the project/thread speaker error no longer appears on his iPhone. USB inspection the same evening verified installed iPhone build 92. The separately retrieved actual crash reports identify a notification-completion threading fault; see `reports/iphone-crash-evidence-2026-09-13.md`. This confirmation resolves the previously unanswered exact-error follow-up and does not claim full physical playback or crash-free verification.

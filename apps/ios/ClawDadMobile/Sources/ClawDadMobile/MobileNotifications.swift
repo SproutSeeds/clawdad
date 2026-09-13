@@ -225,27 +225,39 @@ final class ClawDadPushAppDelegate: NSObject, UIApplicationDelegate, UNUserNotif
   func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
     MobileNotificationController.shared.registrationFailed()
   }
-  nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+  nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+    withCompletionHandler completionHandler: @escaping @Sendable (UNNotificationPresentationOptions) -> Void) {
     let target = AssistantReplyNotification.parse(notification.request.content.userInfo)
-    return await MainActor.run {
-      target.map { AssistantReplyNavigation.shared.suppressInterruption($0) } == true
-        ? [.list] : [.banner, .list, .sound]
+    Task { @MainActor in
+      completionHandler(target.map { AssistantReplyNavigation.shared.suppressInterruption($0) } == true
+        ? [.list] : [.banner, .list, .sound])
     }
   }
-  nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
-    guard response.actionIdentifier == UNNotificationDefaultActionIdentifier else { return }
-    if let target = AssistantReplyNotification.parse(response.notification.request.content.userInfo),
-      response.actionIdentifier == UNNotificationDefaultActionIdentifier {
-      await MainActor.run {
-        AssistantReplyNavigation.shared.receive(target)
+  nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+    withCompletionHandler completionHandler: @escaping @Sendable () -> Void) {
+    handleNotificationResponse(actionIdentifier: response.actionIdentifier,
+      userInfo: response.notification.request.content.userInfo, completionHandler: completionHandler)
+  }
+  nonisolated func handleNotificationResponse(actionIdentifier: String, userInfo: [AnyHashable: Any],
+    completionHandler: @escaping @Sendable () -> Void) {
+    // Parse before crossing executors; the raw notification payload stays here.
+    let isOpen = actionIdentifier == UNNotificationDefaultActionIdentifier
+    let target = isOpen ? AssistantReplyNotification.parse(userInfo) : nil
+    let terminal = isOpen && target == nil ? CompletedTurnNotification.parse(userInfo) : nil
+    let usage = isOpen && target == nil ? WeeklyUsageNotification.parse(userInfo) : nil
+    MobileCrashDiagnostics.shared.event(.notificationReceived)
+    Task { @MainActor in
+      // The async delegate's generated Obj-C thunk completed on a cooperative
+      // worker after MainActor.run returned. UIKit's snapshot update then
+      // asserted. Own the callback explicitly and complete ON the main actor,
+      // once, including ignored/malformed actions. Never wait for Mac or audio.
+      defer {
+        completionHandler()
+        MobileCrashDiagnostics.shared.event(.notificationHandled)
       }
-      return
-    }
-    if let notification = CompletedTurnNotification.parse(response.notification.request.content.userInfo) {
-      await MainActor.run { MobileNotificationController.shared.pendingOpen = notification }
-    }
-    if let usage = WeeklyUsageNotification.parse(response.notification.request.content.userInfo) {
-      await MainActor.run {
+      if let target { AssistantReplyNavigation.shared.receive(target) }
+      if let terminal { MobileNotificationController.shared.pendingOpen = terminal }
+      if let usage {
         if usage.kind == "research" { MobileNotificationController.shared.pendingResearchOpen = usage }
         else { MobileNotificationController.shared.pendingUsageOpen = usage }
       }
