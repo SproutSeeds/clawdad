@@ -6,8 +6,7 @@ import Foundation
 @MainActor
 final class AssistantReplyAudio {
   var onStarted: (() -> Void)?
-  private var player: AVAudioPlayer?
-  private var delegate: AssistantClipDelegate?
+  private var player: SpeechOutputPlayer?
   private var completion: CheckedContinuation<Void, Error>?
   private var epoch = UUID()
   private var stoppedPosition: TimeInterval = 0
@@ -19,7 +18,7 @@ final class AssistantReplyAudio {
     try Task.checkCancellation()
     stop()
     stoppedPosition = position
-    let player = try AVAudioPlayer(data: data)
+    let player = try SpeechOutputPlayer(data: data)
     guard position.isFinite, position >= 0, position <= player.duration else { throw AssistantReplyAudioError.playbackFailed }
     player.volume = volume
     self.player = player
@@ -28,24 +27,20 @@ final class AssistantReplyAudio {
     try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { continuation in
         completion = continuation
-        let delegate = AssistantClipDelegate { [weak self] success in
+        player.onCompletion = { [weak self] success in
           guard let self, self.epoch == epoch else { return }
           let done = completion
           completion = nil
           stoppedPosition = (success ? self.player?.duration : self.player?.currentTime) ?? stoppedPosition
           self.player = nil
-          self.delegate = nil
           if success { done?.resume() }
           else { done?.resume(throwing: AssistantReplyAudioError.playbackFailed) }
         }
-        self.delegate = delegate
-        player.delegate = delegate
         let prepared = player.prepareToPlay()
         player.currentTime = position
         guard prepared, player.play() else {
           completion = nil
           self.player = nil
-          self.delegate = nil
           continuation.resume(throwing: AssistantReplyAudioError.playbackFailed)
           return
         }
@@ -66,7 +61,6 @@ final class AssistantReplyAudio {
     completion = nil
     player?.stop()
     player = nil
-    delegate = nil
     done?.resume(throwing: CancellationError())
   }
 
@@ -75,15 +69,4 @@ final class AssistantReplyAudio {
 private enum AssistantReplyAudioError: LocalizedError {
   case playbackFailed
   var errorDescription: String? { "The spoken reply could not play. Its text is still available in the conversation." }
-}
-
-private final class AssistantClipDelegate: NSObject, AVAudioPlayerDelegate, Sendable {
-  let completed: @MainActor @Sendable (Bool) -> Void
-  init(completed: @escaping @MainActor @Sendable (Bool) -> Void) { self.completed = completed }
-  func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-    Task { @MainActor in completed(flag) }
-  }
-  func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
-    Task { @MainActor in completed(false) }
-  }
 }

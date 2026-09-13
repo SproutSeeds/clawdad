@@ -88,6 +88,12 @@ struct VoiceSettingsPanel: View {
   private var scope: String { "\(session.accountId)/\(session.workspaceId)/\(session.hostId)" }
 
   var body: some View {
+    VStack(spacing: 16) {
+    SpeechBoostSettings(playback: session.readAloud, previewAvailable: session.ready && session.voiceSettings != nil) {
+      if let settings = session.voiceSettings {
+        session.previewVoice(settings.selection, text: "This is your selected ClawDad voice. Adjust speech boost to a comfortable level.")
+      } else { session.requestVoiceSettings() }
+    }
     VoiceSettingsEditor(settings: session.voiceSettings, pending: session.voiceSettingsPending,
       error: session.voiceSettingsError, status: session.voiceSettingsStatus,
       request: { session.requestVoiceSettings(selection: $0) },
@@ -99,6 +105,7 @@ struct VoiceSettingsPanel: View {
         requestedScope = scope
         session.requestVoiceSettings()
       }
+    }
   }
 }
 

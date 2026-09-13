@@ -52,6 +52,14 @@ struct MacAssistantRuntime {
     case .command:
       var body = try JSONDecoder().decode([String: AssistantValue].self, from: request.payload)
       body.removeValue(forKey: "imageOwner")
+      if body["action"]?.string == "speech.sync" {
+        guard let deviceId, !deviceId.isEmpty else { throw AssistantProtocolError.invalid }
+        body["deviceId"] = .string(deviceId)
+        body["label"] = .string("iPhone")
+      }
+      if body["action"]?.string == "message" {
+        body["speechDeviceId"] = deviceId.map(AssistantValue.string)
+      }
       if body["action"]?.string == "message", body["images"] != nil {
         guard let deviceId, !deviceId.isEmpty else { throw AssistantProtocolError.invalid }
         body["imageOwner"] = .string(deviceId)

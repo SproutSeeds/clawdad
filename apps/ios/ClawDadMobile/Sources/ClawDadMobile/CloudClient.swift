@@ -26,7 +26,7 @@ final class MobileReadAloudController: NSObject, ObservableObject {
   private var playlistIndex = 0
   private var transferComplete = false
   private var receivedBytes = 0
-  private var player: AVAudioPlayer?
+  private var player: SpeechOutputPlayer?
   private let audioSession: MobileAudioSession
   private var audioSessionID: UUID?
   private var timeoutTask: Task<Void, Never>?
@@ -322,8 +322,11 @@ final class MobileReadAloudController: NSObject, ObservableObject {
       finishPlayback()
       return
     }
-    let nextPlayer = try AVAudioPlayer(contentsOf: playlist[playlistIndex])
-    nextPlayer.delegate = self
+    let nextPlayer = try SpeechOutputPlayer(contentsOf: playlist[playlistIndex])
+    nextPlayer.onCompletion = { [weak self, weak nextPlayer] success in
+      guard let nextPlayer else { return }
+      self?.speechPlayerCompleted(nextPlayer, successfully: success)
+    }
     nextPlayer.prepareToPlay()
     guard nextPlayer.play() else {
       throw URLError(.cannotOpenFile)
@@ -338,6 +341,11 @@ final class MobileReadAloudController: NSObject, ObservableObject {
     playlist.count > 1
       ? "Playing audio part \(playlistIndex + 1) of \(playlist.count)"
       : "Playing audio"
+  }
+
+  func speechPlayerCompleted(_ candidate: SpeechOutputPlayer, successfully success: Bool) {
+    guard player === candidate else { return }
+    advancePlayback(successfully: success)
   }
 
   private func advancePlayback(successfully flag: Bool) {
@@ -382,7 +390,7 @@ final class MobileReadAloudController: NSObject, ObservableObject {
     playbackStartTask = nil
     timeoutTask?.cancel()
     timeoutTask = nil
-    player?.delegate = nil
+    player?.onCompletion = nil
     player?.stop()
     player = nil
     requestId = ""
@@ -408,32 +416,6 @@ final class MobileReadAloudController: NSObject, ObservableObject {
       try? FileManager.default.removeItem(at: url)
     }
     audioFilesByPart = [:]
-  }
-}
-
-extension MobileReadAloudController: AVAudioPlayerDelegate {
-  nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-    let playerID = ObjectIdentifier(player)
-    Task { @MainActor [weak self] in
-      guard let self, let currentPlayer = self.player,
-            ObjectIdentifier(currentPlayer) == playerID else { return }
-      self.advancePlayback(successfully: flag)
-    }
-  }
-
-  nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
-    let playerID = ObjectIdentifier(player)
-    Task { @MainActor [weak self] in
-      guard let self, let currentPlayer = self.player,
-            ObjectIdentifier(currentPlayer) == playerID else {
-        return
-      }
-      self.fail(
-        requestId: self.requestId,
-        message: error.map { "Audio playback failed: \($0.localizedDescription)" }
-          ?? "Audio playback failed."
-      )
-    }
   }
 }
 

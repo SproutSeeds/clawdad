@@ -785,6 +785,14 @@
           <section class="settings-section" aria-labelledby="settingsSpeechTitle">
             <div id="settingsSpeechTitle" class="settings-section-title">Voice &amp; Playback</div>
             <p class="settings-root-meta">Choose the voice used by ClawDad and Remote Assist. Speech is generated locally on this computer.</p>
+            <label class="settings-label" for="speechBoost">Speech boost <output id="speechBoostValue">0 dB</output></label>
+            <input id="speechBoost" type="range" min="0" max="20" step="1" value="0" style="cursor:pointer" aria-label="Speech boost">
+            <div class="settings-desktop-actions">
+              <button id="speechBoostReset" class="detail-action-button" type="button">Reset to 0 dB</button>
+              <button id="speechBoostPreview" class="detail-action-button" type="button">Preview</button>
+            </div>
+            <p class="settings-root-meta">All ClawDad speech in this app/browser profile at this address, across accounts. Saves immediately; other addresses, profiles and devices keep their own boost. The dB value is requested gain. Limiting can reduce the loudness increase, especially at +10 to +20 dB. Strong boost can sound compressed; +20 dB cannot be distortion-free for every source.</p>
+            <div id="speechBoostStatus" class="settings-root-meta" role="status"></div>
             <label class="settings-label" for="speechModel">Model</label>
             <select id="speechModel" aria-label="Speech model"></select>
             <div id="speechModelDetail" class="settings-root-meta"></div>

@@ -96,6 +96,9 @@ final class MobileAssistantController: ObservableObject {
   private weak var session: CloudSession?
   private var scope = ""
   var settingsScope: String { scope }
+  private var speechControlSync: Task<Void, Never>?
+  private var speechControlLastSync = Date.distantPast
+  private var speechControlAck: [String: AssistantValue]?
   private var monitor: Task<Void, Never>?
   private var speech: Task<Void, Never>?
   private var playbackEpoch = UUID()
@@ -209,6 +212,7 @@ final class MobileAssistantController: ObservableObject {
       pendingMessage = nil
       spoken = []
       silencedReplies = []
+      speechControlSync?.cancel(); speechControlSync = nil; speechControlAck = nil
       scope = next
       chatDraft.bind(next)
     }
@@ -269,6 +273,7 @@ final class MobileAssistantController: ObservableObject {
         return
       }
     #endif
+    syncSpeechOutput()
     let requestedScope = scope
     let previousRevision = snapshot?.historyRevision
     let known = previousRevision.map { ["historyRevision": $0] } ?? [:]
@@ -300,6 +305,33 @@ final class MobileAssistantController: ObservableObject {
         }
       }
       speakNext()
+    }
+  }
+  private func syncSpeechOutput() {
+    guard speechControlSync == nil, Date().timeIntervalSince(speechControlLastSync) >= 1 else { return }
+    speechControlLastSync = Date()
+    let requestedScope = scope
+    speechControlSync = Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer { if scope == requestedScope { speechControlSync = nil } }
+      do {
+        var body: [String: AssistantValue] = ["action": .string("speech.sync"),
+          "requestId": .string(UUID().uuidString.lowercased()), "state": .object(SpeechOutputPreference.shared.wireState)]
+        if let speechControlAck { body["ack"] = .object(speechControlAck) }
+        let data = try await connection.request(.command, payload: JSONEncoder().encode(body))
+        guard scope == requestedScope, !Task.isCancelled else { return }
+        speechControlAck = nil
+        let response = try JSONDecoder().decode([String: AssistantValue].self, from: data)
+        if let pending = response["speechOutput"]?.object?["pending"]?.object,
+          let expiresAt = pending["expiresAt"]?.number, expiresAt > Date().timeIntervalSince1970 * 1000 {
+          speechControlAck = SpeechOutputPreference.shared.applyRemote(pending)
+          body["state"] = .object(SpeechOutputPreference.shared.wireState)
+          body["ack"] = speechControlAck.map(AssistantValue.object)
+          body["requestId"] = .string(UUID().uuidString.lowercased())
+          _ = try await connection.request(.command, payload: JSONEncoder().encode(body))
+          if scope == requestedScope { speechControlAck = nil }
+        }
+      } catch { /* Old/offline hosts cannot acknowledge control. Local Settings still work. */ }
     }
   }
   @discardableResult func command(

@@ -1,3 +1,4 @@
+import {createSpeechAudio,installSpeechBoostSettings} from './speech-output.js';
 const state = {
   speechSettings: null,
   speechDraft: null,
@@ -5990,7 +5991,7 @@ function ttsFallbackText(text) {
 function createMessageAudioPlayback(audioKey) {
   return {
     key: audioKey,
-    audio: new Audio(),
+    audio: createSpeechAudio(),
     paused: false,
     stopped: false,
     priming: false,
@@ -11353,6 +11354,12 @@ function bindSpeechSettings() {
   document.querySelector("#speechSave")?.addEventListener("click", () => { void loadSpeechSettings({...state.speechDraft}); });
   document.querySelector("#speechRefresh")?.addEventListener("click", () => { void loadSpeechSettings(); });
   document.querySelector("#speechStop")?.addEventListener("click", () => stopActiveMessageAudio());
+  installSpeechBoostSettings(() => {
+    if (!state.speechSettings?.selection) { void loadSpeechSettings(); return; }
+    const key = `speech-boost-preview:${Date.now()}`;
+    primeMessageAudioPlayback(key);
+    void prepareAndPlayMessageAudio(key, {project: state.selectedProject || "", text: "This is your selected ClawDad voice. Adjust speech boost to a comfortable level.", voiceSelection: {...state.speechSettings.selection}, kind: "response"}).catch(error => handleMessageAudioPlaybackError(key, error));
+  });
   document.querySelector("#speechPreview")?.addEventListener("click", () => {
     const key = `voice-preview:${Date.now()}`;
     const voice = speechFilteredVoices().find(v => v.id === state.speechDraft.voice);

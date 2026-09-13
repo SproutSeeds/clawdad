@@ -5542,3 +5542,8 @@ button.detail-backdrop:focus-visible:not(:disabled) {
 .weekly-usage-dialog::backdrop { background: #000b; }
 .weekly-usage-dialog p { white-space: pre-line; }
 .weekly-usage-dialog button { min-height: 44px; margin: 6px; cursor: pointer; }
+
+/* Speech boost is an immediately saved output control. */
+#speechBoostValue { text-transform: none; font-variant-numeric: tabular-nums; }
+#speechBoost { appearance: auto; accent-color: var(--gold, #f4c66a); padding: 0; height: 44px; background: transparent; border: 0; }
+#speechBoostReset, #speechBoostPreview { cursor: pointer; }

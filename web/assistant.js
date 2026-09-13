@@ -1,3 +1,4 @@
+import {createSpeechAudio,speechDeviceId,syncSpeechOutput} from './speech-output.js';
 import {researchSupervisorPanel} from './research-supervisor.js';
 import './assistant-settings.js';
 const $ = (id) => document.getElementById(id);
@@ -23,7 +24,7 @@ if (dialog) {
   window.openClawDadResearch=()=>{open();$('assistantWorkspace').hidden=false;$('assistantFeed').hidden=true;};
   function status(message){$('assistantStatus').textContent=message;$('assistantCallStatus').textContent=message;}
   async function command(action,args={},id=crypto.randomUUID()) {
-    const result=await request('/v1/assistant/request',{...args,action,requestId:id});render(result);return result;
+    const result=await request('/v1/assistant/request',{...args,...(action==='message'?{speechDeviceId:speechDeviceId()}:{}),action,requestId:id});render(result);return result;
   }
   async function ensureAssistant(){await refresh();if(snapshot?.conversationMode!=='background')throw new Error('Update ClawDad on your Mac to use Assistant calls.');await command('start');}
   function button(text,handler){const element=document.createElement('button');element.type='button';element.textContent=text;element.onclick=handler;return element;}
@@ -139,7 +140,7 @@ if (dialog) {
   $('assistantDraft').onkeydown=event=>{if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();$('assistantComposer').requestSubmit();}};
   function stopSpeech(){
     const wasPlaying=!!playingMessage;
-    speechQueue=[];const epoch=++speechEpoch;speechAbort?.abort();speechAbort=null;speechRunner=null;playingMessage=null;updatePlaybackButtons();window.speechSynthesis?.cancel();
+    speechQueue=[];const epoch=++speechEpoch;speechAbort?.abort();speechAbort=null;speechRunner=null;playingMessage=null;updatePlaybackButtons();
     if(audio){audio.pause();audio.src='';audio=null;}
     if(wasPlaying)setTimeout(()=>{if(epoch===speechEpoch&&!playingMessage)capture?.port.postMessage({muted});},350);
     else capture?.port.postMessage({muted});
@@ -177,7 +178,7 @@ if (dialog) {
       if(result.audio?.state==='failed')throw new Error(result.audio.error||'Local speech is unavailable');
       const parts=result.audio?.parts||[];
       while(played<parts.length&&epoch===speechEpoch){
-        status('Speaking…');const player=new Audio(parts[played].url);audio=player;
+        status('Speaking…');const player=createSpeechAudio();player.src=parts[played].url;audio=player;
         await new Promise((resolve,reject)=>{
           const cancel=()=>{player.pause();reject(new DOMException('Interrupted','AbortError'));};
           abort.signal.addEventListener('abort',cancel,{once:true});
@@ -192,17 +193,7 @@ if (dialog) {
     if(epoch===speechEpoch)throw Error('Speech preparation timed out');
     } catch(e) {
       if(epoch!==speechEpoch||abort.signal.aborted)throw e;
-      const remaining=played?chunks.slice(played).join('\n\n'):message.text;
-      if(!remaining||!window.speechSynthesis)throw e;
-      status('Speaking · device voice');
-      await new Promise((resolve,reject)=>{
-        const utterance=new SpeechSynthesisUtterance(remaining);
-        const cancel=()=>{window.speechSynthesis.cancel();reject(new DOMException('Interrupted','AbortError'));};
-        abort.signal.addEventListener('abort',cancel,{once:true});
-        utterance.onend=()=>{abort.signal.removeEventListener('abort',cancel);resolve();};
-        utterance.onerror=()=>{abort.signal.removeEventListener('abort',cancel);reject(Error('Device speech unavailable'));};
-        window.speechSynthesis.speak(utterance);
-      });
+      throw new Error('The selected voice could not finish. Retry speech when your Mac is available.');
     }
   }
   function wav(samples,rate){
@@ -270,3 +261,6 @@ if (dialog) {
   $('assistantMuteInline').onclick=()=>setMuted(!muted);
   window.addEventListener('beforeunload',endVoice);
 }
+
+const syncSpeechRequest=async(route,body)=>{const response=await fetch(route,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});if(!response.ok)throw Error('Speech control unavailable');return response.json();};
+setInterval(()=>{void syncSpeechOutput(syncSpeechRequest).catch(()=>{});},1000);
