@@ -112,7 +112,7 @@ final class MacTerminalTabTests: XCTestCase {
     XCTAssertEqual(macTerminalTabTitle("Release review"), "Release review")
   }
   func testBatchedCatalogAndIdentityFocusScriptsCompileWithoutRunningTerminal() {
-    for source in [MacTerminalAutomation.catalogScript, MacTerminalAutomation.focusScript(windowID: 10, tabIndex: 2, tty: "/dev/ttys001")] {
+    for source in [MacTerminalAutomation.catalogScript, MacTerminalAutomation.activationScript, MacTerminalAutomation.focusScript(windowID: 10, tabIndex: 2, tty: "/dev/ttys001")] {
       let script = NSAppleScript(source: source)
       var error: NSDictionary?
       XCTAssertTrue(script?.compileAndReturnError(&error) == true, error?.description ?? "No script")

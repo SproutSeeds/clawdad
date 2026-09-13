@@ -655,12 +655,38 @@ final class MacTerminalAutomation: MacTerminalAutomating, @unchecked Sendable {
     guard let nativeID = snapshot.nativeTabID else {
       try await focusTab(windowID: snapshot.windowID, tabIndex: snapshot.tabIndex, tty: snapshot.tty); return
     }
-    guard let terminal = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Terminal").first else { return }
-    if !terminal.isActive { terminal.activate(options: [.activateIgnoringOtherApps]) }
+    guard let terminal = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Terminal").first else {
+      throw MacTerminalTabFailure(code: "terminal_not_running", message: "Terminal is not open on the Mac.", state: nil)
+    }
+    if !terminal.isActive {
+      // Use the same authorized Apple Event activation as the TTY-bound route.
+      // AXPress selects background tabs, and NSRunningApplication.activate is
+      // only a request: neither proves that Terminal owns keyboard focus.
+      try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+        queue.async { continuation.resume(with: Result {
+          try Self.requestAutomationPermission()
+          guard !terminal.isTerminated, !MacConsoleSessionState.isLocked() else {
+            throw MacTerminalTabFailure(code: "terminal_activation_unavailable", message: "Connect to an unlocked Mac with this Terminal process still open.", state: nil)
+          }
+          _ = try Self.execute(Self.activationScript)
+        }) }
+      }
+    }
+    try await confirmActiveTerminal(terminal)
     try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
       queue.async { continuation.resume(with: Result {
         try self.nativeTabs.focus(nativeID, application: AXUIElementCreateApplication(terminal.processIdentifier))
       }) }
+    }
+  }
+
+  @MainActor private func confirmActiveTerminal(_ terminal: NSRunningApplication) async throws {
+    for _ in 0..<20 {
+      if terminal.isActive || terminal.isTerminated || MacConsoleSessionState.isLocked() { break }
+      try await Task.sleep(nanoseconds: 25_000_000)
+    }
+    guard terminal.isActive, !terminal.isTerminated, !MacConsoleSessionState.isLocked() else {
+      throw MacTerminalTabFailure(code: "terminal_activation_unavailable", message: "Terminal did not become active. No input was sent. Bring Terminal forward and inspect the intended tab again.", state: nil)
     }
   }
 
@@ -690,9 +716,9 @@ final class MacTerminalAutomation: MacTerminalAutomating, @unchecked Sendable {
 
   @MainActor
   func focusTab(windowID: Int, tabIndex: Int, tty: String) async throws {
-    guard !NSRunningApplication.runningApplications(
+    guard let terminal = NSRunningApplication.runningApplications(
       withBundleIdentifier: "com.apple.Terminal"
-    ).isEmpty else {
+    ).first else {
       throw MacTerminalTabFailure(
         code: "terminal_not_running",
         message: "Terminal is not open on the Mac.",
@@ -712,6 +738,7 @@ final class MacTerminalAutomation: MacTerminalAutomating, @unchecked Sendable {
         })
       }
     }
+    try await confirmActiveTerminal(terminal)
   }
 
   @MainActor
@@ -858,6 +885,12 @@ final class MacTerminalAutomation: MacTerminalAutomating, @unchecked Sendable {
   end tell
   end timeout
   """#
+
+  static let activationScript = """
+    with timeout of 3 seconds
+      tell application "Terminal" to activate
+    end timeout
+    """
 
   static func focusScript(
     windowID: Int,

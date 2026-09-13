@@ -7,6 +7,34 @@ import XCTest
 /// harness supplies only disposable Terminal targets; this never starts a call.
 @MainActor
 final class MacAssistantTerminalTransportLiveTests: XCTestCase {
+  func testDisposableColdInputFocus() async throws {
+    guard let folder = ProcessInfo.processInfo.environment["CLAWDAD_TERMINAL_QA_ROOT"], folder.hasPrefix("/private/tmp/clawdad-terminal-coverage-") else { throw XCTSkip("Opt-in disposable tab selection") }
+    let automation = MacTerminalAutomation()
+    let before = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""
+    let rows = try await automation.readTabs()
+    let matches = rows.filter { $0.customTitle.contains("accept-Ox8wea") }
+    let target = try XCTUnwrap(matches.count == 1 ? matches.first : nil)
+    // Force the cold native identity path, without using cached scripting/TTY metadata.
+    let cold = MacTerminalTabSnapshot(windowID: 0, windowIndex: target.windowIndex,
+      tabIndex: target.tabIndex, customTitle: target.customTitle, tty: "",
+      isSelectedInWindow: target.isSelectedInWindow, nativeTabID: target.nativeTabID)
+    let start = Date()
+    try await automation.focusTab(cold)
+    let identity = try await automation.inputIdentity()
+    let after = try await automation.readTabs()
+    let selected = after.filter { $0.isSelectedInWindow && $0.windowIndex == 1 }
+    let result: [String:Any] = ["beforeBundle":before,
+      "afterBundle":NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "",
+      "elapsedMs":Date().timeIntervalSince(start)*1000,
+      "inputIdentityVerified":identity != nil,
+      "selectedNativeIdMatches":selected.count == 1 && selected[0].nativeTabID == target.nativeTabID,
+      "selectedTTY":selected.first?.tty ?? "", "inputSent":false]
+    try JSONSerialization.data(withJSONObject:result,options:[.prettyPrinted,.sortedKeys]).write(to:URL(fileURLWithPath:folder).appendingPathComponent("cold-focus-result.json"))
+    XCTAssertEqual(result["afterBundle"] as? String,"com.apple.Terminal")
+    XCTAssertNotNil(identity)
+    XCTAssertEqual(result["selectedNativeIdMatches"] as? Bool,true)
+    XCTAssertEqual(result["selectedTTY"] as? String,"/dev/ttys013")
+  }
   func testDisposableNativeSelectionCapabilities() async throws {
     guard let folder = ProcessInfo.processInfo.environment["CLAWDAD_TERMINAL_QA_ROOT"], folder.hasPrefix("/private/tmp/clawdad-terminal-coverage-") else { throw XCTSkip("Opt-in read-only fixture inspection") }
     let app = try XCTUnwrap(NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Terminal").first)
@@ -41,7 +69,11 @@ final class MacAssistantTerminalTransportLiveTests: XCTestCase {
         catch { observationError=error.localizedDescription }
         try await Task.sleep(for:.milliseconds(100))
       }
-      let result: [String:Any] = ["target":target.title,"calls":calls,"failure":failure as Any? ?? NSNull(),"observedSelected":selected,"observationError":observationError as Any? ?? NSNull()]
+      var focusRole:CFTypeRef?, focusValue:CFTypeRef?, focused:CFTypeRef?
+      let front=NSWorkspace.shared.frontmostApplication
+      if let front { _=AXUIElementCopyAttributeValue(AXUIElementCreateApplication(front.processIdentifier),kAXFocusedUIElementAttribute as CFString,&focused) }
+      if let focused { let element=unsafeBitCast(focused,to:AXUIElement.self);_=AXUIElementCopyAttributeValue(element,kAXRoleAttribute as CFString,&focusRole);_=AXUIElementCopyAttributeValue(element,kAXValueAttribute as CFString,&focusValue) }
+      let result: [String:Any] = ["target":target.title,"calls":calls,"failure":failure as Any? ?? NSNull(),"observedSelected":selected,"observationError":observationError as Any? ?? NSNull(),"frontmostBundle":front?.bundleIdentifier ?? "", "focusRole":focusRole as? String ?? "", "focusValueIsString":focusValue is String]
       try JSONSerialization.data(withJSONObject:result,options:[.prettyPrinted,.sortedKeys]).write(to:URL(fileURLWithPath:folder).appendingPathComponent("selection-action.json"))
     }
   }

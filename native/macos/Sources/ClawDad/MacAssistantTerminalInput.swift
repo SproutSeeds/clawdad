@@ -136,8 +136,15 @@ final class MacAssistantTerminalInput {
     observationStep?("focus")
     let focused = try await tabs.focus(tabID: tabId, expectedRevision: state.revision)
     observationStep?("identity")
-    guard let tab = tabs.assistantSnapshot(tabID: tabId), !tab.tty.isEmpty,
-      let identity = try await tabs.inputIdentity(), interaction.isCurrent(ticket) else { throw AssistantProtocolError.invalid }
+    guard let tab = tabs.assistantSnapshot(tabID: tabId), !tab.tty.isEmpty else {
+      throw assistantTerminalFailure("catalog_binding_unresolved", "The selected tab's native shell identity is still resolving. Inspect this same tab again; no input was sent.")
+    }
+    guard interaction.isCurrent(ticket) else {
+      throw assistantTerminalFailure("manual_input_changed", "Manual input changed during inspection. Your input was preserved; inspect the intended tab again when ready.")
+    }
+    guard let identity = try await tabs.inputIdentity() else {
+      throw assistantTerminalFailure("terminal_input_not_focused", "Terminal has not confirmed keyboard focus for this input. Bring the intended tab forward and inspect it again; no input was sent.")
+    }
     let foreground = try await Task.detached { try MacAssistantForeground.read(tty: tab.tty) }.value
     observationStep?("context")
     let agent = try? await Task.detached { try MacTerminalResponseReader().inputBinding(tty: tab.tty) }.value
