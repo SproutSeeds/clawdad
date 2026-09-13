@@ -265,6 +265,16 @@ func mobileReadAloudKey(
   return "\(requestId)::\(kind.rawValue)::\(normalized.utf8.count)::\(String(hash, radix: 36))"
 }
 
+func mobileProjectReadAloudKey(project: String, session: String, item: MobileHistoryItem,
+  kind: MobileReadAloudKind, text: String) -> String {
+  let components = [project, session, mobileReadAloudKey(item: item, kind: kind, text: text)]
+  var hash: UInt64 = 14_695_981_039_346_656_037
+  for byte in components.map({ "\($0.utf8.count):\($0)" }).joined().utf8 {
+    hash ^= UInt64(byte); hash &*= 1_099_511_628_211
+  }
+  return String(hash, radix: 36)
+}
+
 struct MobileHistoryItem: Identifiable, Equatable {
   var id: String
   var requestId: String

@@ -12,6 +12,7 @@
 		08A2F61153C0221F74B49988 /* RemoteTerminalReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B67F2E9259E05DBACEB7F04 /* RemoteTerminalReader.swift */; };
 		0B412DE03A30270A0488D1D6 /* SpeechOutputPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28572026C39963DF8D1F01AD /* SpeechOutputPlayer.swift */; };
 		1022DB6F1FD8E58702E505B4 /* AssistantChatComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 193E817EE91878630342FBFE /* AssistantChatComposer.swift */; };
+		10CA63A4E5F07D4FA390B1B6 /* MobileCrashDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 228FD9D02CC116AFA865D99A /* MobileCrashDiagnostics.swift */; };
 		12BA298BF1ED630AADFF8002 /* ResearchSupervisorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 482370CE69CA78C83DA3EB3A /* ResearchSupervisorView.swift */; };
 		187E31F4AF200A700830399F /* RemoteTerminalWindowGroups.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4B71B55085B2C1EE623A070 /* RemoteTerminalWindowGroups.swift */; };
 		1A308337EBE5F90AF0C5DD19 /* ClawDadRemoteAssistProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = 3E041F6ED9B6E45F5F37F06A /* ClawDadRemoteAssistProtocol */; };
@@ -72,6 +73,7 @@
 		D1BCAA9F0E429DF09D1DC3BE /* SpeechBoostUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9ED14DF01B173CB2A4D42A97 /* SpeechBoostUITests.swift */; };
 		DA856C77B9663DCAB80C7092 /* AssistantAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3286351CBEADFC96A79F1EE4 /* AssistantAudio.swift */; };
 		DF96F6052BD8A379003C658D /* AssistantReplyAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C8B178EFE4C52CC4F261077 /* AssistantReplyAudio.swift */; };
+		E20F5A457E054D7112A0F695 /* ProjectReadbackUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AED4051022C101DAD6FC4F4 /* ProjectReadbackUITests.swift */; };
 		EA31CFC4A3254B9DD470160E /* AssistantSelectableText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31F8E430E715C3D274D33CFA /* AssistantSelectableText.swift */; };
 		EDA340FC5A4C8FDF0090ABB0 /* RemoteImagePreparation.swift in Sources */ = {isa = PBXBuildFile; fileRef = D70593B6087D12EBB653329D /* RemoteImagePreparation.swift */; };
 		F07EBA06FDF3D4509727718D /* RemoteDictationDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35C55DF601F5D3D9ABD04556 /* RemoteDictationDraft.swift */; };
@@ -106,6 +108,7 @@
 		03F34ABFFB51FC546D105D8F /* ClawDadMobileUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = ClawDadMobileUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		061444F36751011C7753FD06 /* RemoteQuickChat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteQuickChat.swift; sourceTree = "<group>"; };
 		088F57A9C660D2D5A01BEF9B /* VoiceSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceSettings.swift; sourceTree = "<group>"; };
+		0AED4051022C101DAD6FC4F4 /* ProjectReadbackUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectReadbackUITests.swift; sourceTree = "<group>"; };
 		10F1B258EA5FA2916837629C /* AssistantListeningInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantListeningInput.swift; sourceTree = "<group>"; };
 		11E193EDE43AF5D11AADF538 /* ClawDadMobileUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClawDadMobileUITests.swift; sourceTree = "<group>"; };
 		147A8BFF03CEDB70896BAB51 /* AppAttestClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppAttestClient.swift; sourceTree = "<group>"; };
@@ -117,6 +120,7 @@
 		1CBE9BB9E28B2AADC9243157 /* RemoteTerminalTabList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTerminalTabList.swift; sourceTree = "<group>"; };
 		1D7242D152C900A9BC22484E /* ResearchBudgetEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResearchBudgetEditor.swift; sourceTree = "<group>"; };
 		21A33EE26BF9BD9F84918E9F /* FilesLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilesLibraryView.swift; sourceTree = "<group>"; };
+		228FD9D02CC116AFA865D99A /* MobileCrashDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileCrashDiagnostics.swift; sourceTree = "<group>"; };
 		26AABBF8F4DF0D8B38BF9365 /* QRScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRScannerView.swift; sourceTree = "<group>"; };
 		28572026C39963DF8D1F01AD /* SpeechOutputPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechOutputPlayer.swift; sourceTree = "<group>"; };
 		29F575EC9D8D541AD658DF6B /* AssistantMicrophoneState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantMicrophoneState.swift; sourceTree = "<group>"; };
@@ -254,6 +258,7 @@
 				B19FF3297A4E2E39A76F9B9A /* MainTerminalWorkspaceView.swift */,
 				E9F3B8E8409978BFFE0C10D1 /* MobileAssistant.swift */,
 				7DB814BD7925748F246B8403 /* MobileAudioSession.swift */,
+				228FD9D02CC116AFA865D99A /* MobileCrashDiagnostics.swift */,
 				83005EBBAE60D00DFFF52D33 /* MobileFileExport.swift */,
 				33B53FE2D8E9ADBA82728DA2 /* MobileFiles.swift */,
 				A01E4E35032819166F419843 /* MobileFilesPreview.swift */,
@@ -296,6 +301,7 @@
 			children = (
 				517D29CD52F468A0EE7BA82F /* AssistantUITests.swift */,
 				11E193EDE43AF5D11AADF538 /* ClawDadMobileUITests.swift */,
+				0AED4051022C101DAD6FC4F4 /* ProjectReadbackUITests.swift */,
 				5D38D459495C632F08CA5FC7 /* RemoteSpecialKeysUITests.swift */,
 				9ED14DF01B173CB2A4D42A97 /* SpeechBoostUITests.swift */,
 			);
@@ -500,6 +506,7 @@
 				5E7078B06348F89577EEC257 /* MainTerminalWorkspaceView.swift in Sources */,
 				C94E7212185A49D92DA02824 /* MobileAssistant.swift in Sources */,
 				5236A640231EA2C1D890376C /* MobileAudioSession.swift in Sources */,
+				10CA63A4E5F07D4FA390B1B6 /* MobileCrashDiagnostics.swift in Sources */,
 				7528DEE2F3D0A122F71E8C32 /* MobileFileExport.swift in Sources */,
 				BF46A08D3F06D8FF71B9D210 /* MobileFiles.swift in Sources */,
 				4DCD11D7065D315AEF5D4EEB /* MobileFilesPreview.swift in Sources */,
@@ -542,6 +549,7 @@
 			files = (
 				A579349CC92C8C0E2A9E2C21 /* AssistantUITests.swift in Sources */,
 				854A5AC2401B066B721E86D2 /* ClawDadMobileUITests.swift in Sources */,
+				E20F5A457E054D7112A0F695 /* ProjectReadbackUITests.swift in Sources */,
 				AB3D8220A00908D37822FFF1 /* RemoteSpecialKeysUITests.swift in Sources */,
 				D1BCAA9F0E429DF09D1DC3BE /* SpeechBoostUITests.swift in Sources */,
 			);
@@ -676,7 +684,7 @@
 				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 91;
+				CURRENT_PROJECT_VERSION = 92;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_NS_ASSERTIONS = NO;
@@ -773,7 +781,7 @@
 				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 91;
+				CURRENT_PROJECT_VERSION = 92;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -884,7 +892,7 @@
 				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 91;
+				CURRENT_PROJECT_VERSION = 92;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_NS_ASSERTIONS = NO;

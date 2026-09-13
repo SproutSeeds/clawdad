@@ -76,6 +76,13 @@ final class AssistantSpeechPlayback {
     pendingAudio = nil; position = 0; poll = false; retry = false
   }
   func record(_ event: String, reason: String? = nil) {
+    switch event {
+    case "startedOrResumed": MobileCrashDiagnostics.shared.event(.playbackStart)
+    case "partCompleted": MobileCrashDiagnostics.shared.event(.playbackPart)
+    case "paused": MobileCrashDiagnostics.shared.event(.playbackPause)
+    case "completed", "stopped": MobileCrashDiagnostics.shared.event(.playbackStop)
+    default: break
+    }
     diagnostics.record(message: Self.hash(Data(id.utf8)), batch: batch, part: part, position: position,
       event: event, stage: stage, reason: reason, voice: voice, audioID: audioID)
   }

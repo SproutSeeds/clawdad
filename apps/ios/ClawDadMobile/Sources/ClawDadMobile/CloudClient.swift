@@ -1318,6 +1318,14 @@ final class CloudSession: ObservableObject {
   }
 
   func requestHistory(limit: Int? = nil) {
+    #if DEBUG
+    if appStorePreviewMode {
+      let fixture = ClawDadAppStorePreviewFixture.make(scenario: .conversation)
+      historyItems = selectedProjectPath == fixture.selectedProjectPath && selectedSessionId == fixture.selectedSessionId ? fixture.historyItems : []
+      historyStatus = historyItems.isEmpty ? "No preview history for this thread." : "Thread ready"
+      return
+    }
+    #endif
     guard paired else {
       historyItems = []
       historyStatus = "Pair this iPhone to load thread history."

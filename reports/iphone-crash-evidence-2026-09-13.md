@@ -1,0 +1,23 @@
+# iPhone exit/crash evidence
+
+Status: **physical crash cause unconfirmed; device evidence unavailable**. Local diagnostic collection is included in iPhone 92 alongside the separately verified project-speaker repair. No claim is made that this fixes Cody's reported Home Screen exits.
+
+Cody reports genuine app exits followed by a crash-report sharing dialog, which he declines. Apple App Store Connect's `betaFeedbackCrashSubmissions` endpoint returned HTTP 200, zero submissions and no next page on September 13. Apple receives these TestFlight records only when the tester submits them; zero records does not mean zero crashes. The available Mac crash directories contain an older simulator UITest-runner crash, not a matching physical-phone incident.
+
+Xcode/CoreDevice currently reports CodyVerse unavailable. Cached pairing metadata is iPhone 15 Pro Max (`iPhone16,2`), iOS 26.6.1 (`23G83`), last connection September 13 around 03:32 UTC. These are **cached**, not verified current device settings. The earlier first-chunk audit observed iPhone build 90; latest previously available TestFlight build was 91. Current installed phone build is unknown. The exact crash timestamps, termination reason, exception/backtrace, jetsam/watchdog record and matching physical build have not been retrieved. Therefore no strongest physical signature can yet be symbolicated or correlated reliably with Mac/relay/audio events.
+
+The earlier first-chunk defect was a playback fade/completion problem corrected in 91. Intermittent relay socket errors also exist. Neither proves the cause of these exits. Recent volume/DSP changes remain preserved. Controlled regression tests did not reproduce a crash: full mobile suite, complete four-chunk native boosted output, compact/large iPhone simulator user/agent speakers and muted-call transitions passed. The new active-call speaker reservation conflict is an ordinary controlled error, separate from an operating-system crash.
+
+## Bounded local collection
+
+`MobileCrashDiagnostics` starts once and subscribes to MetricKit diagnostic payloads plus lifecycle/memory-warning notifications. It keeps at most 160 timestamp/build/OS/type event records and 12 sanitized system-diagnostic files in the app's internal Application Support `ClawDad/AssistantDiagnostics` directory. Files are atomic, private and excluded from backups. It accepts only typed event names, numeric crash/frame metadata, valid binary UUIDs and constrained version strings. It strips free-form exception reasons, binary names/paths and all unknown fields; array/depth/payload/file-size limits bound retention. It never accepts conversation text, transcripts, images, URLs or audio and never uploads data. MetricKit delivery is platform-dependent and can be delayed; these records are supporting evidence rather than a guaranteed immediate crash report.
+
+Privacy tests verify removal of synthetic private strings while retaining symbolication UUID/offsets, bounded arrays and 160-record retention across a new collector. App 92 and dSYM share UUID `CFCD73B6-447A-3BF2-9D8C-C80A9FC2DEB4`. The existing third-party WebRTC archive lacks a matching dSYM; if a future signature lands there, full third-party symbolication may require that vendor's symbols.
+
+## Next physical step
+
+Connect Cody's iPhone to this Mac by USB and unlock it. Retrieve local crash, JetsamEvent and watchdog diagnostics via the existing trusted device connection, read its actual installed app/iOS build, and correlate exact incident times. If unavailable over that path, export the relevant ClawDad/JetSam entry from iPhone Settings → Privacy & Security → Analytics & Improvements → Analytics Data. Do not ask for broad private diagnostic exports. No microphone, call or live project needs to be enabled for this retrieval.
+
+Use the exact report/build UUID to select symbols, establish the failing stack/termination category, then reproduce that specific scenario and implement a supported fix. Preserve current voice, conversations, drafts/images and ongoing Mac work. No report was invented or inferred from the ordinary speaker error.
+
+Evidence: `native/macos/dist/candidates/iphone-crashes-2026-09-13/` (`device-details.json`, `crash-list.json`, `devices-latest.json`, `apple-readonly.json`, `build92-symbols.txt`) and the neighboring project-thread readback candidate. Apple references: [TestFlight crash feedback API](https://developer.apple.com/documentation/appstoreconnectapi/beta-feedback-crash-submissions?changes=_3_2), [MetricKit crash diagnostics](https://developer.apple.com/documentation/metrickit/mxcrashdiagnostic?changes=_3).

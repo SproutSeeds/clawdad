@@ -10,6 +10,7 @@ struct ClawDadMobileApp: App {
   @StateObject private var subscription: SubscriptionManager
 
   init() {
+    MobileCrashDiagnostics.shared.start()
 #if DEBUG
     if let scenario = ClawDadAppStorePreviewScenario.current {
 #if canImport(UIKit)

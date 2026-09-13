@@ -4,6 +4,64 @@ import ClawDadRemoteAssistProtocol
 
 @MainActor
 final class AssistantMessagePlaybackTests: XCTestCase {
+  private func projectDraft() -> AssistantChatDraftStore {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("project-readback-\(UUID())")
+    addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+    return AssistantChatDraftStore(root: root)
+  }
+  private func projectSession(_ controller: MobileAssistantController) -> CloudSession {
+    let suite = "project-readback-\(UUID())", values = UserDefaults(suiteName: suite)!
+    addTeardownBlock { values.removePersistentDomain(forName: suite) }
+    let session = CloudSession(defaults: values) { _, _, _ in }
+    controller.bind(session)
+    return session
+  }
+  func testProjectSpeakerDuringCallSharesVoiceBoostAndPreservesMuteHeldWordsAndDraft() async throws {
+    let connection = AssistantTestTransport(), audio = AssistantTestAudio()
+    let controller = MobileAssistantController(connection: connection, audio: audio, defaults: nil, chatDraft: projectDraft())
+    let session = projectSession(controller)
+    defer { controller.stop() }
+    connection.connected = true; connection.onChange?()
+    await controller.startVoice(); controller.setWaitForSend(true); controller.toggleMute()
+    controller.chatDraft.setText("Unrelated typed draft")
+    controller.toggleProjectReadAloud(session, key: "exact-project:user", text: "User message")
+    try await until { audio.played.count == 1 }
+    XCTAssertEqual(controller.projectReadAloudPhase(key: "exact-project:user"), .playing)
+    XCTAssertTrue(controller.voiceActive); XCTAssertTrue(controller.muted); XCTAssertTrue(controller.waitForSend)
+    let transcriptions = connection.transcriptions
+    audio.onUtterance?(Data("Playback echo".utf8), true); audio.onSpeechStarted?()
+    try await Task.sleep(nanoseconds: 30_000_000)
+    XCTAssertEqual(connection.transcriptions, transcriptions)
+    controller.toggleProjectReadAloud(session, key: "exact-project:user", text: "User message")
+    XCTAssertEqual(controller.projectReadAloudPhase(key: "exact-project:user"), .paused)
+    controller.toggleProjectReadAloud(session, key: "exact-project:agent", text: "Agent response")
+    try await until { audio.played.count == 2 }
+    XCTAssertEqual(controller.projectReadAloudPhase(key: "exact-project:user"), .idle)
+    XCTAssertEqual(controller.projectReadAloudPhase(key: "exact-project:agent"), .playing)
+    controller.stopMessagePlayback()
+    XCTAssertTrue(connection.sentTexts.isEmpty); XCTAssertEqual(controller.chatDraft.value.text, "Unrelated typed draft")
+    XCTAssertTrue(controller.voiceActive); XCTAssertTrue(controller.muted); XCTAssertTrue(controller.waitForSend)
+    XCTAssertEqual(audio.starts, 1)
+  }
+  func testProjectReadbackReconnectAndSecondChunkRecoveryDoNotStartCallOrRepeatFirstChunk() async throws {
+    let connection = AssistantTestTransport(), audio = AssistantTestAudio()
+    let controller = MobileAssistantController(connection: connection, audio: audio, defaults: nil, chatDraft: projectDraft())
+    let session = projectSession(controller)
+    defer { controller.stop() }
+    connection.connected = false; connection.onReconnect = { connection.connected = true; connection.onChange?() }
+    var fail = true
+    connection.download = { data in if data == Data("two".utf8) && fail { throw AssistantProtocolError.disconnected }; return data }
+    controller.toggleProjectReadAloud(session, key: "long", text: "Complete multi-paragraph reply")
+    try await until { audio.played.count == 1 }; audio.completeClip()
+    try await until { controller.messagePlaybackPaused }
+    XCTAssertEqual(connection.connects, 1); XCTAssertEqual(audio.played, [Data("one".utf8)])
+    fail = false; controller.toggleProjectReadAloud(session, key: "long", text: "Complete multi-paragraph reply")
+    try await until { audio.played.count == 2 }; audio.completeClip()
+    try await until { controller.playingMessageID == nil }
+    XCTAssertEqual(audio.played, [Data("one".utf8), Data("two".utf8)])
+    XCTAssertTrue(connection.synthesisPayloads.dropFirst().allSatisfy { $0["voiceSelection"]?.object?["voice"]?.string == "af_heart" })
+    XCTAssertEqual(audio.starts, 0); XCTAssertFalse(controller.callVisible); XCTAssertTrue(connection.sentTexts.isEmpty)
+  }
   func testSettingsConnectWithoutStartingAssistantOrMicrophone() async throws {
     let connection = AssistantTestTransport(), audio = AssistantTestAudio()
     connection.connected = false

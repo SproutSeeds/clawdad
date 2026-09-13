@@ -1353,6 +1353,24 @@ final class MobileAssistantController: ObservableObject {
       } catch { /* The authoritative final transcription retains its normal retry. */ }
     }
   }
+  func projectReadAloudPhase(key: String) -> MobileReadAloudPhase {
+    guard playingMessageID == "project:\(key)" else { return .idle }
+    return messagePlaybackPaused ? .paused : messagePlaybackPreparing ? .preparing : .playing
+  }
+  func projectReadAloudStatus(key: String) -> String {
+    guard playingMessageID == "project:\(key)" else { return "" }
+    return messagePlaybackPaused ? "Speech paused. Resume or stop below." : messagePlaybackPreparing ? "Preparing audio…" : "Playing audio"
+  }
+  func toggleProjectReadAloud(_ session: CloudSession, key: String, text: String) {
+    bind(session)
+    session.readAloud.stop()
+    switch projectReadAloudPhase(key: key) {
+    case .playing: pauseMessagePlayback()
+    case .paused: resumeMessagePlayback()
+    case .preparing: break
+    case .idle, .failed: playMessage(id: "project:\(key)", text: text)
+    }
+  }
   func playMessage(id: String, text: String) {
     if playingMessageID == id {
       if messagePlaybackPaused { resumeMessagePlayback() } else { stopMessagePlayback() }
@@ -1459,6 +1477,16 @@ final class MobileAssistantController: ObservableObject {
       try Task.checkCancellation()
       guard playbackEpoch == epoch else { throw CancellationError() }
       do {
+        // Readback may be the first Assistant data operation in a text-only
+        // visit. Connect only the data channel; never start a call or agent.
+        let deadline = Date().addingTimeInterval(20)
+        while !connection.connected {
+          try Task.checkCancellation()
+          guard playbackEpoch == epoch else { throw CancellationError() }
+          guard Date() < deadline else { throw AssistantProtocolError.disconnected }
+          connection.connect()
+          try await Task.sleep(nanoseconds: 150_000_000)
+        }
         if cursor.pendingAudio == nil {
           cursor.stage = "synthesis"
           var payload: [String: AssistantValue] = ["text": .string(cursor.batches[cursor.batch]),
@@ -1851,6 +1879,8 @@ struct AssistantCallBar: View {
       }.padding(.horizontal, 10).background(Color.black.opacity(0.96)).foregroundStyle(
         ClawDadTheme.cream)
       }.background(Color.black.opacity(0.96)).foregroundStyle(ClawDadTheme.cream)
+    } else if controller.playingMessageID?.hasPrefix("project:") == true {
+      AssistantSpeechRecoveryNotice(controller: controller)
     }
   }
 }
