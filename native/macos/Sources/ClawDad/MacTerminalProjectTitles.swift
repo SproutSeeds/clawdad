@@ -83,18 +83,15 @@ final class MacTerminalProjectTitles {
   private var writtenDirectories: [String: String] = [:]
   private(set) var refreshTask: Task<Void, Never>?
   private var refreshedAt = Date.distantPast
-  private var changing = Set<String>()
   private var pendingNames: [String: (name: String, window: String, since: Date)] = [:]
   private let readMetadata: @Sendable (String) throws -> MacTerminalTitleMetadata
   private let writeOutput: @Sendable (MacTerminalTitleMetadata, Data) throws -> Void
-  private let readWindowTitle: @Sendable (String) throws -> String
   init(url: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/ClawDad/TerminalTitles/names.json"),
     readMetadata: @escaping @Sendable (String) throws -> MacTerminalTitleMetadata = { try MacTerminalTitleMetadata.read($0) },
-    writeOutput: @escaping @Sendable (MacTerminalTitleMetadata, Data) throws -> Void = { try MacTerminalProjectTitles.nativeWrite($0, bytes: $1) },
-    readWindowTitle: @escaping @Sendable (String) throws -> String = { try MacTerminalProjectTitles.windowTitle($0) }
+    writeOutput: @escaping @Sendable (MacTerminalTitleMetadata, Data) throws -> Void = { try MacTerminalProjectTitles.nativeWrite($0, bytes: $1) }
   ) {
     self.url = url
-    self.readMetadata = readMetadata; self.writeOutput = writeOutput; self.readWindowTitle = readWindowTitle
+    self.readMetadata = readMetadata; self.writeOutput = writeOutput
     names = [:]
     if FileManager.default.fileExists(atPath: url.path) {
       do { names = try JSONDecoder().decode([String: MacTerminalSavedName].self, from: Data(contentsOf: url)) }
@@ -111,8 +108,8 @@ final class MacTerminalProjectTitles {
     guard let current = metadata[tty], let saved = names[current.lifetime], saved.tty == tty else { return nil }
     return saved.name
   }
-  func refresh(_ snapshots: [MacTerminalTabSnapshot]) {
-    guard refreshTask == nil, Date().timeIntervalSince(refreshedAt) >= 3 else { return }
+  func refresh(_ snapshots: [MacTerminalTabSnapshot], now: Date = Date()) {
+    guard refreshTask == nil, now.timeIntervalSince(refreshedAt) >= 3 else { return }
     let ttys = Set(snapshots.flatMap(\.activityTTYs)).union(snapshots.map(\.tty).filter { !$0.isEmpty }).union(names.values.map(\.tty))
     let readMetadata = self.readMetadata
     refreshTask = Task { [weak self] in
@@ -123,18 +120,17 @@ final class MacTerminalProjectTitles {
       metadata = Dictionary(uniqueKeysWithValues: observed.map { ($0.tty, $0) })
       for value in observed {
         let savedName = explicitName(tty: value.tty)
-        let nativeNameVisible = snapshots.contains { ($0.tty == value.tty || $0.activityTTYs == [value.tty]) && $0.customTitle == savedName }
         // Native directory metadata is independent of the window/tab title. A
         // -C launch gets the verified agent directory before its first rollout.
         if let directory = value.directory,
-          writtenDirectories[value.lifetime] != value.foreground + "\n" + directory || (savedName != nil && !nativeNameVisible) {
+          writtenDirectories[value.lifetime] != value.foreground + "\n" + directory {
           do {
             try await write(value, directory: directory, name: savedName)
             writtenDirectories[value.lifetime] = value.foreground + "\n" + directory
           } catch { /* Retry display metadata on a later observation; never type. */ }
         }
       }
-      refreshedAt = Date(); refreshTask = nil
+      refreshedAt = now; refreshTask = nil
     }
   }
   func title(for snapshot: MacTerminalTabSnapshot, now: Date = Date()) -> String {
@@ -227,9 +223,9 @@ final class MacTerminalProjectTitles {
     let fd = open(url.path, O_RDONLY); if fd >= 0 { _ = fsync(fd); close(fd) }
     let directory = open(url.deletingLastPathComponent().path, O_RDONLY); if directory >= 0 { _ = fsync(directory); close(directory) }
   }
-  /// Program OSC title updates can replace even Terminal's Inspector Tab Title.
-  /// Repair only generated title updates. A different native custom name wins,
-  /// including one that happens to be a path; its spelling is never normalized.
+  /// Program OSC updates are observations, never a reason to rewrite a title.
+  /// Fighting an animated OSC 0 writer with OSC 1 causes continuous flashing.
+  /// Names are applied on explicit rename or a verified owner transition only.
   func nativeTitleChanged(tty: String, value: String, generated: Bool, userEdited: Bool = false) {
     guard let owner = metadata[tty] else { return }
     if userEdited, names[owner.lifetime]?.name != value {
@@ -238,22 +234,6 @@ final class MacTerminalProjectTitles {
       pendingNames.removeValue(forKey: owner.lifetime)
       rememberNativeName(value, metadata: owner, source: "user")
       return
-    }
-    guard let saved = names[owner.lifetime], saved.tty == tty,
-      value != saved.name, !changing.contains(tty) else { return }
-    changing.insert(tty)
-    let readWindowTitle = self.readWindowTitle
-    Task { [weak self] in
-      guard let self else { return }; defer { changing.remove(tty) }
-      do {
-        let windowTitle = !generated && value.contains(" — ") ? try await Task.detached { try readWindowTitle(tty) }.value : nil
-        if generated || windowTitle.map({ Self.displayKey($0) == Self.displayKey(value) }) == true {
-          try await write(owner, directory: nil, name: saved.name)
-        } // A distinct title is considered by the stable catalog observation.
-      } catch {
-        if ProcessInfo.processInfo.environment["CLAWDAD_TITLE_FIXTURE_TTY"] == tty { print("TITLE_REPAIR_ERROR", error.localizedDescription) }
-        /* No input fallback. Retain the approved name for reconciliation. */
-      }
     }
   }
   static func output(directory: String?, name: String?) -> Data {
@@ -307,7 +287,7 @@ final class MacTerminalProjectTitles {
   }
 }
 
-/// Event-driven repair avoids a polling race with Codex's animated OSC title.
+/// Observe explicit native title edits without writing in response to animation.
 /// All elements come from the already verified native tab catalog.
 struct MacTerminalTitleEventBatch {
   private var pending: [String] = []
@@ -423,6 +403,9 @@ struct MacTerminalProjectLaunch {
     guard metadata.directory == URL(fileURLWithPath: directory).resolvingSymlinksInPath().path else {
       throw MacAssistantError("The shell is still in another directory. Prepare and explicitly submit the directory step, then inspect before launching Codex.")
     }
-    return "codex -C " + MacMainWorkspaceNative.quoted(directory)
+    return "codex -C " + MacMainWorkspaceNative.quoted(directory) + Self.titleOptions
   }
+  /// Let Terminal/ClawDad own display names. Codex's OSC 0 animation otherwise
+  /// replaces native custom tab names, including restored workspace names.
+  static let titleOptions = " -c 'tui.terminal_title=[]'"
 }

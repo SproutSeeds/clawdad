@@ -808,4 +808,12 @@ test('project names are verified metadata with durable deduplication and project
   assert.equal((await restored.job(draft.requestId)).status,'inserted');
   assert.equal((await restored.command(draft,{tool:true})).job.status,'inserted');
   assert.equal((await restored.nativePoll({workerId:'worker'})).job,null);
+  const launch={...draft,requestId:'launch-codex-stable-display',stage:'codex'};
+  await restored.command(launch,{tool:true});
+  assert.equal((await restored.nativePoll({workerId:'worker'})).job.id,launch.requestId);
+  const launchText=text.replace('cd -- ','codex -C ')+" -c 'tui.terminal_title=[]'";
+  await restored.nativeResult({id:launch.requestId,result:{tabId:'shell',inputSessionId:'exact-shell',draftVerified:true,text:launchText,launchStage:'codex',directory:draft.directory,submitted:false,enterSent:false}});
+  assert.equal((await restored.job(launch.requestId)).status,'inserted');
+  assert.equal((await restored.command(launch,{tool:true})).job.status,'inserted');
+  assert.equal((await restored.nativePoll({workerId:'worker'})).job,null);
 });

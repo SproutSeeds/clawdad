@@ -19,7 +19,7 @@ final class MacTerminalTitleIOFixture: @unchecked Sendable {
     .init(windowID: 1, windowIndex: 1, tabIndex: 1, customTitle: title, tty: tty, isSelectedInWindow: true, activityWindowTitle: window, generatedTitle: generated, windowCustomTitle: windowCustom, configuredTitle: configured)
   }
   func fixture(_ io: MacTerminalTitleIOFixture, url: URL) -> MacTerminalProjectTitles {
-    MacTerminalProjectTitles(url: url, readMetadata: { _ in io.current }, writeOutput: io.write, readWindowTitle: { _ in "alpha — thread | beta — codex — 180×49" })
+    MacTerminalProjectTitles(url: url, readMetadata: { _ in io.current }, writeOutput: io.write)
   }
   func testVerifiedAgentDirectoryWinsInheritedShellMetadataWithoutNeedingHistory() async throws {
     let io = MacTerminalTitleIOFixture(), root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -119,6 +119,19 @@ final class MacTerminalTitleIOFixture: @unchecked Sendable {
     XCTAssertTrue(value.contains("%20")); XCTAssertTrue(value.contains("%07")); XCTAssertTrue(value.hasSuffix("]1;My project\u{7}"))
     XCTAssertEqual(value.filter { $0 == "\u{1b}" }.count, 2)
   }
+  func testAnimationCannotTriggerCompetingTitleWrites() async throws {
+    let io = MacTerminalTitleIOFixture(), root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at:root) }
+    let titles = fixture(io,url:root.appendingPathComponent("names.json"))
+    try await titles.rename(tty:io.current.tty,name:"Approved Project",expectedLifetime:io.current.lifetime)
+    titles.refresh([row()]); await titles.refreshTask?.value
+    let count = io.outputs.count
+    for i in 0..<1000 { titles.nativeTitleChanged(tty:io.current.tty,value:"[\(i%2 == 0 ? "!":".")] Action Required | agent",generated:true) }
+    try await Task.sleep(nanoseconds:10_000_000)
+    titles.refresh([row()],now:Date().addingTimeInterval(4)); await titles.refreshTask?.value
+    XCTAssertEqual(io.outputs.count,count)
+    XCTAssertEqual(titles.title(for:row()),"Approved Project")
+  }
   func testProjectLaunchRequiresActualShellDirectoryAndKeepsSubmissionSeparate() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent("title ' 日本 " + UUID().uuidString)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true); defer { try? FileManager.default.removeItem(at: root) }
@@ -129,29 +142,6 @@ final class MacTerminalTitleIOFixture: @unchecked Sendable {
     let ready = MacTerminalTitleMetadata(tty: old.tty, lifetime: old.lifetime, foreground: old.foreground, directory: root.resolvingSymlinksInPath().path, kind: "shell")
     XCTAssertTrue(try MacTerminalProjectLaunch.draft(directory: root.path, stage: "codex", metadata: ready).hasPrefix("codex -C '"))
     XCTAssertThrowsError(try MacTerminalProjectLaunch.draft(directory: root.path + "/missing", stage: "directory", metadata: ready))
-  }
-  func testLiveNamedDisposableTabSurvivesProgramTitleChanges() async throws {
-    guard let tty = ProcessInfo.processInfo.environment["CLAWDAD_TITLE_FIXTURE_TTY"], tty == "/dev/ttys019" else {
-      throw XCTSkip("Requires the explicitly created disposable title fixture.")
-    }
-    let automation = MacTerminalAutomation()
-    let before = try await automation.readTabs()
-    guard let target = before.first(where: { $0.tty == tty && $0.isSelectedInWindow }) else { return XCTFail("Select the disposable fixture first") }
-    let owner = try MacTerminalTitleMetadata.read(tty)
-    XCTAssertEqual(owner.kind, "shell")
-    MacTerminalProjectTitles.shared.refresh([target]); await MacTerminalProjectTitles.shared.refreshTask?.value
-    try await MacTerminalProjectTitles.shared.rename(tty: tty, name: "Title Fixture", expectedLifetime: owner.lifetime)
-    _ = try await automation.readTabs()
-    try await Task.sleep(for: .milliseconds(150))
-    let start = Date()
-    try MacTerminalProjectTitles.nativeWrite(owner, bytes: Data("\u{1b}]0;Synthetic status | title-fixture\u{7}".utf8))
-    // Allow native title notifications to restore display metadata; never sends
-    // anything to the shell or reads its draft.
-    try await Task.sleep(for: .milliseconds(700))
-    let after = try await automation.readTabs()
-    XCTAssertEqual(after.first { $0.tty == tty }?.customTitle, "Title Fixture")
-    XCTAssertEqual(before.map(\.tty), after.map(\.tty))
-    print("TITLE_FIXTURE_NATIVE_RECOVERY elapsed_ms=\(Date().timeIntervalSince(start)*1000) tab_lifetime=\(owner.lifetime)")
   }
   func testActualProcessMetadataHandlesWrappersAndDirectoryOverrideBeforeFirstTurn() throws {
     let listing = "10 10 20 Ss Thu Sep 10 18:00:00 2026 /usr/bin/login\n11 11 20 S Thu Sep 10 18:00:00 2026 -zsh\n20 20 20 S+ Thu Sep 10 18:01:00 2026 /versions/0.154/codex\n21 20 20 S+ Thu Sep 10 18:01:00 2026 /bin/node"

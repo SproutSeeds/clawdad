@@ -48,6 +48,9 @@ final class MacNativeTerminalTabs {
   private var deadline: TimeInterval = .infinity
   // Inject actions alongside the AX graph for deterministic native-operation tests.
   var performAction: ((AXUIElement, String) -> AXError)?
+  var writeAttribute: ((AXUIElement, String, CFTypeRef) -> AXError)?
+  var manualInputIdle: () -> TimeInterval = MacTerminalWindowGeometry.manualInputIdle
+  var displaySignature: () -> String = MacTerminalWindowGeometry.displays
   private struct ClosePrompt {
     let token: String
     let application: AXUIElement
@@ -348,23 +351,30 @@ final class MacNativeTerminalTabs {
       }
     }
   }
-  func focus(_ id: String, application: AXUIElement) throws {
+  func focus(_ id: String, application: AXUIElement, selectKnownTTY: (() throws -> Void)? = nil) throws {
     let previousDeadline = deadline
     deadline = min(deadline, now() + 1.5)
     defer { deadline = previousDeadline }
     let current = try capture(application: application)
     guard let target = current.first(where: { $0.id == id }) else { throw failure("That Terminal tab has closed. Refresh the picker.") }
-    if !target.focused {
+    let originalFrame = try frame(target.window)
+    let originalFullScreen = try value(target.window, "AXFullScreen") as? Bool
+    let originalDisplays = displaySignature(), began = now()
+    if !target.focused && selectKnownTTY == nil {
       try prepare(target.window)
       AXUIElementSetAttributeValue(target.window, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
       try prepare(target.window)
       let raised = performAction?(target.window, kAXRaiseAction) ?? AXUIElementPerformAction(target.window, kAXRaiseAction as CFString)
       guard raised == .success else { throw failure("Terminal could not raise that window.") }
     }
-    if !CFEqual(target.control, target.window) {
+    if !CFEqual(target.control, target.window) || selectKnownTTY != nil {
       if target.selected && target.focused { return }
-      try prepare(target.control)
-      let selected = performAction?(target.control, kAXPressAction) ?? AXUIElementPerformAction(target.control, kAXPressAction as CFString)
+      let selected: AXError
+      if let selectKnownTTY { try selectKnownTTY(); selected = .success }
+      else {
+        try prepare(target.control)
+        selected = performAction?(target.control, kAXPressAction) ?? AXUIElementPerformAction(target.control, kAXPressAction as CFString)
+      }
       // AppKit can replace the selected AXWindow while handling AXPress and
       // return cannotComplete although the exact tab was selected. Dispatch
       // once, then verify the same control in the resulting native layout.
@@ -374,12 +384,36 @@ final class MacNativeTerminalTabs {
       let confirmationDeadline = min(deadline, now() + 1.0)
       repeat {
         if let confirmed = try? capture(application: application),
-          confirmed.contains(where: { $0.id == target.id && $0.groupID == target.groupID && $0.selected && $0.focused }) { return }
+          let selected = confirmed.first(where: { $0.id == target.id && $0.groupID == target.groupID && $0.selected && $0.focused }) {
+          try preserveWindowSize(selected, before: originalFrame, fullScreen: originalFullScreen,
+            displays: originalDisplays, began: began)
+          return
+        }
         Thread.sleep(forTimeInterval: 0.025)
       } while now() < confirmationDeadline
       throw failure("Terminal's selection action was sent once, but the exact selected tab is not verified. Refresh before another action.")
     }
     // The controller also verifies the selected TTY with a transactional catalog.
+  }
+
+  private func preserveWindowSize(_ selected: Binding, before: CGRect?, fullScreen: Bool?,
+    displays: String, began: TimeInterval) throws {
+    let after = try frame(selected.window)
+    guard MacTerminalWindowGeometry.shouldPreserve(before: before, after: after,
+      beforeFullScreen: fullScreen, afterFullScreen: try value(selected.window, "AXFullScreen") as? Bool,
+      elapsed: now() - began, manualInputIdle: manualInputIdle(),
+      displaysUnchanged: displays != "unavailable" && displays == displaySignature()), let before else { return }
+    try prepare(selected.window)
+    var size = before.size
+    guard let desired = AXValueCreate(.cgSize, &size) else { return }
+    let result = writeAttribute?(selected.window, kAXSizeAttribute, desired)
+      ?? AXUIElementSetAttributeValue(selected.window, kAXSizeAttribute as CFString, desired)
+    let actual = try frame(selected.window)
+    guard result == .success, let actual,
+      abs(actual.width - before.width) <= 20, abs(actual.height - before.height) <= 20 else {
+      throw MacTerminalTabFailure(code: "window_size_unverified",
+        message: "The tab was selected, but Terminal could not preserve the window size. Your input was untouched; resize the window manually if needed.", state: nil)
+    }
   }
 
   func close(_ id: String, application: AXUIElement) throws -> MacTerminalNativeCloseOutcome {

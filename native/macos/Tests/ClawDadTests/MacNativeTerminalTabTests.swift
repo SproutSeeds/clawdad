@@ -4,6 +4,55 @@ import ApplicationServices
 import XCTest
 
 final class MacNativeTerminalTabTests: XCTestCase {
+  func testKnownTTYActivationReceivesTheSamePhysicalSizeProtection() throws {
+    let graph=TerminalGraph(), native=MacNativeTerminalTabs(readAttribute:graph.read)
+    native.manualInputIdle={100};native.displaySignature={"display"}
+    let rows=try native.snapshots(application:graph.app){graph.shells}
+    var actions=0,writes=0
+    native.performAction={_,_ in XCTFail("Do not repeat a scripted selection using AXPress");return .failure}
+    native.writeAttribute={_,attribute,value in
+      XCTAssertEqual(attribute,kAXSizeAttribute);var size=CGSize.zero
+      XCTAssertTrue(AXValueGetValue(unsafeBitCast(value,to:AXValue.self),.cgSize,&size))
+      graph.windowFrame.size=size;writes += 1;return .success
+    }
+    let before=graph.windowFrame
+    try native.focus(try XCTUnwrap(rows[0].nativeTabID),application:graph.app,selectKnownTTY:{actions += 1;graph.selected=0;graph.windowFrame.size.height=500})
+    XCTAssertEqual(actions,1);XCTAssertEqual(writes,1);XCTAssertEqual(graph.windowFrame,before)
+  }
+  func testNativeSelectionPreservesPhysicalFrameAfterStaleTabGridRestoration() throws {
+    let graph = TerminalGraph(), original = CGRect(x: 0, y: 30, width: 1800, height: 1200)
+    graph.windowFrame = original
+    let native = MacNativeTerminalTabs(readAttribute: graph.read)
+    native.manualInputIdle = { 100 }; native.displaySignature = { "display-A" }
+    let rows = try native.snapshots(application: graph.app) { graph.shells }
+    var presses = 0, writes = 0
+    native.performAction = { _, _ in
+      presses += 1; graph.selected = 0
+      graph.windowFrame.size.height = 800 // AppKit revives a background tab's grid.
+      return .success
+    }
+    native.writeAttribute = { element, attribute, value in
+      XCTAssertTrue(CFEqual(element, graph.window)); XCTAssertEqual(attribute, kAXSizeAttribute)
+      var size = CGSize.zero
+      XCTAssertTrue(AXValueGetValue(unsafeBitCast(value, to: AXValue.self), .cgSize, &size))
+      graph.windowFrame.size = size; writes += 1; return .success
+    }
+    try native.focus(try XCTUnwrap(rows[0].nativeTabID), application: graph.app)
+    XCTAssertEqual(graph.windowFrame, original); XCTAssertEqual(presses, 1); XCTAssertEqual(writes, 1)
+    graph.windowFrame.size.height = 700 // A subsequent manual resize stays in place.
+    try native.focus(try XCTUnwrap(rows[0].nativeTabID), application: graph.app)
+    XCTAssertEqual(graph.windowFrame.height, 700); XCTAssertEqual(writes, 1)
+  }
+  func testNativeSelectionYieldsGeometryToConcurrentHumanInput() throws {
+    let graph = TerminalGraph()
+    let reader = MacNativeTerminalTabs(readAttribute: graph.read)
+    reader.manualInputIdle = { 0 }; reader.displaySignature = { "display-A" }
+    let rows = try reader.snapshots(application: graph.app) { graph.shells }
+    reader.performAction = { _, _ in graph.selected = 0; graph.windowFrame.size.height = 600; return .success }
+    reader.writeAttribute = { _, _, _ in XCTFail("A manual resize must win"); return .failure }
+    try reader.focus(try XCTUnwrap(rows[0].nativeTabID), application: graph.app)
+    XCTAssertEqual(graph.windowFrame.height, 600)
+  }
   func testColdSelectionCannotCompleteIsVerifiedWithoutSecondPress() throws {
     let graph=TerminalGraph()
     let native=MacNativeTerminalTabs(readAttribute:graph.read)
@@ -417,6 +466,7 @@ private final class TerminalGraph {
   var otherTTY: String?
   var reverseWindows = false
   var selected = 1
+  var windowFrame = CGRect(x: 0, y: 30, width: 1000, height: 800)
   var enumeration = [0, 1, 2]
   var failWindows = false
   var hidden: Int?
@@ -459,11 +509,12 @@ private final class TerminalGraph {
       throw MacTerminalTabFailure(code: "layout_unavailable", message: "Terminal idle tab AXValue is unavailable", state: nil)
     case kAXTitleAttribute: return titles[tab ?? selected] as CFString
     case kAXPositionAttribute:
-      var point = CGPoint(x: tab.map { CGFloat($0 * 100) } ?? 0, y: 30)
+      var point = isWindow ? windowFrame.origin : CGPoint(x: tab.map { CGFloat($0 * 100) } ?? 0, y: 30)
       return AXValueCreate(.cgPoint, &point)
     case kAXSizeAttribute:
-      var size = CGSize(width: isStrip ? 300 : tab == hidden && hidden != nil ? 0 : 100, height: 24)
+      var size = isWindow ? windowFrame.size : CGSize(width: isStrip ? 300 : tab == hidden && hidden != nil ? 0 : 100, height: 24)
       return AXValueCreate(.cgSize, &size)
+    case "AXFullScreen" where isWindow: return kCFBooleanFalse
     default: return nil
     }
   }

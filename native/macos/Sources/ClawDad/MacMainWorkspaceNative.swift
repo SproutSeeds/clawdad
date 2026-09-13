@@ -507,7 +507,7 @@ enum MainWorkspaceTitleCensus {
     do {
       let latest=entry.conversationPath.flatMap{Self.resumeConfiguration(URL(fileURLWithPath:$0))}
       let settings=((latest?.model ?? entry.model).map{" --model \(Self.quoted($0))"} ?? "") + ((latest?.effort ?? entry.effort).map{" -c \(Self.quoted("model_reasoning_effort=\"\($0)\""))"} ?? "")
-      let command="cd -- \(Self.quoted(entry.directory))" + (entry.kind=="codex" ? " && \(Self.quoted(entry.executable!)) resume \(Self.quoted(entry.sessionId!)) --cd \(Self.quoted(entry.directory))\(settings)":"")
+      let command="cd -- \(Self.quoted(entry.directory))" + (entry.kind=="codex" ? " && \(Self.quoted(entry.executable!)) resume \(Self.quoted(entry.sessionId!)) --cd \(Self.quoted(entry.directory))\(settings)\(MacTerminalProjectLaunch.titleOptions)":"")
       var target:[String:AssistantValue]=["tabId":.string(tab.tabId),"inputToken":inspected["inputToken"]!,"inputSessionId":inspected["inputSessionId"]!,"mode":.string("insert"),"expectedText":.string(""),"text":.string(command)]
       _=try await controls.execute("terminal.native.type",args:target,input:input)
       let fresh=try await controls.inspect(tabId:tab.tabId,input:input,ticket:ticket)

@@ -648,10 +648,9 @@ final class MacTerminalAutomation: MacTerminalAutomating, @unchecked Sendable {
 
   @MainActor
   func focusTab(_ snapshot: MacTerminalTabSnapshot) async throws {
-    if snapshot.windowID > 0 && !snapshot.tty.isEmpty {
-      try await focusTab(windowID: snapshot.windowID, tabIndex: snapshot.tabIndex, tty: snapshot.tty)
-      return
-    }
+    // Preserve the exact native physical frame around the established TTY
+    // activation route as well as cold native selection. Scripting aliases may
+    // retain an older character grid; neither route may silently restore it.
     guard let nativeID = snapshot.nativeTabID else {
       try await focusTab(windowID: snapshot.windowID, tabIndex: snapshot.tabIndex, tty: snapshot.tty); return
     }
@@ -675,7 +674,14 @@ final class MacTerminalAutomation: MacTerminalAutomating, @unchecked Sendable {
     try await confirmActiveTerminal(terminal)
     try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
       queue.async { continuation.resume(with: Result {
-        try self.nativeTabs.focus(nativeID, application: AXUIElementCreateApplication(terminal.processIdentifier))
+        let select: (() throws -> Void)? = snapshot.windowID > 0 && !snapshot.tty.isEmpty ? {
+          guard snapshot.tty.range(of: "^/dev/tty[A-Za-z0-9]+$", options: .regularExpression) != nil else {
+            throw MacTerminalTabFailure(code:"tab_unavailable",message:"That Terminal tab is unavailable.",state:nil)
+          }
+          try Self.requestAutomationPermission()
+          _ = try Self.execute(Self.focusScript(windowID:snapshot.windowID,tabIndex:snapshot.tabIndex,tty:snapshot.tty))
+        } : nil
+        try self.nativeTabs.focus(nativeID, application: AXUIElementCreateApplication(terminal.processIdentifier),selectKnownTTY:select)
       }) }
     }
   }
