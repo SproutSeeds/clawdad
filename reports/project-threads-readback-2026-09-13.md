@@ -81,3 +81,12 @@ iPhone 92 archive app and matching dSYM UUID: `CFCD73B6-447A-3BF2-9D8C-C80A9FC2D
 Physical iPhone: verify the installed build, original reported error, complete audible readback of user/agent/long messages, preferred voice/boost, pause/replay/cancel and network/background recovery with a muted/unmuted call. No live phone microphone/call state was changed remotely. The paired phone remained unavailable. Actual iPhone crash cause remains unconfirmed; see `iphone-crash-evidence-2026-09-13.md`.
 
 Unrelated classified paths preserved: release skill copies/plugin metadata, existing build/package/storage scripts, wordmark explorations, `cloud/native/`, `marketing-site/`. No real project drafts, native queues, saved roster membership or research prompts were used as mutation fixtures.
+
+Source checkpoints: `5cf5f24` (Assistant project runtime/tools) and `1c85f95` (iPhone readback, bounded crash evidence and release report). ORP handoff state is `dirty_classified`, nine unrelated paths, zero unclassified, safe to expand. Remaining buckets and next actions:
+
+| Preserved paths | Next action |
+|---|---|
+| `.agents/skills/clawdad-release/SKILL.md`, `plugins/clawdad-codex-integration/.codex-plugin/plugin.json`, `plugins/clawdad-codex-integration/skills/clawdad-release/SKILL.md` | Separate integration/release-guidance review; not included in these commits. |
+| `native/macos/build-app.sh`, `native/macos/package-release.sh`, `native/macos/storage-workflow.sh` | Retain the existing native build/storage lane for its own audited checkpoint. |
+| `assets/wordmark-explorations/` | Preserve design exploration pending its design review. |
+| `cloud/native/`, `marketing-site/` | Preserve the separate cloud/marketing lane; no deployment in this repair. |
