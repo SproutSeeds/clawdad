@@ -22,6 +22,7 @@
     </script>
     <link rel="stylesheet" href="/app.css?v=__CLAWDAD_ASSET_VERSION__">
     <link rel="stylesheet" href="/files-library.css?v=__CLAWDAD_ASSET_VERSION__">
+    <link rel="stylesheet" href="/main-terminal-workspace.css?v=__CLAWDAD_ASSET_VERSION__">
     <link rel="stylesheet" href="/assistant.css?v=__CLAWDAD_ASSET_VERSION__">
   </head>
   <body>
@@ -73,34 +74,48 @@
       </header>
       <button id="weeklyUsage" class="weekly-usage" type="button" aria-haspopup="dialog">Weekly allowance unavailable</button>
       <button id="weeklyUsageNotice" class="weekly-usage" type="button" hidden></button>
-      <button id="mainWorkspaceOpen" class="weekly-usage" type="button" aria-haspopup="dialog">Main Terminal Workspace</button>
-      <dialog id="mainWorkspaceDialog" aria-labelledby="mainWorkspaceTitle" style="max-width:640px;width:90%;max-height:85vh;overflow:auto">
-        <header style="display:flex;justify-content:space-between;gap:16px;position:sticky;top:0;background:var(--panel,#200303);z-index:1">
-          <h2 id="mainWorkspaceTitle">Main Workspace</h2><button id="mainWorkspaceClose" type="button">Done</button>
-        </header>
-        <p id="mainWorkspaceStatus" role="status">Loading…</p><p id="mainWorkspaceError" role="alert"></p>
-        <label for="mainWorkspaceNamed">Saved setup</label><select id="mainWorkspaceNamed"><option value="">Choose a snapshot</option></select>
-        <button id="mainWorkspaceRestore" type="button" disabled>Restore selected setup</button>
-        <button id="mainWorkspaceRetry" type="button" hidden>Check / retry this request</button>
-        <p>Running work stays in its current tab. Restore never replays submitted prompts or enables supervisors.</p>
-        <label for="mainWorkspaceWindow">Main Terminal window</label><select id="mainWorkspaceWindow"><option value="">Choose a window</option></select>
-        <label for="mainWorkspaceName">Snapshot name</label><input id="mainWorkspaceName" type="text" maxlength="80" value="Main Workspace">
-        <button id="mainWorkspaceSave" type="button" disabled>Save new named snapshot</button>
-        <button id="mainWorkspaceUpdate" type="button" disabled>Update selected snapshot…</button>
-        <button id="mainWorkspaceReuse" type="button" disabled>Reuse chosen window for restore…</button>
-        <button id="mainWorkspaceSeparate" type="button" disabled>Restore in a separate window…</button>
-        <button id="mainWorkspaceCloseWindow" type="button" disabled>Close chosen window…</button>
-        <button id="mainWorkspaceScan" type="button">Refresh Terminal windows</button>
-        <section id="mainWorkspaceClosePlan" hidden aria-labelledby="mainWorkspaceClosePlanTitle">
-          <h3 id="mainWorkspaceClosePlanTitle">Close window</h3><p id="mainWorkspaceCloseDescription"></p>
-          <button id="mainWorkspaceSaveClose" type="button">Save snapshot and close…</button>
-          <button id="mainWorkspaceConfirmClose" type="button">Close window…</button>
-          <button id="mainWorkspaceCancelClose" type="button">Cancel</button>
+      <section class="terminal-setups" aria-label="Terminal setups">
+        <span>Terminal Setups</span>
+        <div><button id="mainWorkspaceSaveOpen" type="button" aria-haspopup="dialog">Save Terminal Setup…</button>
+        <button id="mainWorkspaceOpen" type="button" aria-haspopup="dialog">Open Saved Setup…</button></div>
+      </section>
+      <dialog id="mainWorkspaceDialog" aria-labelledby="mainWorkspaceTitle">
+        <header><button id="mainWorkspaceBack" type="button" hidden>Back</button><h2 id="mainWorkspaceTitle">Saved Terminal Setups</h2><button id="mainWorkspaceClose" type="button">Done</button></header>
+        <p id="mainWorkspaceStatus" role="status" aria-live="polite">Loading…</p>
+        <p id="mainWorkspaceError" role="alert"></p>
+        <button id="mainWorkspaceRetry" type="button" hidden>Check this request</button>
+        <section id="mainWorkspaceSavedPane">
+          <label for="mainWorkspaceNamed">Saved setup</label><select id="mainWorkspaceNamed"><option value="">Choose a setup</option></select>
+          <p id="mainWorkspaceSavedMeta"></p>
+          <p id="mainWorkspaceStale" role="status" hidden>This setup changed. Review its latest version before restoring.</p>
+          <button id="mainWorkspaceReviewLatest" type="button" hidden>Review latest saved version</button>
+          <div id="mainWorkspaceEntries"></div>
+          <button id="mainWorkspaceRestore" type="button" disabled>Open / Restore this setup</button>
+          <p class="workspace-note">Reopens exact conversations with their latest saved history, ready for you to continue. Running work and drafts stay intact. The regular window fills the usable display.</p>
+          <details id="mainWorkspaceRestoreOptions"><summary>Other restore options</summary>
+            <label for="mainWorkspaceReuseWindow">Window to reuse</label><select id="mainWorkspaceReuseWindow"><option value="">Choose a window</option></select>
+            <button id="mainWorkspaceReuse" type="button" disabled>Add missing tabs to chosen window…</button>
+            <button id="mainWorkspaceSeparate" type="button" disabled>Open missing tabs in a separate window…</button>
+            <p class="workspace-note">Existing windows stay open. A conversation already running elsewhere is never duplicated.</p>
+          </details>
+          <details><summary>Update or recover this setup</summary>
+            <button id="mainWorkspaceUpdate" type="button" disabled>Update from a Terminal window…</button>
+            <h3>Previous versions</h3><div id="mainWorkspaceSnapshots"></div>
+          </details>
         </section>
-        <h3>Saved projects</h3><div id="mainWorkspaceEntries"></div>
-        <h3>Previous versions of this setup</h3><div id="mainWorkspaceSnapshots"></div><p>Save captures only the chosen window. Update replaces the selected lineup and keeps its previous version. Closing Terminal never changes saved setups. Restore resumes the latest persisted history without sending a task.</p>
+        <section id="mainWorkspaceSavePane" hidden>
+          <label for="mainWorkspaceWindow">Terminal window to save</label><select id="mainWorkspaceWindow"><option value="">Choose a window</option></select>
+          <button id="mainWorkspaceScan" type="button">Refresh Terminal windows</button>
+          <p id="mainWorkspaceWindowState" role="status"></p>
+          <div id="mainWorkspaceObserved"></div>
+          <button id="mainWorkspaceReview" type="button" disabled>Review this window</button>
+          <div id="mainWorkspacePreview"></div>
+          <label for="mainWorkspaceName">Setup name</label><input id="mainWorkspaceName" type="text" maxlength="80" placeholder="My projects" autocomplete="off">
+          <p id="mainWorkspaceChanges"></p>
+          <button id="mainWorkspaceSave" type="button" disabled>Save as new setup</button>
+          <p class="workspace-note">Save captures only this window’s ordered tabs. Codex threads retain their exact identities; shells are labeled separately. Saving keeps all windows open.</p>
+        </section>
       </dialog>
-      <style>#mainWorkspaceDialog{border:1px solid #58462d;border-radius:16px;padding:20px;background:#111;color:#ffedc2}#mainWorkspaceDialog header{align-items:center;padding-bottom:12px;background:#111!important}#mainWorkspaceTitle{margin:0;flex:1}#mainWorkspaceClose{width:auto;flex:none;padding:10px 20px}#mainWorkspaceDialog button,#mainWorkspaceDialog select,#mainWorkspaceDialog summary{min-height:44px;cursor:pointer}#mainWorkspaceDialog button:disabled{cursor:default}#mainWorkspaceDialog button+button,#mainWorkspaceDialog select+button{margin-top:8px}#mainWorkspaceDialog pre{white-space:pre-wrap;overflow-wrap:anywhere}#mainWorkspaceDialog details{padding:12px 0}#mainWorkspaceDialog p{white-space:pre-wrap}</style>
       <dialog id="weeklyUsageDialog" class="weekly-usage-dialog" aria-labelledby="weeklyUsageTitle">
         <h2 id="weeklyUsageTitle">Codex weekly allowance</h2>
         <p id="weeklyUsageDetail"></p>
@@ -1386,7 +1401,7 @@
     <div id="assistantCall" class="assistant-call" hidden><button id="assistantReturn" type="button">Messages</button><span id="assistantCallStatus">Listening…</span><button id="assistantMute" type="button">Mute</button><button id="assistantEnd" type="button">End</button></div>
     <script type="module" src="/app.js?v=__CLAWDAD_ASSET_VERSION__"></script>
     <script src="/weekly-usage.js?v=__CLAWDAD_ASSET_VERSION__"></script>
-    <script src="/main-terminal-workspace.js?v=__CLAWDAD_ASSET_VERSION__"></script>
+    <script type="module" src="/main-terminal-workspace.js?v=__CLAWDAD_ASSET_VERSION__"></script>
     <script type="module" src="/assistant.js?v=__CLAWDAD_ASSET_VERSION__"></script>
   </body>
 </html>

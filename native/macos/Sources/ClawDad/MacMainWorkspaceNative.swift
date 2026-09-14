@@ -299,6 +299,26 @@ enum MainWorkspaceTitleCensus {
   func inventory(captureDrafts: Bool) async throws -> [MainWorkspaceLiveTab] {
     try await inventory(captureDrafts:captureDrafts,captureGroup:nil)
   }
+  func windowChoices(observations:[MainWorkspaceLiveTab]) async throws -> [MainWorkspaceWindowChoice] {
+    let catalog=try await tabs.catalog()
+    var groups:[Int]=[],members:[Int:[MainWorkspaceWindowMember]]=[:]
+    for descriptor in catalog.tabs {
+      guard let snapshot=tabs.assistantSnapshot(tabID:descriptor.id) else {
+        throw MacAssistantError("Terminal's window list changed during inspection. Refresh its windows.")
+      }
+      if members[snapshot.groupID]==nil { groups.append(snapshot.groupID);members[snapshot.groupID]=[] }
+      let known=observations.first{$0.tabId==descriptor.id && !snapshot.tty.isEmpty && $0.tty==snapshot.tty}
+      members[snapshot.groupID]!.append(MainWorkspaceWindowMember(tabId:descriptor.id,name:known?.name ?? descriptor.title,
+        directory:known?.directory,kind:known?.kind,sessionId:known?.sessionId,identityIssue:known?.identityIssue))
+    }
+    // Catalog rows are native left-to-right controls, even before process/TTY
+    // association. Only the explicit Review step visits inputs and binds owners.
+    return try groups.enumerated().map { index,group in
+      let rows=members[group]!
+      return MainWorkspaceWindowChoice(id:try MainTerminalWorkspace.windowChoiceId(tabIds:rows.map(\.tabId)),
+        tabId:rows[0].tabId,title:"Terminal window \(index+1)",count:rows.count,tabs:rows)
+    }
+  }
   private func focusForSnapshot(_ id:String,ticket:UInt64) async throws {
     for attempt in 0..<3 {
       guard interaction.isCurrent(ticket) else { throw MacAssistantError("You changed Terminal during the snapshot. Save again when ready.") }

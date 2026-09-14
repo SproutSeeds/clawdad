@@ -118,7 +118,7 @@ test('existing-draft Enter stores dispatch and exact acceptance separately, incl
 });
 test('Main Workspace controls need no call and repeated restore requests keep one durable native job',async t=>{
   const {runtime}=await fixture(t);runtime.state.enabled=false;
-  const request={action:'mainworkspace.restore',requestId:'restore'};
+  const request={action:'mainworkspace.restore',expectedSnapshotRevision:1,requestId:'restore'};
   await runtime.command(request);await runtime.command(request);
   assert.equal((await runtime.nativePoll({workerId:'worker'})).job.id,'restore');
   assert.equal((await runtime.nativePoll({workerId:'worker'})).job,null);
@@ -816,4 +816,20 @@ test('project names are verified metadata with durable deduplication and project
   assert.equal((await restored.job(launch.requestId)).status,'inserted');
   assert.equal((await restored.command(launch,{tool:true})).job.status,'inserted');
   assert.equal((await restored.nativePoll({workerId:'worker'})).job,null);
+});
+
+test('legacy restore freezes the selected snapshot revision before native delivery and retry',async t=>{
+  const parent=await fs.mkdtemp(path.join(os.tmpdir(),'workspace-runtime-test-'));t.after(()=>fs.rm(parent,{recursive:true,force:true}));
+  const root=path.join(parent,'Assistant'),folder=path.join(parent,'MainTerminalWorkspace');await fs.mkdir(folder);
+  const record={version:2,revision:4,selectedSnapshotId:'one',snapshots:[{id:'one',name:'Research',revision:3,roster:{entries:[{id:'a',kind:'codex',directory:'/fixture',sessionId:'exact'}]},previous:[]}]};
+  await fs.writeFile(path.join(folder,'main-workspace.json'),JSON.stringify(record));
+  const runtime=new AssistantRuntime({root,coordinator:{stop(){},prepare:async()=>({})}});t.after(()=>runtime.close());
+  const args={action:'mainworkspace.restore',requestId:'original'};
+  const accepted=await runtime.command(args);assert.equal(accepted.job.args.expectedSnapshotRevision,3);assert.equal(accepted.job.args.snapshotId,'one');
+  record.snapshots[0].revision=4;await fs.writeFile(path.join(folder,'main-workspace.json'),JSON.stringify(record));
+  assert.equal((await runtime.command(args)).job.args.expectedSnapshotRevision,3,'Retry never upgrades an accepted target');
+  const claimed=(await runtime.nativePoll({workerId:'fixture-worker'})).job;assert.equal(claimed.args.expectedSnapshotRevision,3);
+  await assert.rejects(runtime.command({...args,requestId:'bad',expectedSnapshotRevision:0}),/revision/);
+  await fs.rm(path.join(folder,'main-workspace.json'));
+  await assert.rejects(runtime.command({...args,requestId:'missing'}),/available named setup/);
 });

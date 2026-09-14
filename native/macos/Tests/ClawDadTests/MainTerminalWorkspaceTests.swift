@@ -28,6 +28,9 @@ import ClawDadRemoteAssistProtocol
     if selectedOnlyInLightInventory && !captureDrafts { return live.filter(\.selected) }
     return refreshedSelection ? live.map { var tab=$0;tab.selected=false;return tab }:live
   }
+  func windowChoices(observations:[MainWorkspaceLiveTab]) async throws -> [MainWorkspaceWindowChoice] {
+    try MainTerminalWorkspace.windowChoices(live)
+  }
   func checkDirectory(_ entry:MainWorkspaceEntry) throws { if missing.contains(entry.directory) { throw MacAssistantError("Waiting for exact directory") } }
   func create(marker:String,anchor:MainWorkspaceLiveTab?) async throws -> MainWorkspaceLiveTab {
     creates += 1
@@ -55,6 +58,7 @@ import ClawDadRemoteAssistProtocol
     let root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let native=MainWorkspaceFixture()
     native.live=(0..<3).map{i in MainWorkspaceLiveTab(tabId:"tab-\(i)",group:"original",tty:"tty-original-\(i)",owner:"owner-\(i)",directory:i==2 ? "/other":"/same",kind:"codex",sessionId:"00000000-0000-4000-8000-00000000000\(i)",conversationPath:"/session/\(i)",executable:"/codex",name:"Project \(i)",position:i+1,selected:i==1,fullScreen:true,draft:.init(text:"draft \(i)",capturedAt:Date(),transcriptOffset:10))}
+    for i in native.live.indices { native.live[i].lifetime="login-\(i)" }
     addTeardownBlock { try? FileManager.default.removeItem(at:root) }
     return (MainTerminalWorkspace(root:root,native:native),native,root)
   }

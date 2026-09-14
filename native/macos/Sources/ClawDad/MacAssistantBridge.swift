@@ -169,7 +169,12 @@ final class MacAssistantBridge {
           try? await Task.sleep(for:.seconds(2))
         }
       }
-      defer { heartbeat.cancel();nativeInput.invalidate();draftInspections.removeAll();draftProvenance.invalidate() }
+      defer {
+        heartbeat.cancel();nativeInput.invalidate();draftInspections.removeAll()
+        // Reviewing or saving a window does not edit its input. Its retained
+        // paste still needs the usual exact live-context verification at Save.
+        if ["mainworkspace.restore", "mainworkspace.close"].contains(action) { draftProvenance.invalidate() }
+      }
       return try await mainWorkspace.control(action,args:args,requestId:id)
     }
     if action == "terminal.rename" { return try await renameTerminal(args) }

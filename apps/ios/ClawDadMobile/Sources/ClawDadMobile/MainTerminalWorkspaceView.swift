@@ -39,13 +39,14 @@ struct MainTerminalWorkspaceView: View {
   @State private var refreshing=false
   @State private var loaded=false
   @State private var selectedSnapshot=""
+  @State private var reviewedState:[String:AssistantValue]?
   @State private var snapshotName="Main Workspace"
   @State private var updating=false
   @State private var reusing=false
   @State private var closeWindow=false
   @State private var separateWindow=false
   private var storageKey:String { "clawdad.main-workspace.pending."+controller.settingsScope }
-  private var entries:[[String:AssistantValue]] { state["entries"]?.array?.compactMap(\.object) ?? [] }
+  private var entries:[[String:AssistantValue]] { (reviewedState ?? state)["entries"]?.array?.compactMap(\.object) ?? [] }
   private var revision:AssistantValue { state["revision"] ?? .number(1) }
   private var status:String { (state["status"]?.string ?? "loading").replacingOccurrences(of:"_",with:" ") }
   private var namedSnapshots:[[String:AssistantValue]] { state["namedSnapshots"]?.array?.compactMap(\.object) ?? [] }
@@ -58,6 +59,18 @@ struct MainTerminalWorkspaceView: View {
     }
   }
   private var target:[String:AssistantValue] { selectedSnapshot.isEmpty ? [:]:["snapshotId":.string(selectedSnapshot)] }
+  private var reviewedRevision:AssistantValue? { reviewedState?["snapshotRevision"] }
+  private var reviewChanged:Bool {
+    guard let reviewedState else { return false }
+    return reviewedState["selectedSnapshotId"]?.string != selectedSnapshot ||
+      namedSnapshots.first(where:{$0["id"]?.string==selectedSnapshot})?["revision"]?.number != reviewedRevision?.number
+  }
+  private var restoreReady:Bool { reviewedRevision?.number != nil && !reviewChanged && !entries.isEmpty }
+  private var restoreTarget:[String:AssistantValue] {
+    var args=target
+    args["expectedSnapshotRevision"]=reviewedRevision
+    return args
+  }
   private var snapshots:[MainWorkspaceSnapshotChoice] {
     (state["snapshots"]?.array ?? []).compactMap { value in
       guard let item=value.object,let index=item["index"]?.number else { return nil }
@@ -84,15 +97,16 @@ struct MainTerminalWorkspaceView: View {
         Button("Update snapshot") { save(updating:true) };Button("Cancel",role:.cancel) {}
       } message: { Text("Only the chosen window’s current tabs will belong to this version. The previous version remains recoverable. Live work stays intact.") }
       .alert("Reuse the chosen window?",isPresented:$reusing) {
-        Button("Reuse window") { perform("mainworkspace.restore",target.merging(["reuseWindowTabId":.string(selectedTab)]){$1}) }
+        Button("Reuse window") { perform("mainworkspace.restore",restoreTarget.merging(["reuseWindowTabId":.string(selectedTab)]){$1}) }
         Button("Cancel",role:.cancel) {}
       } message: { Text("Restore only missing saved tabs into this window. Its other tabs and unsaved work stay open. To switch to an exact lineup, save and close the current window first.") }
       .alert("Open a separate window?",isPresented:$separateWindow) {
-        Button("Open separate window") { perform("mainworkspace.restore",target.merging(["newWindowConfirmed":.bool(true)]){$1}) }
+        Button("Open separate window") { perform("mainworkspace.restore",restoreTarget.merging(["newWindowConfirmed":.bool(true)]){$1}) }
         Button("Cancel",role:.cancel) {}
       } message: { Text("Your existing windows remain open. Existing exact conversations are reused; only confirmed missing saved tabs are created. This choice does not close or move your work.") }
       .sheet(isPresented:$closeWindow) { TerminalWorkspaceCloseView(controller:controller,tabId:selectedTab) }
       .onChange(of:selectedSnapshot) { _,value in
+        reviewedState=nil
         UserDefaults.standard.set(value,forKey:"clawdad.main-workspace.selection."+controller.settingsScope)
         if let name=namedSnapshots.first(where:{$0["id"]?.string==value})?["name"]?.string { snapshotName=name }
         Task { await refresh() }
@@ -112,9 +126,14 @@ struct MainTerminalWorkspaceView: View {
           }
           Text(status.capitalized).font(.headline).accessibilityIdentifier("main-workspace-status")
           if let message=state["message"]?.string { Text(message).font(.callout) }
-          Button { perform("mainworkspace.restore",target) } label: {
+          Button { perform("mainworkspace.restore",restoreTarget) } label: {
             Label("Restore saved setup",systemImage:"arrow.counterclockwise").frame(minHeight:44)
-          }.disabled(!loaded || entries.isEmpty || pending != nil).accessibilityIdentifier("restore-main-workspace")
+          }.disabled(!loaded || !restoreReady || pending != nil).accessibilityIdentifier("restore-main-workspace")
+          if reviewChanged {
+            Text("This setup changed. Review its latest saved lineup before restoring.").font(.callout)
+            Button("Review latest saved version") { reviewedState=state }.frame(minHeight:44)
+              .accessibilityIdentifier("main-workspace-review-latest")
+          }
           if pending != nil { ProgressView("Checking saved progress…") }
           if let error { Text(error).foregroundStyle(ClawDadTheme.gold).font(.callout) }
           if pending != nil,error != nil { Button("Check / retry this request") { Task { await resend() } }.frame(minHeight:44) }
@@ -129,11 +148,11 @@ struct MainTerminalWorkspaceView: View {
             .frame(minHeight:44).disabled(selectedTab.isEmpty || pending != nil || !loaded)
             .accessibilityIdentifier("main-workspace-save-new")
           Button("Update selected snapshot") { updating=true }.frame(minHeight:44)
-            .disabled(selectedSnapshot.isEmpty || selectedTab.isEmpty || pending != nil || !loaded)
+            .disabled(selectedSnapshot.isEmpty || selectedTab.isEmpty || pending != nil || !loaded || reviewChanged)
           Button("Reuse chosen window for restore…") { reusing=true }.frame(minHeight:44)
-            .disabled(selectedSnapshot.isEmpty || selectedTab.isEmpty || pending != nil || !loaded)
+            .disabled(selectedSnapshot.isEmpty || selectedTab.isEmpty || pending != nil || !loaded || reviewChanged)
           Button("Restore in a separate window…") { separateWindow=true }.frame(minHeight:44)
-            .disabled(selectedSnapshot.isEmpty || pending != nil || !loaded)
+            .disabled(!restoreReady || pending != nil || !loaded)
           Button("Close chosen window…",role:.destructive) { closeWindow=true }.frame(minHeight:44)
             .disabled(selectedTab.isEmpty || pending != nil || !loaded)
           Button("Refresh Terminal windows") { perform("mainworkspace.inspect") }.frame(minHeight:44).disabled(pending != nil)
@@ -180,17 +199,20 @@ struct MainTerminalWorkspaceView: View {
         if let data=UserDefaults.standard.data(forKey:storageKey) { pending=try? JSONDecoder().decode(MainWorkspacePending.self,from:data) }
         selectedSnapshot=UserDefaults.standard.string(forKey:"clawdad.main-workspace.selection."+controller.settingsScope) ?? ""
         await refresh()
-        if pending==nil { perform("mainworkspace.inspect") }
         while !Task.isCancelled { try? await Task.sleep(for:.seconds(2));if !Task.isCancelled { await refresh() } }
 
   }
   private func save(updating:Bool) {
     var args:[String:AssistantValue]=["tabId":.string(selectedTab),"expectedRevision":revision,"name":.string(snapshotName)]
-    if updating { args["snapshotId"] = .string(selectedSnapshot) }
+    if updating {
+      guard !reviewChanged else { error="Review the latest saved lineup before updating.";return }
+      args["snapshotId"] = .string(selectedSnapshot)
+    }
     perform("mainworkspace.save",args)
   }
   private func perform(_ action:String,_ args:[String:AssistantValue]=[:]) {
     guard pending==nil else { return }
+    if action=="mainworkspace.restore",!restoreReady { error="Review the latest saved setup before restoring.";return }
     pending=MainWorkspacePending(action:action,args:args,id:UUID().uuidString.lowercased())
     if let data=try? JSONEncoder().encode(pending) { UserDefaults.standard.set(data,forKey:storageKey) }
     Task { await resend() }
@@ -208,6 +230,7 @@ struct MainTerminalWorkspaceView: View {
       let value=try await controller.settingsRequest("mainworkspace.status",args:args)
       state=value["mainWorkspace"]?.object ?? [:];loaded=true
       if selectedSnapshot.isEmpty { selectedSnapshot=state["selectedSnapshotId"]?.string ?? "" }
+      if reviewedState==nil,state["selectedSnapshotId"]?.string==selectedSnapshot { reviewedState=state }
       if let raw=value["catalog"],let decoded=try? JSONDecoder().decode(RemoteTerminalTabState.self,from:JSONEncoder().encode(raw)) {
         catalog=decoded
         if selectedTab.isEmpty {
@@ -218,6 +241,7 @@ struct MainTerminalWorkspaceView: View {
       }
       if let job=value["job"]?.object,!["queued","running"].contains(job["status"]?.string ?? "") {
         if pending?.action=="mainworkspace.save",job["error"]?.string==nil,let id=job["result"]?.object?["selectedSnapshotId"]?.string { selectedSnapshot=id }
+        if ["mainworkspace.save","mainworkspace.remove","mainworkspace.recover"].contains(pending?.action ?? ""),job["error"]?.string==nil { reviewedState=nil }
         error=job["error"]?.string;pending=nil;UserDefaults.standard.removeObject(forKey:storageKey)
       }
       if value["paused"]?.bool==true,pending != nil { error="Mac control is paused. Resume control to continue this saved request." }

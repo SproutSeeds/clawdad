@@ -66,6 +66,7 @@
     private var settings: [String: AssistantValue]?
     private var streamRevision = 0
     private var mainWorkspace:[String:AssistantValue] = ["revision":.number(1),"status":.string("saved"),"selectedSnapshotId":.string("fixture-setup"),
+      "snapshotRevision":.number(1),
       "namedSnapshots":.array([.object(["id":.string("fixture-setup"),"name":.string("Research setup"),"revision":.number(1),"count":.number(2)])]),"snapshots":.array([]),"entries":.array([
       .object(["id":.string("fixture-one"),"name":.string("ClawDad"),"kind":.string("codex"),"directory":.string("/fixture/clawdad"),"sessionId":.string("fixture-conversation-one"),"status":.string("saved"),"draftText":.string("A recoverable unsent fixture draft.")]),
       .object(["id":.string("fixture-two"),"name":.string("Research"),"kind":.string("codex"),"directory":.string("/fixture/research"),"sessionId":.string("fixture-conversation-two"),"status":.string("saved")])])]

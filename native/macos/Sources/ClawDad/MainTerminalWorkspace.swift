@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import CryptoKit
 import ClawDadRemoteAssistProtocol
 
 struct MainWorkspaceDraft: Codable, Equatable {
@@ -80,6 +81,33 @@ struct MainWorkspaceState: Codable {
   var requests: [String: String]?
   var closePlans: [String: MainWorkspaceClosePlan]?
   var migrationBackup: String?
+  var windowPreviews: [String: MainWorkspaceWindowPreview]?
+  var windowChoices: [MainWorkspaceWindowChoice]?
+}
+/// Complete native topology for choosing a window, including tabs that have not
+/// yet been focused/bound to a TTY. These display rows never authorize a Save.
+struct MainWorkspaceWindowMember: Codable {
+  var tabId:String
+  var name:String
+  var directory:String?
+  var kind:String?
+  var sessionId:String?
+  var identityIssue:String?
+}
+struct MainWorkspaceWindowChoice: Codable {
+  var id:String
+  var tabId:String
+  var title:String
+  var count:Int
+  var tabs:[MainWorkspaceWindowMember]
+}
+/// Explicit review evidence, separate from the manually saved library. Transient
+/// catalog IDs can be rebound only through the same complete native owners.
+struct MainWorkspaceWindowPreview: Codable {
+  var token: String
+  var requestId: String
+  var capturedAt: Date
+  var tabs: [MainWorkspaceLiveTab]
 }
 struct MainWorkspaceSavedSnapshot: Codable, Identifiable {
   var id: String
@@ -114,6 +142,7 @@ struct MainWorkspaceWindowSnapshot {
 
 @MainActor protocol MainWorkspaceNative: AnyObject {
   func inventory(captureDrafts: Bool) async throws -> [MainWorkspaceLiveTab]
+  func windowChoices(observations:[MainWorkspaceLiveTab]) async throws -> [MainWorkspaceWindowChoice]
   func snapshot(windowContaining tabId: String) async throws -> MainWorkspaceWindowSnapshot
   func beginRestore(entries:[MainWorkspaceEntry]) async throws
   func endRestore() async
@@ -127,6 +156,9 @@ struct MainWorkspaceWindowSnapshot {
 }
 
 extension MainWorkspaceNative {
+  func windowChoices(observations:[MainWorkspaceLiveTab]) async throws -> [MainWorkspaceWindowChoice] {
+    try MainTerminalWorkspace.windowChoices(observations)
+  }
   func snapshot(windowContaining tabId: String) async throws -> MainWorkspaceWindowSnapshot {
     MainWorkspaceWindowSnapshot(anchorId:tabId,tabs:try await inventory(captureDrafts:true))
   }
@@ -224,6 +256,8 @@ extension MainWorkspaceNative {
     do {
       let state=try read()
       return ["revision":.number(Double(state.revision)),"status":.string(state.status),
+        "windows":try .encode(state.windowChoices ?? Self.windowChoices(state.observations ?? [])),
+        "snapshotRevision":state.snapshots?.first(where:{$0.id==state.selectedSnapshotId}).map{.number(Double($0.revision))} ?? .null,
         "message":state.message.map(AssistantValue.string) ?? .null,
         "savedAt":state.roster.savedAt.map { .string(ISO8601DateFormatter().string(from:$0)) } ?? .null,
         "observedAt":state.observedAt.map { .string(ISO8601DateFormatter().string(from:$0)) } ?? .null,
@@ -283,6 +317,7 @@ extension MainWorkspaceNative {
       var state=try read();try migrate(&state)
       let live=try await native.inventory(captureDrafts:false)
       state.observations=live
+      state.windowChoices=try await native.windowChoices(observations:live)
       state.observedAt=Date();try write(state)
     } catch { /* Keep the last good snapshot; an unavailable inventory is not an empty roster. */ }
   }
@@ -348,6 +383,45 @@ extension MainWorkspaceNative {
     state.progress=[:];state.status="saved";state.message="\(name) saved: \(entries.count) tabs. Update replaces this lineup; previous versions remain recoverable."
     return group
   }
+  private func previewFields(_ preview:MainWorkspaceWindowPreview) throws -> [String:AssistantValue] {
+    ["windowPreview":try .encode(preview),"expiresAt":.string(ISO8601DateFormatter().string(from:preview.capturedAt.addingTimeInterval(600)))]
+  }
+  static func sameReviewedWindow(_ expected:[MainWorkspaceLiveTab],_ current:[MainWorkspaceLiveTab]) -> Bool {
+    sameWindow(expected,current,drafts:false) && expected.allSatisfy { old in
+      guard let tab=current.first(where:{$0.tty==old.tty}) else { return false }
+      // Busy/idle and catalog IDs are observations. Names and recoverable input
+      // are part of what Cody reviewed, and must not change under a Save click.
+      return old.name==tab.name && old.draft?.text==tab.draft?.text
+        && old.draft?.limitation==tab.draft?.limitation && old.identityIssue==tab.identityIssue
+    }
+  }
+  static func windowChoiceId(_ tabs:[MainWorkspaceLiveTab]) throws -> String {
+    try windowChoiceId(tabIds:tabs.map(\.tabId))
+  }
+  static func windowChoiceId(tabIds:[String]) throws -> String {
+    let data=try JSONSerialization.data(withJSONObject:tabIds.sorted(),options:[.withoutEscapingSlashes])
+    return SHA256.hash(data:data).map{String(format:"%02x",$0)}.joined()
+  }
+  static func windowChoices(_ tabs:[MainWorkspaceLiveTab]) throws -> [MainWorkspaceWindowChoice] {
+    var seen=Set<String>()
+    return try tabs.map(\.group).filter{seen.insert($0).inserted}.enumerated().map { index,group in
+      let members=tabs.filter{$0.group==group}.sorted{$0.position<$1.position}
+      return MainWorkspaceWindowChoice(id:try windowChoiceId(members),tabId:members[0].tabId,
+        title:"Terminal window \(index+1)",count:members.count,tabs:members.map { tab in
+          MainWorkspaceWindowMember(tabId:tab.tabId,name:tab.name,directory:tab.directory,kind:tab.kind,sessionId:tab.sessionId,identityIssue:tab.identityIssue)
+        })
+    }
+  }
+  private func reviewedAnchor(_ preview:MainWorkspaceWindowPreview) async throws -> String {
+    guard Date().timeIntervalSince(preview.capturedAt)<600 else {
+      throw MacAssistantError("The window review expired. Review this window again; the snapshot and name were preserved.")
+    }
+    let live=try await native.inventory(captureDrafts:false)
+    guard let anchor=live.first(where:{ tab in preview.tabs.contains { old in
+      old.tty==tab.tty && old.lifetime==tab.lifetime && old.owner==tab.owner && old.sessionId==tab.sessionId
+    }}) else { throw MacAssistantError("The reviewed window's owners changed. Choose and review the intended window again; nothing was saved.") }
+    return anchor.tabId
+  }
   static func sameWindow(_ expected:[MainWorkspaceLiveTab],_ current:[MainWorkspaceLiveTab],drafts:Bool) -> Bool {
     guard expected.count==current.count,!expected.isEmpty,Set(current.map(\.group)).count==1 else { return false }
     return expected.allSatisfy { old in
@@ -373,6 +447,39 @@ extension MainWorkspaceNative {
     let fingerprint=action+String(data:try JSONEncoder().encode(args.sorted { $0.key<$1.key }.map { [$0.key:$0.value] }),encoding:.utf8)!
     if let original=state.requests?[requestId] ?? state.receipts[requestId],original != fingerprint {
       throw MacAssistantError("This request ID belongs to different instructions. Nothing was dispatched.")
+    }
+    if action=="mainworkspace.windows" {
+      state.observations=try await native.inventory(captureDrafts:false);state.observedAt=Date()
+      state.windowChoices=try await native.windowChoices(observations:state.observations ?? [])
+      try write(state);return fields()
+    }
+    if action=="mainworkspace.preview" {
+      if let preview=state.windowPreviews?.values.first(where:{$0.requestId==requestId}) { return try previewFields(preview) }
+      guard let tabId=args["tabId"]?.string else { throw MacAssistantError("Choose the exact window to review.") }
+      let changedWindow="The chosen window changed after selection. Refresh its window list and review the intended lineup; nothing was saved."
+      if let chosen=args["windowId"]?.string {
+        let choices=try await native.windowChoices(observations:state.observations ?? [])
+        guard choices.contains(where:{$0.id==chosen && $0.tabs.contains(where:{$0.tabId==tabId})}) else { throw MacAssistantError(changedWindow) }
+      }
+      let captured=try await native.snapshot(windowContaining:tabId)
+      guard let anchor=captured.tabs.first(where:{$0.tabId==captured.anchorId}) else { throw MacAssistantError("The chosen window changed. Choose it again.") }
+      let members=captured.tabs.filter{$0.group==anchor.group}.sorted{$0.position<$1.position}
+      if let chosen=args["windowId"]?.string {
+        let choices=try await native.windowChoices(observations:captured.tabs)
+        guard let current=choices.first(where:{$0.id==chosen}),
+          Set(current.tabs.map(\.tabId))==Set(members.map(\.tabId)) else { throw MacAssistantError(changedWindow) }
+        state.windowChoices=choices
+      }
+      guard !members.isEmpty,Set(members.map(\.tty)).count==members.count,
+        members.allSatisfy({!$0.tty.isEmpty && !$0.owner.isEmpty && $0.lifetime != nil}) else {
+        throw MacAssistantError("The complete window identity is unavailable. Show the intended Terminal window and review it again.")
+      }
+      let preview=MainWorkspaceWindowPreview(token:UUID().uuidString.lowercased(),requestId:requestId,capturedAt:Date(),tabs:members)
+      state.windowPreviews=Dictionary(uniqueKeysWithValues:(state.windowPreviews ?? [:]).values
+        .filter{Date().timeIntervalSince($0.capturedAt)<600}.sorted{$0.capturedAt>$1.capturedAt}.prefix(7).map{($0.token,$0)})
+      state.windowPreviews![preview.token]=preview
+      state.requests=state.requests ?? [:];state.requests![requestId]=fingerprint
+      try write(state);return try previewFields(preview)
     }
     if action=="mainworkspace.close.inspect" {
       if let plan=state.closePlans?.values.first(where:{$0.requestId==requestId}) { return try closeFields(plan) }
@@ -440,7 +547,14 @@ extension MainWorkspaceNative {
       guard let anchor=args["tabId"]?.string else { throw MacAssistantError("Choose a tab in the intended window.") }
       let updating=args["snapshotId"]?.string
       let name=args["name"]?.string ?? state.snapshots?.first{$0.id==updating}?.name ?? "Main Workspace"
-      _=try await capture(&state,tabId:anchor,name:name,updating:updating)
+      if let token=args["windowToken"]?.string {
+        guard let preview=state.windowPreviews?[token] else { throw MacAssistantError("Review the intended window before saving. Its review is unavailable; nothing was saved.") }
+        let rebound=try await reviewedAnchor(preview)
+        let members=try await capture(&state,tabId:rebound,name:name,updating:updating)
+        guard Self.sameReviewedWindow(preview.tabs,members) else {
+          throw MacAssistantError("The reviewed window's lineup, project identity, name or draft changed. Review it again before saving; the previous snapshot was preserved.")
+        }
+      } else { _=try await capture(&state,tabId:anchor,name:name,updating:updating) }
     } else if ["mainworkspace.remove","mainworkspace.recover"].contains(action) {
       guard let id=state.selectedSnapshotId,let name=state.snapshots?.first(where:{$0.id==id})?.name else { throw MacAssistantError("Choose a named snapshot.") }
       if action=="mainworkspace.remove" {
@@ -455,6 +569,9 @@ extension MainWorkspaceNative {
       state.message="Saved record updated. Live work was preserved. Restore explicitly to reopen this setup."
     } else if action=="mainworkspace.restore" {
       guard let snapshot=state.snapshots?.first(where:{$0.id==state.selectedSnapshotId}),!snapshot.roster.entries.isEmpty else { throw MacAssistantError("Choose a saved snapshot first.") }
+      if let reviewed=args["expectedSnapshotRevision"]?.number,reviewed != Double(snapshot.revision) {
+        throw MacAssistantError("This saved setup changed on another device. Review its latest version before restoring; no Terminal action was sent.")
+      }
       var operation=state.operations?[snapshot.id]
       if operation?.snapshotRevision != snapshot.revision { operation=nil }
       let live=try await native.inventory(captureDrafts:false)

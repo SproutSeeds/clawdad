@@ -1,0 +1,27 @@
+.terminal-setups{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:16px 0 24px;padding:14px 16px;border:1px solid var(--border,#845026);border-radius:14px}
+.terminal-setups>span{font-weight:650}.terminal-setups>div{display:flex;gap:10px;flex-wrap:wrap}
+.terminal-setups button{width:auto;min-height:44px;padding:10px 14px;cursor:pointer}
+#mainWorkspaceDialog{box-sizing:border-box;max-width:740px;width:calc(100% - 32px);max-height:88dvh;overflow:auto;border:1px solid #58462d;border-radius:16px;padding:20px;background:#111;color:#ffedc2}
+#mainWorkspaceDialog::backdrop{background:#0009}
+#mainWorkspaceDialog header{display:flex;align-items:center;gap:12px;position:sticky;top:-20px;padding:12px 0;background:#111;z-index:2}
+#mainWorkspaceTitle{margin:0;flex:1;font-size:1.35rem;overflow-wrap:anywhere}
+#mainWorkspaceDialog button,#mainWorkspaceDialog select,#mainWorkspaceDialog summary,#mainWorkspaceDialog input{min-height:44px;font:inherit}
+#mainWorkspaceDialog button,#mainWorkspaceDialog select,#mainWorkspaceDialog summary{cursor:pointer}
+#mainWorkspaceDialog button:disabled{cursor:default;opacity:.5}
+#mainWorkspaceDialog button{margin:8px 0;padding:10px 14px;white-space:normal;background:#30271a;color:#ffedc2;border:1px solid #6b5833;border-radius:10px}
+#mainWorkspaceDialog #mainWorkspaceSave,#mainWorkspaceDialog #mainWorkspaceRestore{background:#edb935;color:#211500;font-weight:650}
+#mainWorkspaceDialog header button{width:auto;flex:none}
+#mainWorkspaceDialog select,#mainWorkspaceDialog input{width:100%;box-sizing:border-box;padding:10px;border-radius:8px;background:#222;color:inherit;border:1px solid #66583c}
+#mainWorkspaceDialog select{appearance:none;padding-right:34px;background-image:linear-gradient(45deg,transparent 50%,#ffedc2 50%),linear-gradient(135deg,#ffedc2 50%,transparent 50%);background-position:right 16px center,right 10px center;background-size:6px 6px;background-repeat:no-repeat}
+#mainWorkspaceDialog label{display:block;margin:16px 0 8px;font-weight:650}
+#mainWorkspaceDialog details{padding:10px 0;border-bottom:1px solid #383328}
+#mainWorkspaceDialog summary{display:flex;align-items:center;gap:8px;line-height:1.4;overflow-wrap:anywhere}
+#mainWorkspaceDialog summary::before{content:'▸';flex-shrink:0}#mainWorkspaceDialog details[open]>summary::before{content:'▾'}
+#mainWorkspaceDialog p{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.5}
+#mainWorkspaceDialog pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:.9em;max-height:260px;overflow:auto}
+#mainWorkspaceDialog .workspace-note,#mainWorkspaceSavedMeta{color:#c3b59a;font-size:.9em}
+#mainWorkspaceDialog .workspace-directory{display:block;color:#c3b59a;font-size:.85em;overflow-wrap:anywhere}
+#mainWorkspaceError,#mainWorkspaceStale,#mainWorkspaceChanges{color:#ffd078}
+#mainWorkspaceDialog :focus-visible,.terminal-setups button:focus-visible{outline:3px solid #ffcc59;outline-offset:3px}
+#mainWorkspaceDialog [hidden]{display:none!important}
+@media(max-width:480px){.terminal-setups>div{width:100%}.terminal-setups button{flex:1}#mainWorkspaceDialog{padding:14px;width:calc(100% - 16px)}#mainWorkspaceDialog header{top:-14px}#mainWorkspaceTitle{font-size:1.1rem}}

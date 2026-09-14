@@ -1007,6 +1007,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     }
     let params = body["params"] as? [String: Any] ?? [:]
     switch method {
+    case "workspaceUIState":
+      do {
+        let store = MainWorkspaceDesktopState()
+        if let state = params["state"] as? [String: Any] { try store.save(state) }
+        resolveNativeMessage(id: id, result: ["state": store.read()])
+      } catch { resolveNativeMessage(id: id, error: error.localizedDescription) }
     case "enableUsageNotifications":
       Task { @MainActor in
         let allowed = await usageNotifications.requestPermission()

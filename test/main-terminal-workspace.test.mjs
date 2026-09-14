@@ -14,6 +14,8 @@ test('named snapshots expose exact membership and independent progress without r
   assert.equal(a.namedSnapshots[1].needsReview,true);assert.equal(b.entries.length,1);assert.equal(b.entries[0].identityIssue,'Legacy shell needs review');
   assert.equal(b.status,'needs_review');assert.equal(b.message,null);assert.equal(b.activeRequest,null);
   assert.equal(JSON.stringify(state),bytes);assert.equal(workspaceProjection(state,'missing').status,'needs_attention');
+  assert.equal(workspaceProjection(state,'missing').namedSnapshots.length,2);
+  assert.equal(workspaceProjection(state,'missing').selectedSnapshotId,'missing');
 });
 test('Assistant exposes named save/update, exact restore, and separate inspect/confirmed close tools',()=>{
   const tool=name=>{const t=assistantTools.find(t=>t[0]===name);return t&&{name:t[0],description:t[1],inputSchema:t[2]};};
