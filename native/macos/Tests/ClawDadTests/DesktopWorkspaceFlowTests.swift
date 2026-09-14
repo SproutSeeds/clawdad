@@ -54,29 +54,51 @@ import ClawDadRemoteAssistProtocol
     var evidence=try await json(base,"/fixture/evidence",[:])
     XCTAssertTrue((evidence["requests"] as? [[String:Any]] ?? []).allSatisfy{$0["action"] as? String=="mainworkspace.status"},"Opening only reads status")
     try await js(view,"document.getElementById('mainWorkspaceScan').click()")
-    try await wait(view,"!document.getElementById('mainWorkspaceReview').disabled")
+    try await wait(view,"!document.getElementById('mainWorkspaceWindow').disabled && document.getElementById('mainWorkspaceWindow').value!==''")
     XCTAssertEqual(try store.read().observations?.count,1)
     let completeChoice=try await view.evaluateJavaScript("document.getElementById('mainWorkspaceWindow').selectedOptions[0].text.includes('2 tabs')") as? Bool
     XCTAssertEqual(completeChoice,true,"Chooser uses complete topology rather than partial process observations")
-    try await js(view,"document.getElementById('mainWorkspaceReview').click()")
-    try await wait(view,"document.getElementById('mainWorkspacePreview').textContent.includes('00000000-0000-4000-8000-000000000001')")
+    let noReview=try await view.evaluateJavaScript("document.getElementById('mainWorkspaceReview')===null") as? Bool
+    XCTAssertEqual(noReview,true)
+    XCTAssertEqual(native.captures,0,"Choosing a window does not tour its tabs")
     XCTAssertTrue(try store.read().roster.entries.isEmpty)
     try await js(view,"document.getElementById('mainWorkspaceName').value='Desktop fixture Ω';document.getElementById('mainWorkspaceName').dispatchEvent(new Event('input'))")
     try await wait(view,"!document.getElementById('mainWorkspaceSave').disabled")
-    if let folder=ProcessInfo.processInfo.environment["CLAWDAD_WORKSPACE_TEST_ARTIFACTS"] {
+    for width in [390,980] {
+      view.setFrameSize(NSSize(width:width,height:900));window.setContentSize(view.frame.size)
+      try await Task.sleep(for:.milliseconds(100))
+      let fits=try await view.evaluateJavaScript("document.getElementById('mainWorkspaceDialog').getBoundingClientRect().right<=innerWidth && ['mainWorkspaceSave','mainWorkspaceName','mainWorkspaceWindow'].every(id=>document.getElementById(id).getBoundingClientRect().height>=44)") as? Bool
+      XCTAssertEqual(fits,true)
+      if let folder=ProcessInfo.processInfo.environment["CLAWDAD_WORKSPACE_TEST_ARTIFACTS"] {
       let shot=try await view.takeSnapshot(configuration:nil)
       if let data=shot.tiffRepresentation,let bitmap=NSBitmapImageRep(data:data),let png=bitmap.representation(using:.png,properties:[:]) {
-        try png.write(to:URL(fileURLWithPath:folder).appendingPathComponent("desktop-save-980.png"))
+        try png.write(to:URL(fileURLWithPath:folder).appendingPathComponent("desktop-save-\(width).png"))
+      }
       }
     }
+    native.captureDelay=2000
     try await js(view,"document.getElementById('mainWorkspaceSave').click();document.getElementById('mainWorkspaceSave').click()")
+    try await wait(view,"!document.getElementById('mainWorkspaceSpinner').hidden && document.getElementById('mainWorkspaceStatus').textContent.includes('Saving tab')")
+    let inputsHeld=try await view.evaluateJavaScript("document.getElementById('mainWorkspaceName').disabled && document.getElementById('mainWorkspaceSave').disabled") as? Bool
+    XCTAssertEqual(inputsHeld,true)
+    try await js(view,"document.getElementById('mainWorkspaceClose').click();document.getElementById('mainWorkspaceSaveOpen').click()")
     try await wait(view,"!document.getElementById('mainWorkspaceSavedPane').hidden && !document.getElementById('mainWorkspaceRestore').disabled")
+    native.captureDelay=0
+    XCTAssertEqual(native.captures,1);XCTAssertEqual(native.visits,["fixture-0","fixture-1"])
+    let detailsOptional=try await view.evaluateJavaScript("!document.getElementById('mainWorkspaceSavedDetails').open") as? Bool
+    XCTAssertEqual(detailsOptional,true)
     let saved=try store.read(),snapshot=try XCTUnwrap(saved.snapshots?.first)
     XCTAssertEqual(saved.snapshots?.count,1);XCTAssertEqual(snapshot.roster.entries.map(\.sessionId),native.live.map(\.sessionId))
     XCTAssertEqual(native.closes,0);XCTAssertEqual(native.launches,0)
     // The same exact saved setup is visible over the actual Assistant MCP tool.
     let inspected=try await json(base,"/fixture/mcp",["name":"main_terminal_workspace","arguments":["snapshotId":snapshot.id]])
     XCTAssertEqual((inspected["mainWorkspace"] as? [String:Any])?["snapshotRevision"] as? Int,1)
+    evidence=try await json(base,"/fixture/evidence",[:])
+    let saveRequest=try XCTUnwrap((evidence["requests"] as? [[String:Any]])?.first{$0["action"] as? String=="mainworkspace.save"})
+    var savedArgs=saveRequest;savedArgs.removeValue(forKey:"action")
+    let saveReplay=try await json(base,"/fixture/mcp",["name":"save_main_terminal_workspace","arguments":savedArgs])
+    XCTAssertEqual((saveReplay["job"] as? [String:Any])?["status"] as? String,"completed")
+    XCTAssertEqual(native.captures,1,"MCP reconciliation returns the accepted UI receipt without another pass")
     native.selectedOnlyInLightInventory=false
     native.live=[] // Only the in-memory fixture is closed. No Terminal API exists here.
     try await js(view,"document.getElementById('mainWorkspaceRestore').click();document.getElementById('mainWorkspaceRestore').click()")
@@ -88,7 +110,7 @@ import ClawDadRemoteAssistProtocol
     XCTAssertEqual((duplicate["job"] as? [String:Any])?["status"] as? String,"completed")
     XCTAssertEqual(native.creates,2)
     // Polling keeps a selected saved draft's DOM node and its expanded state.
-    try await js(view,"window.retainedRow=document.querySelector('#mainWorkspaceEntries details');retainedRow.open=true")
+    try await js(view,"document.getElementById('mainWorkspaceSavedDetails').open=true;window.retainedRow=document.querySelector('#mainWorkspaceEntries details');retainedRow.open=true")
     try await Task.sleep(for:.milliseconds(2200))
     let retained=try await view.evaluateJavaScript("retainedRow===document.querySelector('#mainWorkspaceEntries details') && retainedRow.open") as? Bool
     XCTAssertEqual(retained,true)

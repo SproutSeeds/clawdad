@@ -109,4 +109,62 @@ import ClawDadRemoteAssistProtocol
     XCTAssertThrowsError(try store.save(["name":String(repeating:"x",count:81)]))
     XCTAssertEqual(restarted.read()["name"] as? String,"Research Ω")
   }
+  func testDirectSaveAndUpdateCaptureOnceAndReconcileAfterRestart() async throws {
+    let (store,native,root)=try fixture()
+    native.selectedOnlyInLightInventory=true
+    let windowId=try MainTerminalWorkspace.windowChoiceId(native.live)
+    let args:[String:AssistantValue]=["tabId":.string("tab-0"),"windowId":.string(windowId),"name":.string("Single pass Ω"),"expectedRevision":.number(1)]
+    _=try await store.control("mainworkspace.save",args:args,requestId:"direct")
+    let saved=try store.read(),id=try XCTUnwrap(saved.selectedSnapshotId)
+    XCTAssertEqual(native.captures,1);XCTAssertEqual(native.visits,["tab-0","tab-1"])
+    XCTAssertEqual(saved.roster.entries.map{$0.draft?.text},native.live.map{$0.draft?.text})
+    let restarted=MainTerminalWorkspace(root:root,native:native)
+    _=try await restarted.control("mainworkspace.save",args:args,requestId:"direct")
+    XCTAssertEqual(native.captures,1,"A lost acknowledgement must not repeat the capture or save")
+    native.live.removeLast();native.live[0].draft?.text="Changed draft retained Ω\nline two"
+    var update=args;update["snapshotId"] = .string(id);update["windowId"] = .string(try MainTerminalWorkspace.windowChoiceId(native.live));update["expectedRevision"] = .number(Double(saved.revision))
+    _=try await restarted.control("mainworkspace.save",args:update,requestId:"update")
+    let result=try restarted.read()
+    XCTAssertEqual(native.captures,2);XCTAssertEqual(result.snapshots?.count,1)
+    XCTAssertEqual(result.roster.entries.count,1);XCTAssertEqual(result.previous.first?.entries.count,2)
+    XCTAssertEqual(result.roster.entries[0].draft?.text,native.live[0].draft?.text)
+    XCTAssertFalse(FileManager.default.fileExists(atPath:root.appendingPathComponent("capture-progress.json").path))
+    XCTAssertEqual(native.creates,0);XCTAssertEqual(native.closes,0);XCTAssertEqual(native.launches,0)
+  }
+  func testDirectSaveRefusesStaleOrMidCaptureWindowChangesAndPreservesPrevious() async throws {
+    for mutation in 0..<4 {
+      let (store,native,_)=try fixture()
+      let args:[String:AssistantValue]=["tabId":.string("tab-0"),"windowId":.string(try MainTerminalWorkspace.windowChoiceId(native.live)),"name":.string("Safe"),"expectedRevision":.number(1)]
+      _=try await store.control("mainworkspace.save",args:args,requestId:"initial")
+      let before=try store.read();var update=args;update["snapshotId"] = .string(before.selectedSnapshotId!);update["expectedRevision"] = .number(Double(before.revision))
+      if mutation==0 { native.live[0].group="moved" }
+      else { native.afterCapture={
+        switch mutation {
+        case 1:native.live.removeLast()
+        case 2:native.live[0].position=3
+        default:native.live[0].tabId="rebuilt"
+        }
+      } }
+      do { _=try await store.control("mainworkspace.save",args:update,requestId:"change");XCTFail("Changed lineup saved") }
+      catch { XCTAssertTrue(error.localizedDescription.contains("changed")) }
+      XCTAssertEqual(try store.read().roster,before.roster)
+      XCTAssertEqual(native.captures,mutation==0 ? 1:2)
+      XCTAssertEqual(native.closes,0);XCTAssertEqual(native.launches,0)
+    }
+  }
+  func testSingleCaptureFailureDoesNotPublishAndProgressContainsOnlyCounts() async throws {
+    let (store,native,root)=try fixture()
+    let args:[String:AssistantValue]=["tabId":.string("tab-0"),"windowId":.string(try MainTerminalWorkspace.windowChoiceId(native.live)),"name":.string("Held name"),"expectedRevision":.number(1)]
+    native.afterCapture={
+      let value=try! JSONSerialization.jsonObject(with:Data(contentsOf:root.appendingPathComponent("capture-progress.json"))) as! [String:Any]
+      XCTAssertEqual(Set(value.map{$0.key}),Set(["requestId","current","total"]))
+      XCTAssertEqual(value["current"] as? Int,2)
+    }
+    native.missing.insert("/same-project")
+    do { _=try await store.control("mainworkspace.save",args:args,requestId:"failure");XCTFail() } catch {}
+    XCTAssertTrue(try store.read().roster.entries.isEmpty)
+    XCTAssertTrue(try store.read().snapshots?.isEmpty ?? true)
+    XCTAssertEqual(native.captures,1);XCTAssertEqual(native.live[0].draft?.text,"Exact Ω\nline 0")
+    XCTAssertFalse(FileManager.default.fileExists(atPath:root.appendingPathComponent("capture-progress.json").path))
+  }
 }

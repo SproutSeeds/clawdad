@@ -6,12 +6,14 @@ On the Mac’s main ClawDad screen, use **Terminal Setups**, above the project a
 
 1. Click **Save Terminal Setup…**.
 2. Choose the exact Terminal window. The list shows its ordered tabs; **Refresh Terminal windows** updates this preliminary list.
-3. Click **Review this window**. ClawDad inspects its project identities and recoverable drafts. Let that inspection finish; manual Terminal activity can pause it safely.
-4. Review the directories, Codex conversations versus shells, and any draft limitations. Enter a name and click **Save as new setup**.
+3. Enter a setup name and click **Save setup**.
+4. A spinner and **Saving tab X of Y…** show the single inspection pass. ClawDad verifies project identities and recoverable drafts, returns to the previous tab, and saves the setup. **View saved setup** shows its exact conversations, directories and draft limitations afterward.
 
-Different names can represent different windows or arrangements. Save does not close the window. A fresh Codex tab without a persisted conversation ID, an uncertain exited agent, or another unverifiable identity can prevent Save; the previous setup stays intact. Complete the intended startup/work or resolve the displayed issue, then review again.
+Let the inspection finish; manual Terminal activity can stop it safely. Closing this panel keeps the accepted save running. Reopen it to check the same request without starting another capture.
 
-To replace a saved lineup, open **Open Saved Setup…**, choose it, expand **Update or recover this setup**, and use **Update from a Terminal window…**. Review the replacement lineup and confirm Update. Absent tabs are removed from that saved version; its previous version remains recoverable. Background observations and closing tabs never rewrite a manual snapshot.
+Different names can represent different windows or arrangements. Save does not close the window. A fresh Codex tab without a persisted conversation ID, an uncertain exited agent, or another unverifiable identity can prevent Save; the previous setup stays intact. Complete the intended startup/work or resolve the displayed issue, then save again.
+
+To replace a saved lineup, open **Open Saved Setup…**, choose it, expand **Update or recover this setup**, and use **Update from a Terminal window…**. Choose its exact current window and confirm **Update setup**. This also uses a single capture pass. Absent tabs are removed from that saved version; its previous version remains recoverable. Background observations and closing tabs never rewrite a manual snapshot.
 
 ## Reopen a setup
 

@@ -81,7 +81,7 @@
       </section>
       <dialog id="mainWorkspaceDialog" aria-labelledby="mainWorkspaceTitle">
         <header><button id="mainWorkspaceBack" type="button" hidden>Back</button><h2 id="mainWorkspaceTitle">Saved Terminal Setups</h2><button id="mainWorkspaceClose" type="button">Done</button></header>
-        <p id="mainWorkspaceStatus" role="status" aria-live="polite">Loading…</p>
+        <div class="workspace-saving-status"><span id="mainWorkspaceSpinner" class="workspace-spinner" aria-hidden="true" hidden></span><p id="mainWorkspaceStatus" role="status" aria-live="polite">Loading…</p></div>
         <p id="mainWorkspaceError" role="alert"></p>
         <button id="mainWorkspaceRetry" type="button" hidden>Check this request</button>
         <section id="mainWorkspaceSavedPane">
@@ -89,7 +89,7 @@
           <p id="mainWorkspaceSavedMeta"></p>
           <p id="mainWorkspaceStale" role="status" hidden>This setup changed. Review its latest version before restoring.</p>
           <button id="mainWorkspaceReviewLatest" type="button" hidden>Review latest saved version</button>
-          <div id="mainWorkspaceEntries"></div>
+          <details id="mainWorkspaceSavedDetails" open><summary>View saved setup</summary><div id="mainWorkspaceEntries"></div></details>
           <button id="mainWorkspaceRestore" type="button" disabled>Open / Restore this setup</button>
           <p class="workspace-note">Reopens exact conversations with their latest saved history, ready for you to continue. Running work and drafts stay intact. The regular window fills the usable display.</p>
           <details id="mainWorkspaceRestoreOptions"><summary>Other restore options</summary>
@@ -107,12 +107,10 @@
           <label for="mainWorkspaceWindow">Terminal window to save</label><select id="mainWorkspaceWindow"><option value="">Choose a window</option></select>
           <button id="mainWorkspaceScan" type="button">Refresh Terminal windows</button>
           <p id="mainWorkspaceWindowState" role="status"></p>
-          <div id="mainWorkspaceObserved"></div>
-          <button id="mainWorkspaceReview" type="button" disabled>Review this window</button>
-          <div id="mainWorkspacePreview"></div>
+          <details><summary>Window’s current tab list</summary><div id="mainWorkspaceObserved"></div></details>
           <label for="mainWorkspaceName">Setup name</label><input id="mainWorkspaceName" type="text" maxlength="80" placeholder="My projects" autocomplete="off">
           <p id="mainWorkspaceChanges"></p>
-          <button id="mainWorkspaceSave" type="button" disabled>Save as new setup</button>
+          <button id="mainWorkspaceSave" type="button" disabled>Save setup</button>
           <p class="workspace-note">Save captures only this window’s ordered tabs. Codex threads retain their exact identities; shells are labeled separately. Saving keeps all windows open.</p>
         </section>
       </dialog>

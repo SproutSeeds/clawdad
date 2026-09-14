@@ -13,6 +13,22 @@ import ClawDadRemoteAssistProtocol
   var closes=0,partialClose=false
   var modalSessionStillPresent=false
   var selectedOnlyInLightInventory=false
+  var captureProgress:((Int,Int)throws->Void)?
+  var captures=0,captureDelay=0
+  var visits:[String]=[]
+  var afterCapture:(()->Void)?
+  func snapshot(windowContaining tabId:String) async throws -> MainWorkspaceWindowSnapshot {
+    captures += 1
+    let tabs=try await inventory(captureDrafts:true)
+    let group=tabs.first{$0.tabId==tabId}?.group
+    let members=tabs.filter{$0.group==group}.sorted{$0.position<$1.position}
+    for (index,tab) in members.enumerated() {
+      visits.append(tab.tabId);try captureProgress?(index+1,members.count)
+      if captureDelay>0 { try await Task.sleep(for:.milliseconds(captureDelay)) }
+    }
+    afterCapture?()
+    return MainWorkspaceWindowSnapshot(anchorId:tabId,tabs:tabs)
+  }
   func areClosed(_ tabs:[MainWorkspaceLiveTab]) async throws -> Bool {
     !modalSessionStillPresent && tabs.allSatisfy{old in !live.contains{$0.tty==old.tty && $0.lifetime==old.lifetime}}
   }

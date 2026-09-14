@@ -75,6 +75,7 @@ enum MainWorkspaceTitleCensus {
   private let runtime: MacAssistantRuntime
   private let bindings=MainWorkspaceAgentBindings(file:FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/ClawDad/MainTerminalWorkspace/verified-agent-bindings.json"))
   var retainedDraft: ((MacCodexInputBinding,String,MacAssistantForeground,String,UInt64)->String?)?
+  var captureProgress: ((Int,Int) throws -> Void)?
   private var exitedFullScreen:(tty:String,owner:String,ticket:UInt64)?
   private var closingWindow=false
   init(runtime: MacAssistantRuntime) { self.runtime=runtime }
@@ -312,7 +313,7 @@ enum MainWorkspaceTitleCensus {
         directory:known?.directory,kind:known?.kind,sessionId:known?.sessionId,identityIssue:known?.identityIssue))
     }
     // Catalog rows are native left-to-right controls, even before process/TTY
-    // association. Only the explicit Review step visits inputs and binds owners.
+    // association. Explicit Save (or optional inspection) visits inputs and binds owners.
     return try groups.enumerated().map { index,group in
       let rows=members[group]!
       return MainWorkspaceWindowChoice(id:try MainTerminalWorkspace.windowChoiceId(tabIds:rows.map(\.tabId)),
@@ -344,6 +345,8 @@ enum MainWorkspaceTitleCensus {
     let selected=initial.selectedTabId
     let selections=Dictionary(uniqueKeysWithValues:initial.tabs.map{($0.id,tabs.assistantSnapshot(tabID:$0.id)?.isSelectedInWindow ?? $0.isSelected)})
     let ticket=captureDrafts ? try ensure() : nil
+    let capturing=initial.tabs.filter { captureDrafts && (captureGroup==nil || tabs.assistantSnapshot(tabID:$0.id)?.groupID==captureGroup) }
+    var captureIndex=0,owners:[String:String]=[:],lifetimes:[String:String]=[:]
     do {
       for descriptor in initial.tabs {
         let snapshot=tabs.assistantSnapshot(tabID:descriptor.id)
@@ -352,6 +355,7 @@ enum MainWorkspaceTitleCensus {
         // only needs to visit unbound tabs; known live inputs remain untouched.
         let shouldCapture=requiresIdentity && (captureGroup != nil || snapshot?.tty.isEmpty != false)
         if let ticket,shouldCapture {
+          captureIndex += 1;try captureProgress?(captureIndex,capturing.count)
           guard interaction.isCurrent(ticket) else { throw MacAssistantError("You changed Terminal during the snapshot. Your input was preserved; save again when ready.") }
           do {
             try await focusForSnapshot(descriptor.id,ticket:ticket)
@@ -365,6 +369,7 @@ enum MainWorkspaceTitleCensus {
         let owner=try? await Task.detached{try MacAssistantForeground.read(tty:tab.tty)}.value
         guard let owner else { if requiresIdentity { throw MacAssistantError("\(descriptor.detail)'s foreground process could not be identified. Complete startup before saving.") };continue }
         let lifetime=try? await Task.detached{try MacTerminalTitleMetadata.currentLifetime(tab.tty)}.value
+        if requiresIdentity { owners[tab.tty]=owner.identity;lifetimes[tab.tty]=lifetime }
         var bindingIssue:String?
         let agent:MacCodexInputBinding?
         do { agent=try await Task.detached{try MacTerminalResponseReader().inputBinding(tty:tab.tty)}.value }
@@ -417,6 +422,19 @@ enum MainWorkspaceTitleCensus {
           conversationPath:agent?.conversation?.path.path ?? historical?.path,executable:agent?.executable ?? historical?.executable,name:MacTerminalProjectTitles.shared.explicitName(tty: tab.tty) ?? (names[tab.tty]?.hasPrefix("ClawDad Restore ")==true ? names[tab.tty]! : (tab.generatedTitle && !directory.isEmpty ? URL(fileURLWithPath: directory).lastPathComponent : descriptor.title)),
           position:tab.position,selected:selections[descriptor.id] ?? false,fullScreen:focused ? fullScreen():false,draft:draft,model:config?.model,effort:config?.effort,pendingReceipts:receiptIds,nameIsExplicit:MacTerminalProjectTitles.shared.explicitName(tty: tab.tty) != nil,
           lifetime:lifetime,identityIssue:bindingIssue,historical:historical != nil,isBusy:descriptor.isBusy))
+      }
+      if let ticket,captureGroup != nil {
+        // One full pass, then checks that need no tab switching. User input
+        // invalidates the capture; process/login changes cannot rebind a draft.
+        guard interaction.isCurrent(ticket) else { throw MacAssistantError("You changed Terminal during saving. Your input and previous setup were preserved; save again when ready.") }
+        for tab in output where tab.group==String(captureGroup!) {
+          let current=try? await Task.detached { try MacAssistantForeground.read(tty:tab.tty) }.value
+          let lifetime=try? await Task.detached { try MacTerminalTitleMetadata.currentLifetime(tab.tty) }.value
+          guard current?.identity==owners[tab.tty],lifetime==lifetimes[tab.tty],lifetime != nil else {
+            throw MacAssistantError("\(tab.name)'s process changed during saving. Its input and previous setup were preserved; save again after startup or exit finishes.")
+          }
+        }
+        guard interaction.isCurrent(ticket) else { throw MacAssistantError("You changed Terminal during saving. Your input and previous setup were preserved; save again when ready.") }
       }
     } catch {
       if let ticket,interaction.isCurrent(ticket),let selected,let state=try? await tabs.catalog() { _=try? await tabs.focus(tabID:selected,expectedRevision:state.revision) }

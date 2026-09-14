@@ -1,4 +1,4 @@
-import {chooseWindow, reviewSnapshot, staleReview, restoreArguments, lineupChanges, pendingRequest} from './main-terminal-workspace-state.mjs';
+import {chooseWindow, reviewSnapshot, staleReview, restoreArguments, pendingRequest} from './main-terminal-workspace-state.mjs';
 
 // This view sends only explicit user actions. All identity checks, snapshots and
 // restore journals remain in the existing native workspace implementation.
@@ -6,15 +6,14 @@ const $ = id => document.getElementById(id);
 const dialog = $('mainWorkspaceDialog');
 if (dialog) {
   let state = {}, selected = '', chosenWindow = '', reuseWindow = '', pending = null;
-  let reviewed = null, preview = null, updating = null, mode = 'open', opener;
-  let timer, refreshing = false, sending = false, renderKey = '', previewKey = '';
+  let reviewed = null, updating = null, mode = 'open', opener;
+  let timer, refreshing = false, sending = false, renderKey = '';
   let preferencesLoaded = false, nativeStorage = false, persistChain = Promise.resolve();
   const storeKey = 'clawdad.workspace.desktop.v1';
   const error = message => { $('mainWorkspaceError').textContent = message || ''; };
   const tabsLabel = count => `${count} ${count === 1 ? 'tab' : 'tabs'}`;
   const time = value => value ? new Date(value).toLocaleString() : 'Unavailable';
   const windowNow = () => chooseWindow(state.windows || [], chosenWindow).window;
-  const readyPreview = () => preview && windowNow() && Date.parse(preview.expiresAt) > Date.now();
   const busy = () => !!pending || !preferencesLoaded;
 
   async function loadPreferences() {
@@ -97,28 +96,31 @@ if (dialog) {
       dialog.dataset.workspacePane = mode;
     }
     $('mainWorkspaceBack').hidden = !updating;
-    $('mainWorkspaceStatus').textContent = pending ? 'Request saved · checking progress…' : (state.status === 'restored' && mode === 'open' ? 'Setup is open. Continue when you’re ready.' : (state.message || (mode === 'save' ? 'Choose one window and review its tabs before saving.' : 'Choose a setup to see its saved tabs.')));
+    const saving = pending?.action === 'mainworkspace.save';
+    const progress = saving && state.captureProgress?.requestId === pending.id ? state.captureProgress : null;
+    const statusText = pending ? (saving ? (progress ? `Saving tab ${progress.current} of ${progress.total}…` : 'Saving setup…') : 'Request saved · checking progress…')
+      : (mode === 'save' ? 'Choose a window, name your setup, then Save. Terminal will visit its tabs once.'
+      : (state.status === 'restored' ? 'Setup is open. Continue when you’re ready.' : (state.message || 'Choose a setup to see its saved tabs.')));
+    if ($('mainWorkspaceStatus').textContent !== statusText) $('mainWorkspaceStatus').textContent = statusText;
+    $('mainWorkspaceSpinner').hidden = !saving;
+    savePane.setAttribute('aria-busy', String(saving));
     $('mainWorkspaceRetry').hidden = !pending;
     options($('mainWorkspaceNamed'), (state.namedSnapshots || []).map(s => ({id: s.id, title: `${s.name} · ${tabsLabel(s.count)}${s.needsReview ? ' · Identity review needed' : ''}${s.draftWarnings ? ` · ${s.draftWarnings} draft warnings` : ''}`})), selected, 'Choose a saved setup');
     const choices = (state.windows || []).map(w => ({id: w.id, title: `${w.title} · ${tabsLabel(w.count)} · ${w.tabs.slice(0, 3).map(t => t.name).join(', ')}`}));
     options($('mainWorkspaceWindow'), choices, chosenWindow, 'Choose a Terminal window');
     options($('mainWorkspaceReuseWindow'), choices, reuseWindow, 'Choose a Terminal window');
-    $('mainWorkspaceWindowState').textContent = chosenWindow && !window ? 'The reviewed window changed or is unavailable. Choose and review its current lineup; your proposed name is preserved.' : `Window list last observed: ${time(state.observedAt)}. Refresh if needed.`;
+    $('mainWorkspaceWindowState').textContent = chosenWindow && !window ? 'The chosen window changed or is unavailable. Refresh its windows and choose again; your proposed name is preserved.' : `Window list last observed: ${time(state.observedAt)}. Refresh if needed.`;
     const observedKey = JSON.stringify(window?.tabs || []);
     if ($('mainWorkspaceObserved').dataset.signature !== observedKey) {
       $('mainWorkspaceObserved').dataset.signature = observedKey;
       $('mainWorkspaceObserved').textContent = window ? window.tabs.map((t, i) => `${i + 1}. ${t.name} · ${t.directory || 'Directory awaiting inspection'}`).join('\n') : '';
       $('mainWorkspaceObserved').style.whiteSpace = 'pre-wrap';
     }
-    const captureKey = JSON.stringify(preview);
-    if (captureKey !== previewKey) { previewKey = captureKey; renderRows($('mainWorkspacePreview'), preview?.windowPreview?.tabs || []); }
-    $('mainWorkspaceObserved').hidden = !!preview;
-    if (preview && !readyPreview()) $('mainWorkspaceWindowState').textContent = 'Window review expired or the window changed. Review it again; your name is preserved.';
-    const changes = updating && preview ? lineupChanges(updating.entries, preview.windowPreview.tabs) : null;
-    $('mainWorkspaceChanges').textContent = changes ? `Update replaces the lineup. Removed: ${changes.removed.map(e => e.name).join(', ') || 'none'}. Added or changed identity: ${changes.added.map(e => e.name).join(', ') || 'none'}. The previous version stays recoverable.` : '';
-    $('mainWorkspaceSave').textContent = updating ? 'Update this saved setup' : 'Save as new setup';
-    $('mainWorkspaceSave').disabled = busy() || !readyPreview() || !$('mainWorkspaceName').value.trim() || !!(updating && staleReview(updating, state));
-    $('mainWorkspaceReview').disabled = busy() || !window;
+    $('mainWorkspaceChanges').textContent = updating ? `Update replaces ${updating.name} with this window’s current lineup. Its previous version stays recoverable.` : '';
+    $('mainWorkspaceSave').textContent = saving ? 'Saving…' : (updating ? 'Update setup' : 'Save setup');
+    $('mainWorkspaceSave').disabled = busy() || !window || !$('mainWorkspaceName').value.trim() || !!(updating && staleReview(updating, state));
+    $('mainWorkspaceName').disabled = busy();
+    $('mainWorkspaceBack').disabled = busy();
     $('mainWorkspaceScan').disabled = busy();
     $('mainWorkspaceNamed').disabled = busy(); $('mainWorkspaceWindow').disabled = busy();
     $('mainWorkspaceStale').hidden = !stale; $('mainWorkspaceReviewLatest').hidden = !stale;
@@ -158,9 +160,9 @@ if (dialog) {
       if (!reviewed && selected) reviewed = reviewSnapshot(state, selected);
       if (result.job && pending?.id === result.job.id && !['queued', 'running'].includes(result.job.status)) {
         const job = result.job, finished = pending; pending = null;
-        if (job.result?.windowPreview) { preview = job.result; }
         if (job.result?.selectedSnapshotId && finished.action === 'mainworkspace.save' && !job.error) {
-          selected = job.result.selectedSnapshotId; reviewed = null; updating = null; preview = null; mode = 'open';
+          selected = job.result.selectedSnapshotId; reviewed = null; updating = null; mode = 'open';
+          $('mainWorkspaceSavedDetails').open = false;
         }
         if (['mainworkspace.recover','mainworkspace.remove'].includes(finished.action) && !job.error) reviewed = null;
         error(job.error); await persist();
@@ -184,7 +186,8 @@ if (dialog) {
     await resend();
   }
   async function open(modeValue, button) {
-    opener = button; mode = modeValue; updating = null;
+    opener = button; mode = modeValue; updating = null; error('');
+    $('mainWorkspaceSavedDetails').open = true;
     try { await loadPreferences(); } catch (e) { error(`Workspace request storage is unavailable: ${e.message}`); }
     // Expose the intended pane before WebKit constructs the modal accessibility
     // tree and chooses initial focus, including Open -> Done -> Save navigation.
@@ -199,19 +202,18 @@ if (dialog) {
   dialog.addEventListener('cancel', event => { event.preventDefault(); close(); });
   $('mainWorkspaceBack').onclick = () => { mode = 'open'; updating = null; render(); };
   $('mainWorkspaceScan').onclick = () => void perform('mainworkspace.windows');
-  $('mainWorkspaceReview').onclick = () => { preview = null; void perform('mainworkspace.preview', {tabId: windowNow().tabId, windowId: chosenWindow}); };
-  $('mainWorkspaceWindow').onchange = () => { chosenWindow = $('mainWorkspaceWindow').value; preview = null; void persist().catch(e => error(e.message)); render(); };
+  $('mainWorkspaceWindow').onchange = () => { chosenWindow = $('mainWorkspaceWindow').value; void persist().catch(e => error(e.message)); render(); };
   $('mainWorkspaceReuseWindow').onchange = () => { reuseWindow = $('mainWorkspaceReuseWindow').value; render(); };
   $('mainWorkspaceName').oninput = () => { void persist().catch(e => error(e.message)); render(); };
   $('mainWorkspaceNamed').onchange = () => { selected = $('mainWorkspaceNamed').value; reviewed = null; void persist().catch(e => error(e.message)); void refresh(); render(); };
   $('mainWorkspaceReviewLatest').onclick = () => { reviewed = reviewSnapshot(state, selected); render(); };
-  $('mainWorkspaceUpdate').onclick = () => { updating = structuredClone(reviewed); preview = null; mode = 'save'; $('mainWorkspaceName').value = updating.name; render(); };
+  $('mainWorkspaceUpdate').onclick = () => { updating = structuredClone(reviewed); mode = 'save'; $('mainWorkspaceName').value = updating.name; render(); };
   $('mainWorkspaceSave').onclick = () => {
-    if (!readyPreview()) return error('Review the window again before saving.');
+    if (!windowNow()) return error('Choose the exact Terminal window before saving.');
     const name = $('mainWorkspaceName').value.trim();
     if (!updating && state.namedSnapshots?.some(s => s.name.toLocaleLowerCase() === name.toLocaleLowerCase()) && !confirm(`A setup named “${name}” exists. Save a separate setup with that name? To replace its lineup, use Update from Open Saved Setup.`)) return;
-    if (updating && !confirm(`Replace ${updating.name} with exactly the reviewed lineup? Its previous version stays recoverable.`)) return;
-    void perform('mainworkspace.save', {tabId: windowNow().tabId, windowToken: preview.windowPreview.token, name, expectedRevision: state.revision, ...(updating ? {snapshotId: updating.id} : {})});
+    if (updating && !confirm(`Replace ${updating.name} with this window’s current lineup? Its previous version stays recoverable.`)) return;
+    void perform('mainworkspace.save', {tabId: windowNow().tabId, windowId: chosenWindow, name, expectedRevision: state.revision, ...(updating ? {snapshotId: updating.id} : {})});
   };
   function restore(extra = {}) { try { void perform('mainworkspace.restore', restoreArguments(reviewed, state, extra)); } catch (e) { error(e.message); } }
   $('mainWorkspaceRestore').onclick = () => restore();

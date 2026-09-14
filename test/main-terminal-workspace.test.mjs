@@ -21,6 +21,8 @@ test('Assistant exposes named save/update, exact restore, and separate inspect/c
   const tool=name=>{const t=assistantTools.find(t=>t[0]===name);return t&&{name:t[0],description:t[1],inputSchema:t[2]};};
   for(const name of ['main_terminal_workspace','save_main_terminal_workspace','restore_main_terminal_workspace','inspect_terminal_window_close','close_terminal_window'])assert.ok(tool(name),name);
   assert.ok(tool('save_main_terminal_workspace').inputSchema.properties.snapshotId);
+  assert.ok(tool('save_main_terminal_workspace').inputSchema.properties.windowId);
+  assert.ok(!tool('save_main_terminal_workspace').inputSchema.required.includes('windowToken'));
   assert.ok(tool('restore_main_terminal_workspace').inputSchema.required.includes('snapshotId'));
   assert.deepEqual(tool('close_terminal_window').inputSchema.required,['confirmationToken','confirm','requestId']);
   assert.match(tool('save_main_terminal_workspace').description,/NEVER authorizes closing/);
@@ -42,6 +44,19 @@ test('missing or corrupt workspace remains explicit and preserves the file',asyn
   assert.equal((await readMainWorkspace(assistant)).status,'not_saved');
   const folder=path.join(root,'MainTerminalWorkspace');await fs.mkdir(folder);const file=path.join(folder,'main-workspace.json');await fs.writeFile(file,'broken');
   assert.equal((await readMainWorkspace(assistant)).status,'needs_attention');assert.equal(await fs.readFile(file,'utf8'),'broken');
+});
+test('capture progress is readable without mutating snapshots and ignores malformed progress',async t=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'workspace-save-progress-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));
+  const folder=path.join(root,'MainTerminalWorkspace');await fs.mkdir(folder);
+  const file=path.join(folder,'main-workspace.json'),progress=path.join(folder,'capture-progress.json');
+  const bytes=JSON.stringify({revision:7,status:'saved',roster:{entries:[]},snapshots:[]});await fs.writeFile(file,bytes);
+  await fs.writeFile(progress,JSON.stringify({requestId:'one-save',current:2,total:14}));
+  assert.deepEqual((await readMainWorkspace(path.join(root,'Assistant'))).captureProgress,{requestId:'one-save',current:2,total:14});
+  assert.equal(await fs.readFile(file,'utf8'),bytes);
+  await fs.writeFile(progress,JSON.stringify({requestId:'one-save',current:15,total:14}));
+  assert.equal((await readMainWorkspace(path.join(root,'Assistant'))).captureProgress,undefined);
+  await fs.writeFile(progress,'interrupted write');
+  assert.equal((await readMainWorkspace(path.join(root,'Assistant'))).status,'saved');
 });
 test('a resume ownership claim requires a live authorized restore and never enables a runtime',async()=>{
   const claims=new MainWorkspaceResumeClaims({job:async()=>({action:'message',status:'running'})});

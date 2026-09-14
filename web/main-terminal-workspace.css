@@ -25,3 +25,8 @@
 #mainWorkspaceDialog :focus-visible,.terminal-setups button:focus-visible{outline:3px solid #ffcc59;outline-offset:3px}
 #mainWorkspaceDialog [hidden]{display:none!important}
 @media(max-width:480px){.terminal-setups>div{width:100%}.terminal-setups button{flex:1}#mainWorkspaceDialog{padding:14px;width:calc(100% - 16px)}#mainWorkspaceDialog header{top:-14px}#mainWorkspaceTitle{font-size:1.1rem}}
+
+#mainWorkspaceDialog .workspace-saving-status{display:flex;align-items:center;gap:12px}
+#mainWorkspaceDialog .workspace-spinner{flex:none;width:18px;height:18px;border:3px solid #6b5833;border-top-color:#ffcc59;border-radius:50%;animation:workspace-spin 1s linear infinite}
+@keyframes workspace-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){#mainWorkspaceDialog .workspace-spinner{animation:none}}
