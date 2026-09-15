@@ -2,6 +2,19 @@ import XCTest
 @testable import ClawDadMobile
 
 final class WeeklyUsageTests: XCTestCase {
+  func testSubscriptionMetadataKeepsWeeklyAndShortWindowsSeparateAndAcceptsOlderHosts() throws {
+    let old = #"{"status":"current","remainingPercent":90,"resetsAt":2000000000,"observedAt":null,"validUntil":2000000000000,"message":null,"alerts":[]}"#
+    let previous = try JSONDecoder().decode(WeeklyUsage.self, from: Data(old.utf8))
+    XCTAssertNil(previous.subscription); XCTAssertNil(previous.ordinaryUsageAllowed); XCTAssertNil(previous.shortWindow)
+    var value = previous
+    value.subscription = .init(method: "chatgpt", email: "fixture@example.test", plan: "pro", workspaceName: nil)
+    value.ordinaryUsageAllowed = false
+    value.shortWindow = .init(remainingPercent: 0, resetsAt: 1900000000, windowDurationMins: 300)
+    let restored = try JSONDecoder().decode(WeeklyUsage.self, from: JSONEncoder().encode(value))
+    XCTAssertEqual(restored.remainingPercent, 90); XCTAssertEqual(restored.shortWindow?.remainingPercent, 0)
+    XCTAssertEqual(restored.subscription?.email, "fixture@example.test"); XCTAssertNil(restored.subscription?.workspaceName)
+    XCTAssertEqual(restored.ordinaryUsageAllowed, false)
+  }
   @MainActor
   func testUsageReconnectScopeAndPersistentNoticeAcknowledgment() async throws {
     let name = "WeeklyUsageTests.\(UUID().uuidString)"

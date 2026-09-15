@@ -302,7 +302,7 @@ final class AssistantUITests: XCTestCase {
     XCTAssertEqual(destination.value as? String, "Terminal selected")
     saveScreenshot(app, largeText ? "Destination with accessibility text" : "Destination during a call")
   }
-  func testResearchBudgetDefaultOverrideAndPolling() {
+  func testResearchBudgetOptionalLimitAndPolling() {
     checkResearchBudgetControls(largeText: false)
   }
   func testResearchBudgetControlsAtAccessibilityTextSize() {
@@ -361,17 +361,11 @@ final class AssistantUITests: XCTestCase {
     let current = app.staticTexts["clawdad.research.budget.current"]
     reveal(current, up: false)
     XCTAssertTrue(current.label.contains("0% remaining"), current.label)
-    saveScreenshot(app, largeText ? "Research allowance zero at accessibility text size" : "Research allowance zero override with shared default")
-    reveal(picker); picker.tap(); app.buttons["Use shared default"].tap()
+    saveScreenshot(app, largeText ? "Research allowance zero at accessibility text size" : "Explicit project allowance limit")
+    reveal(picker); picker.tap(); app.buttons["No project limit"].tap()
     reveal(review); review.tap(); app.alerts.buttons["Approve"].tap()
-    reveal(current, up: false); XCTAssertTrue(current.label.contains("20% remaining"), current.label)
-    let shared = app.buttons["Shared default: 20% remaining"]
-    reveal(shared); shared.tap()
-    let sharedPercent = app.textFields["clawdad.research.budget.default"]
-    reveal(sharedPercent); replace(sharedPercent, with: "25")
-    let sharedReview = app.buttons["clawdad.research.budget.review-default"]
-    reveal(sharedReview); sharedReview.tap(); app.alerts.buttons["Approve"].tap()
-    reveal(current, up: false); XCTAssertTrue(current.label.contains("25% remaining"), current.label)
+    reveal(current, up: false); XCTAssertEqual(current.label, "No project allowance limit")
+    XCTAssertFalse(app.buttons["clawdad.research.budget.review-default"].exists)
     app.buttons["Done"].tap()
     app.buttons["Workspace"].tap()
     XCTAssertTrue(app.buttons["End voice conversation"].exists)

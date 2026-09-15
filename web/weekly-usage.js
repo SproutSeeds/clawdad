@@ -13,8 +13,13 @@
     const title = usage?.remainingPercent == null ? 'Weekly allowance unavailable'
       : `${usage.remainingPercent}% weekly remaining${fresh ? '' : ' · Stale'}`;
     const text = title + (usage?.resetsAt ? '\nResets ' + reset(usage.resetsAt) : '');
-    button.textContent = text;
-    detail.textContent = text + (!fresh && usage?.message ? '\n\n' + usage.message : '');
+    button.textContent = title;
+    const identity=usage?.subscription;
+    detail.textContent = (identity?.email?`${identity.email} · ${identity.plan||'Subscription'}\nWorkspace: ${identity.workspaceName||'Not exposed by Codex'}\n\n`:'')
+      +text+(usage?.observedAt?'\nLast refreshed '+new Date(usage.observedAt).toLocaleString():'')
+      +(!fresh&&usage?.message?'\n\n'+usage.message:'')
+      +(usage?.ordinaryUsageAllowed===false?'\n\nCodex reports that included subscription usage is currently unavailable. A shorter usage window can limit access while weekly allowance remains.'
+        +(usage.shortWindow?'\nShorter window: '+usage.shortWindow.remainingPercent+'% remaining'+(usage.shortWindow.resetsAt?' · resets '+reset(usage.shortWindow.resetsAt):''):''):'');
     const alert = usage?.alerts?.filter(item => !seen.includes(item.id)).at(-1);
     notice.hidden = !alert || !fresh;
     if (alert && fresh) {
@@ -34,7 +39,9 @@
   }
   window.openClawDadUsage = () => { if (!dialog.open) dialog.showModal(); void refresh(); };
   button.onclick = window.openClawDadUsage;
-  document.getElementById('weeklyUsageClose').onclick = () => dialog.close();
+  const close = () => { dialog.close(); button.focus(); };
+  document.getElementById('weeklyUsageClose').onclick = close;
+  dialog.addEventListener('cancel', event => { event.preventDefault(); close(); });
   document.getElementById('weeklyUsageRefresh').onclick = refresh;
   const permission = document.getElementById('weeklyUsageNotifications');
   permission.hidden = !window.webkit?.messageHandlers?.clawdadNative;

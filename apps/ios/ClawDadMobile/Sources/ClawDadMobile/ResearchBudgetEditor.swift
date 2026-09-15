@@ -6,9 +6,8 @@ struct ResearchBudgetEditor: View {
   let thread: [String: AssistantValue]?
   var inputFocused: FocusState<Bool>.Binding
   let submit: (String, [String: AssistantValue]) -> Void
-  @State private var defaultText = "20"
-  @State private var overrideText = "20"
-  @State private var mode = "default"
+  @State private var overrideText = ""
+  @State private var mode = "none"
   @State private var initializedKey: String?
   @State private var confirming = false
   @State private var confirmationText = ""
@@ -19,7 +18,6 @@ struct ResearchBudgetEditor: View {
     budget["accounts"]?.array?.compactMap(\.object).first { $0["accountKey"]?.string == accountKey }
   }
   private var usage: [String: AssistantValue] { budget["usage"]?.object ?? [:] }
-  private var defaultThreshold: Int { Int(account?["threshold"]?.number ?? 20) }
   private var policy: [String: AssistantValue] { thread?["budgetPolicy"]?.object ?? [:] }
   private var editingKey: String { "\(accountKey ?? ""):\(thread?["id"]?.string ?? "")" }
   private var canChange: Bool {
@@ -33,10 +31,13 @@ struct ResearchBudgetEditor: View {
       if let remaining = usage["remainingPercent"]?.number {
         Text("\(remaining.formatted())% weekly remaining\(canChange ? "" : " · reading unavailable or stale")")
       } else { Text("Checking weekly allowance…") }
-      Text("Pause at a percentage of the shared weekly allowance remaining. 0% allows using the remaining allowance until exhausted. Other supervisors and your manual work use the same pool. Running tasks may consume more after new work pauses.").font(.footnote)
+      Text("Project limits are optional. Pause this supervisor at a chosen percentage of the shared weekly allowance remaining. 0% allows using the remaining allowance until exhausted. Other supervisors and your manual work use the same pool. Running tasks may consume more after new work pauses.").font(.footnote)
       if let threshold = policy["threshold"]?.number {
-        Text("Current: pause at \(threshold.formatted())% remaining · \(policy["mode"]?.string == "default" ? "shared default" : "custom override")")
+        Text("Current: pause at \(threshold.formatted())% remaining")
           .accessibilityIdentifier("clawdad.research.budget.current")
+      }
+      if policy["threshold"]?.number == nil {
+        Text("No project allowance limit").accessibilityIdentifier("clawdad.research.budget.current")
       }
       if let reason = policy["reason"]?.string, !reason.isEmpty { Text(reason).font(.footnote) }
       if let expiry = policy["expiresAt"]?.number {
@@ -45,25 +46,18 @@ struct ResearchBudgetEditor: View {
       }
       if thread != nil {
         Picker("This supervisor", selection: $mode) {
-          Text("Use shared default").tag("default")
+          Text("No project limit").tag("none")
           Text("Custom stopping percentage").tag("override")
         }.accessibilityIdentifier("clawdad.research.budget.mode")
         if mode == "override" {
           percentageInput("Pause at", text: $overrideText, id: "override")
           Text("A custom override applies to this supervisor and account through the current weekly cycle. A reset never renews it or releases its pause.").font(.footnote)
         }
-        Button("Review supervisor limit") { review(scope: "supervisor") }
+        Button("Review project limit") { review(scope: "supervisor") }
           .disabled(!canChange || (mode == "override" && ResearchBudgetInput.threshold(overrideText) == nil))
           .accessibilityIdentifier("clawdad.research.budget.review-supervisor")
       } else {
         Text("Save the research setup with autonomy off to choose its custom limit before starting.").font(.footnote)
-      }
-      DisclosureGroup("Shared default: \(defaultThreshold)% remaining") {
-        percentageInput("Pause at", text: $defaultText, id: "default")
-        Text("Applies to every supervisor using the default on this Codex account. Custom overrides keep their own limits. The default is saved; a latched pause still requires explicit approval after a reset.").font(.footnote)
-        Button("Review shared default") { review(scope: "account_default") }
-          .disabled(!canChange || ResearchBudgetInput.threshold(defaultText) == nil)
-          .accessibilityIdentifier("clawdad.research.budget.review-default")
       }
       if !canChange {
         Text(budget["available"]?.bool == true ? "A current reading for this signed-in account is required to approve changes. Refresh to check again." : "Update ClawDad on your Mac to edit allowance settings.").font(.footnote)
@@ -74,9 +68,8 @@ struct ResearchBudgetEditor: View {
       // destination so scrolling and polling both preserve an unsaved choice.
       guard initializedKey != editingKey else { return }
       initializedKey = editingKey
-      defaultText = String(defaultThreshold)
-      mode = policy["mode"]?.string == "default" || policy.isEmpty ? "default" : "override"
-      overrideText = String(Int(policy["threshold"]?.number ?? Double(defaultThreshold)))
+      mode = policy["mode"]?.string == "override" ? "override" : "none"
+      overrideText = policy["threshold"]?.number.map { String(Int($0)) } ?? ""
       confirming = false
     }
     .alert("Approve allowance setting?", isPresented: $confirming) {
@@ -92,11 +85,11 @@ struct ResearchBudgetEditor: View {
         TextField("0–100", text: text)
           .multilineTextAlignment(.trailing).frame(minWidth: 64, minHeight: 44).focused(inputFocused)
           .researchPercentageKeyboard()
-          .accessibilityLabel(id == "default" ? "Shared default percentage remaining" : "Supervisor percentage remaining")
+          .accessibilityLabel("Supervisor percentage remaining")
           .accessibilityIdentifier("clawdad.research.budget.\(id)")
         Text("% remaining")
       }
-      Stepper("Adjust percentage", value: Binding(get: { ResearchBudgetInput.threshold(text.wrappedValue) ?? 20 },
+      Stepper("Adjust percentage", value: Binding(get: { ResearchBudgetInput.threshold(text.wrappedValue) ?? 0 },
         set: { text.wrappedValue = String($0) }), in: 0...100)
         .accessibilityValue("\(text.wrappedValue)% remaining")
     }
@@ -105,20 +98,14 @@ struct ResearchBudgetEditor: View {
     guard canChange, let accountKey, let revision = account?["revision"] else { return }
     var args: [String: AssistantValue] = ["scope": .string(scope), "accountKey": .string(accountKey),
       "expectedBudgetRevision": revision, "confirmed": .bool(true)]
-    if scope == "account_default" {
-      guard let threshold = ResearchBudgetInput.threshold(defaultText) else { return }
+    guard let id = thread?["id"], let revision = thread?["revision"] else { return }
+    args["threadId"] = id; args["expectedRevision"] = revision; args["mode"] = .string(mode)
+    if mode == "override" {
+      guard let threshold = ResearchBudgetInput.threshold(overrideText) else { return }
       args["threshold"] = .number(Double(threshold))
-      confirmationText = "Set the shared default to pause at \(threshold)% weekly allowance remaining for this account. Supervisors with custom overrides keep their limits."
+      confirmationText = "Allow this exact supervisor to run until \(threshold)% weekly allowance remains, through this weekly cycle."
     } else {
-      guard let id = thread?["id"], let revision = thread?["revision"] else { return }
-      args["threadId"] = id; args["expectedRevision"] = revision; args["mode"] = .string(mode)
-      if mode == "override" {
-        guard let threshold = ResearchBudgetInput.threshold(overrideText) else { return }
-        args["threshold"] = .number(Double(threshold))
-        confirmationText = "Allow this exact supervisor to run until \(threshold)% weekly allowance remains, through this weekly cycle. This overrides the \(defaultThreshold)% shared default for this supervisor only."
-      } else {
-        confirmationText = "Remove this supervisor’s override and use the shared default of \(defaultThreshold)% weekly allowance remaining. An existing shared reserve pause remains in force."
-      }
+      confirmationText = "Remove this supervisor’s project allowance limit? No automatic app-wide reserve will apply."
     }
     confirmationText += " Stopped and manually paused supervisors stay stopped. Enabled work paused only by allowance may become eligible. Running tasks may consume more after the pause. This does not purchase usage."
     confirmedArgs = args; inputFocused.wrappedValue = false; confirming = true

@@ -1,0 +1,58 @@
+Please audit and design deliberate Codex subscription-account switching in ClawDad while preserving the user's working sessions. This is an audit and planning task. Return an evidence-backed implementation proposal for our review before changing product behavior, switching real accounts, or stopping any working agents.
+
+Desired experience
+
+I use more than one subscription account and want to choose which account supplies Codex access. In the weekly-allowance info popover, show the verified active account email and workspace, remaining allowance and reset time, plus a clear account selector or Switch account control. When an account is exhausted, offer the same deliberate switching flow. Allow switching before exhaustion as well. Do not automatically cycle accounts. Keep subscription allowance and separately billed API credits distinct; switching must not silently enable API billing.
+
+My goal is to preserve the same Terminal windows, ordered tabs, actual project directories, exact Codex conversations, model and reasoning-effort choices, and unsent work. Prefer keeping the Terminal windows and tabs open. Restart only the Codex processes that genuinely require it. Determine feasibility from the installed implementation rather than assuming logging in once updates every running process or that every thread can resume under another account.
+
+Start with the existing architecture
+
+Read applicable instructions, inspect repository/worktree status and reconcile recent ClawDad changes. Preserve unrelated work and concurrent agent lanes. Review current official Codex authentication documentation and the installed Codex version, supported CLI and app-server interfaces. Reference: https://learn.chatgpt.com/docs/auth . Document observed behavior separately from documentation and proposed design.
+
+Map authentication ownership across native Terminal agents, app-server project threads, the main Assistant coordinator, independent research supervisors, and usage reporting. Determine which processes share credentials, which cache credentials in memory, and whether account changes require a reload or restart. Identify any managed workspace restrictions. Do not inspect or print secret values unnecessarily, invent an unsupported account-switch API, or assume a ChatGPT browser account switch changes Codex authentication.
+
+Determine whether supported credential storage can safely retain multiple authenticated accounts and let the user select one. If the supported flow requires browser sign-in each time, explain that limitation plainly. Use supported authentication and secure credential storage; never place tokens, passwords or recovery codes in snapshots, reports or source control. Explain account identity versus workspace identity and how to verify the account actually serving each process.
+
+Preserving work and conversation identity
+
+Audit existing manual Terminal snapshots and restoration before proposing new storage. A switch recovery record must be separate from named snapshots and must not overwrite a manually saved setup or reinstate automatic workspace saving.
+
+Specify how to record and verify each affected window/tab, directory, exact thread ID, process owner, model, reasoning effort, unsent text/images, pending request receipts and native queue entries. Establish what can actually be recovered. A saved thread ID alone is not proof that drafts, pending queues or in-flight work survive a restart. If a particular state cannot be recovered reliably, defer switching that session or present the precise limitation before any destructive step.
+
+Verify whether locally retained conversations can resume under a different subscription account without losing history, changing ownership unexpectedly or crossing workspace access/data boundaries. Preserve Terminal-owned versus app-server-owned transport. Never silently migrate a conversation, substitute a new thread, duplicate a window, replay a submitted message or reconstruct an uncertain queue from guesses.
+
+Proposed switching sequence
+
+Design a recoverable sequence: inspect current state, preview affected sessions, hold new dispatch, preserve recovery evidence, authenticate and verify the destination account, transition only the required processes, verify exact restored conversations and fresh allowance, then let the user continue work. Determine the correct ordering experimentally; authenticate the replacement before disrupting existing sessions when the supported interfaces permit it.
+
+Let active turns finish by default. If exhaustion has left an interrupted turn, distinguish accepted work, partial execution and unsent work before deciding how to resume. Explicitly describe any step that would stop active work. Repeated clicks, reconnects and retries must reuse durable request identities and must not repeat side effects.
+
+The switching controller must survive restarting the Assistant or app-server processes it manages. Define behavior for login cancellation, authentication failure, expired credentials, unavailable models, network loss, Mac restart, partial multi-tab restoration and rollback. Show per-session progress and leave a usable recovery path. Do not declare success while some sessions still use the previous account.
+
+Usage and autonomy
+
+Refresh allowance for the verified destination account and show its own reset time. Distinguish a rounded 0% display, stale data, short-window throttling and actual weekly exhaustion. Unknown allowance must remain visibly unknown.
+
+Preserve the existing 20%-remaining research-supervisor stopping policy and its recorded authorizations. Switching accounts must not silently resume paused or stopped supervisors, transfer an old account's exception to a new account, or reset historical usage. Propose the exact account-scoped budget behavior for review, including what happens to already-running work and pending continuations.
+
+Verification plan
+
+Prepare a disposable test plan before touching real working sessions. Cover idle and busy Terminal agents, shell-only tabs, app-server threads, main-Assistant work, held drafts, attached images, queued messages, account exhaustion, failed login, duplicate clicks, restart during switching and partial recovery. Verify exact histories and message identities, no lost or duplicate accepted work, correct account attribution, settings preservation and unchanged manual snapshots.
+
+The audit may use read-only inspection and offline synthetic tests that do not change authentication or interrupt sessions. A live two-account experiment requires a reviewed plan and explicit authorization for the accounts and disposable sessions involved. Do not log out the current account, stop agents, change credentials, publish, release or spend under this audit task.
+
+Deliverables
+
+Provide a concise explanation Cody can understand, an architecture and authentication map with evidence, a feasibility table separating supported behavior from unresolved questions, the proposed interface and switching sequence, recovery/rollback design, acceptance tests, and a bounded implementation prompt for the next approved phase. Identify the smallest useful first version and any decisions genuinely required from Cody. Save the findings in canonical project reports, classify workspace changes, and leave a clear continuation checkpoint. Implementation remains held for review.
+
+
+Current clarification and primary audit question
+
+Cody now authorizes sending this audit/discovery task. Focus initially on Codex with OpenAI subscription authentication. Classify every proposed switching step as deterministic application/CLI/app-server code, supported browser automation, AI-assisted computer use, or user-owned authentication. Explain why AI is needed for any step rather than assuming that all browser interaction needs a model. Investigate supported browser and device-code login, existing browser sessions, account selection, consent, MFA/passkeys and callback verification without logging anyone out or changing live authentication.
+
+Prefer a deterministic recovery controller that still operates at zero model allowance. If an AI-assisted computer-use fallback is genuinely useful, describe which authenticated runtime/account supplies it, its failure modes, and how to recover when that runtime is exhausted, unavailable or itself being restarted. User authentication challenges must retain their supported interaction; do not promise unattended completion.
+
+Evaluate Cody's idea of offering a switch near 1% or 2% remaining. Treat both as candidate thresholds for analysis, not authorization to change current budgets or automatically switch. Establish available quota precision, staleness, short-window limits, concurrent consumption and variability of computer-use costs. Never claim a percentage guarantees enough processing to finish authentication. Recommend whether a warning, user-selectable reserve or deterministic zero-allowance path is best, and keep the existing 20% research-supervisor pause separate. Do not spend down allowance to test exhaustion.
+
+Produce a step-by-step feasibility matrix, recommended first-version flow and concise plain-language findings, including exactly which steps Cody may need to complete. Save this full received prompt with your report and the revised next-phase implementation prompt. Use read-only inspection and bounded offline fixtures under this audit; live account switching, disruptive session tests and product implementation remain held for review.

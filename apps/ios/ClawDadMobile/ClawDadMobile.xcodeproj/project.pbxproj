@@ -20,6 +20,7 @@
 		275FAABA58CF0436EC6D32FB /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 471CC1C676A805963BAF2F99 /* Assets.xcassets */; };
 		2EFAB0BA46EC3D36BAF2E9A0 /* MobileNotifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97E3CAB4A99E84BAFA945FA2 /* MobileNotifications.swift */; };
 		3031C85399B84CB186BBF471 /* AssistantMessageLinks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A6015610A23A073B93087F9 /* AssistantMessageLinks.swift */; };
+		366C66A2CBA556A482C4EA36 /* CodexAccountsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2557E89BD8854A7A36A3CBCE /* CodexAccountsUITests.swift */; };
 		39F7EDBB4973CC068AC0E2F3 /* RemoteSpeechControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89C609AE055F4F4C09202552 /* RemoteSpeechControls.swift */; };
 		3B51519C1804A2B28C237997 /* CloudModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 395E23F4DD2363BA0762CE4C /* CloudModels.swift */; };
 		3CA091886654915398868F62 /* CloudClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD8DD24D34A3F29E43308A65 /* CloudClient.swift */; };
@@ -55,6 +56,7 @@
 		92590FA64F260AD34017423B /* AssistantListeningInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10F1B258EA5FA2916837629C /* AssistantListeningInput.swift */; };
 		930C8384655B365B43D6B7D6 /* PairedComputer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A248092D559C4CD1B15AECEC /* PairedComputer.swift */; };
 		99A55BE9948DD5DB46281F55 /* SpeechOutputDSP.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16094AA9855EF80736B284A2 /* SpeechOutputDSP.swift */; };
+		9D7B1B35ECE9677123D1BBFC /* CodexAccountsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66116C12D5655071F660BF27 /* CodexAccountsView.swift */; };
 		9FAEDA464727521A0D77839C /* RemoteAssist.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA4FB03C06FF3E3F780BF6B2 /* RemoteAssist.swift */; };
 		A108218C025FA0193F36DE60 /* VoiceSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 088F57A9C660D2D5A01BEF9B /* VoiceSettings.swift */; };
 		A159970E6AA19C6C9444F2D3 /* TerminalWorkspaceCloseView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58F57A6B47B36221EA055386 /* TerminalWorkspaceCloseView.swift */; };
@@ -124,6 +126,7 @@
 		1D7242D152C900A9BC22484E /* ResearchBudgetEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResearchBudgetEditor.swift; sourceTree = "<group>"; };
 		21A33EE26BF9BD9F84918E9F /* FilesLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilesLibraryView.swift; sourceTree = "<group>"; };
 		228FD9D02CC116AFA865D99A /* MobileCrashDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileCrashDiagnostics.swift; sourceTree = "<group>"; };
+		2557E89BD8854A7A36A3CBCE /* CodexAccountsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexAccountsUITests.swift; sourceTree = "<group>"; };
 		26AABBF8F4DF0D8B38BF9365 /* QRScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRScannerView.swift; sourceTree = "<group>"; };
 		28572026C39963DF8D1F01AD /* SpeechOutputPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechOutputPlayer.swift; sourceTree = "<group>"; };
 		29F575EC9D8D541AD658DF6B /* AssistantMicrophoneState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantMicrophoneState.swift; sourceTree = "<group>"; };
@@ -146,6 +149,7 @@
 		58F57A6B47B36221EA055386 /* TerminalWorkspaceCloseView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalWorkspaceCloseView.swift; sourceTree = "<group>"; };
 		5D38D459495C632F08CA5FC7 /* RemoteSpecialKeysUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteSpecialKeysUITests.swift; sourceTree = "<group>"; };
 		658C2545BFF09ADE9DFDD902 /* AssistantVoiceTranscription.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantVoiceTranscription.swift; sourceTree = "<group>"; };
+		66116C12D5655071F660BF27 /* CodexAccountsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexAccountsView.swift; sourceTree = "<group>"; };
 		6C8B178EFE4C52CC4F261077 /* AssistantReplyAudio.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantReplyAudio.swift; sourceTree = "<group>"; };
 		6FF0AAFFEE2B3F518ABC947D /* AssistantMicrophoneConfirmation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantMicrophoneConfirmation.swift; sourceTree = "<group>"; };
 		7A3BE7EC4AB5DE28F2E8E4EF /* RemoteSpeechPreviewHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteSpeechPreviewHost.swift; sourceTree = "<group>"; };
@@ -257,6 +261,7 @@
 				D668F2D2DA41C5EF31F820B0 /* ClawDadMobileApp.swift */,
 				FD8DD24D34A3F29E43308A65 /* CloudClient.swift */,
 				395E23F4DD2363BA0762CE4C /* CloudModels.swift */,
+				66116C12D5655071F660BF27 /* CodexAccountsView.swift */,
 				3B8CED3140E0C0FA87EA0782 /* ContentView.swift */,
 				9EF3E28FFA532EBF14FEAF8B /* DeviceIdentity.swift */,
 				21A33EE26BF9BD9F84918E9F /* FilesLibraryView.swift */,
@@ -306,6 +311,7 @@
 			children = (
 				517D29CD52F468A0EE7BA82F /* AssistantUITests.swift */,
 				11E193EDE43AF5D11AADF538 /* ClawDadMobileUITests.swift */,
+				2557E89BD8854A7A36A3CBCE /* CodexAccountsUITests.swift */,
 				9EC6F6153334333CA871B821 /* NotificationDelegateUITests.swift */,
 				0AED4051022C101DAD6FC4F4 /* ProjectReadbackUITests.swift */,
 				5D38D459495C632F08CA5FC7 /* RemoteSpecialKeysUITests.swift */,
@@ -506,6 +512,7 @@
 				FDBB6FDF3DE4BE0AA407E4F7 /* ClawDadMobileApp.swift in Sources */,
 				3CA091886654915398868F62 /* CloudClient.swift in Sources */,
 				3B51519C1804A2B28C237997 /* CloudModels.swift in Sources */,
+				9D7B1B35ECE9677123D1BBFC /* CodexAccountsView.swift in Sources */,
 				F7211DC300102D784A05D5D1 /* ContentView.swift in Sources */,
 				AB9E3EA912AF86012C19E96F /* DeviceIdentity.swift in Sources */,
 				4CA1BBCCF6A50D70B8EAA6FE /* FilesLibraryView.swift in Sources */,
@@ -555,6 +562,7 @@
 			files = (
 				A579349CC92C8C0E2A9E2C21 /* AssistantUITests.swift in Sources */,
 				854A5AC2401B066B721E86D2 /* ClawDadMobileUITests.swift in Sources */,
+				366C66A2CBA556A482C4EA36 /* CodexAccountsUITests.swift in Sources */,
 				3FB7AB0E368B08E3EAAD1910 /* NotificationDelegateUITests.swift in Sources */,
 				E20F5A457E054D7112A0F695 /* ProjectReadbackUITests.swift in Sources */,
 				AB3D8220A00908D37822FFF1 /* RemoteSpecialKeysUITests.swift in Sources */,

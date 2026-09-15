@@ -145,6 +145,21 @@
       return try JSONDecoder().decode(AssistantSnapshot.self, from: JSONEncoder().encode(state))
     }
     func research(_ action: String, args: [String: AssistantValue], id: String) throws -> [String: AssistantValue] {
+      if action.hasPrefix("accounts.") {
+        var accounts=state["codexAccounts"]?.object ?? ["version":.number(1),"revision":.number(0),"accounts":.array([]),
+          "current":.object(["email":.string("fixture@example.test"),"plan":.string("pro"),"status":.string("current")]),
+          "capabilities":.object(["ready":.bool(false),"reasons":.array([.object(["message":.string("Keeping both Codex accounts signed in independently still needs the isolated two-account verification.")])])])]
+        if action=="accounts.add" {
+          var entries=accounts["accounts"]?.array ?? []
+          if !entries.contains(where:{$0.object?["id"]?.string==id}) { entries.append(.object(["id":.string(id),"email":args["email"] ?? .string("second@example.test"),"workspaceLabel":args["workspaceLabel"] ?? .string(""),"authentication":.string("needs_sign_in")])) }
+          accounts["accounts"] = .array(entries);accounts["revision"] = .number((accounts["revision"]?.number ?? 0)+1)
+        }
+        if action=="accounts.switch" {
+          accounts["activeOperation"] = .object(["id":.string(id),"status":.string("needs_setup"),"fenced":.bool(false),"reason":.string("Live switching needs isolated verification. Current work is preserved.")])
+        }
+        state["codexAccounts"] = .object(accounts)
+        return ["accounts":.object(accounts)]
+      }
       if action.hasPrefix("settings.") { return try modelSettings(action, args: args) }
       if action.hasPrefix("mainworkspace.") {
         if action != "mainworkspace.status",mainWorkspaceJobs[id]==nil {
@@ -173,7 +188,7 @@
       let accountKey = String(repeating: "a", count: 64)
       let now = Date().timeIntervalSince1970 * 1_000
       var budget = research["budget"]?.object ?? [:]
-      var account = budget["accounts"]?.array?.first?.object ?? ["accountKey": .string(accountKey), "threshold": .number(20), "revision": .number(0), "policies": .object([:])]
+      var account = budget["accounts"]?.array?.first?.object ?? ["accountKey": .string(accountKey), "threshold": .null, "revision": .number(0), "policies": .object([:])]
       budget["available"] = .bool(true); budget["currentAccountKey"] = .string(accountKey)
       budget["usage"] = .object(["status": .string("current"), "remainingPercent": .number(50), "validUntil": .number(now + 60_000)])
       if action == "research.enable" || action == "research.configure" {
@@ -193,10 +208,10 @@
       if action == "research.budget" {
         guard args["expectedBudgetRevision"] == account["revision"] else { throw AssistantProtocolError.invalid }
         account["revision"] = .number((account["revision"]?.number ?? 0) + 1)
-        if args["scope"]?.string == "account_default" { account["threshold"] = args["threshold"] }
+        if args["scope"]?.string == "account_default" { throw AssistantProtocolError.invalid }
         else if let threadId = args["threadId"]?.string {
           var policies = account["policies"]?.object ?? [:]
-          policies[threadId] = .object(["mode": args["mode"] ?? .string("default"), "threshold": args["threshold"] ?? .null,
+          policies[threadId] = .object(["mode": args["mode"] ?? .string("none"), "threshold": args["threshold"] ?? .null,
             "expiresAt": .number(now + 86_400_000)])
           account["policies"] = .object(policies)
         }
@@ -204,7 +219,7 @@
       research["threads"] = .array((research["threads"]?.array ?? []).map { value in
         guard var thread = value.object, let id = thread["id"]?.string else { return value }
         let selected = account["policies"]?.object?[id]?.object ?? [:]
-        thread["budgetPolicy"] = .object(selected["mode"]?.string == "override" ? selected : ["mode": .string("default"), "threshold": account["threshold"] ?? .number(20)])
+        thread["budgetPolicy"] = .object(selected["mode"]?.string == "override" ? selected : ["mode": .string("none"), "threshold": .null])
         return .object(thread)
       })
       budget["accounts"] = .array([.object(account)]); research["budget"] = .object(budget)

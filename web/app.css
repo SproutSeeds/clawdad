@@ -5542,6 +5542,15 @@ button.detail-backdrop:focus-visible:not(:disabled) {
 .weekly-usage-dialog::backdrop { background: #000b; }
 .weekly-usage-dialog p { white-space: pre-line; }
 .weekly-usage-dialog button { min-height: 44px; margin: 6px; cursor: pointer; }
+.weekly-usage-dialog { max-height: calc(100dvh - 32px); overflow-y: auto; }
+.weekly-usage-header { position: sticky; top: -24px; z-index: 1; display: flex; align-items: center; gap: 12px; background: #180600; padding-block: 12px; }
+.weekly-usage-header h2 { flex: 1; margin: 0; }
+.weekly-usage-header button { flex: 0 0 auto; width: auto; min-width: 44px; padding-inline: 14px; }
+#codexAccounts summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; }
+#codexAccounts label { display: block; margin-block: 10px; }
+#codexAccounts input { display: block; box-sizing: border-box; width: 100%; min-height: 44px; }
+#codexAccounts section { border-top: 1px solid #795522; padding-block: 12px; overflow-wrap: anywhere; }
+#codexAccounts button:disabled { cursor: default; }
 
 /* Speech boost is an immediately saved output control. */
 #speechBoostValue { text-transform: none; font-variant-numeric: tabular-nums; }

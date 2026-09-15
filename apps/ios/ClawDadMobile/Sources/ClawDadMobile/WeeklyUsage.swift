@@ -29,6 +29,8 @@ struct WeeklyUsageAlert: Codable, Equatable, Identifiable {
 }
 
 struct WeeklyUsage: Codable, Equatable {
+  struct Subscription: Codable, Equatable { let method: String?; let email: String?; let plan: String?; let workspaceName: String? }
+  struct ShortWindow: Codable, Equatable { let remainingPercent: Double; let resetsAt: Double; let windowDurationMins: Int }
   var status: String
   let remainingPercent: Double?
   let resetsAt: Double?
@@ -36,6 +38,9 @@ struct WeeklyUsage: Codable, Equatable {
   let validUntil: Double?
   let message: String?
   let alerts: [WeeklyUsageAlert]
+  var subscription: Subscription? = nil
+  var ordinaryUsageAllowed: Bool? = nil
+  var shortWindow: ShortWindow? = nil
 
   func isCurrent(now: Date = Date()) -> Bool {
     status == "current" && (validUntil ?? 0) > now.timeIntervalSince1970 * 1000 &&
@@ -120,17 +125,28 @@ struct WeeklyUsageButton: View {
 struct WeeklyUsageSheet: View {
   @EnvironmentObject private var session: CloudSession
   @Environment(\.dismiss) private var dismiss
+  @State private var showingAccounts = false
   var body: some View {
     NavigationStack {
       ScrollView {
         TimelineView(.periodic(from: .now, by: 30)) { timeline in
           VStack(alignment: .leading, spacing: 16) {
+            if let identity = session.weeklyUsage?.subscription, let email = identity.email {
+              Text(email).font(.headline).textSelection(.enabled)
+              Text("\(identity.plan ?? "Subscription") · Workspace: \(identity.workspaceName ?? "Not exposed by Codex")").font(.footnote)
+            }
             Text(session.weeklyUsage?.summary(now: timeline.date) ?? "Weekly allowance unavailable").font(.headline)
               .accessibilityIdentifier("clawdad.weeklyUsage.detail-summary")
             Text(session.weeklyUsage?.resetsAt.map { WeeklyUsage.resetText($0) } ?? "Reset time: Not yet available")
               .accessibilityIdentifier("clawdad.weeklyUsage.reset")
             Text(WeeklyUsage.refreshedText(session.weeklyUsage?.observedAt))
               .accessibilityIdentifier("clawdad.weeklyUsage.refreshed")
+            if session.weeklyUsage?.ordinaryUsageAllowed == false {
+              Text("Codex reported that included subscription usage was unavailable at this refresh. A shorter usage window can apply even with weekly allowance remaining.").font(.footnote)
+              if let window = session.weeklyUsage?.shortWindow {
+                Text("Shorter window: \(window.remainingPercent.formatted())% remaining. \(WeeklyUsage.resetText(window.resetsAt))").font(.footnote)
+              }
+            }
             if let explanation = session.weeklyUsage?.readingExplanation(now: timeline.date)
               ?? (session.weeklyUsage == nil ? "A current weekly allowance reading has not arrived from your Mac yet. Connect to your Mac and choose Check allowance to try again." : nil) {
               Text(explanation).accessibilityIdentifier("clawdad.weeklyUsage.explanation")
@@ -139,6 +155,10 @@ struct WeeklyUsageSheet: View {
               Label(alert.title, systemImage: "exclamationmark.triangle").font(.subheadline)
             }
             Button("Check allowance") { session.requestWeeklyUsage() }.frame(minHeight: 44)
+            Button { showingAccounts = true } label: {
+              Text("Codex accounts and switching").frame(minHeight: 44).contentShape(Rectangle())
+            }
+              .accessibilityIdentifier("clawdad.accounts.open")
           }
           .frame(maxWidth: .infinity, alignment: .leading).padding()
         }
@@ -152,6 +172,15 @@ struct WeeklyUsageSheet: View {
         Button("Done") { dismiss() }.frame(minWidth: 44, minHeight: 44).keyboardShortcut(.cancelAction)
       } }
     }.preferredColorScheme(.dark)
+      .sheet(isPresented: $showingAccounts) {
+        NavigationStack {
+          CodexAccountsView()
+            .toolbar { ToolbarItem(placement: .cancellationAction) {
+              Button("Back") { showingAccounts = false }.frame(minWidth: 44, minHeight: 44)
+                .accessibilityLabel("Back to weekly allowance").keyboardShortcut(.cancelAction)
+            } }
+        }.preferredColorScheme(.dark)
+      }
   }
 }
 

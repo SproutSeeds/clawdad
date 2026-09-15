@@ -62,6 +62,19 @@ test('weekly account bucket uses duration, percent-used inversion, and provider 
   assert.throws(() => normalizeWeeklyUsage(value), /single weekly/);
 });
 
+test('account details keep weekly and short windows distinct without inventing workspace identity or denial',()=>{
+  const value=provider(88);value.ordinaryUsageAllowed=false;
+  value.rateLimitsByLimitId.codex.secondary={usedPercent:100,windowDurationMins:300,resetsAt:reset-86400};
+  const parsed=normalizeWeeklyUsage(value,{account:{type:'chatgpt',email:'fixture@example.test',planType:'pro'}});
+  assert.equal(parsed.remainingPercent,12);assert.equal(parsed.shortWindow.remainingPercent,0);
+  assert.equal(parsed.subscription.email,'fixture@example.test');assert.equal(parsed.subscription.plan,'pro');
+  assert.equal(parsed.subscription.workspaceName,null);assert.equal(parsed.subscription.workspaceStatus,'not_exposed');
+  assert.equal(parsed.ordinaryUsageAllowed,false);
+  const older=normalizeWeeklyUsage(provider(100),{account:{type:'chatgpt',email:'fixture@example.test'}});
+  assert.equal(older.remainingPercent,0);assert.equal(older.ordinaryUsageAllowed,null);assert.equal(older.shortWindow,null);
+  assert.equal(normalizeWeeklyUsage(value,{account:{email:'invalid\nidentity',planType:'pro'}}).subscription.email,null);
+});
+
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'clawdad-weekly-'));
   t.after(() => fs.rm(root, {recursive: true, force: true}));

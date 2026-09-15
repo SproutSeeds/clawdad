@@ -115,11 +115,11 @@
         </section>
       </dialog>
       <dialog id="weeklyUsageDialog" class="weekly-usage-dialog" aria-labelledby="weeklyUsageTitle">
-        <h2 id="weeklyUsageTitle">Codex weekly allowance</h2>
+        <header class="weekly-usage-header"><h2 id="weeklyUsageTitle">Codex weekly allowance</h2><button id="weeklyUsageClose" type="button">Done</button></header>
         <p id="weeklyUsageDetail"></p>
+        <details id="codexAccounts"><summary>Codex accounts and switching</summary></details>
         <button id="weeklyUsageRefresh" type="button">Check allowance</button>
         <button id="weeklyUsageNotifications" type="button" hidden>Enable Mac allowance notifications</button>
-        <button id="weeklyUsageClose" type="button">Done</button>
       </dialog>
 
       <form id="dispatchForm" class="composer">
@@ -1399,6 +1399,7 @@
     <div id="assistantCall" class="assistant-call" hidden><button id="assistantReturn" type="button">Messages</button><span id="assistantCallStatus">Listening…</span><button id="assistantMute" type="button">Mute</button><button id="assistantEnd" type="button">End</button></div>
     <script type="module" src="/app.js?v=__CLAWDAD_ASSET_VERSION__"></script>
     <script src="/weekly-usage.js?v=__CLAWDAD_ASSET_VERSION__"></script>
+    <script type="module" src="/codex-accounts.js?v=__CLAWDAD_ASSET_VERSION__"></script>
     <script type="module" src="/main-terminal-workspace.js?v=__CLAWDAD_ASSET_VERSION__"></script>
     <script type="module" src="/assistant.js?v=__CLAWDAD_ASSET_VERSION__"></script>
   </body>
