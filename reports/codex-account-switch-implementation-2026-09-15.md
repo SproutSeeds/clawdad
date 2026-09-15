@@ -2,6 +2,8 @@
 
 Status: scoped implementation and offline verification; production switching remains gated. The next live sign-in experiment is prepared in `codex-account-switch-live-plan-2026-09-15.md` and still requires the separate approval specified by the reviewed first-phase proposal. No real account was switched, no production service or working Terminal agent was restarted, and no native release was installed or published for this change.
 
+Implementation commit: **`5359f51`**, 44 scoped files. Final hygiene: **dirty_classified**, nine preserved unrelated paths, zero unclassified; `git diff --check` passed. `checkpoint.json` and `scoped-paths.json` in the candidate evidence directory record the exact commit and audited path set.
+
 ## Resumed state
 
 Work resumed after Cody reported changing subscription accounts. The branch remained `codex/hermes-hybrid-supervisor-ui`, based on `e84e6d4` (Mac 145 desktop Save setup release). The previously running desktop tests had passed. Existing account work and unrelated dirty paths were preserved; the large-text tests were continued rather than rebuilding the feature.
