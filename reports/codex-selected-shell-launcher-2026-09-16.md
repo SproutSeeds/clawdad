@@ -2,6 +2,8 @@
 
 ## Scope and current checkpoint
 
+**Setup completed September 16, 2026, 16:32 UTC:** Cody finished Dough’s browser sign-in. A separate, newly opened account-only Codex connection then verified retained subscription authentication for `doughalchemy@gmail.com`. All three saved accounts are verified. Mac147 remains installed. No production account switch, profile adoption or existing agent restart was performed. The earlier expired-login evidence below is historical.
+
 Cody authorized the recommended selected-account launcher and continued setup for `doughalchemy@gmail.com`. This work extends the shipped Mac 146 / internal iPhone 95 account controller to future interactive Terminal launches. Existing agents, project drafts, named workspaces and authentication remain unchanged. No global account switch is a test.
 
 The fresh Dough retained-profile sign-in (`connect-doughalchemy-20260916-2`, 15:35:09.755 UTC) expired awaiting Cody's browser completion. Supported verification `verify-doughalchemy-20260916-2` found no retained sign-in. The separate profile remains `needs_sign_in`; the current ordinary CLI's Dough login is a different credential source. No further browser ceremony will be started until Cody is ready.
@@ -39,9 +41,16 @@ Physical iPhone account navigation/VoiceOver and a deliberate whole-workspace ac
 - Fresh supported account-only RPCs at **16:09:52 UTC** verified the original CLI login remains **doughalchemy@gmail.com**, subscription authentication, ordinary usage available. This makes new shells usable immediately under the current default login. ClawDad's separate Dough profile still needs the supported browser sign-in before it can be deliberately selected as a retained account. `selectedRuntime` remains null; no global switch, profile adoption or credential replacement occurred.
 - **iPhone 0.7.0 (95)** remains the relevant internal TestFlight build. This change adds no phone UI and requires no duplicate upload. Physical phone installation/navigation remains unverified in this turn.
 
-The remaining user-owned step is **weekly allowance info → Codex accounts and switching → doughalchemy@gmail.com → Connect account on Mac**, followed by browser completion as that account. The expired request was reconciled; use a fresh sign-in when Cody is ready, then verify retained identity before an explicit switch. Do not sign out the current default account or silently switch running work to finish setup.
+The user-owned sign-in step below is now complete. The desktop control is the expandable **Codex accounts and switching** section inside the weekly allowance dialog; its visibility was verified through the actual Mac accessibility tree. Expanding that section and clicking Dough’s **Connect account on Mac** opened the supported browser account chooser. A future workspace switch remains a distinct, deliberate action; saving the login does not select a new runtime or move running work.
 
 Release receipts are `mac147-install.json`, `installed147-status.json`, `installed147-source.json`, `install147-preservation.json`, `shell-install147.json`, `shell-installed147-verification.json`, `installed147-fresh-shell.txt` and `post147-default-account.json` in the canonical candidate directory. These distinguish installed code, private fixture evidence, current default identity and the still-incomplete Dough retained login.
+
+## Dough retained-login completion
+
+- The actual desktop control started request `8421598a-b0b4-43d5-903b-a1ded1f61746` at **16:26:57.134 UTC**. Cody completed browser sign-in, and the installed service verified subscription identity at **16:28:57.070 UTC**.
+- On Cody’s “finished” confirmation, `accounts.verify_signin` request `verify-dough-retained-8421598a-20260916` opened a separate account-only Codex connection. At **16:32:48.701 UTC**, both `verifiedAt` and `retainedVerifiedAt` were saved with status `verified`, email `doughalchemy@gmail.com`, method `chatgpt`, plan `prolite`, and the same exact account key. This proves the saved authorization can be reopened after the original browser ceremony. No secret values were printed or copied.
+- The actual Assistant HTTP path on port4487 reported all three accounts verified, `activeOperation=null`, and the durable selected runtime remains null. No model turn, session replacement, new authentication ceremony or global account switch occurred during verification. Mac147 / internal iPhone95 remain the applicable versions; this completion requires no release.
+- Evidence: `dough-finished-status.json`, `dough-retained-verification-start.json`, `dough-retained-verified.json` in the canonical candidate directory. Existing physical iPhone and deliberate production workspace-transition checks remain separate from login verification. Do not ask Cody to repeat this completed sign-in.
 
 ## Workspace classification
 
