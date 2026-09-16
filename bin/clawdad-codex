@@ -1,0 +1,11 @@
+#!/usr/bin/env node
+import {launchSelectedCodex} from '../lib/codex-account-shell-launch.mjs';
+
+const [binary,separator,...args]=process.argv.slice(2);
+try{
+  if(separator!=='--')throw Error('Use the installed ClawDad Terminal launcher.');
+  await launchSelectedCodex({binary,args});
+}catch(error){
+  console.error('ClawDad: '+error.message+' No Codex session was started.');
+  process.exitCode=1;
+}

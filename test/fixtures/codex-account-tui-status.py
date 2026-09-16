@@ -14,9 +14,10 @@ import time
 import pexpect
 import pyte
 
-if len(sys.argv) != 3 or sys.argv[1] not in ('cody', 'sun') or not re.fullmatch(r'tui-status-[a-z0-9-]+', sys.argv[2]):
+if len(sys.argv) not in (3,4) or sys.argv[1] not in ('cody', 'sun') or not re.fullmatch(r'tui-status-[a-z0-9-]+', sys.argv[2]) or len(sys.argv)==4 and sys.argv[3] not in ('--selected-shell','--selected-shell-census','--root-options'):
     raise SystemExit('Use cody|sun and a new tui-status-* receipt.')
-profile, name = sys.argv[1:]
+profile, name = sys.argv[1:3]
+selected_shell=len(sys.argv)==4 and sys.argv[3].startswith('--selected-shell')
 base = Path.home() / 'Library/Application Support/ClawDad/Accounts/verification-2026-09-15'
 root = base / 'thread-continuity-1'
 original = json.loads((root / 'evidence.json').read_text())
@@ -43,8 +44,24 @@ args = ['resume', thread, '--cd', str(project), '--no-alt-screen',
         '--model', 'gpt-6-astra', '-c', 'model_reasoning_effort="low"',
         '-c', 'cli_auth_credentials_store="keyring"', '-c', 'sqlite_home=' + json.JSONEncoder().encode(str(root / 'index')),
         '--sandbox', 'read-only', '--ask-for-approval', 'never']
+command='/opt/homebrew/bin/codex'
+if len(sys.argv)==4 and sys.argv[3]=='--root-options':
+    options=[]
+    for setting in ('cli_auth_credentials_store="keyring"','sqlite_home='+json.JSONEncoder().encode(str(root/'index'))):
+        i=args.index(setting);assert args[i-1]=='-c';options+=args[i-1:i+1];del args[i-1:i+1]
+    args=options+args
+    receipt['launchPath']='direct-cli-root-options-control'
+if selected_shell:
+    # The selected launch supplies these exact account/history flags itself.
+    del env['CODEX_HOME']
+    args=args[:]
+    for setting in ('cli_auth_credentials_store="keyring"','sqlite_home='+json.JSONEncoder().encode(str(root/'index'))):
+        i=args.index(setting);assert args[i-1]=='-c';del args[i-1:i+1]
+    command='/Applications/ClawDad.app/Contents/Resources/runtime/bin/node'
+    args=['--disable-warning=ExperimentalWarning',str(Path.cwd()/'test/fixtures/codex-account-shell-launch.mjs'),profile,name,'--',*args]
+    receipt['launchPath']='production-launcher-with-fixture-selected-profile'
 save()
-child = pexpect.spawn('/opt/homebrew/bin/codex', args, cwd=str(project), env=env, encoding='utf-8',
+child = pexpect.spawn(command, args, cwd=str(project), env=env, encoding='utf-8',
                       timeout=25, dimensions=(45, 180))
 receipt['pid'] = child.pid
 save()
@@ -108,6 +125,20 @@ try:
             break
     if receipt['state'] != 'verified_local_status':
         raise RuntimeError('The local status did not expose the expected account.')
+    if len(sys.argv)==4 and sys.argv[3]=='--selected-shell-census':
+        save()
+        deadline=time.monotonic()+40
+        while time.monotonic()<deadline:
+            receive()
+            confirmation=folder/'census-verified.json'
+            if confirmation.exists():
+                confirmed=json.loads(confirmation.read_text())
+                if confirmed.get('pid')!=child.pid or confirmed.get('state')!='native_launch_observed':
+                    raise RuntimeError('The native launch census did not match this child.')
+                receipt['nativeLaunchVerified']=True
+                break
+        else:
+            raise RuntimeError('The native launch observation timed out.')
 except Exception as error:
     receipt['state'] = 'needs_attention'
     receipt['failure'] = str(error)
