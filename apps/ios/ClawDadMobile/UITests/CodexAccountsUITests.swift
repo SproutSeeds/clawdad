@@ -55,6 +55,14 @@ import XCTest
     let saved = app.staticTexts["second@example.test"]
     reveal(saved, earlier: true, actionable: false)
     XCTAssertTrue(saved.waitForExistence(timeout: 5), app.debugDescription)
+    let connect = app.buttons["clawdad.accounts.connect"]
+    reveal(connect)
+    // XCTest can report a 44-point SwiftUI frame as 43.99999999999994.
+    XCTAssertGreaterThanOrEqual(connect.frame.height, 44 - 0.01)
+    connect.tap()
+    let verified = app.staticTexts["Saved subscription sign-in verified"]
+    reveal(verified, earlier: true, actionable: false)
+    XCTAssertTrue(verified.waitForExistence(timeout: 5))
     let select = app.buttons["Prepare account switch"]
     reveal(select); select.tap()
     let status = app.staticTexts["Live switching needs isolated verification. Current work is preserved."]

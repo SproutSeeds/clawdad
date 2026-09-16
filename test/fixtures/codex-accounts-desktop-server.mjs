@@ -3,12 +3,30 @@ import path from 'node:path';
 import http from 'node:http';
 import {AssistantRuntime,assistantHttp} from '../../lib/assistant-runtime.mjs';
 import {CodexAccounts} from '../../lib/codex-accounts.mjs';
-const root=process.argv[2];if(!root||!path.basename(root).startsWith('accounts-ui-fixture-'))throw Error('An isolated fixture path is required.');
+import {CodexAccountAuthorizations} from '../../lib/codex-account-authorizations.mjs';
+const selected=process.argv[2];if(!selected||!path.basename(selected).startsWith('accounts-ui-fixture-'))throw Error('An isolated fixture path is required.');
+const root=await fs.realpath(selected);
 const runtime=new AssistantRuntime({root:path.join(root,'Assistant'),coordinator:{stop(){},prepare(){throw Error('Fixture cannot start Codex');}}});
 const usage={snapshot:async()=>({status:'current',accountKey:'a'.repeat(64),remainingPercent:12,resetsAt:2000000000,validUntil:2000000000000,
   observedAt:new Date().toISOString(),alerts:[],subscription:{method:'chatgpt',email:'fixture@example.test',plan:'pro'}})};
 usage.freshReading=usage.snapshot;
 runtime.accounts=new CodexAccounts({root:path.join(root,'Accounts'),usage,inspectConsumers:async()=>({complete:false,consumers:[],reasons:['Synthetic inventory only.']})});
+const saved=new Map();let completeSignIn;
+runtime.accounts.authorizations=new CodexAccountAuthorizations({root:path.join(root,'Accounts'),binary:'/fixture-only/codex',
+  open:async()=>queueMicrotask(()=>completeSignIn()),createProcess:({home})=>{
+    const id=path.basename(home),listeners=new Set();
+    return {connect:async()=>{},verifyStorage:async()=>{},close(){},subscribe(fn){listeners.add(fn);return()=>listeners.delete(fn);},
+      async request(method){
+        if(method==='account/read')return {account:saved.has(id)?{type:'chatgpt',email:saved.get(id),planType:'pro'}:null};
+        if(method==='account/rateLimits/read')return {accountId:id,rateLimits:{limitId:'codex',primary:{windowDurationMins:10080,usedPercent:88,resetsAt:2000000000}}};
+        if(method==='account/login/start'){
+          const account=await runtime.accounts.transaction(s=>s.accounts.find(a=>a.id===id));
+          completeSignIn=()=>{saved.set(id,account.email);for(const fn of listeners)fn({method:'account/login/completed',params:{loginId:id,success:true}});};
+          return {type:'chatgpt',loginId:id,authUrl:'https://auth.openai.com/fixture-only'};
+        }
+        throw Error('Only synthetic account reads and sign-in are available');
+      }};
+  }});
 await runtime.load();let requests=[];
 const page=await fs.readFile(new URL('../../web/index.html',import.meta.url),'utf8');
 const dialog=page.match(/<dialog id="weeklyUsageDialog"[\s\S]*?<\/dialog>/)?.[0];

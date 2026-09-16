@@ -24,7 +24,11 @@ import WebKit
     try await wait(view,"document.getElementById('codexAccounts').textContent.includes('fixture@example.test')")
     try await view.evaluateJavaScript("const fields=document.querySelectorAll('#codexAccounts input');fields[0].value='second@example.test';fields[0].dispatchEvent(new Event('input'));fields[1].value='Personal';document.querySelector('#codexAccounts details').open=true")
     try await view.evaluateJavaScript("const save=[...document.querySelectorAll('button')].find(b=>b.textContent==='Save account entry');save.click();save.click()")
-    try await wait(view,"document.getElementById('codexAccounts').textContent.includes('First sign-in required')")
+    try await wait(view,"document.getElementById('codexAccounts').textContent.includes('First sign-in or verification required')")
+    try await view.evaluateJavaScript("[...document.querySelectorAll('button')].find(b=>b.textContent==='Connect account on Mac').click()")
+    try await wait(view,"document.getElementById('codexAccounts').textContent.includes('Saved subscription sign-in verified')")
+    try await view.evaluateJavaScript("[...document.querySelectorAll('button')].find(b=>b.textContent==='Check saved sign-in').click()")
+    try await wait(view,"!document.getElementById('codexAccounts').getAttribute('aria-busy') || document.getElementById('codexAccounts').getAttribute('aria-busy')==='false'")
     try await view.evaluateJavaScript("[...document.querySelectorAll('button')].find(b=>b.textContent==='Prepare account switch').click()")
     try await wait(view,"document.getElementById('codexAccounts').textContent.includes('Existing Terminal and app-server processes')")
     for width in [390,980] {
@@ -56,6 +60,7 @@ import WebKit
     XCTAssertEqual((state["activeOperation"] as? [String:Any])?["status"] as? String,"needs_setup")
     XCTAssertEqual((state["activeOperation"] as? [String:Any])?["fenced"] as? Bool,false)
     XCTAssertEqual((evidence["requests"] as? [[String:Any]])?.filter{$0["action"] as? String=="accounts.add"}.count,1)
+    XCTAssertEqual((evidence["requests"] as? [[String:Any]])?.filter{$0["action"] as? String=="accounts.signin"}.count,1)
   }
   private func wait(_ view:WKWebView,_ condition:String) async throws {
     for _ in 0..<120 {if (try? await view.evaluateJavaScript(condition)) as? Bool==true{return};try await Task.sleep(for:.milliseconds(50))}

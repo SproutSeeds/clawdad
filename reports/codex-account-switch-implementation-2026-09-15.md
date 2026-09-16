@@ -1,5 +1,7 @@
 # Codex account switching — implementation checkpoint
 
+Continuation: this is the first-phase checkpoint. Cody subsequently approved the discussed account-only experiment and further implementation. See [stage two](codex-account-switch-stage-two-2026-09-15.md) for actual connection/recovery controls and current evidence. References below to an unstarted experiment or pending initial approval are historical: the first attempt ran and timed out without a saved account.
+
 Status: scoped implementation and offline verification; production switching remains gated. The next live sign-in experiment is prepared in `codex-account-switch-live-plan-2026-09-15.md` and still requires the separate approval specified by the reviewed first-phase proposal. No real account was switched, no production service or working Terminal agent was restarted, and no native release was installed or published for this change.
 
 Implementation commit: **`5359f51`**, 44 scoped files. Final hygiene: **dirty_classified**, nine preserved unrelated paths, zero unclassified; `git diff --check` passed. `checkpoint.json` and `scoped-paths.json` in the candidate evidence directory record the exact commit and audited path set.

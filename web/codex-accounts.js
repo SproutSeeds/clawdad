@@ -25,14 +25,33 @@ export function codexAccountsPanel(root,{request=async body=>{
     status.textContent=state?.activeOperation?.reason||state?.capabilities?.reasons?.map(r=>r.message).join(' ')||'';
     list.replaceChildren();
     for(const account of state?.accounts||[]){
-      const row=el('section'),name=el('strong',account.email),label=el('p',account.workspaceLabel?`${account.workspaceLabel} · label supplied by you`:'Workspace will be verified during sign-in');
-      const auth=el('p',account.authentication==='verified'?'Authorization verified':'First sign-in required');
+      const row=el('section'),name=el('strong',account.email),label=el('p',account.workspaceLabel?`${account.workspaceLabel} · label supplied by you`:'Codex does not provide a workspace name here.');
+      const authorization=account.authorization,signIn=authorization?.operation;
+      const auth=el('p',account.authentication==='verified'?'Saved subscription sign-in verified':'First sign-in or verification required');
+      row.append(name,label,auth);
+      if(authorization?.verifiedAt)row.append(el('p',`Last checked: ${new Date(authorization.verifiedAt).toLocaleString()}`));
+      if(signIn?.reason)row.append(el('p',signIn.reason));
+      const connecting=['checking','starting','awaiting_user','cancelling'].includes(signIn?.status);
+      if(state.canConnectAccounts){
+        const connect=button(account.authentication==='verified'?'Check saved sign-in':'Connect account on Mac',()=>send(
+          account.authentication==='verified'?'accounts.verify_signin':'accounts.signin',{accountId:account.id,confirmed:true}));
+        connect.disabled=busy||!!pending||connecting;row.append(connect);
+        if(account.authentication!=='verified'){
+          const check=button('Check saved sign-in',()=>send('accounts.verify_signin',{accountId:account.id}));
+          check.disabled=busy||!!pending||connecting;row.append(check);
+          if(signIn?.status==='needs_check'||signIn?.status==='needs_attention'){
+            const reconnect=button('Reconnect account on Mac',()=>send('accounts.signin',{accountId:account.id,confirmed:true,reauthenticate:true}));
+            reconnect.disabled=busy||!!pending||connecting;row.append(reconnect);
+          }
+        }
+        if(connecting)row.append(button('Cancel sign-in',()=>send('accounts.cancel_signin',{operationId:signIn.requestId})));
+      }
       const inspect=button('Review affected sessions',async()=>{
         try{const result=await request({action:'accounts.preview',accountId:account.id});preview=result.accountPreview;error.textContent='';render();}
         catch(e){error.textContent=e.message;}
       });
       const select=button(state?.capabilities?.ready?'Switch to this account':'Prepare account switch',()=>send('accounts.switch',{accountId:account.id,expectedRevision:state.revision,confirmed:true}));
-      inspect.disabled=busy||!!pending;select.disabled=busy||!!pending;row.append(name,label,auth,inspect,select);list.append(row);
+      inspect.disabled=busy||!!pending;select.disabled=busy||!!pending;row.append(inspect,select);list.append(row);
     }
     if(preview){const box=el('details'),label=el('summary','Affected sessions');box.open=true;box.append(label);
       for(const c of preview.observation?.consumers||[])box.append(el('p',`${c.title||c.kind}${c.sessionId?' · '+c.sessionId:''}\n${c.reason||''}`));
@@ -50,9 +69,15 @@ export function codexAccountsPanel(root,{request=async body=>{
     catch(e){error.textContent=e.message+' Your pending selection is retained; Retry uses the same request.';}
     finally{busy=false;render();}
   }
-  async function load(){if(busy)return;try{const result=await request({action:'accounts.status'});state=result.accounts;render();}catch(e){error.textContent=e.message;}}
+  async function load(){if(busy)return;try{const result=await request({action:'accounts.status'});
+    if(JSON.stringify(state)!==JSON.stringify(result.accounts)){state=result.accounts;render();}
+  }catch(e){error.textContent=e.message;}}
+  // Poll only an open panel with a pending ceremony. Rendering never starts
+  // authentication; the Mac owns completion after the panel closes.
+  const poll=setInterval(()=>{if(root.isConnected&&root.open!==false&&!busy&&!pending
+    &&state?.accounts?.some(a=>['checking','starting','awaiting_user','cancelling'].includes(a.authorization?.operation?.status)))void load();},1500);
   email.oninput=render;workspace.oninput=render;
-  return {load,render};
+  return {load,render,dispose:()=>clearInterval(poll)};
 }
 
 const root=document.getElementById('codexAccounts');

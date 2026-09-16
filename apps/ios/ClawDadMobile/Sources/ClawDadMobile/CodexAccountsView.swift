@@ -34,7 +34,28 @@ struct CodexAccountsView: View {
             if let workspace = account["workspaceLabel"]?.string, !workspace.isEmpty {
               Text("\(workspace) · label supplied by you").font(.footnote)
             }
-            Text(account["authentication"]?.string == "verified" ? "Authorization verified" : "First sign-in required").font(.footnote)
+            let authorization = account["authorization"]?.object ?? [:]
+            let signIn = authorization["operation"]?.object ?? [:]
+            let connecting = ["checking", "starting", "awaiting_user", "cancelling"].contains(signIn["status"]?.string ?? "")
+            let verified = account["authentication"]?.string == "verified"
+            Text(verified ? "Saved subscription sign-in verified" : "First sign-in or verification required").font(.footnote)
+            if let reason = signIn["reason"]?.string { Text(reason).font(.footnote).accessibilityIdentifier("clawdad.accounts.signinStatus") }
+            if state["canConnectAccounts"]?.bool == true {
+              accountButton(verified ? "Check saved sign-in" : "Connect account on Mac") {
+                perform(verified ? "accounts.verify_signin" : "accounts.signin", args: ["accountId": account["id"] ?? .null, "confirmed": .bool(true)])
+              }.disabled(connecting).accessibilityIdentifier("clawdad.accounts.connect")
+              if !verified {
+                accountButton("Check saved sign-in") { perform("accounts.verify_signin", args: ["accountId": account["id"] ?? .null]) }.disabled(connecting)
+                if ["needs_check", "needs_attention"].contains(signIn["status"]?.string ?? "") {
+                  accountButton("Reconnect account on Mac") {
+                    perform("accounts.signin", args: ["accountId": account["id"] ?? .null, "confirmed": .bool(true), "reauthenticate": .bool(true)])
+                  }.disabled(connecting)
+                }
+              }
+              if connecting {
+                accountButton("Cancel sign-in") { perform("accounts.cancel_signin", args: ["operationId": signIn["requestId"] ?? .null]) }
+              }
+            }
             accountButton("Review affected sessions") { inspect(account) }.frame(minHeight: 44)
             accountButton(state["capabilities"]?.object?["ready"]?.bool == true ? "Switch to this account" : "Prepare account switch") {
               perform("accounts.switch", args: ["accountId": account["id"] ?? .null, "expectedRevision": state["revision"] ?? .number(0), "confirmed": .bool(true)])
@@ -101,6 +122,12 @@ struct CodexAccountsView: View {
     .task {
       if let data = UserDefaults.standard.data(forKey: pendingKey) { pending = try? JSONDecoder().decode([String: AssistantValue].self, from: data) }
       await load()
+      while !Task.isCancelled {
+        do { try await Task.sleep(for: .milliseconds(1500)) } catch { break }
+        if entries.contains(where: { ["checking", "starting", "awaiting_user", "cancelling"].contains($0["authorization"]?.object?["operation"]?.object?["status"]?.string ?? "") }) {
+          await load()
+        }
+      }
     }
   }
   private func accountButton(_ title: String, action: @escaping () -> Void) -> some View {

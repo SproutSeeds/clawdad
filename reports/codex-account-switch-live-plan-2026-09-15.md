@@ -1,6 +1,6 @@
 # Isolated account authorization check
 
-Status: prepared for Cody's review. No live sign-in has been started. The two emails below are Cody's supplied test accounts; the experiment itself remains awaiting the explicit approval required by the reviewed first-phase prompt.
+Status: Cody approved proceeding with the discussed plan on September 15: “ok I like this plan. lets fully investigate and plan exactly what we are going to do and how we are going to implement this. and then implement and let me know if you need me for any decisive steps.” The account-only `cody` check began at 2026-09-16T00:23Z. Browser account selection, consent and authentication remain user-owned. This approval does not authorize disrupting existing work or treating unverified session transitions as successful.
 
 ## Exact first check
 
@@ -21,7 +21,7 @@ The controller needs no model allowance. Browser handoff and account RPCs are de
 
 ## Reviewed commands
 
-The runner is `test/fixtures/codex-account-login-check.mjs`. It is outside the application runtime and refuses invocation without the explicit isolated-signin flag. These commands must not run until this plan is approved:
+The runner is `test/fixtures/codex-account-login-check.mjs`. It is outside the application runtime and refuses invocation without the explicit isolated-signin flag. The account-only plan is now approved; each command still needs its original receipt reconciled before any retry:
 
 ```sh
 node test/fixtures/codex-account-login-check.mjs signin cody codyshanemitchell@gmail.com account-check-cody-1 --user-approved-isolated-signin

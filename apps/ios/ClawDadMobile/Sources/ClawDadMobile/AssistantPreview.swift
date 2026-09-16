@@ -147,6 +147,7 @@
     func research(_ action: String, args: [String: AssistantValue], id: String) throws -> [String: AssistantValue] {
       if action.hasPrefix("accounts.") {
         var accounts=state["codexAccounts"]?.object ?? ["version":.number(1),"revision":.number(0),"accounts":.array([]),
+          "canConnectAccounts":.bool(true),
           "current":.object(["email":.string("fixture@example.test"),"plan":.string("pro"),"status":.string("current")]),
           "capabilities":.object(["ready":.bool(false),"reasons":.array([.object(["message":.string("Keeping both Codex accounts signed in independently still needs the isolated two-account verification.")])])])]
         if action=="accounts.add" {
@@ -156,6 +157,16 @@
         }
         if action=="accounts.switch" {
           accounts["activeOperation"] = .object(["id":.string(id),"status":.string("needs_setup"),"fenced":.bool(false),"reason":.string("Live switching needs isolated verification. Current work is preserved.")])
+        }
+        if action=="accounts.signin" || action=="accounts.verify_signin" {
+          accounts["accounts"] = .array((accounts["accounts"]?.array ?? []).map { value in
+            var entry=value.object ?? [:]
+            if entry["id"]?.string==args["accountId"]?.string {
+              entry["authentication"] = .string("verified")
+              entry["authorization"] = .object(["operation":.object(["requestId":.string(id),"status":.string("verified"),"reason":.string("Fixture sign-in verified. Existing agents have not been switched.")])])
+            }
+            return .object(entry)
+          })
         }
         state["codexAccounts"] = .object(accounts)
         return ["accounts":.object(accounts)]
