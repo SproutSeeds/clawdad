@@ -63,3 +63,14 @@ test('success requires preparation and complete journal validation survives serv
   await fs.writeFile(f.control.file,JSON.stringify(state));
   await assert.rejects(f.open().poll({workerId:'worker'}),{code:'native_account_journal_invalid'});
 });
+test('cancellation revokes unprepared actions and waits for a prepared capture to restore its draft',async t=>{
+  const f=await fixture(t);await f.control.enqueue({...request,action:'status'});
+  const first=(await f.control.poll({workerId:'worker'})).job;
+  assert.equal(await f.control.settleCancellation(request.operationId),true);
+  await assert.rejects(f.control.prepare(context(first)),{code:'native_account_dispatch_uncertain'});
+  await f.control.enqueue({...request,requestId:'second',action:'status'});
+  const second=(await f.control.poll({workerId:'worker'})).job;await f.control.prepare(context(second));f.pause();
+  assert.equal(await f.control.settleCancellation(request.operationId),false);
+  await f.control.complete({...context(second),result:{draft:{text:'preserved'},settingsVerified:true}});
+  assert.equal(await f.control.settleCancellation(request.operationId),true);
+});

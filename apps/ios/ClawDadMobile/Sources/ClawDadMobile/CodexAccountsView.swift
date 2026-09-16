@@ -79,6 +79,9 @@ struct CodexAccountsView: View {
       }.disabled(busy || pending != nil)
       if let preview {
         Section("Affected sessions") {
+          ForEach(Array((preview["observation"]?.object?["reasons"]?.array ?? []).enumerated()), id: \.offset) { _, reason in
+            if let text = reason.string { Text(text).font(.footnote) }
+          }
           ForEach(Array((preview["observation"]?.object?["consumers"]?.array ?? []).enumerated()), id: \.offset) { _, item in
             if let consumer = item.object {
               VStack(alignment: .leading) {
@@ -97,8 +100,15 @@ struct CodexAccountsView: View {
           }
         }
         if operation["fenced"]?.bool == true {
-          accountButton("Cancel switch") { perform("accounts.cancel", args: ["operationId": operation["id"] ?? .null]) }.frame(minHeight: 44)
+          if operation["cancelRequested"]?.bool == true {
+            accountButton("Continue original switch") { perform("accounts.continue", args: ["operationId": operation["id"] ?? .null, "confirmed": .bool(true)]) }
+          } else {
+            accountButton("Cancel switch") { perform("accounts.cancel", args: ["operationId": operation["id"] ?? .null]) }.frame(minHeight: 44)
+          }
           accountButton("Check recovery") { perform("accounts.reconcile") }.frame(minHeight: 44)
+        }
+        if let retained = operation["retainedReceipts"]?.array, !retained.isEmpty {
+          Text("\(retained.count) earlier delivery receipts remain saved for review. Account switching will not retry those messages.").font(.footnote)
         }
         if busy { ProgressView("Checking account…") }
         if !error.isEmpty { Text(error).foregroundStyle(.yellow).accessibilityIdentifier("clawdad.accounts.error") }
@@ -124,7 +134,7 @@ struct CodexAccountsView: View {
       await load()
       while !Task.isCancelled {
         do { try await Task.sleep(for: .milliseconds(1500)) } catch { break }
-        if entries.contains(where: { ["checking", "starting", "awaiting_user", "cancelling"].contains($0["authorization"]?.object?["operation"]?.object?["status"]?.string ?? "") }) {
+        if operation["fenced"]?.bool == true || entries.contains(where: { ["checking", "starting", "awaiting_user", "cancelling"].contains($0["authorization"]?.object?["operation"]?.object?["status"]?.string ?? "") }) {
           await load()
         }
       }

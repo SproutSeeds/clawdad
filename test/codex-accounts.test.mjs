@@ -46,6 +46,12 @@ test('shipped capability gate saves a recoverable choice without authenticating,
   assert.equal((await f.controller.snapshot()).accounts[0].authentication,'needs_sign_in');
   assert.equal((await fs.stat(f.controller.file)).mode&0o777,0o600);
 });
+test('an unsigned additional account is rejected before holding current work',async t=>{
+  const f=await fixture(t);f.controller.authorizations={snapshot:async()=>({profiles:[{accountId:f.entry.id,authentication:'needs_sign_in'}]})};
+  const response=await f.controller.control('accounts.switch',{accountId:f.entry.id,requestId:'unsigned',expectedRevision:1,confirmed:true});
+  assert.equal(response.accountReceipt.accepted,false);assert.match(response.accountReceipt.error,/Connect this account/);
+  assert.equal((await f.controller.admission()).allowed,true);assert.equal(response.accounts.activeOperation,null);assert.deepEqual(f.calls,[]);
+});
 test('single selection at zero allowance runs deterministic transition, preserves exact draft and does not call a model',async t=>{
   const f=await fixture(t);await f.request();assert.equal((await f.controller.admission()).allowed,false);
   await f.controller.advance();const state=await f.controller.snapshot();
@@ -53,6 +59,16 @@ test('single selection at zero allowance runs deterministic transition, preserve
   assert.equal(state.activeOperation.recovery.entries[0].draft.text,'Kept draft 🌿\nSecond line');
   assert.equal(state.activeOperation.consumers[0].sessionId,thread);
   assert.deepEqual(f.calls,['authenticate','transition:terminal-A']);assert.equal((await f.controller.admission()).allowed,true);
+});
+test('a delayed shared ownership release remains waiting and reconciles the original transition after restart',async t=>{
+  const f=await fixture(t);let released=false,dispatched=0,reconciled=0;
+  f.adapter.transition=async()=>{dispatched++;return {state:'waiting',reasonCode:'shared_threads_releasing'};};
+  f.adapter.reconcileTransition=async({consumer})=>{reconciled++;return released?{state:'verified',sessionId:consumer.sessionId,accountKey:b,ownerVerified:true,draftVerified:true}:
+    {state:'waiting',reasonCode:'shared_threads_releasing'};};
+  await f.request();await f.controller.advance();
+  assert.equal((await f.controller.snapshot()).activeOperation.status,'waiting');assert.equal((await f.controller.admission()).allowed,false);
+  const restored=new CodexAccounts(f.options);await restored.advance();assert.equal(dispatched,1);assert.equal(reconciled,1);
+  released=true;await restored.advance();assert.equal((await restored.snapshot()).activeOperation.status,'completed');assert.equal(dispatched,1);
 });
 test('a verified selected launch is published only with complete transition and survives restart without leaking into earlier work',async t=>{
   const f=await fixture(t),root=await fs.realpath(f.root),canonical=path.join(root,'canonical'),home=path.join(root,'saved-profile');
@@ -177,6 +193,18 @@ test('cancellation after uncertain authentication never claims credentials staye
   await f.request();await f.controller.advance();const cancelled=await f.controller.cancel({operationId:'switch',requestId:'cancel'});
   assert.equal(cancelled.status,'needs_attention');assert.equal(cancelled.reasonCode,'cancel_requires_reconciliation');
   assert.equal((await f.controller.admission()).allowed,false);await f.controller.advance();assert.deepEqual(f.calls,[]);
+});
+test('explicit continuation after partial cancellation reconciles the original effects without repeating a dispatch',async t=>{
+  const f=await fixture(t);let complete=false,starts=0;
+  f.adapter.transition=async()=>{starts++;throw Error('acknowledgment lost');};
+  f.adapter.reconcileTransition=async({consumer})=>({state:complete?'verified':'uncertain',sessionId:consumer.sessionId,accountKey:b,ownerVerified:true,draftVerified:true});
+  await f.request();await f.controller.advance();assert.equal(starts,1);
+  await f.controller.cancel({operationId:'switch',requestId:'cancel'});
+  await f.controller.advance();assert.equal(starts,1);assert.equal((await f.controller.admission()).allowed,false);
+  const args={operationId:'switch',requestId:'continue-original',confirmed:true};
+  await assert.rejects(f.controller.continueSwitch({...args,confirmed:false}),/Explicitly/);
+  complete=true;await f.controller.continueSwitch(args);await f.controller.continueSwitch(args);
+  await new CodexAccounts(f.options).advance();assert.equal((await f.controller.snapshot()).activeOperation.status,'completed');assert.equal(starts,1);
 });
 test('cancel recovery releases held work only after read-only verification of every original owner and receipt',async t=>{
   const f=await fixture(t);f.adapter.authenticate=async()=>{throw Error('Callback lost');};

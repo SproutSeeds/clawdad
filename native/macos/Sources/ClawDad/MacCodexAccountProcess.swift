@@ -12,6 +12,7 @@ struct MacCodexAccountProcess {
     var home: String?
     var alternateAuthentication: Bool
     var accountTransitionId: String?
+    var accountLaunchRequestId: String?
   }
 
   static func facts(_ data: Data) -> Facts? {
@@ -37,6 +38,9 @@ struct MacCodexAccountProcess {
       let transitionPrefix="CLAWDAD_ACCOUNT_TRANSITION_ID="
       if entry.starts(with:transitionPrefix.utf8),let text=String(data:entry.dropFirst(transitionPrefix.utf8.count),encoding:.utf8),
         text.range(of:#"^[A-Za-z0-9_.:-]{1,160}$"#,options:.regularExpression) != nil {value.accountTransitionId=text}
+      let launchPrefix="CLAWDAD_ACCOUNT_LAUNCH_REQUEST_ID="
+      if entry.starts(with:launchPrefix.utf8),let text=String(data:entry.dropFirst(launchPrefix.utf8.count),encoding:.utf8),
+        text.range(of:#"^[a-f0-9]{64}$"#,options:.regularExpression) != nil {value.accountLaunchRequestId=text}
     }
     return value
   }

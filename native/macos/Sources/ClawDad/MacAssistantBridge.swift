@@ -116,7 +116,14 @@ final class MacAssistantBridge {
                   }
                 }
               } catch { complete=false }
-              accountInventory=(request,.object(["id":.string(request),"complete":.bool(complete),"consumers":.array(entries)]))
+              var inventory:[String:AssistantValue]=["id":.string(request),"complete":.bool(complete),"consumers":.array(entries)]
+              do {
+                let owners=try await Task.detached {try MacCodexAccountActivity.allOwners()}.value
+                inventory["processes"] = owners["processes"]
+                inventory["processesObservedAt"] = owners["observedAt"]
+                inventory["processesComplete"] = .bool(true)
+              } catch {inventory["processesComplete"] = .bool(false)}
+              accountInventory=(request,.object(inventory))
             }
             observation["accountInventory"] = accountInventory?.value
           }

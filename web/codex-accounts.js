@@ -56,8 +56,11 @@ export function codexAccountsPanel(root,{request=async body=>{
     if(preview){const box=el('details'),label=el('summary','Affected sessions');box.open=true;box.append(label);
       for(const c of preview.observation?.consumers||[])box.append(el('p',`${c.title||c.kind}${c.sessionId?' · '+c.sessionId:''}\n${c.reason||''}`));
       for(const reason of preview.observation?.reasons||[])box.append(el('p',reason));list.append(box);}
-    if(state?.activeOperation?.fenced){list.append(button('Cancel switch',()=>send('accounts.cancel',{operationId:state.activeOperation.id})),
+    if(state?.activeOperation?.fenced){list.append(state.activeOperation.cancelRequested
+      ?button('Continue original switch',()=>send('accounts.continue',{operationId:state.activeOperation.id,confirmed:true}))
+      :button('Cancel switch',()=>send('accounts.cancel',{operationId:state.activeOperation.id})),
       button('Check recovery',()=>send('accounts.reconcile',{})));}
+    if(state?.activeOperation?.retainedReceipts?.length)list.append(el('p',`${state.activeOperation.retainedReceipts.length} earlier delivery receipts remain saved for review. Account switching will not retry those messages.`));
     save.disabled=busy||!!pending||!state||!email.checkValidity()||!email.value.trim();refresh.disabled=busy;
     retry.hidden=!pending;retry.disabled=busy;root.setAttribute('aria-busy',String(busy));
   }
@@ -75,7 +78,7 @@ export function codexAccountsPanel(root,{request=async body=>{
   // Poll only an open panel with a pending ceremony. Rendering never starts
   // authentication; the Mac owns completion after the panel closes.
   const poll=setInterval(()=>{if(root.isConnected&&root.open!==false&&!busy&&!pending
-    &&state?.accounts?.some(a=>['checking','starting','awaiting_user','cancelling'].includes(a.authorization?.operation?.status)))void load();},1500);
+    &&(state?.activeOperation?.fenced||state?.accounts?.some(a=>['checking','starting','awaiting_user','cancelling'].includes(a.authorization?.operation?.status))))void load();},1500);
   email.oninput=render;workspace.oninput=render;
   return {load,render,dispose:()=>clearInterval(poll)};
 }

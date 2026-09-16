@@ -158,6 +158,20 @@ test('account controls expose saved sign-in distinctly from production selected 
   assert.equal(result.accounts.current.email,'current@example.test');
   await f.finish();assert.equal((await controller.snapshot()).current.email,'current@example.test');
 });
+test('configuration-only inspection supports an existing readable canonical home without authentication RPC or permission changes',async t=>{
+  const temporary=await fs.mkdtemp(path.join(os.tmpdir(),'clawdad-config-read-')),home=await fs.realpath(temporary);
+  t.after(()=>fs.rm(home,{recursive:true,force:true}));await fs.chmod(home,0o755);
+  await fs.writeFile(path.join(home,'auth.json'),'synthetic existing credential file',{mode:0o600});
+  const calls=[],launch=()=>{
+    const child=new EventEmitter();child.stdout=new PassThrough();child.kill=()=>{};
+    child.stdin=new Writable({write(buffer,encoding,done){const m=JSON.parse(String(buffer));calls.push(m.method);
+      if(m.id)queueMicrotask(()=>child.stdout.write(JSON.stringify({id:m.id,result:m.method==='config/read'?{config:{cli_auth_credentials_store:'keyring'}}:{}})+'\n'));done();}});return child;
+  };
+  const client=new CodexAccountProfileProcess({home,binary:'/fixture/codex',launch,configurationOnly:true});await client.connect();
+  for(const method of ['account/read','account/login/start','account/rateLimits/read','thread/resume','turn/start'])await assert.rejects(client.request(method),/separate Codex/);
+  client.close();assert.ok(calls.every(method=>['initialize','initialized','config/read'].includes(method)));
+  assert.equal((await fs.stat(home)).mode&0o777,0o755);assert.equal(await fs.readFile(path.join(home,'auth.json'),'utf8'),'synthetic existing credential file');
+});
 test('Assistant MCP connects only the explicitly authorized saved account using the real service control path',async t=>{
   const f=await fixture(t),usage={snapshot:async()=>({subscription:{email:'current@example.test',method:'chatgpt'},accountKey:'current'})};
   const controller=new CodexAccounts({root:f.root,usage,authorizations:f.service});

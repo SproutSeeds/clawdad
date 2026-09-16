@@ -2,9 +2,27 @@ import Foundation
 import XCTest
 @testable import ClawDad
 
+final class MacCodexAccountServerOptionsTests:XCTestCase {
+  func testDefaultAndManagedServerRoutingPreservesOnlyReviewedFeatureFlags() throws {
+    XCTAssertEqual(try MacCodexAccountActivity.serverOptions(["codex","app-server","--listen","unix:///private/s"],managed:false),[])
+    XCTAssertEqual(try MacCodexAccountActivity.serverOptions(["codex","-c","cli_auth_credentials_store=\"keyring\"","-c","sqlite_home=\"/canonical home\"","app-server","--listen","unix:///private/s","-c","features.code_mode_host=true"],managed:true),["-c","features.code_mode_host=true"])
+  }
+  func testUnknownCredentialsProviderAndTransportCannotAuthorizeServerRestart() {
+    for arguments in [["codex","app-server","-c","provider_key=secret"],["codex","app-server","--stdio"],
+      ["codex","app-server","--listen","ws://remote"],["codex","app-server","--arbitrary"],
+      ["codex","app-server","-c","cli_auth_credentials_store=\"keyring\""]] {
+      XCTAssertThrowsError(try MacCodexAccountActivity.serverOptions(arguments,managed:false))
+    }
+  }
+}
+
 final class MacCodexAccountActivityTests:XCTestCase {
   private func row(_ pid:String,_ executable:String="/fixture/codex",time:String="00:00:01",uid:UInt32=getuid())->String {
     "\(pid) \(uid) Wed Sep 16 \(time) 2026 \(executable)"
+  }
+  func testProcessColumnPaddingDoesNotBecomePartOfExecutableOrLifetime() throws {
+    let plain=try MacCodexAccountActivity.rows(row("10")),padded=try MacCodexAccountActivity.rows(row("10","    /fixture/codex"))
+    XCTAssertEqual(plain,padded);XCTAssertEqual(padded.first?.executable,"/fixture/codex")
   }
   func testAllSupportedOwnersIncludeBackgroundProcessesWithoutReturningArgumentsOrCredentials() throws {
     let table=[row("10"),row("20"),row("30","/fixture/other"),row("40",uid:getuid()+1)].joined(separator:"\n")

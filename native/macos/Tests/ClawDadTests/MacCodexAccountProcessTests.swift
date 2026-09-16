@@ -23,6 +23,14 @@ final class MacCodexAccountProcessTests:XCTestCase {
     XCTAssertEqual(try MacCodexAccountProcess.options(["codex","--no-alt-screen","--","old prompt","--search"]),["--no-alt-screen"])
     XCTAssertEqual(try MacCodexAccountProcess.options(["codex","-C/one","--enable","plugins","--add-dir","/exact/write directory"]),["--enable","plugins","--add-dir","/exact/write directory"])
   }
+  func testManagedLaunchIdentityAcceptsOnlyBoundedNonsecretReceiptMarkers() throws {
+    let request=String(repeating:"a",count:64)
+    let value=try XCTUnwrap(MacCodexAccountProcess.facts(data(["codex"],["CLAWDAD_ACCOUNT_TRANSITION_ID=switch-third",
+      "CLAWDAD_ACCOUNT_LAUNCH_REQUEST_ID=\(request)","UNRELATED_SECRET=preserve-private"])))
+    XCTAssertEqual(value.accountTransitionId,"switch-third");XCTAssertEqual(value.accountLaunchRequestId,request)
+    let invalid=try XCTUnwrap(MacCodexAccountProcess.facts(data(["codex"],["CLAWDAD_ACCOUNT_LAUNCH_REQUEST_ID=not-a-request"])))
+    XCTAssertNil(invalid.accountLaunchRequestId);XCTAssertFalse(String(describing:value).contains("preserve-private"))
+  }
   func testRemoteFreshWorktreeAndUnrecognizedOrSensitiveOverridesRequireAnAdapter() {
     for args in [["codex","--remote","unix://fixture"],["codex","--worktree"],["codex","exec"],
       ["codex","-c","model_providers.secret.http_headers={x=\"private\"}"],["codex","--new-unknown-flag"],

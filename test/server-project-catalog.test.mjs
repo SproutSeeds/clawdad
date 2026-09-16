@@ -957,8 +957,8 @@ cat > "$CLAWDAD_TERMINAL_CAPTURE"
         sessionId,
       }),
     });
-    assert.equal(response.status, 200);
     const payload = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(payload));
     assert.equal(payload.ok, true);
     assert.equal(payload.project, projectPath);
     assert.equal(payload.sessionId, sessionId);
