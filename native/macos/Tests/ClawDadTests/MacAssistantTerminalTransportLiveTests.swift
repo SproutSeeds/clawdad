@@ -88,7 +88,15 @@ final class MacAssistantTerminalTransportLiveTests: XCTestCase {
     let initial = try await MacTerminalTabController.shared.catalog()
     try JSONEncoder().encode(initial).write(to: root.appendingPathComponent("initial-catalog.json"))
     let bridge = MacAssistantBridge(runtime: runtime, root: root.appendingPathComponent("Assistant", isDirectory: true), observeWorkspaces: false)
-    bridge.diagnosticStep = { try? Data($0.utf8).write(to: root.appendingPathComponent("worker-step"), options: .atomic) }
+    bridge.diagnosticStep = { step in
+      try? Data(step.utf8).write(to:root.appendingPathComponent("worker-step"),options:.atomic)
+      let file=root.appendingPathComponent("worker-stages.jsonl")
+      if !FileManager.default.fileExists(atPath:file.path){FileManager.default.createFile(atPath:file.path,contents:Data(),attributes:[.posixPermissions:0o600])}
+      if let handle=try? FileHandle(forWritingTo:file) {
+        defer{try? handle.close()};try? handle.seekToEnd()
+        if let data=try? JSONSerialization.data(withJSONObject:["at":Date().timeIntervalSince1970,"stage":step]){try? handle.write(contentsOf:data+Data([10]))}
+      }
+    }
     bridge.start(); defer { bridge.stop() }
     try Data("ready".utf8).write(to: root.appendingPathComponent("worker-ready"))
     let end = Date().addingTimeInterval(2400)

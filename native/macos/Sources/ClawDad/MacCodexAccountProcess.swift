@@ -11,6 +11,7 @@ struct MacCodexAccountProcess {
     var codexHome: String?
     var home: String?
     var alternateAuthentication: Bool
+    var accountTransitionId: String?
   }
 
   static func facts(_ data: Data) -> Facts? {
@@ -33,6 +34,9 @@ struct MacCodexAccountProcess {
           !text.contains(where:{$0.isNewline}),text.utf8.count<=4096 else { return nil }
         if prefix=="CODEX_HOME=" { value.codexHome=text } else { value.home=text }
       }
+      let transitionPrefix="CLAWDAD_ACCOUNT_TRANSITION_ID="
+      if entry.starts(with:transitionPrefix.utf8),let text=String(data:entry.dropFirst(transitionPrefix.utf8.count),encoding:.utf8),
+        text.range(of:#"^[A-Za-z0-9_.:-]{1,160}$"#,options:.regularExpression) != nil {value.accountTransitionId=text}
     }
     return value
   }
@@ -49,7 +53,7 @@ struct MacCodexAccountProcess {
 
   /// Retain only reviewed launch flags. Positional prompts and initial images
   /// must never be replayed. Unknown options remain an actionable stop.
-  static func options(_ arguments:[String]) throws -> [String] {
+  static func options(_ arguments:[String],allowVerifiedAccountRouting:Bool=false) throws -> [String] {
     guard !arguments.isEmpty else { throw failure("launch_arguments_unavailable") }
     let switches:Set<String>=["--strict-config","--search","--no-alt-screen","--approve-for-me","--dangerously-bypass-approvals-and-sandbox","--dangerously-bypass-hook-trust"]
     let values:Set<String>=["-m","--model","-p","--profile","-s","--sandbox","-a","--ask-for-approval","--enable","--disable","--add-dir"]
@@ -68,6 +72,12 @@ struct MacCodexAccountProcess {
       if argument=="-c" || argument=="--config" {
         guard index+1<arguments.count else { throw failure("incomplete_launch_option") }
         let option=arguments[index+1]
+        if allowVerifiedAccountRouting {
+          if option=="cli_auth_credentials_store=\"keyring\"" {index += 2;continue}
+          if option.hasPrefix("sqlite_home="),let data=String(option.dropFirst("sqlite_home=".count)).data(using:.utf8),
+            let directory=try? JSONDecoder().decode(String.self,from:data),directory.hasPrefix("/"),
+            !directory.unicodeScalars.contains(where:CharacterSet.controlCharacters.contains) {index += 2;continue}
+        }
         // User-supplied provider credentials, arbitrary instructions and paths
         // are never serialized as process evidence. They need explicit support.
         guard option.range(of:#"^(features\.[A-Za-z0-9_]+=(true|false)|model_reasoning_effort="?[a-z_]+"?)$"#,options:.regularExpression) != nil else { throw failure("unsupported_configuration_override") }

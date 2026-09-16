@@ -176,7 +176,14 @@ final class MacTerminalTabController {
   private var windowNumbers: [Int: Int] = [:]
   private var nextWindowNumber = 1
   private var lastState: RemoteTerminalTabState?
+  // Candidate identities only. Account control must independently verify the
+  // current AX window/tab, TTY lifetime and foreground process before input.
+  var assistantKnownCatalog: RemoteTerminalTabState? { lastState }
   func assistantSnapshot(tabID: String) -> MacTerminalTabSnapshot? { snapshotsByIdentifier[tabID] }
+  func assistantVerifiedInputIdentity(tabID:String) async throws -> String? {
+    guard let snapshot=assistantSnapshot(tabID:tabID),let native=automation as? MacTerminalAutomation else{return nil}
+    return try await native.verifiedInputIdentity(snapshot)
+  }
   func assistantCloseInspectedWindowTab(tabId:String,beforeConfirmation:() async throws -> Void) async throws {
     _=try await catalog()
     guard let target=assistantSnapshot(tabID:tabId),!target.tty.isEmpty else { throw MacAssistantError("The inspected window tab is unavailable.") }
@@ -620,6 +627,18 @@ final class MacTerminalAutomation: MacTerminalAutomating, @unchecked Sendable {
       queue.async { continuation.resume(with: Result {
         guard terminal.isActive, !terminal.isTerminated, !MacConsoleSessionState.isLocked() else { return nil }
         return try self.nativeTabs.inputIdentity(application: AXUIElementCreateApplication(terminal.processIdentifier))
+      }) }
+    }
+  }
+
+  @MainActor func verifiedInputIdentity(_ snapshot:MacTerminalTabSnapshot) async throws -> String? {
+    guard let nativeId=snapshot.nativeTabID,
+      let app=NSRunningApplication.runningApplications(withBundleIdentifier:"com.apple.Terminal").first,
+      app.isActive,AXIsProcessTrusted(),!MacConsoleSessionState.isLocked() else{return nil}
+    return try await withCheckedThrowingContinuation { continuation in
+      queue.async { continuation.resume(with:Result {
+        guard app.isActive,!app.isTerminated,!MacConsoleSessionState.isLocked() else{return nil}
+        return try self.nativeTabs.inputIdentity(application:AXUIElementCreateApplication(app.processIdentifier),expectedNativeTabID:nativeId)
       }) }
     }
   }

@@ -130,11 +130,23 @@ final class MacAssistantTerminalInput {
     return MacAssistantComposerRendering.shared.normalized(String(value.suffix(24_000)))
   }
 
-  func inspect(tabId: String, input: MacInputController, ticket: UInt64) async throws -> [String: AssistantValue] {
+  func inspect(tabId: String, input: MacInputController, ticket: UInt64, verifiedSelection:String?=nil) async throws -> [String: AssistantValue] {
     observationStep?("catalog")
-    let state = try await tabs.catalog()
-    observationStep?("focus")
-    let focused = try await tabs.focus(tabID: tabId, expectedRevision: state.revision)
+    let focused:RemoteTerminalTabState
+    if let verifiedSelection {
+      // An internal account handoff already established the exact selected
+      // native control. Recheck it, retaining every ordinary composer/token
+      // guard, without scanning or focusing unrelated windows again.
+      guard let known=tabs.assistantKnownCatalog,known.tabs.contains(where:{$0.id==tabId}),
+        try await tabs.assistantVerifiedInputIdentity(tabID:tabId)==verifiedSelection else{
+        throw assistantTerminalFailure("selected_input_changed", "The exact selected Terminal input changed. Inspect it again; no input was sent.")
+      }
+      focused=known
+    }else{
+      let state=try await tabs.catalog()
+      observationStep?("focus")
+      focused=try await tabs.focus(tabID:tabId,expectedRevision:state.revision)
+    }
     observationStep?("identity")
     guard let tab = tabs.assistantSnapshot(tabID: tabId), !tab.tty.isEmpty else {
       throw assistantTerminalFailure("catalog_binding_unresolved", "The selected tab's native shell identity is still resolving. Inspect this same tab again; no input was sent.")

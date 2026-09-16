@@ -6,6 +6,7 @@ import path from 'node:path';
 import {EventEmitter} from 'node:events';
 import {PassThrough, Writable} from 'node:stream';
 import {readCodexAccountUsage, normalizeWeeklyUsage, CodexWeeklyUsageMonitor} from '../lib/codex-weekly-usage.mjs';
+import {selectedCodexLaunch} from '../lib/codex-account-launch.mjs';
 import {normalizeWeeklyNotification, weeklyNotificationPayload, PushNotificationService} from '../cloud/push-notifications.mjs';
 
 const start = Date.parse('2026-09-09T15:00:00Z');
@@ -38,6 +39,21 @@ test('account monitoring performs only account RPCs and terminates its owned rea
   assert.equal((await readCodexAccountUsage({launch: process.launch})).remainingPercent, 33);
   assert.deepEqual(process.methods, ['initialize', 'initialized', 'account/read', 'account/rateLimits/read', 'account/read']);
   assert.equal(process.child.killed, true);
+});
+
+test('selected subscription usage is read from its own launch and rejects changed account identity',async()=>{
+  const key=normalizeWeeklyUsage(provider()).accountKey;
+  const route=selectedCodexLaunch({verified:true,operationId:'selected',accountId:'fixture',accountKey:key,method:'chatgpt',
+    authorizationHome:'/private/selected',sqliteHome:'/private/history',layoutVerified:true},{env:{HOME:'/Users/fixture',PATH:'/bin'}});
+  const process=accountProcess();
+  const launch=(_binary,args,options)=>{
+    assert.deepEqual(args,[...route.configArgs,'app-server']);assert.equal(options.env.CODEX_HOME,'/private/selected');return process.child;
+  };
+  assert.equal((await readCodexAccountUsage({launch,accountLaunch:route})).accountKey,key);
+  assert.equal(process.methods.some(method=>method?.startsWith('thread/')),false);
+  const changed=accountProcess();
+  await assert.rejects(readCodexAccountUsage({launch:()=>changed.child,accountLaunch:{...route,account:{...route.account,key:'f'.repeat(64)}}}),/allowance identity/);
+  assert.equal(changed.child.killed,true);
 });
 
 test('account changes during a read and stalled providers never become current readings', async () => {

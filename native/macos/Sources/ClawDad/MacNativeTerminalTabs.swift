@@ -190,7 +190,7 @@ final class MacNativeTerminalTabs {
 
   /// Capture only the focused window. This identity never depends on scripting
   /// window counts, TTY uniqueness, tab titles, or an unrelated window's health.
-  func inputIdentity(application: AXUIElement) throws -> String {
+  func inputIdentity(application: AXUIElement, expectedNativeTabID: String? = nil) throws -> String {
     let previousDeadline = deadline
     deadline = min(deadline, now() + 1)
     defer { deadline = previousDeadline }
@@ -214,6 +214,12 @@ final class MacNativeTerminalTabs {
     let confirmed = try selection()
     guard CFEqual(original.window, confirmed.window), CFEqual(original.control, confirmed.control) else {
       throw MacTerminalTabFailure(code: "selection_changed", message: "The Terminal input changed during capture.", state: nil)
+    }
+    if let expectedNativeTabID {
+      guard let bound=bindings.first(where:{$0.id==expectedNativeTabID}),
+        CFEqual(bound.window,original.window),CFEqual(bound.control,original.control) else {
+        throw MacTerminalTabFailure(code:"selection_changed",message:"The exact inspected Terminal tab is not selected.",state:nil)
+      }
     }
     if let known = inputBindings.first(where: {
       CFEqual($0.window, original.window) && CFEqual($0.control, original.control)

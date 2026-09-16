@@ -275,6 +275,21 @@ final class MacNativeTerminalTabTests: XCTestCase {
     }
   }
 
+  func testAccountInputRequiresTheExactKnownControlWithoutRescanningUnrelatedWindows() throws {
+    let graph=TerminalGraph(),reader=MacNativeTerminalTabs(readAttribute:graph.read)
+    let rows=try reader.snapshots(application:graph.app){graph.shells}
+    let expected=try XCTUnwrap(rows[graph.selected].nativeTabID)
+    graph.failWindows=true
+    let original=try reader.inputIdentity(application:graph.app,expectedNativeTabID:expected)
+    graph.selected=2
+    XCTAssertThrowsError(try reader.inputIdentity(application:graph.app,expectedNativeTabID:expected))
+    graph.selected=1
+    XCTAssertEqual(try reader.inputIdentity(application:graph.app,expectedNativeTabID:expected),original)
+    graph.window=graph.newElement()
+    XCTAssertThrowsError(try reader.inputIdentity(application:graph.app,expectedNativeTabID:expected))
+    XCTAssertThrowsError(try reader.inputIdentity(application:graph.app,expectedNativeTabID:"unknown"))
+  }
+
   func testStripReplacementAndFocusMRUDoNotRenumberPhysicalWindow() throws {
     let graph = TerminalGraph()
     let reader = MacNativeTerminalTabs(readAttribute: graph.read)

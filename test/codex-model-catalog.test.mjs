@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import test from "node:test";
+import {createHash} from 'node:crypto';
+import {selectedCodexLaunch} from '../lib/codex-account-launch.mjs';
 import { readCodexModelCatalog } from "../lib/codex-model-catalog.mjs";
 
 test("Codex model catalog reads effective config and paginated app-server models", async () => {
@@ -24,7 +26,12 @@ process.stdin.on("data", (chunk) => {
     if (message.method === "initialize") {
       send({ id: message.id, result: { ok: true } });
     } else if (message.method === "account/read") {
-      send({ id: message.id, result: { account: { type: "chatgpt", planType: "pro" } } });
+      const selected=process.env.CODEX_HOME===process.env.FIXTURE_SELECTED_HOME;
+      const routed=selected&&process.argv.includes('cli_auth_credentials_store="keyring"')&&!process.env.OPENAI_API_KEY;
+      send({ id: message.id, result: { account: { type: "chatgpt", planType: "pro",email:routed?'selected@example.test':'original@example.test' } } });
+    } else if (message.method === "account/rateLimits/read") {
+      const routed=process.env.CODEX_HOME===process.env.FIXTURE_SELECTED_HOME&&process.argv.includes('cli_auth_credentials_store="keyring"')&&!process.env.OPENAI_API_KEY;
+      send({id:message.id,result:{accountId:routed?'selected':'original',rateLimits:{limitId:'codex',primary:{windowDurationMins:10080,usedPercent:10,resetsAt:2000000000}}}});
     } else if (message.method === "config/read") {
       send({ id: message.id, result: { config: { model: "gpt-5.6-sol", model_reasoning_effort: "ultra" }, origins: {} } });
     } else if (message.method === "model/list") {
@@ -75,6 +82,12 @@ process.stdin.on("data", (chunk) => {
     assert.equal(catalog.configuredReasoningEffort, "ultra");
     assert.deepEqual(catalog.models.map((model) => model.model), ["gpt-5.6-sol", "gpt-5.5"]);
     assert.deepEqual(catalog.models[0].supportedReasoningEfforts, ["low", "ultra"]);
+    const key=createHash('sha256').update('codex-account:selected').digest('hex');
+    const accountLaunch=selectedCodexLaunch({verified:true,layoutVerified:true,method:'chatgpt',accountId:'selected-profile',operationId:'verified-switch',
+      accountKey:key,authorizationHome:root,sqliteHome:root},{env:{...process.env,FIXTURE_SELECTED_HOME:root,OPENAI_API_KEY:'must-be-removed'}});
+    const selected=await readCodexModelCatalog({codexBinary:fakeCodex,projectPath:root,timeoutMs:2000,requireAuthenticated:true,accountLaunch});
+    assert.equal(selected.models.length,2);
+    await assert.rejects(readCodexModelCatalog({codexBinary:fakeCodex,projectPath:root,timeoutMs:2000,accountLaunch:{...accountLaunch,account:{...accountLaunch.account,key:'a'.repeat(64)}}}),/identity changed/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -16,6 +16,8 @@ final class MacAssistantBridge {
   private var inventoryRequested = false
   private var accountInventoryRequest: String?
   private var accountInventory: (id:String, value:AssistantValue)?
+  private var accountProfileRequest: (id:String,home:String)?
+  private var accountProfileObservation: (id:String,value:AssistantValue)?
   private var pendingBindings: [AssistantValue] = []
   private var inspection:
     (token: String, pid: pid_t, element: AXUIElement, window: CFTypeRef?, launch: Date?, generation: UInt64, expires: Date, display: CGDirectDisplayID)?
@@ -35,6 +37,15 @@ final class MacAssistantBridge {
   private let workerId = UUID().uuidString
   private let interaction = MacAssistantInteractionGate.shared
   private let nativeInput = MacAssistantTerminalInput()
+  private lazy var accountControl:MacCodexAccountNative = {
+    let native=MacCodexAccountNative(root:root.deletingLastPathComponent().appendingPathComponent("Accounts/NativeRecovery",isDirectory:true))
+    native.retainedDraft={ [weak self] binding,identity,foreground,screen,generation in
+      self?.draftProvenance.text(context:.init(input:identity,process:binding.instanceId,session:binding.conversation?.sessionId,
+        foreground:foreground.identity,generation:generation),screen:screen)
+    }
+    native.diagnosticStep={ [weak self] step in self?.diagnosticStep?("account:"+step) }
+    return native
+  }()
   private lazy var mainWorkspace:MainTerminalWorkspace = {
     let native=MacMainWorkspaceNative(runtime:runtime)
     native.retainedDraft={ [weak self] binding,identity,foreground,screen,generation in
@@ -136,12 +147,49 @@ final class MacAssistantBridge {
             bindings.append(.object(receipt))
           }
           observation["bindings"] = .array(bindings)
+          // Observe immediately before sending, after potentially slow catalog
+          // reads. The migration adapter rejects evidence older than two seconds.
+          if let request=accountProfileRequest {
+            if accountProfileObservation?.id != request.id {
+              var value:[String:AssistantValue]
+              do { value=try await Task.detached { try MacCodexAccountActivity.inspect(home:request.home) }.value }
+              catch { value=["home":.string(request.home),"complete":.bool(false),"owners":.array([]),
+                "reasonCode":.string((error as? MacCodexInputFailure)?.code ?? "process_inventory_failed")] }
+              value["id"] = .string(request.id)
+              accountProfileObservation=(request.id,.object(value))
+            }
+            observation["accountProfileActivity"] = accountProfileObservation?.value
+          }
           diagnosticStep?("poll")
           let next = try await runtime.json("/v1/assistant/native/poll", observation)
           pendingBindings = next["pendingBindings"]?.array ?? []
           inventoryRequested = next["inventoryRequested"]?.bool ?? (next["enabled"]?.bool == true)
           accountInventoryRequest = next["accountInventoryRequest"]?.string
           if accountInventoryRequest==nil { accountInventory=nil }
+          if let request=next["accountProfileRequest"]?.object,let id=request["id"]?.string,let home=request["home"]?.string {
+            accountProfileRequest=(id,home)
+          } else { accountProfileRequest=nil;accountProfileObservation=nil }
+          if let job=next["accountJob"]?.object,let id=job["id"]?.string,let dispatch=job["dispatchId"]?.string,
+            job["workerId"]?.string==workerId,let action=job["action"]?.string,let args=job["args"]?.object {
+            let envelope:[String:AssistantValue]=["id":.string(id),"workerId":.string(workerId),"dispatchId":.string(dispatch)]
+            var completion=envelope
+            let heartbeat=Task { [runtime] in
+              while !Task.isCancelled {_=try? await runtime.json("/v1/assistant/native/heartbeat",[:]);try? await Task.sleep(for:.seconds(2))}
+            }
+            do {
+              // An unanswered prepare never authorizes repeating an effect.
+              // The durable service mailbox reconciles it after reconnection.
+              _=try await runtime.json("/v1/assistant/native/account-prepare",envelope)
+              diagnosticStep?("account:prepared:"+action)
+              completion["result"] = .object(try await accountControl.execute(action:action,args:args,requestId:id))
+            }catch {completion["reasonCode"] = .string((error as? MacCodexInputFailure)?.code ?? "native_account_control_unavailable")}
+            heartbeat.cancel()
+            diagnosticStep?("account:result:"+(completion["reasonCode"]?.string ?? "observed"))
+            while !Task.isCancelled {
+              do{_=try await runtime.json("/v1/assistant/native/account-result",completion);break}
+              catch{try? await Task.sleep(for:.seconds(1))}
+            }
+          }
           if let job = next["job"]?.object, let id = job["id"]?.string {
             diagnosticStep?("execute:" + (job["action"]?.string ?? "unknown"))
             let completion: [String: AssistantValue]

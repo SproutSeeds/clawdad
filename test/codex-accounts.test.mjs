@@ -9,6 +9,7 @@ import {CodexAccounts,installedAccountSwitchCapabilities} from '../lib/codex-acc
 import {inspectAccountConsumers,readAccountWork} from '../lib/codex-account-consumers.mjs';
 import {AssistantRuntime,assistantHttp} from '../lib/assistant-runtime.mjs';
 import {runAssistantMCP} from '../lib/assistant-mcp.mjs';
+import {CodexAccountLayout} from '../lib/codex-account-layout.mjs';
 
 const a='a'.repeat(64),b='b'.repeat(64),thread='11111111-1111-4111-8111-111111111111';
 async function fixture(t,{supported=true}={}){
@@ -52,6 +53,41 @@ test('single selection at zero allowance runs deterministic transition, preserve
   assert.equal(state.activeOperation.recovery.entries[0].draft.text,'Kept draft 🌿\nSecond line');
   assert.equal(state.activeOperation.consumers[0].sessionId,thread);
   assert.deepEqual(f.calls,['authenticate','transition:terminal-A']);assert.equal((await f.controller.admission()).allowed,true);
+});
+test('a verified selected launch is published only with complete transition and survives restart without leaking into earlier work',async t=>{
+  const f=await fixture(t),root=await fs.realpath(f.root),canonical=path.join(root,'canonical'),home=path.join(root,'saved-profile');
+  await fs.mkdir(home,{mode:0o700});await fs.mkdir(canonical,{mode:0o700});
+  for(const name of ['sessions','archived_sessions','thread-writer-locks'])await fs.mkdir(path.join(canonical,name),{mode:0o700});
+  const layout=await new CodexAccountLayout({root}).prepare({canonicalHome:canonical,profileHome:home,sqliteHome:canonical});
+  const profile={accountId:f.entry.id,authentication:'verified',accountKey:b,home};
+  const authorizations={snapshot:async()=>({profiles:[structuredClone(profile)]})};f.controller.authorizations=authorizations;
+  f.adapter.capabilities.selectedRuntimeRouting=true;
+  f.adapter.verify=async()=>({accountKey:b,allConsumersVerified:true,freshUsage:true,runtime:{authorizationHome:home,sqliteHome:canonical,layout}});
+  assert.equal(await f.controller.selectedLaunch(),null);await f.request();assert.equal(await f.controller.selectedLaunch(),null);
+  await f.controller.advance();assert.equal((await f.controller.snapshot()).activeOperation.status,'completed');
+  const restored=new CodexAccounts({...f.options,authorizations}),launch=await restored.selectedLaunch();
+  assert.equal(launch.account.key,b);assert.equal(launch.env.CODEX_HOME,home);
+  assert.ok(launch.configArgs.includes('sqlite_home='+JSON.stringify(canonical)));
+  // Captured child environments are independent values; a later identity
+  // change blocks subsequent launches without rewriting already-started work.
+  profile.accountKey=a;await assert.rejects(restored.selectedLaunch(),/saved sign-in/);
+  assert.equal(launch.account.key,b);profile.accountKey=b;
+  await fs.unlink(path.join(home,'sessions'));await fs.mkdir(path.join(home,'sessions'),{mode:0o700});
+  await assert.rejects(restored.selectedLaunch(),/resources|layout|resource/i);
+});
+test('incomplete routing evidence keeps the account fence and never selects a silent fallback',async t=>{
+  const f=await fixture(t);f.adapter.capabilities.selectedRuntimeRouting=true;
+  await f.request();await f.controller.advance();
+  assert.equal((await f.controller.snapshot()).activeOperation.status,'needs_attention');
+  assert.equal((await f.controller.admission()).allowed,false);assert.equal(await f.controller.selectedLaunch(),null);
+});
+test('mixed cached account ownership is preserved per consumer instead of attributed to the global allowance reader',async t=>{
+  const f=await fixture(t);
+  f.consumers.push({...structuredClone(f.consumers[0]),id:'terminal-B',pid:99998,processIdentity:'owner-B',sessionId:'22222222-2222-4222-8222-222222222222',accountKey:b});
+  await f.request();await f.controller.advance();const state=await f.controller.snapshot();
+  assert.equal(state.activeOperation.status,'completed');
+  assert.deepEqual(state.activeOperation.recovery.entries.map(e=>e.accountKey),[a,b]);
+  assert.equal(state.activeOperation.sourceAccountKey,a);
 });
 test('service driver completes an accepted selection without UI polling and resumes one durable operation after restart',async t=>{
   const f=await fixture(t);f.consumers[0].busy=true;
@@ -99,6 +135,19 @@ test('busy and unrecoverable inputs wait; cancel does not authenticate or stop t
     await f.controller.cancel({operationId:'switch',requestId:'cancel'});
     assert.equal((await f.controller.admission()).allowed,true);await f.controller.advance();assert.deepEqual(f.calls,[]);
   }
+});
+
+test('runner contention leaves one existing switch progressing without repeating any effect',async t=>{
+  const f=await fixture(t);await f.request();
+  const lease=f.controller.lease;
+  f.controller.lease=async(...args)=>{
+    if(args[1].threadId==='account-switch-runner')throw Object.assign(Error('another runner owns this operation'),{code:'CLAWDAD_CODEX_DELIVERY_CLAIM_TIMEOUT'});
+    return lease(...args);
+  };
+  await f.controller.advance();assert.deepEqual(f.calls,[]);
+  assert.equal((await f.controller.snapshot()).activeOperation.status,'checking');
+  f.controller.lease=lease;await f.controller.advance();
+  assert.equal((await f.controller.snapshot()).activeOperation.status,'completed');assert.deepEqual(f.calls,['authenticate','transition:terminal-A']);
 });
 test('crash after authentication dispatch reconciles the original receipt without logging in twice',async t=>{
   const f=await fixture(t),original=f.adapter.authenticate;
@@ -241,6 +290,32 @@ test('closed or expired native inventory requests stop asking the worker and ret
   const request=runtime.accountConsumerInventory({waitMs:1000});runtime.accountInventoryRequest.expires=0;
   const result=await request;assert.equal(result.complete,false);assert.equal(runtime.accountInventoryRequest,null);
   assert.match(result.reason,/fresh account-process inventory/);assert.equal(runtime.state.jobs.length,0);
+});
+test('profile activity transport binds each native census to its exact home and fresh request without starting a conversation',async t=>{
+  const f=await fixture(t,{supported:false}),runtime=new AssistantRuntime({root:path.join(f.root,'Assistant'),coordinator:{stop(){}}});
+  t.after(()=>runtime.close());await runtime.load();const before=structuredClone(runtime.state);
+  const first=runtime.accountProfileActivity('/fixture/one',{waitMs:1000});
+  await new Promise(resolve=>setImmediate(resolve));
+  const poll=await runtime.nativePoll({workerId:'worker-1',accountProfileActivity:{id:'stale',home:'/fixture/one',complete:true,owners:[]}});
+  assert.equal(poll.accountProfileRequest.home,'/fixture/one');assert.equal(poll.job,null);
+  await runtime.nativePoll({workerId:'worker-1',accountProfileActivity:{id:poll.accountProfileRequest.id,home:'/fixture/wrong',complete:true,owners:[]}});
+  assert.equal(runtime.accountProfileRequest.id,poll.accountProfileRequest.id);
+  const second=runtime.accountProfileActivity('/fixture/two',{waitMs:1000});
+  await runtime.nativePoll({workerId:'worker-2',accountProfileActivity:{id:poll.accountProfileRequest.id,home:'/fixture/one',complete:true,owners:[],observedAt:Date.now()}});
+  assert.equal((await first).workerId,'worker-2');await new Promise(resolve=>setImmediate(resolve));
+  const next=await runtime.nativePoll({workerId:'worker-2'});assert.equal(next.accountProfileRequest.home,'/fixture/two');
+  assert.notEqual(next.accountProfileRequest.id,poll.accountProfileRequest.id);
+  await runtime.nativePoll({workerId:'worker-2',accountProfileActivity:{id:next.accountProfileRequest.id,home:'/fixture/two',complete:true,owners:[{pid:'42'}],observedAt:Date.now()}});
+  assert.equal((await second).owners[0].pid,'42');assert.equal(runtime.accountProfileRequest,null);
+  assert.equal(runtime.state.enabled,before.enabled);assert.deepEqual(runtime.state.jobs,before.jobs);assert.deepEqual(runtime.state.messages,before.messages);
+});
+test('missing native activity support never claims an idle account profile',async t=>{
+  const f=await fixture(t,{supported:false}),runtime=new AssistantRuntime({root:path.join(f.root,'Assistant'),coordinator:{stop(){}}});
+  t.after(()=>runtime.close());await runtime.load();
+  const result=await runtime.accountProfileActivity('/fixture/one',{waitMs:100});
+  assert.equal(result.complete,false);assert.equal(result.reasonCode,'native_profile_activity_unavailable');assert.equal(runtime.accountProfileRequest,null);
+  assert.equal((await runtime.nativePoll({workerId:'old-worker'})).accountProfileRequest,null);
+  await assert.rejects(runtime.accountProfileActivity('../other'),/exact saved/);
 });
 test('actual Assistant HTTP and MCP account status paths require no enabled conversation or model',async t=>{
   const f=await fixture(t,{supported:false}),runtime=new AssistantRuntime({root:path.join(f.root,'Assistant'),coordinator:{stop(){},prepare(){throw Error('MODEL MUST NOT START');}}});runtime.accounts=f.controller;

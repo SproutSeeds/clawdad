@@ -390,14 +390,14 @@ final class MacInputController {
   /// Insert into the captured agent composer without sending Enter. The durable
   /// Assistant job owns replay protection; verification never repeats this paste.
   func insertAssistantDraft(_ text: String, targetToken token: String,
-                            isAllowed: @MainActor () -> Bool,
+                            isAllowed: @MainActor () async -> Bool,
                             verifyPaste: (@MainActor () async -> Bool)? = nil,
                             terminalIdentity: @MainActor () async throws -> String?) async -> Bool {
     if let inputProcessingTask { await inputProcessingTask.value }
     if let clipboardCopyTask { await clipboardCopyTask.value }
     await waitForImagePaste()
     let identity = await recoverTerminalIdentity(for: dictationTargets.capture(for: token), read: terminalIdentity)
-    guard !Task.isCancelled, isAllowed(), !speechSelectionInProgress,
+    guard !Task.isCancelled, await isAllowed(), !speechSelectionInProgress,
           let target = dictationTargets.resolve(token: token, generation: inputGeneration,
             terminalIdentity: identity, isCurrent: targetIsCurrent) else { return false }
     defer { invalidateDictationTarget() }
@@ -410,16 +410,16 @@ final class MacInputController {
   /// The verified Codex version handles one Ctrl-C on a nonempty composer as
   /// draft clear, before its idle/busy interrupt path. A second key is never sent.
   /// Never use Terminal's Select All (which selects scrollback), or send Enter.
-  /// The caller verifies nonempty draft text and the authorized draft again synchronously
+  /// The caller verifies nonempty draft text and the authorized draft again
   /// in isAllowed, after the exact native tab identity has been resolved.
   func clearAssistantDraft(targetToken token: String,
-                           isAllowed: @MainActor () -> Bool,
+                           isAllowed: @MainActor () async -> Bool,
                            terminalIdentity: @MainActor () async throws -> String?) async -> Bool {
     if let inputProcessingTask { await inputProcessingTask.value }
     if let clipboardCopyTask { await clipboardCopyTask.value }
     await waitForImagePaste()
     let identity = await recoverTerminalIdentity(for: dictationTargets.capture(for: token), read: terminalIdentity)
-    guard !Task.isCancelled, isAllowed(), !speechSelectionInProgress,
+    guard !Task.isCancelled, await isAllowed(), !speechSelectionInProgress,
       let target = dictationTargets.resolve(token: token, generation: inputGeneration,
         terminalIdentity: identity, isCurrent: targetIsCurrent),
       target.input.bundleIdentifier == "com.apple.Terminal",
