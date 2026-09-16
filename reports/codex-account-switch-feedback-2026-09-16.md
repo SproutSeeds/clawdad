@@ -71,6 +71,8 @@ RoomWave is preserved for deliberate recovery/identity review. The account scree
 
 Remaining hands-on checks: update the physical iPhone to build 96; exercise the selector, touch feedback and VoiceOver; verify the eventual complete account transition after legitimate session blockers are resolved. No full-workspace account-transition success is claimed. The new cold-focus capture path has deterministic native regression coverage; its actual multi-tab account handoff still needs a controlled live acceptance check once work is safely eligible. The prior isolated same-thread account handoffs remain earlier evidence, not proof of this entire current workspace.
 
+Final recheck: an intervening Terminal `layout_unavailable` observation failed safely and exposed its specific reason (`final-check.json`). The normal controller recovered without another user request: **17:45:26.546 UTC**, complete inventory, all 15 consumers, no inventory errors, RoomWave unknown/resume-protected and ClawDad working (`final-recheck.json`). Authentication effects remained empty. Scoped implementation committed as `b31588d`; final hygiene retained only the nine inherited buckets, zero unclassified paths, safe to expand. Temporary retired application copies were removed only after verifying matching canonical rollback binaries/archives.
+
 ## Preservation and release checkpoint
 
 All three saved subscription sign-ins were already verified before this task. No login was repeated. The real user-requested switch is preserved under its original ID; this repair does not issue a new switch request. Busy turns, drafts, native queues and uncertain real receipts continue to gate transitions.
