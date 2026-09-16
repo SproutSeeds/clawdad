@@ -39,10 +39,18 @@ Hidden/attached or otherwise unverifiable drafts, unresolved native queues, unkn
 
 Sanitized live evidence and UI screenshots are retained under ignored `native/macos/dist/candidates/account-window-rebuild-2026-09-16/`. The live round trip covers one disposable tab and two existing retained subscription logins; automated fixtures cover multiple tabs and same-directory distinct conversations. It is not a claim that Cody's real multi-tab window, physical iPhone flow, or a reboot has been exercised.
 
-## Release checkpoint
+## Delivered release
 
-iPhone 0.7.0 (98) archived and uploaded successfully; Apple processing reports VALID. Internal group assignment follows verified Mac 0.7.0 (154) installation. Signed/notarized Mac packaging and final installation verification are the remaining release steps at this checkpoint. Physical iPhone installation, touch/VoiceOver behavior and a user-initiated real workspace transition remain user checks.
+- Code commit `6d84339` pushed to `origin/codex/hermes-hybrid-supervisor-ui`.
+- Mac **0.7.0 (154)** installed and launched at 21:54:59 UTC. App and DMG passed Developer ID signing, notarization, stapling and Gatekeeper. Notary submissions: app `6cfe5308-8992-4e08-8042-0047fb49254c`; DMG `91b4b159-f0bf-430b-8c15-2fd9a845d310`. The installed binary matches the signed package and changed embedded runtime files match the committed source. Prior build 153 remains recoverable at `/Applications/.ClawDad-before-154.app`.
+- Installed runtime hash `ad01b2ae5303c01528d32be01bbb5d33bda5b7aa6462bce8a0b5f14178c13354` exposes `windowRebuild: true` and disables the old per-session skip flow. The real cancelled operation reconciled to `cancelled`, `fenced: false`, with zero transition effects. All observed Terminal process/thread owners and scripting window/tab identities survived installation unchanged. Native read-only inventory then verified one physical working window with 13 tabs.
+- iPhone **0.7.0 (98)** is **IN_BETA_TESTING** in **ClawDad Internal**, verified at 21:56:01 UTC. Apple build ID `7ddf1f5f-3953-4d75-a80c-99e519a5108b`, processing `VALID`, internal group assignment confirmed. The existing vendor WebRTC dSYM upload warning did not prevent acceptance; it is not a claim that every vendor frame can be symbolicated.
+- Native artifacts: `native/macos/dist/releases/0.7.0-beta.20-macos-154-account-window/`. This release did not publish the CLI, switch Cody's working account/window, or enable supervision.
+
+Update the iPhone through Internal TestFlight, select the saved account and intended Terminal window, then start the switch. It waits for work to settle and pauses before closing if an input/session cannot be safely recovered. Physical iPhone installation, touch/VoiceOver behavior and a user-initiated real multi-tab workspace transition remain user checks. A physical restart/power loss was not tested.
 
 ## Workspace classification
 
 This lane owns account-window controller/native adapter, related account routing/UI/guidance/tests, the minimal workspace reuse hooks, and release metadata/report. Preserve these inherited buckets: `.agents/skills/clawdad-release/SKILL.md`, `native/macos/build-app.sh`, `native/macos/package-release.sh`, `native/macos/storage-workflow.sh`, plugin manifest/release skill, `assets/wordmark-explorations/`, `cloud/native/`, and `marketing-site/`. They are not staged as part of this repair. Temporary verification is in ignored `native/macos/dist/candidates/account-window-rebuild-2026-09-16/` and explicitly disposable `/private/tmp/clawdad-terminal-coverage-account-*` roots. No real working window or project draft is a destructive fixture.
+
+Final hygiene: `dirty_classified`, nine inherited paths/buckets, zero unclassified paths, `safe_to_expand: true`. These changes remain with their existing lanes for review; no cleanup or reversion was performed. `git diff --check` passed.
