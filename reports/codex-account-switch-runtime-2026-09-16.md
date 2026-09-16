@@ -4,7 +4,7 @@
 
 This continues the authorized account-switching implementation. The third requested entry, `doughalchemy@gmail.com`, is saved alongside `codyshanemitchell@gmail.com` and `playinthesunwithme@gmail.com`. A metadata-only recheck at approximately 09:39 UTC found the first two independently verified and Dough Alchemy still `needs_sign_in`. The Dough browser ceremony expired; its separate verification found no retained authorization. A fresh sign-in waits for Cody's readiness. No current production account switch has been accepted and no working project agent has been stopped by this work.
 
-Installed versions rechecked in this continuation: Mac 0.7.0 (145), Codex CLI 0.154.0. iPhone 94 is the prior release checkpoint, not a fresh physical-device observation. Release/install status is recorded below and must not be inferred from source or fixture results.
+At the start of this continuation: Mac 0.7.0 (145), Codex CLI 0.154.0, and iPhone 94 as the prior release checkpoint, not a fresh physical-device observation. Mac 146 is now installed and iPhone 95 released to internal TestFlight; exact release evidence is below.
 
 ## Implemented integration
 
@@ -66,6 +66,17 @@ Canonical private evidence: `~/Library/Application Support/ClawDad/Accounts/veri
 - iPhone UI: **4/4 passed**, normal and accessibility text on compact and 6.9-inch simulators (`accounts-connected-phones.xcresult`). Screenshots were exported and visually checked for readable wrapping, 44-point controls and reachable Back navigation. These fixtures exercise saved-account/connection controls, not a real phone authentication or whole-workspace switch.
 
 Physical iPhone sign-in, account-selection navigation, VoiceOver, Keychain prompts/MFA and real whole-workspace transition remain distinct from automated fixtures. No reboot, power-loss test, global credential replacement or live project interruption has been performed. Cody's active work must not become a destructive test fixture.
+
+### Delivered native release
+
+- Source commit: `1e3d664e38e5e1b97e03aacc7c3b96275797907e`, committed locally. No source push, public GitHub release, npm publication or public appcast update.
+- **Mac 0.7.0 (146)** signed, notarized and installed at **09:59:31 UTC**. App notarization `a14e6b31-2d1f-4594-85a9-1e447f1a4296` and DMG notarization `708ef475-3728-48c7-9ca1-bc58f73a4f84` were Accepted; stapling, signature and Gatekeeper checks passed. Private package: `native/macos/dist/releases/0.7.0-beta.20-macos-146-accounts/`. Signed build-145 rollback is retained in the canonical candidate directory.
+- The actual installed Assistant HTTP path returned `accounts.status` HTTP 200 at **10:00:39 UTC** with `capabilities.ready=true`, retained authorization support enabled, all three entries, and no active switch. The loaded service uses port 4487; the old build's observed port was 4488. All 30 changed runtime/web files matched the installed bundle hashes. The desktop rendered successfully; CUA could capture it but its WebView accessibility tree was absent and a click returned `AXError.notImplemented`. Direct live desktop click-through is therefore not claimed; the real WKWebView automated test and installed HTTP path passed.
+- **iPhone 0.7.0 (95)** archive/export/upload succeeded. App Store Connect build `c85167f1-de76-407c-bdac-fbcad5fd8b3a` was verified **VALID**, assigned to **ClawDad Internal**, **IN_BETA_TESTING** at **10:02:46 UTC**. The existing vendored WebRTC missing-dSYM upload warning remains; it did not prevent release. Physical installation of 95 has not been observed.
+- Before replacement the Main Assistant had no accepted active job. All **31 recorded Terminal/Codex process lifetime records remained identical** after installation. No Terminal window, tab, project agent or account owner was closed or switched. The workspace JSON's whole-file hash changed as normal observation timestamps refreshed. Its 12 snapshots retain save dates preceding this install, latest September 15, and revision 27; no Save/Update/Restore action was invoked. A before/after immutable-snapshot-only hash was not captured, so the whole-file check alone is not snapshot byte-equivalence proof.
+- A later supported account-status read established that the user's ordinary Codex login currently serves **doughalchemy@gmail.com** (`prolite`). This is distinct from ClawDad's separately retained Dough authorization home, still `needs_sign_in`. Completing that saved profile's supported browser sign-in remains necessary for reliable switching back to it; do not sign out or overwrite the current default login. Cody and Sun retained homes remain verified. No account selection, production profile adoption or authentication change occurred during release.
+
+Release receipts: `mac146-install.json`, `installed146-accounts-4487.json`, `installed146-source.json`, `install146-preservation.json`, `installed146-snapshot-times.json`, `testflight95-release.json`, plus package/archive/upload logs under the canonical candidate directory. Remaining acceptance: Dough retained login; a user-directed whole-workspace switch after protected/busy states drain; new model-turn evidence under an account with available allowance; physical iPhone account navigation and VoiceOver. Installing does not start any of these actions.
 
 ## Workspace classification
 
