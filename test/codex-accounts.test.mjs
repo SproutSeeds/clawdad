@@ -6,7 +6,7 @@ import os from 'node:os';
 import {Readable,Writable} from 'node:stream';
 import {createHash} from 'node:crypto';
 import {CodexAccounts,installedAccountSwitchCapabilities} from '../lib/codex-accounts.mjs';
-import {inspectAccountConsumers} from '../lib/codex-account-consumers.mjs';
+import {inspectAccountConsumers,readAccountWork} from '../lib/codex-account-consumers.mjs';
 import {AssistantRuntime,assistantHttp} from '../lib/assistant-runtime.mjs';
 import {runAssistantMCP} from '../lib/assistant-mcp.mjs';
 
@@ -173,6 +173,8 @@ test('corrupt or missing active operation fails closed, while a rejected entry c
   await fs.writeFile(f.controller.file,JSON.stringify({version:1,revision:1,epoch:0,accounts:[],requests:{},operations:{},activeOperationId:'missing'}));
   assert.equal((await f.controller.admission()).allowed,false);
   await assert.rejects(f.controller.snapshot(),/recovery/);
+  await fs.writeFile(f.controller.file,JSON.stringify({version:1,revision:1,epoch:0,accounts:[],requests:{},operations:{},activeOperationId:null,work:null}));
+  assert.equal((await f.controller.admission()).allowed,false);await assert.rejects(f.controller.snapshot(),/recovery/);
 });
 
 test('accepted Assistant text and image remain durable while fenced and never silently adopt a new account epoch',async t=>{
@@ -211,4 +213,115 @@ test('actual Assistant HTTP and MCP account status paths require no enabled conv
       return {ok:code===200,json:async()=>result};
     }});
   assert.equal(output[0].result.isError,undefined);assert.equal(runtime.state.enabled,false);assert.equal(runtime.state.jobs.length,0);
+});
+
+test('acceptance and switching serialize durably, and a crash before job persistence prevents transition',async t=>{
+  const f=await fixture(t),jobs=[];f.controller.readWork=async()=>({complete:true,jobs});
+  let release,entered;const waiting=new Promise(r=>release=r),started=new Promise(r=>entered=r);
+  const input={id:'accepted-before-fence',action:'message',fingerprint:'exact-body'};
+  const saving=f.controller.withWorkAdmission(input,async stamp=>{
+    entered();await waiting;const job={...input,...stamp,status:'queued'};jobs.push(job);return job;
+  });
+  await started;
+  const selection=f.request();await new Promise(r=>setTimeout(r,20));
+  assert.equal(JSON.parse(await fs.readFile(f.controller.file,'utf8')).activeOperationId,null);
+  release();await saving;await selection;await f.controller.advance();
+  assert.equal((await f.controller.snapshot()).activeOperation.status,'waiting');assert.deepEqual(f.calls,[]);
+  assert.equal((await f.controller.deliveryAdmission(jobs[0])).allowed,true);
+  jobs[0].status='completed';await f.controller.advance();assert.equal((await f.controller.snapshot()).activeOperation.status,'completed');
+
+  const g=await fixture(t);g.controller.readWork=async()=>({complete:true,jobs:[]});
+  await assert.rejects(g.controller.withWorkAdmission({id:'lost-acceptance',action:'message',fingerprint:'body'},async()=>{throw Error('disk failed');}),/disk failed/);
+  await g.request();await new CodexAccounts({...g.options,readWork:g.controller.readWork}).advance();
+  const blocked=await g.controller.snapshot();assert.equal(blocked.activeOperation.status,'waiting');
+  assert.equal(blocked.activeOperation.observation.drain.pending[0].status,'acceptance_needs_reconciliation');assert.deepEqual(g.calls,[]);
+});
+
+test('an accepted Assistant turn and its actual MCP/HTTP native tool finish during preflight; later text waits without rerouting',async t=>{
+  const f=await fixture(t);let runtime,runs=0,release;const finish=new Promise(r=>release=r);
+  const coordinator={stop(){release();},prepare:async()=>({mode:'background'}),run:async({id,onMessage})=>{
+    runs++;const output=[];
+    await runAssistantMCP({root:f.root,coordinatorRequestId:id,
+      input:Readable.from([JSON.stringify({id:1,method:'tools/call',params:{name:'focus_tab',arguments:{requestId:'original-tool',tabId:'fixture-tab'}}})+'\n']),
+      output:new Writable({write(chunk,encoding,done){output.push(JSON.parse(chunk));done();}}),
+      fetchImpl:async(url,options)=>{
+        let code,result;await assistantHttp({method:options.method},null,new URL(url),runtime,{readBody:async()=>JSON.parse(options.body),json:(res,c,data)=>{code=c;result=data;}});
+        return {ok:code===200,json:async()=>result};
+      }});
+    assert.equal(output[0].result.isError,undefined);
+    await finish;await onMessage({id:'reply',text:'Finished original request'});
+  }};
+  runtime=new AssistantRuntime({root:path.join(f.root,'Assistant'),coordinator});t.after(()=>runtime.close());
+  runtime.accounts=f.controller;f.controller.readWork=()=>readAccountWork(runtime);
+  await runtime.load();runtime.state.enabled=true;await runtime.save();
+  await fs.writeFile(path.join(runtime.root,'connection.json'),JSON.stringify({baseURL:'http://127.0.0.1:4487'}));
+  await fs.writeFile(path.join(f.root,'native-server.token'),'synthetic');
+  await runtime.command({action:'message',requestId:'original-message',text:'Original authorized action'});
+  await f.request();await f.controller.advance();assert.deepEqual(f.calls,[]);
+  await runtime.command({action:'message',requestId:'later-message',text:'Later request 🌿'});
+  const observation={workerId:'fixture-worker',catalog:{tabs:[{id:'fixture-tab'}]}};
+  await runtime.nativePoll(observation);
+  const deadline=Date.now()+3000;
+  while(!(await runtime.job('original-tool'))&&Date.now()<deadline)await new Promise(r=>setTimeout(r,5));
+  assert.equal(runs,1);assert.equal((await runtime.job('original-tool')).accountSwitchHold,null);
+  const native=await runtime.nativePoll(observation);assert.equal(native.job.id,'original-tool');
+  await runtime.nativeResult({id:native.job.id,result:{}});
+  release();await runtime.drainTask;
+  assert.equal((await runtime.job('original-message')).status,'completed');
+  assert.equal((await runtime.job('later-message')).status,'queued');
+  await assert.rejects(runtime.command({action:'terminal.focus',requestId:'expired-child',tabId:'fixture-tab',coordinatorRequestId:'original-message'},{tool:true}),/no longer active/);
+  await f.controller.advance();assert.equal((await f.controller.snapshot()).activeOperation.status,'completed');
+  await runtime.drain();assert.equal(runs,1);
+  assert.equal((await runtime.job('later-message')).reasonCode,'account_request_reconciliation_required');
+  assert.equal(runtime.state.messages.filter(m=>m.role==='assistant').length,1);
+});
+
+test('cancelled switch releases held work on the original epoch; another switch waits for it',async t=>{
+  const f=await fixture(t),jobs=[];f.controller.readWork=async()=>({complete:true,jobs});
+  await f.request();
+  await f.controller.withWorkAdmission({id:'held',action:'message',fingerprint:'unchanged',allowHold:true},async stamp=>{
+    const job={id:'held',action:'message',fingerprint:'unchanged',...stamp,status:'queued'};jobs.push(job);return job;
+  });
+  await f.controller.cancel({operationId:'switch',requestId:'cancel'});
+  assert.equal((await f.controller.deliveryAdmission(jobs[0])).allowed,true);
+  await f.request('next-switch');await f.controller.advance();
+  assert.equal((await f.controller.snapshot()).activeOperation.status,'waiting');
+  assert.equal((await f.controller.deliveryAdmission(jobs[0])).allowed,true);assert.deepEqual(f.calls,[]);
+  jobs[0].status='completed';await f.controller.advance();assert.equal((await f.controller.snapshot()).activeOperation.status,'completed');
+});
+
+test('legacy accepted receipts are drained by exact fingerprint and unreadable inventory prevents adoption',async t=>{
+  const f=await fixture(t),job={id:'legacy',action:'terminal.queue',fingerprint:'exact',status:'agent_queued'};
+  let complete=true;f.controller.readWork=async()=>({complete,jobs:[job]});
+  await f.request();await f.controller.advance();assert.equal((await f.controller.deliveryAdmission(job)).allowed,true);
+  assert.equal((await f.controller.deliveryAdmission({...job,fingerprint:'changed'})).allowed,false);
+  job.status='completed';complete=false;await f.controller.advance();assert.deepEqual(f.calls,[]);
+  job.status='working';complete=true;await f.controller.advance();assert.deepEqual(f.calls,[]);
+  job.fingerprint='changed';job.status='completed';await f.controller.advance();assert.deepEqual(f.calls,[]);
+  assert.equal((await f.controller.snapshot()).activeOperation.observation.drain.pending[0].status,'receipt_identity_changed');
+  job.fingerprint='exact';
+  complete=true;await f.controller.advance();assert.equal((await f.controller.snapshot()).activeOperation.status,'completed');
+});
+
+test('work receipt traffic preserves the reviewed account-selection revision',async t=>{
+  const f=await fixture(t),reviewed=await f.controller.snapshot();
+  await f.controller.withWorkAdmission({id:'background-work',action:'message',fingerprint:'payload'},async stamp=>
+    ({id:'background-work',action:'message',fingerprint:'payload',status:'queued',...stamp}));
+  const after=await f.controller.snapshot();assert.equal(after.revision,reviewed.revision);assert.ok(after.journalRevision>reviewed.journalRevision);
+  const op=await f.controller.request({accountId:f.entry.id,requestId:'chosen',expectedRevision:reviewed.revision,confirmed:true});
+  assert.equal(op.status,'checking');assert.ok((await f.controller.snapshot()).revision>reviewed.revision);
+});
+
+test('the committed-work inventory reports malformed receipts and preserves project-queue identity',async t=>{
+  const f=await fixture(t),runtime={root:path.join(f.root,'Assistant')};
+  await fs.mkdir(path.join(runtime.root,'AppServer'),{recursive:true});
+  await fs.writeFile(path.join(runtime.root,'state.json'),JSON.stringify({version:1,jobs:[
+    {id:'main',action:'message',fingerprint:'main-body',status:'running'},
+    {id:'project',action:'appserver.queue',fingerprint:'old-mirror',status:'completed'}]}));
+  await fs.writeFile(path.join(runtime.root,'AppServer/state.json'),JSON.stringify({version:1,jobs:[
+    {id:'project',action:'appserver.queue',fingerprint:'actual-project-body',status:'agent_queued'}]}));
+  const read=await readAccountWork(runtime);assert.equal(read.complete,true);
+  assert.equal(read.jobs.find(j=>j.id==='project').status,'agent_queued');assert.equal(read.jobs.length,2);
+  await fs.writeFile(path.join(runtime.root,'state.json'),JSON.stringify({version:1,jobs:[{id:'unknown',status:'running'}]}));
+  assert.equal((await readAccountWork(runtime)).complete,false);
 });

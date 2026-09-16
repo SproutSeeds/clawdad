@@ -4,6 +4,8 @@ Latest live checkpoint: [September 15 sign-in verification](codex-account-signin
 
 ## Current verified baseline
 
+Current implementation follow-up: [accepted-work drain](codex-account-drain-2026-09-15.md), with 105/105 focused and 779/779 final runtime checks. The sign-in and registration work is complete (770e5d9). The dated first-attempt notes below preserve earlier evidence; they are not pending requests for another login.
+
 Source checkpoint c87b091 contains the guarded controller and synthetic transitions. Installed Mac build 145 and Codex CLI 0.154.0 are unchanged. The nine inherited dirty paths are classified and preserved. Neither the OpenAI desktop app nor ChatGPT browser sign-in is a prerequisite for running Terminal Codex.
 
 Cody approved investigation followed by implementation, with his participation at decisive steps. The first supported, separate-home Keychain sign-in was opened for codyshanemitchell@gmail.com on September 16 at 00:23 UTC. This does not change production Codex credentials or restart a real agent. The second requested account is playinthesunwithme@gmail.com.

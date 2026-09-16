@@ -7,6 +7,8 @@ import crypto from 'node:crypto';
 import {AssistantAppServer} from '../lib/assistant-app-server.mjs';
 import {classifyThreadOwner,rpcPages} from '../lib/codex-thread-control.mjs';
 import {AssistantRuntime} from '../lib/assistant-runtime.mjs';
+import {CodexAccounts} from '../lib/codex-accounts.mjs';
+import {readAccountWork} from '../lib/codex-account-consumers.mjs';
 
 const id=()=>crypto.randomUUID();
 async function fixture(t){
@@ -241,4 +243,35 @@ test('unavailable settings reject safely and lost configured acknowledgement rec
   await f.app.control('appserver.send',args,requestId);await f.app.control('appserver.reconcile',{deliveryRequestId:requestId},id());
   assert.equal(f.app.state.jobs.find(j=>j.id===requestId).status,'working');assert.equal((await f.app.inspect(f.threadId)).draft.text,'');
   assert.equal(f.calls.filter(c=>c.method==='turn/start').length,1);
+});
+
+test('accepted configured app-server work drains on its original owner before an account switch',async t=>{
+  const f=await fixture(t);f.app.start=()=>{};
+  const changes=[],a='a'.repeat(64),b='b'.repeat(64);
+  const accounts=new CodexAccounts({root:path.join(f.root,'Accounts'),
+    usage:{snapshot:async()=>({}),freshReading:async()=>({accountKey:a})},
+    inspectConsumers:async()=>({complete:true,consumers:[]}),
+    readWork:()=>readAccountWork({root:path.join(f.root,'Assistant'),appServer:f.app}),
+    adapter:{capabilities:{ready:true,reasons:[]},captureRecovery:async o=>({fingerprint:o.fingerprint,entries:[]}),
+      authenticate:async()=>{changes.push('account');return {state:'verified',method:'chatgpt',email:'b@example.test',accountKey:b,workspaceVerified:true};},
+      verify:async()=>({accountKey:b,allConsumersVerified:true,freshUsage:true})}});
+  f.app.accountControls=accounts;f.app.mayDispatch=async job=>(await accounts.deliveryAdmission(job)).allowed;
+  const saved=await accounts.add({email:'b@example.test',requestId:'saved',expectedRevision:0});
+  f.threads.get(f.threadId).status={type:'active'};
+  const token=(await f.app.inspect(f.threadId)).targetToken;
+  const args={threadId:f.threadId,targetToken:token,text:'Authorized original-account work',model:'test-model',reasoningEffort:'low'};
+  const accepted=await f.app.control('appserver.queue',args,'accepted');assert.equal(accepted.job.status,'queued');
+  await accounts.request({accountId:saved.account.id,requestId:'switch',expectedRevision:(await accounts.snapshot()).revision,confirmed:true});
+  await accounts.advance();assert.deepEqual(changes,[]);
+  await assert.rejects(f.app.control('appserver.queue',{...args,text:'Later work'},'later'),/holding new work/);
+  // Local draft editing stays available without submitting or changing owner.
+  await f.app.control('appserver.draft',{threadId:f.other,text:'Keep this draft',expectedRevision:0},'draft');
+  f.threads.get(f.threadId).status={type:'idle'};await f.app.poll();
+  assert.equal(f.calls.filter(c=>c.method==='turn/start').length,1);
+  assert.equal(f.calls.find(c=>c.method==='turn/start').args.clientUserMessageId,'accepted');
+  await accounts.advance();assert.deepEqual(changes,[]);
+  f.threads.get(f.threadId).turns[0].status='completed';f.threads.get(f.threadId).status={type:'idle'};await f.app.poll();
+  await accounts.advance();assert.deepEqual(changes,['account']);assert.equal((await accounts.snapshot()).epoch,1);
+  await f.app.control('appserver.queue',args,'accepted');assert.equal(f.calls.filter(c=>c.method==='turn/start').length,1);
+  assert.equal((await f.app.inspect(f.other)).draft.text,'Keep this draft');
 });
