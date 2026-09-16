@@ -73,9 +73,18 @@ import ClawDadRemoteAssistProtocol
     // is re-observed below on every check. Re-enumerating every unrelated
     // Terminal window for each paste/status step is unnecessary and can stall
     // a transition behind another window's scripting response.
-    let catalog:RemoteTerminalTabState
+    var catalog:RemoteTerminalTabState
     if let known=tabs.assistantKnownCatalog,known.tabs.contains(where:{tabs.assistantSnapshot(tabID:$0.id)?.tty==tty}) {catalog=known}
     else {catalog=try await tabs.catalog()}
+    if !catalog.tabs.contains(where:{tabs.assistantSnapshot(tabID:$0.id)?.tty==tty}),source["windowIdentity"]==nil {
+      let owner=try binding(tty:tty)
+      guard source["processIdentity"]?.string==owner.instanceId,
+        source["pid"]?.number.map({Int($0)==Int(owner.pid)}) ?? (source["pid"]?.string==owner.pid) else{throw fail("agent_owner_changed")}
+      catalog=try await tabs.assistantResolveAccountTTY(tty) {
+        try self.ensure(ticket)
+        guard try self.binding(tty:tty)==owner else{throw self.fail("agent_owner_changed")}
+      }
+    }
     let matches=catalog.tabs.filter{tabs.assistantSnapshot(tabID:$0.id)?.tty==tty}
     guard matches.count==1,let descriptor=matches.first,let original=tabs.assistantSnapshot(tabID:descriptor.id) else{throw fail("tab_binding_unavailable")}
     let lifetime=try MacTerminalTitleMetadata.currentLifetime(tty)

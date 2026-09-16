@@ -75,8 +75,11 @@ final class MacAssistantBridge {
         do {
           diagnosticStep?("cycle")
           var observation: [String: AssistantValue] = ["workerId": .string(workerId)]
-          if observeWorkspaces { await mainWorkspace.automaticSnapshot() }
-          if inventoryRequested {
+          // Account requests have bounded deadlines. Do not put the same slow
+          // workspace/history sweep in front of their own exact inspection.
+          let accountInspectionPending=accountInventoryRequest != nil || accountProfileRequest != nil
+          if observeWorkspaces && !accountInspectionPending { await mainWorkspace.automaticSnapshot() }
+          if inventoryRequested && !accountInspectionPending {
             diagnosticStep?("activity")
             if observeWorkspaces { try? await tabs.prewarmActivity() }
             do {
@@ -88,6 +91,7 @@ final class MacAssistantBridge {
           }
           if let request=accountInventoryRequest {
             if accountInventory?.id != request {
+              let started=Date()
               let heartbeat=Task { [runtime] in
                 while !Task.isCancelled {
                   _=try? await runtime.json("/v1/assistant/native/heartbeat",[:])
@@ -95,34 +99,46 @@ final class MacAssistantBridge {
                 }
               }
               defer { heartbeat.cancel() }
-              var entries:[AssistantValue]=[],complete=true
+              var entries:[AssistantValue]=[],complete=true,reasonCode:String?
               do {
                 let catalog=try await tabs.catalog()
-                for descriptor in catalog.tabs {
-                  guard let tab=tabs.assistantSnapshot(tabID:descriptor.id),!tab.tty.isEmpty else { complete=false;continue }
+                observation["catalog"] = try .encode(catalog)
+                for tab in try await tabs.assistantAccountShells() {
                   do {
                     var fields=try await Task.detached { try MacCodexAccountProcess.inspect(tty:tab.tty) }.value
-                    fields["tabId"] = .string(descriptor.id)
-                    fields["windowId"] = .string("terminal-window-\(tab.groupID)")
-                    fields["title"] = .string(descriptor.title)
-                    fields["position"] = .number(Double(tab.position))
+                    if let id=tabs.assistantIdentifier(tty:tab.tty),let native=tabs.assistantSnapshot(tabID:id) {
+                      fields["tabId"] = .string(id)
+                      fields["windowId"] = .string("terminal-window-\(native.groupID)")
+                      fields["title"] = .string(catalog.tabs.first{$0.id==id}?.title ?? "Terminal agent")
+                      fields["position"] = .number(Double(native.position))
+                    } else {
+                      fields["title"] = .string(fields["directory"]?.string.map{URL(fileURLWithPath:$0).lastPathComponent} ?? "Terminal agent")
+                    }
                     entries.append(.object(fields))
                   } catch let error as MacCodexInputFailure where error.code=="no_codex_process" {
                     // Shell-only tabs need no authentication transition.
                   } catch {
                     complete=false
-                    entries.append(.object(["tabId":.string(descriptor.id),"tty":.string(tab.tty),
+                    entries.append(.object(["tty":.string(tab.tty),
                       "reasonCode":.string((error as? MacCodexInputFailure)?.code ?? "process_inspection_failed")]))
                   }
                 }
-              } catch { complete=false }
+              } catch { complete=false;reasonCode=(error as? MacTerminalTabFailure)?.code ?? "terminal_catalog_unavailable" }
               var inventory:[String:AssistantValue]=["id":.string(request),"complete":.bool(complete),"consumers":.array(entries)]
+              if let reasonCode {
+                inventory["reasonCode"] = .string(reasonCode)
+                inventory["reason"] = .string("Terminal inventory needs attention (\(reasonCode)). Existing windows and work were preserved.")
+              }
               do {
                 let owners=try await Task.detached {try MacCodexAccountActivity.allOwners()}.value
                 inventory["processes"] = owners["processes"]
                 inventory["processesObservedAt"] = owners["observedAt"]
                 inventory["processesComplete"] = .bool(true)
-              } catch {inventory["processesComplete"] = .bool(false)}
+              } catch {
+                inventory["processesComplete"] = .bool(false)
+                inventory["processesReasonCode"] = .string((error as? MacCodexInputFailure)?.code ?? "process_inventory_failed")
+              }
+              inventory["elapsedMs"] = .number(Date().timeIntervalSince(started)*1000)
               accountInventory=(request,.object(inventory))
             }
             observation["accountInventory"] = accountInventory?.value
@@ -131,7 +147,7 @@ final class MacAssistantBridge {
           var bindings: [AssistantValue] = []
           var owners: [String: MacCodexInputBinding] = [:]
           var missing = Set<String>()
-          for pending in pendingBindings {
+          for pending in (accountInspectionPending ? []:pendingBindings) {
             guard let request = pending.object, let tty = request["tty"]?.string,
               let instanceId = request["agentInstanceId"]?.string, let id = request["id"]?.string else { continue }
             if owners[tty] == nil && !missing.contains(tty) {

@@ -369,7 +369,14 @@ final class MobileAssistantController: ObservableObject {
   func settingsRequest(_ action: String, args: [String: AssistantValue] = [:],
     id: String = UUID().uuidString.lowercased()) async throws -> [String: AssistantValue] {
     #if DEBUG
-    if let preview { return try preview.research(action, args: args, id: id) }
+    if let preview {
+      let reply = try preview.research(action, args: args, id: id)
+      if action == "accounts.switch", ProcessInfo.processInfo.arguments.contains("--clawdad-accounts-switch-test") {
+        try await Task.sleep(for: .seconds(4))
+        if ProcessInfo.processInfo.arguments.contains("--clawdad-accounts-lost-reply-test") { throw AssistantProtocolError.timedOut }
+      }
+      return reply
+    }
     #endif
     let requestedScope = scope, deadline = Date().addingTimeInterval(20)
     while !connection.connected {

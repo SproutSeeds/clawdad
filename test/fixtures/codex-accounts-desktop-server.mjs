@@ -27,7 +27,8 @@ runtime.accounts.authorizations=new CodexAccountAuthorizations({root:path.join(r
         throw Error('Only synthetic account reads and sign-in are available');
       }};
   }});
-await runtime.load();let requests=[];
+await runtime.load();let requests=[],waiting=false,dropSwitch=false,targetKey='a'.repeat(64);
+runtime.accounts.readWork=async()=>({complete:true,jobs:waiting?[{id:'fixture-pending-work',action:'legacy.dispatch',fingerprint:'fixture-request',status:'working'}]:[{id:'fixture-pending-work',action:'legacy.dispatch',fingerprint:'fixture-request',status:'completed'}]});
 const page=await fs.readFile(new URL('../../web/index.html',import.meta.url),'utf8');
 const dialog=page.match(/<dialog id="weeklyUsageDialog"[\s\S]*?<\/dialog>/)?.[0];
 if(!dialog)throw Error('The production allowance dialog is missing.');
@@ -44,8 +45,17 @@ const server=http.createServer(async(req,res)=>{
     res.setHeader('content-type',url.pathname.endsWith('.css')?'text/css; charset=utf-8':'application/javascript; charset=utf-8');res.end(await fs.readFile(new URL('../../web'+url.pathname,import.meta.url)));return;
   }
   if(url.pathname==='/v1/codex/weekly-usage')return json(res,200,await usage.snapshot());
+  if(url.pathname==='/fixture/ready'){
+    waiting=true;dropSwitch=true;
+    runtime.accounts.inspectConsumers=async()=>({complete:true,consumers:[],reasons:[]});
+    runtime.accounts.adapter={capabilities:{ready:true},captureRecovery:async observation=>({fingerprint:observation.fingerprint,entries:[]}),
+      authenticate:async({target})=>({state:'verified',email:target.email,accountKey:targetKey,method:'chatgpt',workspaceVerified:true}),
+      verify:async()=>({accountKey:targetKey,allConsumersVerified:true,freshUsage:true})};
+    runtime.accounts.start({intervalMs:50});return json(res,200,{ok:true});
+  }
+  if(url.pathname==='/fixture/finish'){waiting=false;return json(res,200,{ok:true});}
   if(url.pathname==='/fixture/evidence')return json(res,200,{requests,state:await runtime.accounts.snapshot(),jobs:runtime.state.jobs});
-  if(await assistantHttp(req,res,url,runtime,{json,readBody:async r=>{let text='';for await(const chunk of r)text+=chunk;const body=JSON.parse(text);requests.push(body);return body;}}))return;
+  if(await assistantHttp(req,res,url,runtime,{json,readBody:async r=>{let text='';for await(const chunk of r)text+=chunk;const body=JSON.parse(text);requests.push(body);if(body.action==='accounts.switch'&&dropSwitch){dropSwitch=false;res.end=()=>res.destroy();}return body;}}))return;
   json(res,404,{error:'Fixture route unavailable'});
 });
 server.listen(0,'127.0.0.1',async()=>{await fs.writeFile(path.join(root,'ready.json'),JSON.stringify({baseURL:`http://127.0.0.1:${server.address().port}`}));});

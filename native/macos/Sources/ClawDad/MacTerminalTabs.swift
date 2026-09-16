@@ -93,6 +93,7 @@ protocol MacTerminalAutomating: AnyObject {
   @MainActor var supportsReordering: Bool { get }
   @MainActor
   func readTabs() async throws -> [MacTerminalTabSnapshot]
+  @MainActor func readShellTabs() async throws -> [MacTerminalTabSnapshot]
   @MainActor func inputIdentity() async throws -> String?
   @MainActor func focusTab(_ snapshot: MacTerminalTabSnapshot) async throws
   @MainActor func moveTab(_ snapshot: MacTerminalTabSnapshot, toIndex: Int, group: [MacTerminalTabSnapshot]) async throws
@@ -105,6 +106,7 @@ protocol MacTerminalAutomating: AnyObject {
 }
 
 extension MacTerminalAutomating {
+  @MainActor func readShellTabs() async throws -> [MacTerminalTabSnapshot] { try await readTabs() }
   @MainActor func openTab(in snapshot: MacTerminalTabSnapshot) async throws {
     throw MacTerminalTabFailure(code: "create_unavailable", message: "This Terminal interface cannot create a verified tab.", state: nil)
   }
@@ -200,6 +202,33 @@ final class MacTerminalTabController {
   func assistantIdentifier(tty: String) -> String? {
     let matches = snapshotsByIdentifier.filter { !$0.value.tty.isEmpty && $0.value.tty == tty }
     return matches.count == 1 ? matches.first?.key : nil
+  }
+  /// Read-only process inventory must work before native cards have been
+  /// visited. Script window/index fields are observations, never physical AX
+  /// ownership. An independent process census still accounts for every owner.
+  func assistantAccountShells() async throws -> [MacTerminalTabSnapshot] {
+    let rows=try await automation.readShellTabs().filter{!$0.tty.isEmpty}
+    guard Set(rows.map(\.tty)).count==rows.count else {
+      throw MacCodexAccountHandoffEvidence.failure("ambiguous_terminal_tty")
+    }
+    return rows
+  }
+  /// Called only during an explicitly accepted account capture, once owners
+  /// are idle. Select native controls to establish cold TTY mappings; titles
+  /// and candidate activity associations never authorize the binding.
+  func assistantResolveAccountTTY(_ tty:String,validate:() throws -> Void) async throws -> RemoteTerminalTabState {
+    try validate()
+    var state=try await catalog()
+    if assistantIdentifier(tty:tty) != nil { return state }
+    let candidates=state.tabs.filter{assistantSnapshot(tabID:$0.id)?.tty.isEmpty==true}.map(\.id)
+    for id in candidates {
+      try validate()
+      guard state.tabs.contains(where:{$0.id==id}) else {throw MacCodexAccountHandoffEvidence.failure("tab_inventory_changed")}
+      state=try await focus(tabID:id,expectedRevision:state.revision)
+      try validate()
+      if let target=assistantIdentifier(tty:tty),state.selectedTabId==target {return state}
+    }
+    throw MacCodexAccountHandoffEvidence.failure("tab_binding_unavailable")
   }
   func inputIdentity() async throws -> String? { try await automation.inputIdentity() }
 
@@ -644,6 +673,16 @@ final class MacTerminalAutomation: MacTerminalAutomating, @unchecked Sendable {
   }
 
   @MainActor
+  func readShellTabs() async throws -> [MacTerminalTabSnapshot] {
+    guard !NSRunningApplication.runningApplications(withBundleIdentifier:"com.apple.Terminal").isEmpty else{return []}
+    return try await withCheckedThrowingContinuation { continuation in
+      queue.async { continuation.resume(with:Result {
+        try Self.requestAutomationPermission()
+        return try Self.parseCatalog(Self.execute(Self.catalogScript))
+      }) }
+    }
+  }
+
   func readTabs() async throws -> [MacTerminalTabSnapshot] {
     guard !NSRunningApplication.runningApplications(
       withBundleIdentifier: "com.apple.Terminal"

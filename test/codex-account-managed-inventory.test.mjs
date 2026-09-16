@@ -34,3 +34,24 @@ test('fresh sessions and alternate authentication give explicit reasons and rema
   f.native.processes[0].alternateAuthentication=true;
   assert.match((await f.inspect()).consumers[0].reason,/separate authentication/);
 });
+test('cold native cards do not hide a verified Terminal process or borrow a same-title tab binding',async()=>{
+  const f=fixture();delete f.native.consumers[0].tabId;delete f.native.consumers[0].windowId;
+  const value=await f.inspect();assert.equal(value.complete,true);
+  const terminal=value.consumers.find(c=>c.kind==='terminal_codex');
+  assert.equal(terminal.pid,30);assert.equal(terminal.sessionId,'thread');assert.equal(terminal.tty,'/dev/ttys001');
+  assert.equal(terminal.tabId,undefined);assert.equal(terminal.recoverable,false);
+});
+test('missing native replies, catalog failures, individual tab failures and stale census have distinct actionable diagnostics',async()=>{
+  const f=fixture();
+  f.options.readNative=async()=>({complete:false,reasonCode:'native_inventory_timeout',reason:'The Mac did not finish its inventory.',lastRequestMatched:false});
+  let value=await f.inspect();assert.match(value.reasons[0],/did not finish/);assert.equal(value.diagnostics.reasonCode,'native_inventory_timeout');
+  assert.equal(value.diagnostics.lastRequestMatched,false);
+  f.options.readNative=async()=>({...f.native,complete:false,reason:'Terminal inventory needs attention (accessibility_required).',reasonCode:'accessibility_required'});
+  value=await f.inspect();assert.match(value.reasons[0],/accessibility_required/);assert.deepEqual(value.consumers,[]);
+  f.options.readNative=async()=>({...f.native,complete:false,consumers:[{tabId:'exact-tab',tty:'/dev/ttys001',reasonCode:'agent_not_foreground'}]});
+  value=await f.inspect();assert.ok(value.reasons.some(r=>r.includes('/dev/ttys001')&&r.includes('agent_not_foreground')));
+  f.options.readNative=async()=>({...f.native,processesComplete:false,processesReasonCode:'process_inventory_changed'});
+  value=await f.inspect();assert.match(value.reasons[0],/process_inventory_changed/);
+  f.options.readNative=async()=>f.native;f.options.clock=()=>6001;
+  value=await f.inspect();assert.match(value.reasons[0],/stale before delivery/);assert.equal(value.diagnostics.processAgeMs,5001);
+});

@@ -3927,6 +3927,19 @@ fs.writeFileSync(
     assert.notEqual(payload.sessionRecovery.sessionId, sessionId);
     assert.equal(payload.sessionRecovery.session.providerSessionSeeded, false);
     assert.equal(await readFile(invokedPath, "utf8"), "invoked");
+    // The real HTTP dispatch path must isolate account and Assistant state with
+    // the configured CLI home. This caught fixtures polluting the desktop app.
+    const accountResponse = await fetch(`${baseUrl}/v1/assistant/request`, {method: "POST",
+      headers: {"content-type":"application/json", "tailscale-user-login":"tester@example.com"},
+      body: JSON.stringify({action:"accounts.add",email:"fixture@example.test",requestId:"isolation-account",expectedRevision:0})});
+    assert.equal(accountResponse.status,200,await accountResponse.text());
+    const accountState = JSON.parse(await readFile(path.join(home, "native/Accounts/switch-state.json"), "utf8"));
+    assert.equal(accountState.accounts.length,1);
+    assert.equal(accountState.accounts[0].email,"fixture@example.test");
+    assert.equal(accountState.activeOperationId,null);
+    // Non-native test servers do not enroll project dispatch in desktop handoff.
+    assert.deepEqual(accountState.work||{},{});
+
 
     const state = JSON.parse(await readFile(path.join(home, "state.json"), "utf8"));
     const projectState = state.projects[projectPath];

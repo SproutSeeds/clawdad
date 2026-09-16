@@ -5548,7 +5548,7 @@ button.detail-backdrop:focus-visible:not(:disabled) {
 .weekly-usage-header button { flex: 0 0 auto; width: auto; min-width: 44px; padding-inline: 14px; }
 #codexAccounts summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; }
 #codexAccounts label { display: block; margin-block: 10px; }
-#codexAccounts input { display: block; box-sizing: border-box; width: 100%; min-height: 44px; }
+#codexAccounts input, #codexAccounts select { display: block; box-sizing: border-box; width: 100%; min-height: 44px; }
 #codexAccounts section { border-top: 1px solid #795522; padding-block: 12px; overflow-wrap: anywhere; }
 #codexAccounts button:disabled { cursor: default; }
 
@@ -5556,3 +5556,7 @@ button.detail-backdrop:focus-visible:not(:disabled) {
 #speechBoostValue { text-transform: none; font-variant-numeric: tabular-nums; }
 #speechBoost { appearance: auto; accent-color: var(--gold, #f4c66a); padding: 0; height: 44px; background: transparent; border: 0; }
 #speechBoostReset, #speechBoostPreview { cursor: pointer; }
+
+#codexAccounts select { cursor: pointer; font: inherit; max-width: 100%; }
+#codexAccountSwitchStatus { overflow-wrap: anywhere; }
+#codexAccountSwitch { font-weight: 700; border: 1px solid #c89639; }

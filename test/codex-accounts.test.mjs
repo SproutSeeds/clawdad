@@ -317,7 +317,21 @@ test('closed or expired native inventory requests stop asking the worker and ret
   t.after(()=>runtime.close());await runtime.load();
   const request=runtime.accountConsumerInventory({waitMs:1000});runtime.accountInventoryRequest.expires=0;
   const result=await request;assert.equal(result.complete,false);assert.equal(runtime.accountInventoryRequest,null);
-  assert.match(result.reason,/fresh account-process inventory/);assert.equal(runtime.state.jobs.length,0);
+  assert.match(result.reason,/fresh account-process inventory/);assert.equal(result.reasonCode,'native_inventory_timeout');
+  assert.equal(result.lastRequestMatched,false);assert.equal(runtime.state.jobs.length,0);
+});
+test('account inventory allows a large live window inspection while coalescing callers onto the same nonce',async t=>{
+  const f=await fixture(t,{supported:false}),runtime=new AssistantRuntime({root:path.join(f.root,'Assistant'),coordinator:{stop(){}}});
+  t.after(()=>runtime.close());await runtime.load();
+  const start=Date.now(),first=runtime.accountConsumerInventory();
+  assert.ok(runtime.accountInventoryRequest.expires-start>=89_000);
+  const second=runtime.accountConsumerInventory();
+  const poll=await runtime.nativePoll({workerId:'native-current'});
+  await runtime.nativePoll({workerId:'native-current',accountInventory:{id:poll.accountInventoryRequest,complete:true,
+    processesComplete:true,processesObservedAt:Date.now(),consumers:[{processId:'42',sessionId:'exact'}]}});
+  const values=await Promise.all([first,second]);assert.deepEqual(values[0],values[1]);
+  assert.equal(values[0].consumers[0].sessionId,'exact');assert.equal(runtime.accountInventoryRequest,null);
+  assert.equal(runtime.state.jobs.length,0);
 });
 test('profile activity transport binds each native census to its exact home and fresh request without starting a conversation',async t=>{
   const f=await fixture(t,{supported:false}),runtime=new AssistantRuntime({root:path.join(f.root,'Assistant'),coordinator:{stop(){}}});
@@ -467,4 +481,20 @@ test('the committed-work inventory reports malformed receipts and preserves proj
   assert.equal(read.jobs.find(j=>j.id==='project').status,'agent_queued');assert.equal(read.jobs.length,2);
   await fs.writeFile(path.join(runtime.root,'state.json'),JSON.stringify({version:1,jobs:[{id:'unknown',status:'running'}]}));
   assert.equal((await readAccountWork(runtime)).complete,false);
+});
+
+test('status reconciles a lost same-target alias receipt read-only and names unresolved work',async t=>{
+  const f=await fixture(t);
+  f.controller.readWork=async()=>({complete:true,jobs:[{id:'old-unresolved',action:'legacy.dispatch',fingerprint:'fixture-fingerprint',status:'attention'}]});
+  await f.request();await f.controller.advance();
+  const state=await f.controller.snapshot();
+  assert.equal(state.activeOperation.reasonCode,'work_receipts_unresolved');
+  assert.match(state.activeOperation.reason,/1 earlier work receipt needs reconciliation/);
+  await f.request('second-client');
+  const restored=new CodexAccounts(f.options);
+  const receipt=await restored.control('accounts.status',{receiptId:'second-client'});
+  assert.deepEqual(receipt.accountReceipt,{requestId:'second-client',accepted:true,operationId:'switch',accountId:f.entry.id});
+  assert.deepEqual(f.calls,[]);
+  assert.equal(Object.values((await restored.snapshot()).operations).length,1);
+  assert.equal((await restored.control('accounts.status',{receiptId:'unknown'})).accountReceipt,undefined);
 });

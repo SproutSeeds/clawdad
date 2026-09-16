@@ -150,13 +150,29 @@
           "canConnectAccounts":.bool(true),
           "current":.object(["email":.string("fixture@example.test"),"plan":.string("pro"),"status":.string("current")]),
           "capabilities":.object(["ready":.bool(false),"reasons":.array([.object(["message":.string("Keeping both Codex accounts signed in independently still needs the isolated two-account verification.")])])])]
+        if ProcessInfo.processInfo.arguments.contains("--clawdad-accounts-switch-test"), state["codexAccounts"] == nil {
+          accounts["capabilities"] = .object(["ready":.bool(true)])
+          accounts["accounts"] = .array(["first", "second", "third"].map { name in
+            .object(["id":.string(name), "email":.string(name+"@example.test"), "authentication":.string("verified")])
+          })
+        }
         if action=="accounts.add" {
           var entries=accounts["accounts"]?.array ?? []
           if !entries.contains(where:{$0.object?["id"]?.string==id}) { entries.append(.object(["id":.string(id),"email":args["email"] ?? .string("second@example.test"),"workspaceLabel":args["workspaceLabel"] ?? .string(""),"authentication":.string("needs_sign_in")])) }
           accounts["accounts"] = .array(entries);accounts["revision"] = .number((accounts["revision"]?.number ?? 0)+1)
         }
         if action=="accounts.switch" {
-          accounts["activeOperation"] = .object(["id":.string(id),"status":.string("needs_setup"),"fenced":.bool(false),"reason":.string("Live switching needs isolated verification. Current work is preserved.")])
+          let ready = accounts["capabilities"]?.object?["ready"]?.bool == true
+          let operation: AssistantValue = .object(["id":.string(id),"targetId":args["accountId"] ?? .null,"status":.string(ready ? "waiting" : "needs_setup"),"fenced":.bool(ready),"reason":.string(ready ? "2 earlier work receipts need reconciliation before switching. Review affected sessions or cancel this switch to keep using the current account." : "Live switching needs isolated verification. Current work is preserved.")])
+          accounts["activeOperation"] = operation
+          accounts["operations"] = .array([operation])
+        }
+        if action=="accounts.cancel" || action=="accounts.reconcile" {
+          var operation=accounts["activeOperation"]?.object ?? [:]
+          operation["fenced"] = .bool(false)
+          operation["status"] = .string(action=="accounts.cancel" ? "cancelled" : "completed")
+          operation["reason"] = .string(action=="accounts.cancel" ? "Account switch cancelled. Existing work was preserved." : "All fixture sessions verified on the selected account.")
+          accounts["activeOperation"] = .object(operation); accounts["operations"] = .array([.object(operation)])
         }
         if action=="accounts.signin" || action=="accounts.verify_signin" {
           accounts["accounts"] = .array((accounts["accounts"]?.array ?? []).map { value in
@@ -169,7 +185,7 @@
           })
         }
         state["codexAccounts"] = .object(accounts)
-        return ["accounts":.object(accounts)]
+        return ["accounts":.object(accounts),"accountReceipt":.object(["account":.object(["id":.string(id)])])]
       }
       if action.hasPrefix("settings.") { return try modelSettings(action, args: args) }
       if action.hasPrefix("mainworkspace.") {

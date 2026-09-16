@@ -4,6 +4,51 @@ import XCTest
   func testAccountEntryAndNavigationKeepAuthenticationGuarded() { checkAccounts(largeText: false) }
   func testAccountsAtAccessibilityTextSize() { checkAccounts(largeText: true) }
 
+  func testSelectedAccountSwitchHasImmediateFeedbackAndRecoverableWaiting() throws { try checkSwitch(lostReply: false) }
+  func testLostSwitchReplyReconcilesWithoutAnotherTap() throws { try checkSwitch(lostReply: true) }
+
+  private func checkSwitch(lostReply: Bool) throws {
+    continueAfterFailure = false
+    let app = XCUIApplication()
+    app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-weekly-usage-test", "--clawdad-assistant-test", "--clawdad-accounts-switch-test"]
+    if lostReply { app.launchArguments.append("--clawdad-accounts-lost-reply-test") }
+    app.launch()
+    let usage = app.buttons["clawdad.weeklyUsage.main"]
+    XCTAssertTrue(usage.waitForExistence(timeout: 15)); usage.tap()
+    let open = app.buttons["clawdad.accounts.open"]
+    for _ in 0..<6 where !open.isHittable { app.swipeUp() }
+    open.tap()
+    let form=app.collectionViews["clawdad.accounts"]
+    func show(_ element: XCUIElement, up: Bool = false) {
+      for _ in 0..<14 {
+        if element.exists && element.isHittable && element.frame.minY > app.navigationBars["Codex accounts"].frame.maxY + 12 && element.frame.maxY < app.frame.maxY - 16 { return }
+        let backwards=element.exists && element.frame.height > 0 ? element.frame.minY < app.navigationBars["Codex accounts"].frame.maxY + 12 : up
+        form.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: backwards ? 0.3 : 0.8)).press(forDuration: 0.05, thenDragTo: form.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: backwards ? 0.8 : 0.3)))
+      }
+      XCTFail(app.debugDescription)
+    }
+    let picker=app.buttons["clawdad.accounts.selector"]
+    show(picker); XCTAssertGreaterThanOrEqual(picker.frame.height,43.99);picker.tap()
+    app.buttons["second@example.test"].tap()
+    show(app.buttons["clawdad.accounts.connect"])
+    XCTAssertEqual(app.buttons.matching(identifier:"clawdad.accounts.connect").count,1)
+    let change=app.buttons["clawdad.accounts.switch"]
+    show(change);change.tap()
+    XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "clawdad.accounts.progress").firstMatch.waitForExistence(timeout: 2),app.debugDescription)
+    let status=app.staticTexts["clawdad.accounts.switchStatus"]
+    XCTAssertTrue(status.waitForExistence(timeout: 8));XCTAssertTrue(status.label.contains("2 earlier work receipts"))
+    let cancel=app.buttons["Cancel switch"]
+    // Lost HTTP acknowledgment is resolved by status, never by a new switch ID.
+    let enabled=NSPredicate(format:"enabled == true")
+    expectation(for: enabled,evaluatedWith:cancel);waitForExpectations(timeout:8)
+    let shot=XCTAttachment(screenshot:app.screenshot());shot.name=lostReply ? "Switch lost reply reconciled" : "Switch accepted and waiting";shot.lifetime = .keepAlways;add(shot)
+    show(cancel,up:true);cancel.tap()
+    XCTAssertTrue(app.staticTexts["Account switch cancelled. Existing work was preserved."].waitForExistence(timeout:5))
+    app.buttons["Back to weekly allowance"].tap();open.tap()
+    show(picker);XCTAssertEqual(picker.value as? String,"second@example.test",picker.debugDescription)
+    XCTAssertFalse(app.buttons["End voice conversation"].exists)
+  }
+
   private func checkAccounts(largeText: Bool) {
     continueAfterFailure = false
     let app = XCUIApplication()
@@ -24,7 +69,7 @@ import XCTest
         }
         if navigation.exists {
           let form = app.collectionViews["clawdad.accounts"]
-          let down = element.exists ? element.frame.minY < top : earlier
+          let down = element.exists && element.frame.height > 0 ? element.frame.minY < top : earlier
           let start = form.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: down ? 0.38 : 0.8))
           let end = form.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: down ? 0.7 : 0.38))
           start.press(forDuration: 0.05, thenDragTo: end)
@@ -42,7 +87,7 @@ import XCTest
     }
     let accounts = app.buttons["clawdad.accounts.open"]
     reveal(accounts); accounts.tap()
-    XCTAssertTrue(app.staticTexts["fixture@example.test"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.navigationBars["Codex accounts"].waitForExistence(timeout: 5))
     let email = app.textFields["clawdad.accounts.email"]
     reveal(email); email.tap(); email.typeText("second@example.test")
     XCTAssertEqual(email.value as? String, "second@example.test")
@@ -52,16 +97,17 @@ import XCTest
     reveal(save)
     XCTAssertGreaterThanOrEqual(save.frame.height, 44)
     save.tap()
-    let saved = app.staticTexts["second@example.test"]
-    reveal(saved, earlier: true, actionable: false)
+    let saved = app.buttons["clawdad.accounts.selector"]
+    reveal(saved, actionable: false)
     XCTAssertTrue(saved.waitForExistence(timeout: 5), app.debugDescription)
+    XCTAssertEqual(saved.value as? String,"second@example.test")
     let connect = app.buttons["clawdad.accounts.connect"]
     reveal(connect)
     // XCTest can report a 44-point SwiftUI frame as 43.99999999999994.
     XCTAssertGreaterThanOrEqual(connect.frame.height, 44 - 0.01)
     connect.tap()
     let verified = app.staticTexts["Saved subscription sign-in verified"]
-    reveal(verified, earlier: true, actionable: false)
+    reveal(verified, actionable: false)
     XCTAssertTrue(verified.waitForExistence(timeout: 5))
     let select = app.buttons["Prepare account switch"]
     reveal(select); select.tap()
