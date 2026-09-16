@@ -47,8 +47,8 @@ const server=http.createServer(async(req,res)=>{
   if(url.pathname==='/v1/codex/weekly-usage')return json(res,200,await usage.snapshot());
   if(url.pathname==='/fixture/ready'){
     waiting=true;dropSwitch=true;
-    runtime.accounts.inspectConsumers=async()=>({complete:true,consumers:[],reasons:[]});
-    runtime.accounts.adapter={capabilities:{ready:true},captureRecovery:async observation=>({fingerprint:observation.fingerprint,entries:[]}),
+    runtime.accounts.inspectConsumers=async()=>({complete:true,consumers:[{id:'fixture-room',kind:'terminal_codex',pid:99998,tty:'/dev/ttys098',processIdentity:'fixture-room-owner',title:'RoomWave',sessionId:null,busy:null,recoverable:false,pendingReceipts:[],reason:'No verified resumable conversation.'}],reasons:[]});
+    runtime.accounts.adapter={capabilities:{ready:true,skipTerminalSessions:true},captureRecovery:async observation=>({fingerprint:observation.fingerprint,entries:[]}),
       authenticate:async({target})=>({state:'verified',email:target.email,accountKey:targetKey,method:'chatgpt',workspaceVerified:true}),
       verify:async()=>({accountKey:targetKey,allConsumersVerified:true,freshUsage:true})};
     runtime.accounts.start({intervalMs:50});return json(res,200,{ok:true});

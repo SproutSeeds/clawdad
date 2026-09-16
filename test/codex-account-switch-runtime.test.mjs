@@ -4,8 +4,21 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
-import {captureAccountAppServerLocal,readAccountSharedSummary,connectCodexAccountSwitchRuntime} from '../lib/codex-account-switch-runtime.mjs';
+import {captureAccountAppServerLocal,readAccountSharedSummary,connectCodexAccountSwitchRuntime,verifyAccountSwitchInventory} from '../lib/codex-account-switch-runtime.mjs';
+import {accountSkipIdentity,accountSkipOwner} from '../lib/codex-account-switch-scope.mjs';
 import {researchSave} from '../lib/research-budget.mjs';
+
+test('final account verification accounts for unchanged exclusions and rejects replacement, added or wrong-session owners',()=>{
+  const skipped={kind:'terminal_codex',pid:99,tty:'/dev/ttys099',processIdentity:'skip-lifetime'};
+  const kept={kind:'terminal_codex',pid:100,tty:'/dev/ttys100',sessionId:'exact-thread'};
+  const op={consumers:[kept],recovery:{entries:[{native:kept}]},excludedConsumers:[{owner:accountSkipOwner(skipped),identity:accountSkipIdentity(skipped),display:{}}]};
+  assert.equal(verifyAccountSwitchInventory({complete:true,consumers:[kept,skipped]},op),true);
+  assert.equal(verifyAccountSwitchInventory({complete:true,consumers:[kept,{...skipped,pid:101}]},op),false);
+  assert.equal(verifyAccountSwitchInventory({complete:true,consumers:[{...kept,sessionId:'other-thread'},skipped]},op),false);
+  assert.equal(verifyAccountSwitchInventory({complete:true,consumers:[kept,skipped,{...kept,pid:200,tty:'/dev/ttys200'}]},op),false);
+  assert.equal(verifyAccountSwitchInventory({complete:false,consumers:[kept]},op),false);
+  assert.equal(verifyAccountSwitchInventory({complete:true,consumers:[kept]},op),true);
+});
 
 test('local shared draft capture binds exact text and image bytes without changing pending receipts',async t=>{
   const root=await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(),'clawdad-shared-drafts-')));t.after(()=>fs.rm(root,{recursive:true,force:true}));

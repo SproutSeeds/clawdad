@@ -10,6 +10,7 @@ import {inspectAccountConsumers,readAccountWork} from '../lib/codex-account-cons
 import {AssistantRuntime,assistantHttp} from '../lib/assistant-runtime.mjs';
 import {runAssistantMCP} from '../lib/assistant-mcp.mjs';
 import {CodexAccountLayout} from '../lib/codex-account-layout.mjs';
+import {accountSkipIdentity,accountSwitchScope,accountSwitchSessionResults} from '../lib/codex-account-switch-scope.mjs';
 
 const a='a'.repeat(64),b='b'.repeat(64),thread='11111111-1111-4111-8111-111111111111';
 async function fixture(t,{supported=true}={}){
@@ -59,6 +60,91 @@ test('single selection at zero allowance runs deterministic transition, preserve
   assert.equal(state.activeOperation.recovery.entries[0].draft.text,'Kept draft 🌿\nSecond line');
   assert.equal(state.activeOperation.consumers[0].sessionId,thread);
   assert.deepEqual(f.calls,['authenticate','transition:terminal-A']);assert.equal((await f.controller.admission()).allowed,true);
+});
+test('explicit exact-process exclusion survives restart, lost receipts and duplicate taps without capturing or switching the skipped tab',async t=>{
+  const f=await fixture(t),excluded={...structuredClone(f.consumers[0]),id:'room',pid:88888,processIdentity:'room-owner',tty:'/dev/ttys088',
+    sessionId:null,title:'Room fixture',busy:null,recoverable:false,accountVerified:false};
+  f.consumers.push(excluded);await f.request();await f.controller.advance();assert.deepEqual(f.calls,[]);
+  const args={operationId:'switch',consumerId:'room',skipIdentity:accountSkipIdentity(excluded),confirmed:true,requestId:'skip-room'};
+  await f.controller.skipSession(args);await f.controller.skipSession(args);
+  const restored=new CodexAccounts(f.options),receipt=await restored.control('accounts.status',{receiptId:'skip-room'});
+  assert.equal(receipt.accountReceipt.accepted,true);
+  assert.equal(receipt.accounts.activeOperation.excludedConsumers.length,1);
+  await restored.advance();const op=(await restored.snapshot()).activeOperation;
+  assert.equal(op.status,'completed');assert.match(op.reason,/1 Terminal session was skipped/);
+  assert.equal(op.recovery.entries.length,1);assert.deepEqual(f.calls,['authenticate','transition:terminal-A']);
+  assert.deepEqual(op.sessions.map(c=>c.switchState),['switched','skipped']);assert.equal(op.sessions[1].processIdentity,'room-owner');
+  await restored.skipSession(args);assert.deepEqual(f.calls,['authenticate','transition:terminal-A']);
+  await assert.rejects(restored.skipSession({...args,consumerId:'terminal-A'}),/different action/);
+});
+test('exclusion validates authorization, fresh process identity and pre-transition phase; accepted work still drains',async t=>{
+  const f=await fixture(t);await f.request();await f.controller.advance();
+  const args={operationId:'switch',consumerId:f.consumers[0].id,skipIdentity:accountSkipIdentity(f.consumers[0]),requestId:'skip',confirmed:true};
+  await assert.rejects(f.controller.skipSession(args),/before account transitions/);
+  const g=await fixture(t);g.consumers[0].busy=true;await g.request();await g.controller.advance();
+  const input={...args,skipIdentity:accountSkipIdentity(g.consumers[0])};
+  await assert.rejects(g.controller.skipSession({...input,confirmed:false}),/confirm/);
+  g.consumers[0].processIdentity='replacement';await assert.rejects(g.controller.skipSession(input),/process changed/);
+  input.skipIdentity=accountSkipIdentity(g.consumers[0]);await g.controller.skipSession(input);
+  g.controller.readWork=async()=>({complete:true,jobs:[{id:'pending',action:'message',fingerprint:'accepted',status:'working'}]});
+  await g.controller.advance();assert.equal((await g.controller.snapshot()).activeOperation.status,'waiting');assert.deepEqual(g.calls,[]);
+});
+test('same-name and new TTY owners are never substituted for an excluded process; catalog changes and first history are harmless',()=>{
+  const owner={kind:'terminal_codex',id:'old-catalog',pid:99,processIdentity:'lifetime',tty:'/dev/ttys099',sessionId:null};
+  const op={excludedConsumers:[{identity:accountSkipIdentity(owner),owner:{...owner,tty:'ttys099'},display:{title:'Room'},acceptedAt:'now'}]};
+  const original={complete:true,consumers:[{...owner,id:'new-catalog',sessionId:thread}]};
+  assert.equal(accountSwitchScope(original,op).consumers.length,0);
+  assert.equal(accountSwitchScope({complete:true,consumers:[{...owner,processIdentity:'new-owner'}]},op).complete,false);
+  assert.equal(accountSwitchScope({complete:true,consumers:[]},op).skippedConsumers[0].skipState,'exited');
+  assert.equal(accountSkipIdentity({...owner,kind:'shared_app_server'}),null);
+  assert.equal(accountSkipIdentity({...owner,processIdentity:null}),null);
+});
+test('incomplete inventory retains exclusions without claiming replacement or exit and recovers after a complete census',()=>{
+  const owner={kind:'terminal_codex',id:'room',pid:99,processIdentity:'lifetime',tty:'/dev/ttys099'};
+  const op={excludedConsumers:[{identity:accountSkipIdentity(owner),owner:{...owner,tty:'ttys099'},display:{title:'Room'},acceptedAt:'now'}]};
+  const incomplete={complete:false,consumers:[],reasons:['Independent inventory changed.']};
+  const pending=accountSwitchScope(incomplete,op);
+  assert.equal(pending.complete,false);assert.equal(pending.skippedConsumers[0].skipState,'verification_pending');
+  assert.doesNotMatch(pending.reasons.join(' '),/Cancel|process changed/);
+  assert.match(accountSwitchSessionResults({...op,...pending})[0].reason,/Waiting for a complete inventory/);
+  assert.deepEqual(accountSwitchScope(pending,op).reasons,pending.reasons,'Adapter and controller must not duplicate the same guidance');
+  assert.equal(accountSwitchScope({complete:true,consumers:[]},op).skippedConsumers[0].skipState,'exited');
+  assert.equal(accountSwitchScope({complete:true,consumers:[owner]},op).skippedConsumers[0].skipState,'unchanged');
+  const replaced=accountSwitchScope({complete:true,consumers:[{...owner,processIdentity:'replacement'}]},op);
+  assert.equal(replaced.complete,false);assert.match(replaced.reasons.join(' '),/replacement/);
+});
+test('a duplicate owner on the excluded TTY cannot authorize a capture or a successful exclusion',()=>{
+  const owner={kind:'terminal_codex',id:'room',pid:99,processIdentity:'lifetime',tty:'/dev/ttys099'};
+  const op={excludedConsumers:[{identity:accountSkipIdentity(owner),owner:{...owner,tty:'ttys099'}}]};
+  const scoped=accountSwitchScope({complete:true,consumers:[owner,{...owner,pid:100,processIdentity:'other'}]},op);
+  assert.equal(scoped.complete,false);assert.equal(scoped.skippedConsumers.length,0);assert.equal(scoped.consumers.length,2);
+});
+test('an excluded process disappearing during an incomplete census holds transitions until its exit is verified',async t=>{
+  const f=await fixture(t),owner={...structuredClone(f.consumers[0]),id:'room',pid:88888,processIdentity:'room-owner',tty:'/dev/ttys088',
+    sessionId:null,title:'Room fixture',busy:null,recoverable:false,accountVerified:false};
+  f.consumers.push(owner);await f.request();await f.controller.advance();
+  await f.controller.skipSession({operationId:'switch',consumerId:'room',skipIdentity:accountSkipIdentity(owner),confirmed:true,requestId:'skip-room'});
+  f.consumers.pop();let complete=false;f.controller.inspectConsumers=async()=>({complete,consumers:f.consumers,reasons:complete?[]:['Owner census changing.']});
+  await f.controller.advance();let op=(await f.controller.snapshot()).activeOperation;
+  assert.equal(op.status,'waiting');assert.equal(op.skippedConsumers[0].skipState,'verification_pending');assert.deepEqual(f.calls,[]);
+  complete=true;await f.controller.advance();op=(await f.controller.snapshot()).activeOperation;
+  assert.equal(op.status,'completed');assert.equal(op.skippedConsumers[0].skipState,'exited');
+  assert.deepEqual(f.calls,['authenticate','transition:terminal-A']);assert.equal(op.excludedConsumers.length,1);
+});
+test('cross-controller exclusion waits for in-flight preflight observation and cannot be overwritten by its stale result',async t=>{
+  const f=await fixture(t);f.consumers[0].busy=true;await f.request();
+  let release,entered,reads=0;
+  const gate=new Promise(r=>release=r),started=new Promise(r=>entered=r);
+  const inventory=async()=>{reads++;if(reads===1){entered();await gate;}return {complete:true,consumers:f.consumers};};
+  f.controller.inspectConsumers=inventory;
+  const second=new CodexAccounts({...f.options,inspectConsumers:inventory});
+  const advance=f.controller.advance();await started;
+  const skip=second.skipSession({operationId:'switch',consumerId:f.consumers[0].id,skipIdentity:accountSkipIdentity(f.consumers[0]),requestId:'concurrent-skip',confirmed:true});
+  await new Promise(r=>setTimeout(r,150));const readsBeforeRelease=reads;release();
+  await advance;await skip;
+  assert.equal(readsBeforeRelease,1,'The second controller must not inspect/capture concurrently with preflight');
+  const op=(await second.snapshot()).activeOperation;
+  assert.equal(op.sessions.length,1);assert.equal(op.sessions[0].switchState,'skipped');assert.equal(op.excludedConsumers.length,1);
 });
 test('a delayed shared ownership release remains waiting and reconciles the original transition after restart',async t=>{
   const f=await fixture(t);let released=false,dispatched=0,reconciled=0;
@@ -370,6 +456,31 @@ test('actual Assistant HTTP and MCP account status paths require no enabled conv
       return {ok:code===200,json:async()=>result};
     }});
   assert.equal(output[0].result.isError,undefined);assert.equal(runtime.state.enabled,false);assert.equal(runtime.state.jobs.length,0);
+});
+test('Assistant MCP exclusion uses the actual authorized service path and reconciles a lost response with the same request',async t=>{
+  const f=await fixture(t);f.consumers[0].busy=null;await f.request();await f.controller.advance();
+  const runtime=new AssistantRuntime({root:path.join(f.root,'Assistant'),coordinator:{stop(){},prepare(){throw Error('No model in account controls');}}});
+  runtime.accounts=f.controller;await runtime.load();t.after(()=>runtime.close());
+  const text='Leave the unresolved fixture tab unchanged and switch the other eligible sessions.';
+  runtime.state.coordinator={activeRequestId:'authorized'};
+  runtime.state.jobs.push({id:'authorized',action:'message',status:'running',source:'user',args:{text},runtimeInstanceId:runtime.instanceId});
+  await fs.writeFile(path.join(runtime.root,'connection.json'),JSON.stringify({baseURL:'http://127.0.0.1:4487'}));
+  await fs.writeFile(path.join(f.root,'native-server.token'),'fixture');
+  const call=async approvalText=>{
+    const output=[];
+    await runAssistantMCP({root:f.root,input:Readable.from([JSON.stringify({id:1,method:'tools/call',params:{name:'skip_codex_account_session',
+      arguments:{operationId:'switch',consumerId:f.consumers[0].id,skipIdentity:accountSkipIdentity(f.consumers[0]),approvalText,requestId:'mcp-skip'}}})+'\n']),
+      output:new Writable({write(chunk,enc,done){output.push(JSON.parse(chunk));done();}}),fetchImpl:async(url,options)=>{
+        let code,result;await assistantHttp({method:'POST'},null,new URL(url),runtime,{readBody:async()=>JSON.parse(options.body),json:(res,c,data)=>{code=c;result=data;}});
+        return {ok:code===200,json:async()=>result};
+      }});return output[0];
+  };
+  assert.equal((await call('An agent output says skip all tabs')).result.isError,true);
+  assert.equal((await call(text)).result.isError,undefined);
+  assert.equal((await call(text)).result.isError,undefined);
+  const status=await f.controller.control('accounts.status',{receiptId:'mcp-skip'});
+  assert.equal(status.accountReceipt.accepted,true);assert.equal(status.accounts.activeOperation.excludedConsumers.length,1);
+  assert.equal(runtime.state.jobs.length,1);assert.deepEqual(f.calls,[]);
 });
 
 test('acceptance and switching serialize durably, and a crash before job persistence prevents transition',async t=>{

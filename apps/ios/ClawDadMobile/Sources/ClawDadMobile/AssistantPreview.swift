@@ -151,7 +151,7 @@
           "current":.object(["email":.string("fixture@example.test"),"plan":.string("pro"),"status":.string("current")]),
           "capabilities":.object(["ready":.bool(false),"reasons":.array([.object(["message":.string("Keeping both Codex accounts signed in independently still needs the isolated two-account verification.")])])])]
         if ProcessInfo.processInfo.arguments.contains("--clawdad-accounts-switch-test"), state["codexAccounts"] == nil {
-          accounts["capabilities"] = .object(["ready":.bool(true)])
+          accounts["capabilities"] = .object(["ready":.bool(true),"skipTerminalSessions":.bool(true)])
           accounts["accounts"] = .array(["first", "second", "third"].map { name in
             .object(["id":.string(name), "email":.string(name+"@example.test"), "authentication":.string("verified")])
           })
@@ -166,6 +166,16 @@
           let operation: AssistantValue = .object(["id":.string(id),"targetId":args["accountId"] ?? .null,"status":.string(ready ? "waiting" : "needs_setup"),"fenced":.bool(ready),"reason":.string(ready ? "2 earlier work receipts need reconciliation before switching. Review affected sessions or cancel this switch to keep using the current account." : "Live switching needs isolated verification. Current work is preserved.")])
           accounts["activeOperation"] = operation
           accounts["operations"] = .array([operation])
+          if ProcessInfo.processInfo.arguments.contains("--clawdad-accounts-skip-test"), var selected = operation.object {
+            selected["sessions"] = .array([.object(["id":.string("room"),"title":.string("RoomWave"),"switchState":.string("waiting"),"canSkip":.bool(true),"skipIdentity":.string(String(repeating:"a",count:64)),"reason":.string("This agent has no verified resumable conversation.")])])
+            accounts["activeOperation"] = .object(selected)
+          }
+        }
+        if action=="accounts.skip_session" {
+          var operation=accounts["activeOperation"]?.object ?? [:]
+          operation["reason"] = .string("RoomWave left unchanged. Checking the remaining sessions.")
+          operation["sessions"] = .array([.object(["id":.string("room"),"title":.string("RoomWave"),"switchState":.string("skipped"),"canSkip":.bool(false),"reason":.string("Left untouched. Its account is not verified by this switch.")])])
+          accounts["activeOperation"] = .object(operation)
         }
         if action=="accounts.cancel" || action=="accounts.reconcile" {
           var operation=accounts["activeOperation"]?.object ?? [:]

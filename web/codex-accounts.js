@@ -15,7 +15,7 @@ export function codexAccountsPanel(root,{request=async body=>{
   const picker=el('select'),pickerLabel=el('label','Account');picker.id='codexAccountSelector';pickerLabel.htmlFor=picker.id;pickerLabel.append(picker);
   status.setAttribute('role','status');status.setAttribute('aria-live','polite');status.tabIndex=-1;
   status.id='codexAccountSwitchStatus';
-  const actions=el('div');
+  const actions=el('div'),sessions=el('div');sessions.id='codexAccountSessions';
   let state,busy=false,pending,preview,loading=false,selectedId=storage.getItem('clawdad.codex.accounts.selection.v1')||'';
   const storageKey='clawdad.codex.accounts.pending.v1';
   try{pending=JSON.parse(storage.getItem(storageKey)||'null');}catch{}
@@ -23,7 +23,7 @@ export function codexAccountsPanel(root,{request=async body=>{
   const retry=button('Retry pending request',()=>send()),refresh=button('Refresh account status',()=>load());
   const explanation=el('p','An entry records your choice. It becomes authenticated only after supported sign-in is verified.');
   details.append(summary,emailLabel,workspaceLabel,explanation,save);
-  root.append(title,status,error,retry,current,help,pickerLabel,list,actions,details,refresh);
+  root.append(title,status,error,retry,actions,sessions,current,help,pickerLabel,list,details,refresh);
   function render(){
     current.textContent=state?.current?.email?`${state.current.email} · ${state.current.plan||'Subscription'}${state.current.status==='current'?'':' · Last verified reading'}`:'Verified Codex account unavailable';
     const operation=state?.activeOperation,target=state?.accounts?.find(a=>a.id===operation?.targetId);
@@ -38,6 +38,24 @@ export function codexAccountsPanel(root,{request=async body=>{
     }
     picker.value=selectedId;picker.disabled=busy||!!pending||!entries.length;
     list.replaceChildren();actions.replaceChildren();
+    sessions.replaceChildren();
+    if(operation?.sessions?.length){
+      sessions.append(el('h4','Session progress'));
+      for(const c of operation.sessions){
+        const row=el('section'),progress=c.switchState||'waiting';
+        row.append(el('strong',`${c.title||c.kind} · ${progress[0].toUpperCase()+progress.slice(1)}`));
+        if(c.tty)row.append(el('p',[c.directory,c.tty].filter(Boolean).join(' · ')));
+        if(c.reason)row.append(el('p',c.reason));
+        if(state.capabilities?.skipTerminalSessions&&c.canSkip){
+          const skip=button('Leave this tab unchanged',()=>send('accounts.skip_session',{operationId:operation.id,accountId:operation.targetId,
+            consumerId:c.id,skipIdentity:c.skipIdentity,confirmed:true}));
+          skip.setAttribute('aria-label',`Leave ${c.title||'Terminal session'} unchanged for this account switch`);
+          skip.dataset.consumerId=c.id;skip.disabled=busy||!!pending;row.append(skip);
+        }
+        sessions.append(row);
+      }
+      sessions.append(el('p','Skipped tabs stay open with their work intact. Their accounts may differ from the selected account.'));
+    }
     for(const account of entries.filter(a=>a.id===selectedId)){
       const row=el('section'),name=el('strong',account.email),label=el('p',account.workspaceLabel?`${account.workspaceLabel} · label supplied by you`:'Codex does not provide a workspace name here.');
       const authorization=account.authorization,signIn=authorization?.operation;

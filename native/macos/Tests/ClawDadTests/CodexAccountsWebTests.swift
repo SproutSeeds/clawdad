@@ -43,6 +43,9 @@ import WebKit
     let selectors=try await view.evaluateJavaScript("document.querySelectorAll('#codexAccountSelector').length") as? Int
     let switches=try await view.evaluateJavaScript("document.querySelectorAll('#codexAccountSwitch').length") as? Int
     XCTAssertEqual(selectors,1);XCTAssertEqual(switches,1)
+    try await wait(view,"!!document.querySelector('[data-consumer-id=fixture-room]')&&!document.querySelector('[data-consumer-id=fixture-room]').disabled")
+    try await view.evaluateJavaScript("document.querySelector('[data-consumer-id=fixture-room]').click();document.querySelector('[data-consumer-id=fixture-room]')?.click()")
+    try await wait(view,"document.getElementById('codexAccountSessions').textContent.includes('RoomWave · Skipped')")
     try await view.evaluateJavaScript("void fetch('/fixture/finish')")
     try await wait(view,"document.getElementById('codexAccountSwitchStatus').textContent.includes('verified') && document.getElementById('codexAccountSwitch').textContent==='Switch to this account'")
     for width in [390,980] {
@@ -73,6 +76,8 @@ import WebKit
     let state=try XCTUnwrap(evidence["state"] as? [String:Any]);XCTAssertEqual((state["accounts"] as? [Any])?.count,1)
     XCTAssertEqual((state["activeOperation"] as? [String:Any])?["status"] as? String,"completed")
     XCTAssertEqual((state["activeOperation"] as? [String:Any])?["fenced"] as? Bool,false)
+    XCTAssertEqual(((state["activeOperation"] as? [String:Any])?["excludedConsumers"] as? [Any])?.count,1)
+    XCTAssertEqual((evidence["requests"] as? [[String:Any]])?.filter{$0["action"] as? String=="accounts.skip_session"}.count,1)
     XCTAssertEqual((evidence["requests"] as? [[String:Any]])?.filter{$0["action"] as? String=="accounts.switch"}.count,2,"One guarded request and one supported request; no replay on double click or lost acknowledgment")
     XCTAssertEqual((evidence["requests"] as? [[String:Any]])?.filter{$0["action"] as? String=="accounts.add"}.count,1)
     XCTAssertEqual((evidence["requests"] as? [[String:Any]])?.filter{$0["action"] as? String=="accounts.signin"}.count,1)

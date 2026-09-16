@@ -2,6 +2,7 @@ import test from 'node:test';import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';import os from 'node:os';import path from 'node:path';import {createHash} from 'node:crypto';
 import {CodexAccounts} from '../lib/codex-accounts.mjs';
 import {CodexAccountSwitchAdapter} from '../lib/codex-account-switch-adapter.mjs';
+import {accountSkipIdentity} from '../lib/codex-account-switch-scope.mjs';
 
 const hash=text=>createHash('sha256').update(text).digest('hex');
 async function fixture(t){
@@ -14,7 +15,7 @@ async function fixture(t){
     model:'gpt-6-astra',reasoningEffort:'max',settingsVerified:true,launchPolicyVerified:true,shellWillRemain:true,resumeOptions:[],
     busy:false,queueEmpty:true,pendingReceiptsResolved:true,draft:{text:'Unsent long draft 🌿\n'+('word '.repeat(400)),verified:true,provenance:'unchanged-native-paste'},images:[],status:{email:emails[0]}};
   source.draft.hash=hash(source.draft.text);let observed=structuredClone(source),allow=true,working=false,stopped=false,workerTask;
-  const effects=[],savedAccounts=[];
+  const effects=[],savedAccounts=[],nativeRequests=[];
   const usage={freshReading:async()=>({accountKey:observed.accountKey}),snapshot:async()=>({accountKey:observed.accountKey})};
   const accounts=new CodexAccounts({root,usage});
   for(const [n,email] of emails.entries())savedAccounts.push((await accounts.add({email,requestId:'add-'+n,expectedRevision:n})).account);
@@ -36,6 +37,7 @@ async function fixture(t){
     if(stopped||workerTask)return;
     workerTask=(async()=>{
       const {job}=await adapter.transport.poll({workerId:'fixture-native-worker'});if(!job)return;
+      nativeRequests.push({action:job.action,tty:job.args.source?.tty});
       await adapter.transport.prepare({id:job.id,workerId:job.workerId,dispatchId:job.dispatchId});let result;
       if(['observe','status'].includes(job.action))result=structuredClone(observed);
       else if(job.action==='stop'){effects.push('stop');observed={...observed,kind:'shell',draft:{text:'',hash:hash(''),verified:true}};result={};}
@@ -48,8 +50,24 @@ async function fixture(t){
     })().finally(()=>{workerTask=null;});workerTask.catch(error=>{stopped=true;effects.push('worker-error:'+error.message);});
   },2);
   t.after(async()=>{stopped=true;clearInterval(timer);await workerTask;await fs.rm(root,{recursive:true,force:true});});
-  return {root,accounts,adapter,source,savedAccounts,identities,effects,runtime,observed:()=>observed,setBusy:v=>{working=v;},setAllowed:v=>{allow=v;}};
+  return {root,accounts,adapter,source,savedAccounts,identities,effects,nativeRequests,runtime,observed:()=>observed,setBusy:v=>{working=v;},setAllowed:v=>{allow=v;}};
 }
+test('RoomWave reproduction excludes unknown first-turn owner before native capture while eligible owner completes exact handoff',async t=>{
+  const f=await fixture(t),inventory=f.adapter.inventory;
+  const skipped={kind:'terminal_codex',id:'room',pid:87201,processIdentity:'room-lifetime',tty:'/dev/ttys003',
+    sessionId:null,directory:'/fixture/Room',title:'RoomWave',busy:null,reason:'No verified resumable conversation',pendingReceipts:[]};
+  f.adapter.inventory=async()=>{const result=await inventory();return {...result,consumers:[...result.consumers,skipped]};};
+  await f.accounts.request({accountId:f.savedAccounts[1].id,requestId:'skip-switch',expectedRevision:3,confirmed:true});
+  await f.accounts.advance();assert.deepEqual(f.nativeRequests,[]);
+  await f.accounts.skipSession({operationId:'skip-switch',consumerId:'room',skipIdentity:accountSkipIdentity(skipped),confirmed:true,requestId:'room-skip'});
+  assert.equal(await f.adapter.authorizeNative({operationId:'skip-switch',action:'status',args:{source:skipped}}),false);
+  await f.accounts.advance();const op=(await f.accounts.snapshot()).activeOperation;
+  assert.equal(op.status,'completed',op.reason);assert.equal(op.recovery.entries.length,1);
+  assert.deepEqual(f.effects,['stop','launch','draft']);assert.ok(f.nativeRequests.length>0);
+  assert.ok(f.nativeRequests.every(r=>r.tty===f.source.tty));
+  assert.equal(f.observed().sessionId,f.source.sessionId);assert.deepEqual(f.observed().draft,f.source.draft);
+  assert.equal(op.sessions.find(s=>s.id==='room').switchState,'skipped');
+});
 test('combined controller switches three saved identities through one-use native mailbox and preserves an unsent Unicode draft',async t=>{
   const f=await fixture(t);
   for(const n of [1,2,0]){

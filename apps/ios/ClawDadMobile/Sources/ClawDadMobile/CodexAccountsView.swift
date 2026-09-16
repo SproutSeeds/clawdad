@@ -30,6 +30,7 @@ struct CodexAccountsView: View {
     case "accounts.signin": return "Opening sign-in on the Mac…"
     case "accounts.verify_signin": return "Checking saved sign-in…"
     case "accounts.cancel": return "Cancelling switch…"
+    case "accounts.skip_session": return "Leaving selected tab unchanged…"
     default: return "Checking account…"
     }
   }
@@ -41,7 +42,7 @@ struct CodexAccountsView: View {
         VStack(alignment: .leading, spacing: 8) {
           if busy { ProgressView(activity).accessibilityIdentifier("clawdad.accounts.progress") }
           if let reason = operation["reason"]?.string {
-            Label(switching ? "Switch to \(operationEmail)" : (operation["status"]?.string == "completed" ? "Switch complete" : "Account switch"), systemImage: switching ? "clock" : "info.circle")
+            Label(switching ? "Switch to \(operationEmail)" : (operation["status"]?.string == "completed" ? ((operation["skippedConsumers"]?.array ?? []).isEmpty ? "Switch complete" : "Switch complete with skipped tabs") : "Account switch"), systemImage: switching ? "clock" : "info.circle")
               .font(.headline)
             Text(reason).accessibilityIdentifier("clawdad.accounts.switchStatus")
           } else if !busy { Text("Choose an account, then switch when ready.").font(.footnote) }
@@ -61,6 +62,36 @@ struct CodexAccountsView: View {
           }
         }.id("accountStatus")
         .disabled(busy)
+      }
+
+      if let sessions = operation["sessions"]?.array, !sessions.isEmpty {
+        Section("Session progress") {
+          ForEach(Array(sessions.enumerated()), id: \.offset) { _, item in
+            if let consumer = item.object {
+              let title = consumer["title"]?.string ?? "Terminal session"
+              let progress = consumer["switchState"]?.string ?? "waiting"
+              VStack(alignment: .leading, spacing: 6) {
+                Label(title + " · " + progress.capitalized, systemImage: progress == "switched" ? "checkmark.circle" : progress == "skipped" ? "minus.circle" : "clock")
+                  .fixedSize(horizontal: false, vertical: true)
+                if let tty = consumer["tty"]?.string {
+                  Text([consumer["directory"]?.string,tty].compactMap { $0 }.joined(separator:" · ")).font(.caption).textSelection(.enabled)
+                }
+                if let reason = consumer["reason"]?.string, !reason.isEmpty { Text(reason).font(.footnote) }
+                if state["capabilities"]?.object?["skipTerminalSessions"]?.bool == true && consumer["canSkip"]?.bool == true {
+                  accountButton("Leave this tab unchanged") {
+                    perform("accounts.skip_session", args: ["operationId": operation["id"] ?? .null,
+                      "accountId": operation["targetId"] ?? .null,"consumerId": consumer["id"] ?? .null,
+                      "skipIdentity": consumer["skipIdentity"] ?? .null,"confirmed": .bool(true)])
+                  }.accessibilityLabel("Leave \(title) unchanged for this account switch")
+                    .accessibilityHint("Other eligible sessions can switch. This tab keeps running and its account may differ.")
+                    .accessibilityIdentifier("clawdad.accounts.skip.\(consumer["id"]?.string ?? "session")")
+                    .disabled(busy || pending != nil)
+                }
+              }
+            }
+          }
+          Text("Skipped tabs stay open with their work intact. Their accounts may differ from the selected account.").font(.footnote)
+        }
       }
 
       Section("Selected account") {

@@ -6,12 +6,16 @@ import XCTest
 
   func testSelectedAccountSwitchHasImmediateFeedbackAndRecoverableWaiting() throws { try checkSwitch(lostReply: false) }
   func testLostSwitchReplyReconcilesWithoutAnotherTap() throws { try checkSwitch(lostReply: true) }
+  func testExactSessionCanBeLeftUnchanged() throws { try checkSwitch(lostReply:false,skip:true) }
+  func testSkipAtAccessibilityTextSize() throws { try checkSwitch(lostReply:false,skip:true,largeText:true) }
 
-  private func checkSwitch(lostReply: Bool) throws {
+  private func checkSwitch(lostReply: Bool,skip:Bool=false,largeText:Bool=false) throws {
     continueAfterFailure = false
     let app = XCUIApplication()
     app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-weekly-usage-test", "--clawdad-assistant-test", "--clawdad-accounts-switch-test"]
     if lostReply { app.launchArguments.append("--clawdad-accounts-lost-reply-test") }
+    if skip { app.launchArguments.append("--clawdad-accounts-skip-test") }
+    if largeText { app.launchArguments += ["-UIPreferredContentSizeCategoryName","UICTContentSizeCategoryAccessibilityXL"] }
     app.launch()
     let usage = app.buttons["clawdad.weeklyUsage.main"]
     XCTAssertTrue(usage.waitForExistence(timeout: 15)); usage.tap()
@@ -19,9 +23,9 @@ import XCTest
     for _ in 0..<6 where !open.isHittable { app.swipeUp() }
     open.tap()
     let form=app.collectionViews["clawdad.accounts"]
-    func show(_ element: XCUIElement, up: Bool = false) {
+    func show(_ element: XCUIElement, up: Bool = false, actionable:Bool=true) {
       for _ in 0..<14 {
-        if element.exists && element.isHittable && element.frame.minY > app.navigationBars["Codex accounts"].frame.maxY + 12 && element.frame.maxY < app.frame.maxY - 16 { return }
+        if element.exists && (!actionable || element.isHittable) && element.frame.minY > app.navigationBars["Codex accounts"].frame.maxY + 12 && element.frame.maxY < app.frame.maxY - 16 { return }
         let backwards=element.exists && element.frame.height > 0 ? element.frame.minY < app.navigationBars["Codex accounts"].frame.maxY + 12 : up
         form.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: backwards ? 0.3 : 0.8)).press(forDuration: 0.05, thenDragTo: form.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: backwards ? 0.8 : 0.3)))
       }
@@ -41,6 +45,14 @@ import XCTest
     // Lost HTTP acknowledgment is resolved by status, never by a new switch ID.
     let enabled=NSPredicate(format:"enabled == true")
     expectation(for: enabled,evaluatedWith:cancel);waitForExpectations(timeout:8)
+    if skip {
+      let leave=app.buttons["clawdad.accounts.skip.room"]
+      show(leave);XCTAssertGreaterThanOrEqual(leave.frame.height,43.99)
+      XCTAssertTrue(leave.label.contains("RoomWave"));leave.tap()
+      XCTAssertTrue(app.staticTexts["RoomWave left unchanged. Checking the remaining sessions."].waitForExistence(timeout:5))
+      let skipped=app.staticTexts["RoomWave · Skipped"];show(skipped,actionable:false)
+      XCTAssertTrue(skipped.exists);XCTAssertFalse(leave.exists)
+    }
     let shot=XCTAttachment(screenshot:app.screenshot());shot.name=lostReply ? "Switch lost reply reconciled" : "Switch accepted and waiting";shot.lifetime = .keepAlways;add(shot)
     show(cancel,up:true);cancel.tap()
     XCTAssertTrue(app.staticTexts["Account switch cancelled. Existing work was preserved."].waitForExistence(timeout:5))
