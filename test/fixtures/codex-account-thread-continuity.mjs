@@ -15,7 +15,10 @@ const base=path.join(os.homedir(),'Library/Application Support/ClawDad/Accounts/
 const retained=JSON.parse(await fs.readFile(path.join(base,'account-retention-pair-1.json'),'utf8'));
 if(retained.state!=='verified'||!retained.independentRetainedAccounts)throw Error('Verify both retained accounts first.');
 const root=path.join(base,'thread-continuity-1'),project=path.join(root,'project'),index=path.join(root,'index');
-const reconcile=process.argv.includes('--reconcile-existing');
+const inspectOnly=process.argv.includes('--inspect-existing');
+const reconcile=inspectOnly||process.argv.includes('--reconcile-existing');
+const receiptName=inspectOnly?process.argv[process.argv.indexOf('--inspect-existing')+1]:null;
+if(inspectOnly&&!/^inspection-after-[a-z0-9-]+$/.test(receiptName||''))throw Error('Use a new inspection-after-* receipt name.');
 let previous;
 if(reconcile){
   previous=JSON.parse(await fs.readFile(path.join(root,'evidence.json'),'utf8'));
@@ -25,10 +28,10 @@ if(reconcile){
   await fs.mkdir(root,{mode:0o700}); // A repeat must reconcile the existing receipt.
   for(const dir of [project,index,path.join(root,'sessions'),path.join(root,'archived_sessions')])await fs.mkdir(dir,{mode:0o700});
 }
-const file=path.join(root,reconcile?'reconciliation-1.json':'evidence.json'),ids=new Set(reconcile?[previous.sourceThreadId,previous.forkThreadId]:[]),marker='CLAWDAD_CONTINUITY_9F3A 🌿';
+const file=path.join(root,inspectOnly?receiptName+'.json':reconcile?'reconciliation-1.json':'evidence.json'),ids=new Set(reconcile?[previous.sourceThreadId,previous.forkThreadId]:[]),marker='CLAWDAD_CONTINUITY_9F3A 🌿';
 if(await fs.lstat(file).then(()=>true,e=>{if(e.code==='ENOENT')return false;throw e;}))throw Error('This verification receipt exists; inspect it before repeating.');
 const prompt=`This is a synthetic account-switch continuity test. Reply with exactly ${marker}. Do not use any tools.`;
-const record={version:1,requestId:reconcile?'account-thread-continuity-reconcile-1':'account-thread-continuity-1',at:new Date().toISOString(),state:'preparing',root,project,
+const record={version:1,requestId:inspectOnly?receiptName:reconcile?'account-thread-continuity-reconcile-1':'account-thread-continuity-1',at:new Date().toISOString(),state:'preparing',root,project,
   model:'gpt-6-astra',effort:'low',prompt,clientUserMessageId:randomUUID(),events:[],methods:[],histories:[],accounts:[],modelTurns:0};
 if(reconcile)Object.assign(record,{sourceThreadId:previous.sourceThreadId,forkThreadId:previous.forkThreadId,turnId:previous.turnId,
   sourceReceipt:previous.requestId,explicitFixtureSettings:true});
@@ -59,7 +62,7 @@ async function withConnection(profile,allowNewTurn,action){
       }
     }catch{failure();}
   });
-  const readOnly=new Set(['initialize','config/read','account/read','account/rateLimits/read','model/list','thread/read','thread/turns/list','thread/resume','thread/unsubscribe']);
+  const readOnly=new Set(['initialize','config/read','account/read','account/rateLimits/read','model/list','thread/read','thread/turns/list',...(inspectOnly?[]:['thread/resume','thread/unsubscribe'])]);
   const rpc=(method,params={})=>new Promise((resolve,reject)=>{
     if(closed||!readOnly.has(method)&&!(allowNewTurn&&['thread/start','turn/start','thread/fork'].includes(method)))return reject(Error('Fixture RPC is outside the approved scope.'));
     if(method.startsWith('thread/')&&method!=='thread/start'||method==='turn/start')if(!ids.has(params.threadId))return reject(Error('Only this fixture owns the requested thread.'));
@@ -93,6 +96,11 @@ async function inspect(rpc,id,stage){
   if(meta.thread.id!==id||meta.thread.cwd!==project)throw Error('The exact fixture thread or directory changed.');
   const page=await rpc('thread/turns/list',{threadId:id,limit:100,itemsView:'full'});
   if(page.nextCursor)throw Error('Unexpected additional fixture history; inspect before continuing.');
+  if(inspectOnly){
+    const original=previous.histories.find(history=>history.threadId===id);
+    if(!original||JSON.stringify(page.data.map(turn=>turn.id))!==JSON.stringify(original.turnIds))
+      throw Error('The original accepted turn identities changed. Preserve the evidence before continuing.');
+  }
   const messages=page.data.flatMap(turn=>(turn.items||[]).filter(item=>['userMessage','agentMessage'].includes(item.type)).map(item=>({type:item.type,text:item.text??item.content?.filter(c=>c.type==='text').map(c=>c.text).join('')??''})));
   if(!messages.some(m=>m.type==='userMessage'&&m.text===prompt)||!messages.some(m=>m.type==='agentMessage'&&m.text.trim()===marker))throw Error('Complete fixture text was not preserved.');
   const hash=sha(JSON.stringify(messages));if(golden&&hash!==golden)throw Error('Fixture message history changed across ownership.');golden||=hash;
@@ -131,6 +139,11 @@ try{
     for(const id of ids)await rpc('thread/unsubscribe',{threadId:id});
    });
   }
+  if(inspectOnly){
+    for(const profile of ['cody','sun','cody'])await withConnection(profile,false,async({rpc})=>{
+      for(const id of ids)await inspect(rpc,id,'read-only-after-terminal-'+profile);
+    });
+  } else {
   record.state='reading_with_second_account';await save();
   await withConnection('sun',false,async({rpc})=>{
     for(const id of ids){
@@ -147,6 +160,7 @@ try{
     record.events.push({profile:'cody',method:'return_resume_observation',threadId:resumed.thread.id,model:resumed.model,effort:resumed.reasoningEffort,status:resumed.thread.status});await save();
     await inspect(rpc,record.forkThreadId,'return-to-source-account');await rpc('thread/unsubscribe',{threadId:record.forkThreadId});
   });
+  }
   record.state='verified_local_history_only';record.completedAt=new Date().toISOString();
   record.limitations=['Second account has no allowance; no model execution was attempted there.','This uses disposable app-server owners, not live Terminal process replacement.','Images, drafts, queues, real config and permissions migration remain unverified.'];
   await save();console.log(JSON.stringify({state:record.state,sourceThreadId:record.sourceThreadId,forkThreadId:record.forkThreadId,histories:record.histories.length,modelTurns:record.modelTurns,secondAccountModelTurns:0}));

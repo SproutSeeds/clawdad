@@ -124,7 +124,7 @@ extension MacTerminalResponseReader {
     var unsupportedRollout = false
     for line in Set(files.split(separator: "\n").filter { $0.hasPrefix("n/") }) {
       let url = URL(fileURLWithPath: String(line.dropFirst()))
-      switch try MacCodexConversation.metadata(path: url, sessionRoot: sessionRoot) {
+      switch try MacCodexConversation.metadata(path: url, sessionRoot: sessionRoot,acceptedSources:acceptedConversationSources) {
       case .conversation(let conversation):
         conversations[conversation.sessionId] = conversation
       case .pending: pendingRollout = true

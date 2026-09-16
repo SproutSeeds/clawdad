@@ -10,6 +10,7 @@ struct MacCodexConversation: Equatable, Sendable {
   let sessionId: String
   let path: URL
   var cliVersion: String? = nil
+  var origin: String = "cli"
 
   enum Metadata {
     case conversation(MacCodexConversation), auxiliary, unrelated, pending, unsupported
@@ -22,7 +23,7 @@ struct MacCodexConversation: Equatable, Sendable {
 
   /// A CLI can also own Guardian/subagent rollouts. A complete helper header
   /// is neither a second composer nor a conversation still starting up.
-  static func metadata(path: URL, sessionRoot: URL) throws -> Metadata {
+  static func metadata(path: URL, sessionRoot: URL, acceptedSources: Set<String> = ["cli"]) throws -> Metadata {
     let url = path.resolvingSymlinksInPath()
     let root = sessionRoot.resolvingSymlinksInPath().path + "/"
     guard url.path.hasPrefix(root), url.pathExtension == "jsonl",
@@ -39,8 +40,8 @@ struct MacCodexConversation: Equatable, Sendable {
           let id = payload["id"] as? String, UUID(uuidString: id) != nil,
           url.lastPathComponent.hasSuffix("\(id).jsonl") else { return .unsupported }
     if let source = payload["source"] as? [String: Any], source["subagent"] != nil { return .auxiliary }
-    guard payload["source"] as? String == "cli" else { return .unsupported }
-    return .conversation(Self(sessionId: id, path: url, cliVersion: payload["cli_version"] as? String))
+    guard let source=payload["source"] as? String,acceptedSources.contains(source) else { return .unsupported }
+    return .conversation(Self(sessionId: id, path: url, cliVersion: payload["cli_version"] as? String,origin:source))
   }
 }
 
@@ -49,6 +50,7 @@ struct MacTerminalResponseReader: Sendable {
   var run: @Sendable (String, [String]) throws -> String = { try macTerminalResponseCommand($0, $1) }
   var sessionRoot = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex/sessions")
   var inputArguments: @Sendable (String) -> [String]? = macCodexProcessArguments
+  var acceptedConversationSources:Set<String> = ["cli"]
 
   func read(tty: String) throws -> RemoteTerminalResponse {
     let conversation = try resolve(tty: tty)

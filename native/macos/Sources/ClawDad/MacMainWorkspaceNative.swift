@@ -465,7 +465,7 @@ enum MainWorkspaceTitleCensus {
     }
   }
   static func quoted(_ text:String)->String { "'"+text.replacingOccurrences(of:"'",with:"'\\''")+"'" }
-  static func resumeConfiguration(_ path:URL)->(model:String,effort:String?)? {
+  nonisolated static func resumeConfiguration(_ path:URL)->(model:String,effort:String?)? {
     guard let handle=try? FileHandle(forReadingFrom:path) else { return nil };defer{try? handle.close()}
     guard let end=try? handle.seekToEnd() else { return nil }
     // Bounded tail; missing historical settings stay inherited by Codex resume.

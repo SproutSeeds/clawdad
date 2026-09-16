@@ -202,6 +202,46 @@ test('read-only inventory preserves same-directory separate sessions and reports
   const value=await inspectAccountConsumers(runtime,{readOwners:async()=>[{pid:1,tty:'ttys101',threads:['A']},{pid:2,tty:'ttys102',threads:['B']}]});
   assert.deepEqual(value.consumers.map(c=>c.sessionId),['A','B']);assert.equal(value.complete,false);assert.ok(value.consumers.every(c=>!c.accountVerified&&!c.recoverable));
 });
+test('native account inventory resolves a primary thread beside helper rollouts without borrowing the global account',async()=>{
+  const runtime={state:{jobs:[]},accountConsumerInventory:async()=>({complete:true,consumers:[{
+    tabId:'native-tab',windowId:'window-2',processId:'42',tty:'/dev/ttys101',agentInstanceId:'exact-instance',sessionId:'primary',
+    directory:'/actual/project',authorizationHome:'/private/profile',executable:'/pinned/codex',cliVersion:'0.154.0',
+    model:'gpt-6-astra',reasoningEffort:'max',settingsEvidence:'last_persisted_turn',resumeOptions:['--search'],isBusy:true}]})};
+  const value=await inspectAccountConsumers(runtime,{readOwners:async()=>[{pid:42,tty:'ttys101',threads:['primary','helper']}]});
+  const owner=value.consumers[0];assert.equal(owner.sessionId,'primary');assert.equal(owner.directory,'/actual/project');
+  assert.equal(owner.processIdentity,'exact-instance');assert.equal(owner.busy,true);assert.equal(owner.authorizationHome,'/private/profile');
+  assert.equal(owner.accountVerified,false);assert.equal(owner.recoverable,false);
+});
+test('native inventory requires a new matching request and leaves disabled Assistant, drafts and jobs unchanged',async t=>{
+  const f=await fixture(t,{supported:false}),runtime=new AssistantRuntime({root:path.join(f.root,'Assistant'),coordinator:{stop(){}}});
+  t.after(()=>runtime.close());await runtime.load();const before=structuredClone(runtime.state);
+  const request=runtime.accountConsumerInventory({waitMs:1200});
+  const first=await runtime.nativePoll({workerId:'worker-1',accountInventory:{id:'stale',consumers:[{processId:'wrong'}]}});
+  assert.ok(first.accountInventoryRequest);assert.equal(first.job,null);
+  await runtime.nativePoll({workerId:'worker-2',accountInventory:{id:first.accountInventoryRequest,complete:true,consumers:[{processId:'42'}]}});
+  const result=await request;assert.equal(result.workerId,'worker-2');assert.equal(result.consumers[0].processId,'42');
+  assert.equal(runtime.state.enabled,before.enabled);assert.deepEqual(runtime.state.jobs,before.jobs);assert.deepEqual(runtime.state.messages,before.messages);
+  const second=runtime.accountConsumerInventory({waitMs:1200});
+  const next=await runtime.nativePoll({workerId:'worker-2'});assert.notEqual(next.accountInventoryRequest,first.accountInventoryRequest);
+  await runtime.nativePoll({workerId:'worker-2',accountInventory:{id:next.accountInventoryRequest,complete:true,consumers:[]}});
+  assert.deepEqual((await second).consumers,[]);
+});
+test('fresh process inventory preserves unknown busy state and explicit alternate authentication instead of borrowing a stale badge',async()=>{
+  const runtime={state:{jobs:[]},observation:{catalog:{tabs:[{id:'tab',tty:'/dev/ttys101',isBusy:false}]}},
+    accountConsumerInventory:async()=>({consumers:[{tabId:'tab',processId:'42',tty:'/dev/ttys101',agentInstanceId:'exact',
+      alternateAuthentication:true,isBusy:null,busyEvidence:'transcript_unavailable'}]})};
+  const result=await inspectAccountConsumers(runtime,{readOwners:async()=>[{pid:42,tty:'ttys101',threads:[]}]});
+  assert.equal(result.consumers[0].busy,null);assert.equal(result.consumers[0].busyEvidence,'transcript_unavailable');
+  assert.equal(result.consumers[0].alternateAuthentication,true);assert.match(result.consumers[0].reason,/explicit API/);
+  assert.equal(result.consumers[0].accountVerified,false);
+});
+test('closed or expired native inventory requests stop asking the worker and return explicit unavailable state',async t=>{
+  const f=await fixture(t,{supported:false}),runtime=new AssistantRuntime({root:path.join(f.root,'Assistant'),coordinator:{stop(){}}});
+  t.after(()=>runtime.close());await runtime.load();
+  const request=runtime.accountConsumerInventory({waitMs:1000});runtime.accountInventoryRequest.expires=0;
+  const result=await request;assert.equal(result.complete,false);assert.equal(runtime.accountInventoryRequest,null);
+  assert.match(result.reason,/fresh account-process inventory/);assert.equal(runtime.state.jobs.length,0);
+});
 test('actual Assistant HTTP and MCP account status paths require no enabled conversation or model',async t=>{
   const f=await fixture(t,{supported:false}),runtime=new AssistantRuntime({root:path.join(f.root,'Assistant'),coordinator:{stop(){},prepare(){throw Error('MODEL MUST NOT START');}}});runtime.accounts=f.controller;
   t.after(()=>runtime.close());await runtime.load();

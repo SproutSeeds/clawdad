@@ -14,6 +14,8 @@ final class MacAssistantBridge {
   private var loop: Task<Void, Never>?
   var diagnosticStep: ((String) -> Void)?
   private var inventoryRequested = false
+  private var accountInventoryRequest: String?
+  private var accountInventory: (id:String, value:AssistantValue)?
   private var pendingBindings: [AssistantValue] = []
   private var inspection:
     (token: String, pid: pid_t, element: AXUIElement, window: CFTypeRef?, launch: Date?, generation: UInt64, expires: Date, display: CGDirectDisplayID)?
@@ -73,6 +75,40 @@ final class MacAssistantBridge {
               observation["catalogError"] = .string(error.localizedDescription)
             }
           }
+          if let request=accountInventoryRequest {
+            if accountInventory?.id != request {
+              let heartbeat=Task { [runtime] in
+                while !Task.isCancelled {
+                  _=try? await runtime.json("/v1/assistant/native/heartbeat",[:])
+                  try? await Task.sleep(for:.seconds(2))
+                }
+              }
+              defer { heartbeat.cancel() }
+              var entries:[AssistantValue]=[],complete=true
+              do {
+                let catalog=try await tabs.catalog()
+                for descriptor in catalog.tabs {
+                  guard let tab=tabs.assistantSnapshot(tabID:descriptor.id),!tab.tty.isEmpty else { complete=false;continue }
+                  do {
+                    var fields=try await Task.detached { try MacCodexAccountProcess.inspect(tty:tab.tty) }.value
+                    fields["tabId"] = .string(descriptor.id)
+                    fields["windowId"] = .string("terminal-window-\(tab.groupID)")
+                    fields["title"] = .string(descriptor.title)
+                    fields["position"] = .number(Double(tab.position))
+                    entries.append(.object(fields))
+                  } catch let error as MacCodexInputFailure where error.code=="no_codex_process" {
+                    // Shell-only tabs need no authentication transition.
+                  } catch {
+                    complete=false
+                    entries.append(.object(["tabId":.string(descriptor.id),"tty":.string(tab.tty),
+                      "reasonCode":.string((error as? MacCodexInputFailure)?.code ?? "process_inspection_failed")]))
+                  }
+                }
+              } catch { complete=false }
+              accountInventory=(request,.object(["id":.string(request),"complete":.bool(complete),"consumers":.array(entries)]))
+            }
+            observation["accountInventory"] = accountInventory?.value
+          }
           // History discovery is read-only and never selects a tab or replays input.
           var bindings: [AssistantValue] = []
           var owners: [String: MacCodexInputBinding] = [:]
@@ -104,6 +140,8 @@ final class MacAssistantBridge {
           let next = try await runtime.json("/v1/assistant/native/poll", observation)
           pendingBindings = next["pendingBindings"]?.array ?? []
           inventoryRequested = next["inventoryRequested"]?.bool ?? (next["enabled"]?.bool == true)
+          accountInventoryRequest = next["accountInventoryRequest"]?.string
+          if accountInventoryRequest==nil { accountInventory=nil }
           if let job = next["job"]?.object, let id = job["id"]?.string {
             diagnosticStep?("execute:" + (job["action"]?.string ?? "unknown"))
             let completion: [String: AssistantValue]
