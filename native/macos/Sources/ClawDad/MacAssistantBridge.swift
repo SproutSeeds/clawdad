@@ -37,6 +37,15 @@ final class MacAssistantBridge {
   private let workerId = UUID().uuidString
   private let interaction = MacAssistantInteractionGate.shared
   private let nativeInput = MacAssistantTerminalInput()
+  private lazy var accountWindow:MacCodexAccountWindow = {
+    let native=MacCodexAccountWindow(runtime:runtime,root:root.deletingLastPathComponent().appendingPathComponent("Accounts/WindowSwitches"))
+    native.retainedDraft={ [weak self] binding,identity,foreground,screen,generation in
+      self?.draftProvenance.text(context:.init(input:identity,process:binding.instanceId,session:binding.conversation?.sessionId,
+        foreground:foreground.identity,generation:generation),screen:screen)
+    }
+    native.diagnosticStep={ [weak self] step in self?.diagnosticStep?("account-window:"+step) }
+    return native
+  }()
   private lazy var accountControl:MacCodexAccountNative = {
     let native=MacCodexAccountNative(root:root.deletingLastPathComponent().appendingPathComponent("Accounts/NativeRecovery",isDirectory:true))
     native.retainedDraft={ [weak self] binding,identity,foreground,screen,generation in
@@ -125,6 +134,9 @@ final class MacAssistantBridge {
                 }
               } catch { complete=false;reasonCode=(error as? MacTerminalTabFailure)?.code ?? "terminal_catalog_unavailable" }
               var inventory:[String:AssistantValue]=["id":.string(request),"complete":.bool(complete),"consumers":.array(entries)]
+              do {
+                inventory["windows"] = try .encode(await accountWindow.native.windowChoices(observations:[]))
+              } catch { inventory["complete"] = .bool(false) }
               if let reasonCode {
                 inventory["reasonCode"] = .string(reasonCode)
                 inventory["reason"] = .string("Terminal inventory needs attention (\(reasonCode)). Existing windows and work were preserved.")
@@ -204,8 +216,22 @@ final class MacAssistantBridge {
               // The durable service mailbox reconciles it after reconnection.
               _=try await runtime.json("/v1/assistant/native/account-prepare",envelope)
               diagnosticStep?("account:prepared:"+action)
-              completion["result"] = .object(try await accountControl.execute(action:action,args:args,requestId:id))
-            }catch {completion["reasonCode"] = .string((error as? MacCodexInputFailure)?.code ?? "native_account_control_unavailable")}
+              if action.hasPrefix("window.") {
+                completion["result"] = .object(try await accountWindow.execute(action:action,args:args))
+              } else { completion["result"] = .object(try await accountControl.execute(action:action,args:args,requestId:id)) }
+            }catch {
+              diagnosticStep?("account-error-type:"+String(reflecting:type(of:error))+":"+String((error as NSError).code))
+              completion["reasonCode"] = .string((error as? MacCodexInputFailure)?.code ?? "native_account_control_unavailable")
+              // Window adapter messages are local, authored recovery guidance;
+              // OAuth/provider failures never use this projection.
+              if action.hasPrefix("window."),let local=error as? MacAssistantError {
+                completion["message"] = .string(local.localizedDescription)
+              } else if action.hasPrefix("window."),let local=error as? MacCodexInputFailure {
+                completion["message"] = .string(local.message)
+              } else if action.hasPrefix("window."),let local=error as? MacTerminalTabFailure {
+                completion["message"] = .string(local.message)
+              }
+            }
             heartbeat.cancel()
             diagnosticStep?("account:result:"+(completion["reasonCode"]?.string ?? "observed"))
             while !Task.isCancelled {

@@ -13,17 +13,19 @@ export function codexAccountsPanel(root,{request=async body=>{
   emailLabel.append(email);workspaceLabel.append(workspace);
   const button=(text,action)=>{const b=el('button',text);b.type='button';b.onclick=action;return b;};
   const picker=el('select'),pickerLabel=el('label','Account');picker.id='codexAccountSelector';pickerLabel.htmlFor=picker.id;pickerLabel.append(picker);
+  const windowPicker=el('select'),windowLabel=el('label','Terminal window to recreate'),windowHelp=el('p','Waits for work to finish or stop, saves recovery, verifies the account, then recreates the chosen window with the same conversations and drafts. Other windows stay open. You choose when to continue work.');
+  windowPicker.id='codexAccountWindow';windowLabel.htmlFor=windowPicker.id;windowLabel.append(windowPicker);
   status.setAttribute('role','status');status.setAttribute('aria-live','polite');status.tabIndex=-1;
   status.id='codexAccountSwitchStatus';
   const actions=el('div'),sessions=el('div');sessions.id='codexAccountSessions';
-  let state,busy=false,pending,preview,loading=false,selectedId=storage.getItem('clawdad.codex.accounts.selection.v1')||'';
+  let state,busy=false,pending,preview,loading=false,selectedWindow='',selectedId=storage.getItem('clawdad.codex.accounts.selection.v1')||'';
   const storageKey='clawdad.codex.accounts.pending.v1';
   try{pending=JSON.parse(storage.getItem(storageKey)||'null');}catch{}
   const save=button('Save account entry',()=>send('accounts.add',{email:email.value,workspaceLabel:workspace.value,expectedRevision:state.revision}));
   const retry=button('Retry pending request',()=>send()),refresh=button('Refresh account status',()=>load());
   const explanation=el('p','An entry records your choice. It becomes authenticated only after supported sign-in is verified.');
   details.append(summary,emailLabel,workspaceLabel,explanation,save);
-  root.append(title,status,error,retry,actions,sessions,current,help,pickerLabel,list,details,refresh);
+  root.append(title,status,error,retry,actions,sessions,current,help,pickerLabel,windowLabel,windowHelp,list,details,refresh);
   function render(){
     current.textContent=state?.current?.email?`${state.current.email} · ${state.current.plan||'Subscription'}${state.current.status==='current'?'':' · Last verified reading'}`:'Verified Codex account unavailable';
     const operation=state?.activeOperation,target=state?.accounts?.find(a=>a.id===operation?.targetId);
@@ -37,8 +39,21 @@ export function codexAccountsPanel(root,{request=async body=>{
       picker.replaceChildren(...options.map(a=>{const o=el('option',a.label);o.value=a.id;return o;}));picker.dataset.options=JSON.stringify(options);
     }
     picker.value=selectedId;picker.disabled=busy||!!pending||!entries.length;
+    const windows=state?.windows||[];
+    if(!windows.some(w=>w.id===selectedWindow))selectedWindow=windows.length===1?windows[0].id:'';
+    const windowOptions=windows.map(w=>({id:w.id,label:`${w.title} · ${w.count} tabs`}));
+    if(windowPicker.dataset.options!==JSON.stringify(windowOptions)){
+      windowPicker.replaceChildren(...[{id:'',label:'Choose window'},...windowOptions].map(w=>{const o=el('option',w.label);o.value=w.id;return o;}));windowPicker.dataset.options=JSON.stringify(windowOptions);
+    }
+    windowPicker.value=selectedWindow;windowPicker.disabled=busy||!!pending||!!operation?.fenced;
+    windowLabel.hidden=windowHelp.hidden=!state?.capabilities?.windowRebuild;
     list.replaceChildren();actions.replaceChildren();
     sessions.replaceChildren();
+    if(state?.windowProgress){
+      const p=state.windowProgress;sessions.append(el('h4','Window recovery · '+p.stage.replaceAll('_',' ')));
+      if(p.message)sessions.append(el('p',p.message));
+      for(const tab of p.tabs||[])sessions.append(el('p',`${tab.name} · ${tab.status.replaceAll('_',' ')}`));
+    }
     if(operation?.sessions?.length){
       sessions.append(el('h4','Session progress'));
       for(const c of operation.sessions){
@@ -54,7 +69,7 @@ export function codexAccountsPanel(root,{request=async body=>{
         }
         sessions.append(row);
       }
-      sessions.append(el('p','Skipped tabs stay open with their work intact. Their accounts may differ from the selected account.'));
+      if(!state?.capabilities?.windowRebuild)sessions.append(el('p','Skipped tabs stay open with their work intact. Their accounts may differ from the selected account.'));
     }
     for(const account of entries.filter(a=>a.id===selectedId)){
       const row=el('section'),name=el('strong',account.email),label=el('p',account.workspaceLabel?`${account.workspaceLabel} · label supplied by you`:'Codex does not provide a workspace name here.');
@@ -83,8 +98,11 @@ export function codexAccountsPanel(root,{request=async body=>{
         try{const result=await request({action:'accounts.preview',accountId:account.id});preview=result.accountPreview;error.textContent='';render();}
         catch(e){error.textContent=e.message;}finally{busy=false;render();}
       });
-      const select=button(operation?.fenced?'Switch in progress':state?.capabilities?.ready?'Switch to this account':'Prepare account switch',()=>send('accounts.switch',{accountId:account.id,expectedRevision:state.revision,confirmed:true}));
-      inspect.disabled=busy||!!pending;select.disabled=busy||!!pending||connecting||!!operation?.fenced;select.id='codexAccountSwitch';row.append(inspect,select);list.append(row);
+      const select=button(operation?.fenced?'Switch in progress':state?.capabilities?.ready?'Switch to this account':'Prepare account switch',()=>{
+        const window=windows.find(w=>w.id===selectedWindow);
+        send('accounts.switch',{accountId:account.id,expectedRevision:state.revision,confirmed:true,...(state.capabilities?.windowRebuild?{windowSelection:{id:window.id,tabId:window.tabId}}:{})});
+      });
+      inspect.disabled=busy||!!pending;select.disabled=busy||!!pending||connecting||!!operation?.fenced||state?.capabilities?.windowRebuild&&!selectedWindow;select.id='codexAccountSwitch';row.append(inspect,select);list.append(row);
     }
     if(preview){const box=el('details'),label=el('summary','Affected sessions');box.open=true;box.append(label);
       for(const c of preview.observation?.consumers||[])box.append(el('p',`${c.title||c.kind}${c.sessionId?' · '+c.sessionId:''}\n${c.reason||''}`));
@@ -98,6 +116,7 @@ export function codexAccountsPanel(root,{request=async body=>{
     retry.hidden=!pending;retry.disabled=busy;root.setAttribute('aria-busy',String(busy));
   }
   picker.onchange=()=>{selectedId=picker.value;storage.setItem('clawdad.codex.accounts.selection.v1',selectedId);preview=null;render();};
+  windowPicker.onchange=()=>{selectedWindow=windowPicker.value;render();};
   function accept(value){
     state=value.accounts||state;
     const received=pending?.action==='accounts.switch'&&state?.operations?.some(o=>o.id===pending.requestId&&o.targetId===pending.accountId)
@@ -113,7 +132,9 @@ export function codexAccountsPanel(root,{request=async body=>{
     finally{busy=false;render();}
   }
   async function load(){if(busy||loading)return;loading=true;try{const result=await request({action:'accounts.status',...(pending?{receiptId:pending.requestId}:{})});
-    if(!busy){accept(result);render();}
+    if(!busy){accept(result);render();
+      if(state?.capabilities?.windowRebuild&&!state?.activeOperation?.fenced){const windows=await request({action:'accounts.windows'});if(!busy){accept(windows);render();}}
+    }
   }catch(e){error.textContent=e.message;}finally{loading=false;}}
   // Poll only an open panel with a pending ceremony. Rendering never starts
   // authentication; the Mac owns completion after the panel closes.

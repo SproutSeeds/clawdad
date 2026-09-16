@@ -54,6 +54,16 @@ const server=http.createServer(async(req,res)=>{
     runtime.accounts.start({intervalMs:50});return json(res,200,{ok:true});
   }
   if(url.pathname==='/fixture/finish'){waiting=false;return json(res,200,{ok:true});}
+  if(url.pathname==='/fixture/windows'){
+    waiting=true;
+    const windows=[1,2].map(n=>({id:'window-'+n,tabId:'anchor-'+n,title:'Terminal window '+n,count:n+1,tabs:[]}));
+    runtime.accounts.inspectConsumers=async()=>({complete:true,consumers:[],reasons:[]});
+    runtime.accounts.adapter={capabilities:{ready:true,windowRebuild:true,skipTerminalSessions:false},
+      windows:{choices:windows,windows:async()=>({windows,complete:true,reasons:[]}),select:async choice=>{
+        const found=windows.find(w=>w.id===choice?.id&&w.tabId===choice?.tabId);if(!found)throw Error('Exact fixture window required');return found;
+      },progress:async()=>null},captureRecovery:async observation=>({fingerprint:observation.fingerprint,entries:[]})};
+    runtime.accounts.start({intervalMs:50});return json(res,200,{ok:true});
+  }
   if(url.pathname==='/fixture/evidence')return json(res,200,{requests,state:await runtime.accounts.snapshot(),jobs:runtime.state.jobs});
   if(await assistantHttp(req,res,url,runtime,{json,readBody:async r=>{let text='';for await(const chunk of r)text+=chunk;const body=JSON.parse(text);requests.push(body);if(body.action==='accounts.switch'&&dropSwitch){dropSwitch=false;res.end=()=>res.destroy();}return body;}}))return;
   json(res,404,{error:'Fixture route unavailable'});

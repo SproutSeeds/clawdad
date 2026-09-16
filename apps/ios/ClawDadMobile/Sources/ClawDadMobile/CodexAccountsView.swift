@@ -6,6 +6,7 @@ struct CodexAccountsView: View {
   @EnvironmentObject private var session: CloudSession
   @State private var state: [String: AssistantValue] = [:]
   @State private var selectedAccountId = ""
+  @State private var selectedWindowId = ""
   @State private var feedbackRevision = 0
   @State private var loadingStatus = false
   @State private var preview: [String: AssistantValue]?
@@ -22,6 +23,9 @@ struct CodexAccountsView: View {
 
   private var selectionKey: String { pendingKey + ".selection" }
   private var selected: [String: AssistantValue]? { entries.first { $0["id"]?.string == selectedAccountId } }
+  private var windows: [[String: AssistantValue]] { state["windows"]?.array?.compactMap(\.object) ?? [] }
+  private var selectedWindow: [String: AssistantValue]? { windows.first{$0["id"]?.string==selectedWindowId} }
+  private var rebuildsWindow: Bool { state["capabilities"]?.object?["windowRebuild"]?.bool==true }
   private var switching: Bool { operation["fenced"]?.bool == true }
   private var operationEmail: String { entries.first { $0["id"] == operation["targetId"] }?["email"]?.string ?? "selected account" }
   private var activity: String {
@@ -90,7 +94,20 @@ struct CodexAccountsView: View {
               }
             }
           }
-          Text("Skipped tabs stay open with their work intact. Their accounts may differ from the selected account.").font(.footnote)
+          if !rebuildsWindow { Text("Skipped tabs stay open with their work intact. Their accounts may differ from the selected account.").font(.footnote) }
+        }
+      }
+
+      if let progress=state["windowProgress"]?.object {
+        Section("Window recovery") {
+          Text((progress["stage"]?.string ?? "Saved").capitalized).font(.headline)
+          if let message=progress["message"]?.string { Text(message).font(.footnote) }
+          ForEach(Array((progress["tabs"]?.array ?? []).enumerated()),id:\.offset) { _,item in
+            if let tab=item.object {
+              Text("\(tab["name"]?.string ?? "Tab") · \((tab["status"]?.string ?? "saved").replacingOccurrences(of:"_",with:" "))")
+                .fixedSize(horizontal:false,vertical:true)
+            }
+          }
         }
       }
 
@@ -140,13 +157,30 @@ struct CodexAccountsView: View {
                 accountButton("Cancel sign-in") { perform("accounts.cancel_signin", args: ["operationId": signIn["requestId"] ?? .null]) }
               }
             }
+            if rebuildsWindow {
+              Picker("Terminal window to recreate", selection:$selectedWindowId) {
+                Text("Choose window").tag("")
+                ForEach(windows.indices,id:\.self) { index in
+                  let window=windows[index]
+                  Text("\(window["title"]?.string ?? "Terminal window") · \(Int(window["count"]?.number ?? 0)) tabs")
+                    .tag(window["id"]?.string ?? "")
+                }
+              }.accessibilityIdentifier("clawdad.accounts.window")
+                .frame(minHeight:44)
+                .disabled(switching)
+              Text("Waits for work to finish or stop, then saves recovery, verifies the account, and recreates this window with the same conversations and drafts. Other windows stay open. You choose when to continue work.")
+                .font(.footnote).fixedSize(horizontal:false,vertical:true)
+              if windows.isEmpty { Text("Refresh to load Terminal windows on your Mac.").font(.footnote) }
+            }
             accountButton("Review affected sessions") { inspect(account) }
             Button {
-              perform("accounts.switch", args: ["accountId": account["id"] ?? .null, "expectedRevision": state["revision"] ?? .number(0), "confirmed": .bool(true)])
+              var args:[String:AssistantValue] = ["accountId": account["id"] ?? .null, "expectedRevision": state["revision"] ?? .number(0), "confirmed": .bool(true)]
+              if rebuildsWindow,let selectedWindow { args["windowSelection"] = .object(["id":selectedWindow["id"] ?? .null,"tabId":selectedWindow["tabId"] ?? .null]) }
+              perform("accounts.switch", args:args)
             } label: {
               Text(switching ? "Switch in progress" : (state["capabilities"]?.object?["ready"]?.bool == true ? "Switch to this account" : "Prepare account switch"))
                 .frame(maxWidth: .infinity, minHeight: 44)
-            }.buttonStyle(.borderedProminent).disabled(switching || connecting)
+            }.buttonStyle(.borderedProminent).disabled(switching || connecting || rebuildsWindow && selectedWindow==nil)
               .accessibilityIdentifier("clawdad.accounts.switch")
           }
         }
@@ -240,6 +274,13 @@ struct CodexAccountsView: View {
       let reply = try await assistant.settingsRequest("accounts.status", args: args)
       guard key == pendingKey, !busy else { return }
       accept(reply); statusError = ""
+      if rebuildsWindow,!switching {
+        let windowsReply=try await assistant.settingsRequest("accounts.windows",args:[:])
+        guard key==pendingKey,!busy else { return };accept(windowsReply)
+        if !windows.contains(where:{$0["id"]?.string==selectedWindowId}) {
+          selectedWindowId=windows.count==1 ? windows[0]["id"]?.string ?? "":""
+        }
+      }
     }
     catch { self.statusError = error.localizedDescription }
   }

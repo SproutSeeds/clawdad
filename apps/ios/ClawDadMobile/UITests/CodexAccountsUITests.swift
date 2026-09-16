@@ -8,13 +8,16 @@ import XCTest
   func testLostSwitchReplyReconcilesWithoutAnotherTap() throws { try checkSwitch(lostReply: true) }
   func testExactSessionCanBeLeftUnchanged() throws { try checkSwitch(lostReply:false,skip:true) }
   func testSkipAtAccessibilityTextSize() throws { try checkSwitch(lostReply:false,skip:true,largeText:true) }
+  func testChosenWindowSwitchKeepsExactSelectionAndCanCancel() throws { try checkSwitch(lostReply:false,window:true) }
+  func testChosenWindowAtAccessibilityTextSize() throws { try checkSwitch(lostReply:true,largeText:true,window:true) }
 
-  private func checkSwitch(lostReply: Bool,skip:Bool=false,largeText:Bool=false) throws {
+  private func checkSwitch(lostReply: Bool,skip:Bool=false,largeText:Bool=false,window:Bool=false) throws {
     continueAfterFailure = false
     let app = XCUIApplication()
     app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-weekly-usage-test", "--clawdad-assistant-test", "--clawdad-accounts-switch-test"]
     if lostReply { app.launchArguments.append("--clawdad-accounts-lost-reply-test") }
     if skip { app.launchArguments.append("--clawdad-accounts-skip-test") }
+    if window { app.launchArguments.append("--clawdad-accounts-window-test") }
     if largeText { app.launchArguments += ["-UIPreferredContentSizeCategoryName","UICTContentSizeCategoryAccessibilityXL"] }
     app.launch()
     let usage = app.buttons["clawdad.weeklyUsage.main"]
@@ -37,6 +40,12 @@ import XCTest
     show(app.buttons["clawdad.accounts.connect"])
     XCTAssertEqual(app.buttons.matching(identifier:"clawdad.accounts.connect").count,1)
     let change=app.buttons["clawdad.accounts.switch"]
+    if window {
+      show(change);XCTAssertFalse(change.isEnabled)
+      let choice=app.buttons["clawdad.accounts.window"]
+      show(choice,up:true);XCTAssertGreaterThanOrEqual(choice.frame.height,43.99);choice.tap()
+      app.buttons["Terminal window 2 · 3 tabs"].tap()
+    }
     show(change);change.tap()
     XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "clawdad.accounts.progress").firstMatch.waitForExistence(timeout: 2),app.debugDescription)
     let status=app.staticTexts["clawdad.accounts.switchStatus"]

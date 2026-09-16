@@ -80,6 +80,13 @@ final class MacAssistantTerminalTransportLiveTests: XCTestCase {
   func testIsolatedNativeWorker() async throws {
     guard let folder = ProcessInfo.processInfo.environment["CLAWDAD_TERMINAL_QA_ROOT"],
       folder.hasPrefix("/private/tmp/clawdad-terminal-coverage-") else { throw XCTSkip("Requires the explicitly enabled disposable Terminal transport harness") }
+    // The installed app has an AppKit event loop. A command-line XCTest host
+    // needs to initialize it before native window lifecycle/Apple Event work.
+    _ = NSApplication.shared
+    let wake=DispatchSource.makeTimerSource(queue:.global(qos:.userInitiated))
+    wake.schedule(deadline:.now(),repeating:.milliseconds(100))
+    wake.setEventHandler { DispatchQueue.main.async {} };wake.resume()
+    defer { wake.cancel() }
     let root = URL(fileURLWithPath: folder, isDirectory: true)
     let config = try JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("connection.json"))) as! [String:String]
     XCTAssertTrue(AXIsProcessTrusted(), "The test worker needs the existing authorized Accessibility path")

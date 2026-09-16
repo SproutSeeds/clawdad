@@ -76,6 +76,23 @@ enum MainWorkspaceTitleCensus {
   private let bindings=MainWorkspaceAgentBindings(file:FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/ClawDad/MainTerminalWorkspace/verified-agent-bindings.json"))
   var retainedDraft: ((MacCodexInputBinding,String,MacAssistantForeground,String,UInt64)->String?)?
   var captureProgress: ((Int,Int) throws -> Void)?
+  var diagnosticStep: ((String)->Void)?
+  // Used only by the private, explicitly accepted account-window controller.
+  // Ordinary snapshot/restore behavior and its canonical storage are unchanged.
+  var accountCaptureGuard: ((MacCodexInputBinding,String,String?) throws -> Void)?
+  var accountPermit: (() async throws -> Void)?
+  var accountResumeCommand: ((MainWorkspaceEntry) throws -> String)?
+  var accountClaim: ((String,String) async throws -> String)?
+  var accountHistoryRoots: [URL] = []
+  private func inputBinding(_ tty:String) async throws -> MacCodexInputBinding {
+    let account=accountCaptureGuard != nil
+    let value=try await Task.detached { () -> (MacCodexInputBinding,URL) in
+      let reader=try account ? MacCodexAccountProcess.ownerReader(tty:tty):MacTerminalResponseReader()
+      return (try reader.inputBinding(tty:tty),reader.sessionRoot)
+    }.value
+    if account,!accountHistoryRoots.contains(value.1) { accountHistoryRoots.append(value.1) }
+    return value.0
+  }
   private var exitedFullScreen:(tty:String,owner:String,ticket:UInt64)?
   private var closingWindow=false
   init(runtime: MacAssistantRuntime) { self.runtime=runtime }
@@ -118,6 +135,36 @@ enum MainWorkspaceTitleCensus {
     guard let window=try? focusedWindow() else { return false };var value:CFTypeRef?
     return AXUIElementCopyAttributeValue(window,"AXFullScreen" as CFString,&value) == .success && (value as? Bool)==true
   }
+  // This informational quota notice can appear after an exhausted turn or when
+  // resuming. Escape dismisses it without buying credits or sending a turn.
+  // Match the complete native choice/footer, never mentioned text in a reply.
+  nonisolated static func accountQuotaNotice(_ screen:String)->Bool {
+    let lines=screen.components(separatedBy:.newlines).map{$0.trimmingCharacters(in:.whitespaces)}.filter{!$0.isEmpty}
+    guard lines.last=="Press enter to confirm or esc to continue working",lines.count>=4 else { return false }
+    return lines[lines.count-3]=="› 1. Add Credits" && lines[lines.count-2]=="2. Continue with Luna Reserve"
+      && lines.contains("• Automatically switched to Luna Reserve low due to usage limits.")
+  }
+  private func dismissAccountQuotaNotice(_ screen:String,binding:MacCodexInputBinding,tabId:String,identity:String,ticket:UInt64) async throws -> String {
+    guard accountCaptureGuard != nil,Self.accountQuotaNotice(screen) else { return screen }
+    guard let path=binding.conversation?.path else { throw MacAssistantError("This quota notice has no exact saved conversation. Its window stays open.") }
+    var activity=MacCodexRequestActivityLog()
+    guard try !activity.read(path),let input,interaction.isCurrent(ticket),try await inputBinding(binding.tty)==binding,
+      try await tabs.assistantVerifiedInputIdentity(tabID:tabId)==identity,
+      Self.accountQuotaNotice(try focusedText()),let app=NSWorkspace.shared.frontmostApplication,app.bundleIdentifier=="com.apple.Terminal" else {
+      throw MacAssistantError("The quota notice or its owner changed. No key was sent.")
+    }
+    try await accountPermit?()
+    guard input.sendAssistantShortcut(.escape,targetPID:app.processIdentifier) else { throw MacAssistantError("The quota notice could not be dismissed. Its window stays open.") }
+    diagnosticStep?("quota-notice-dismissed")
+    for _ in 0..<20 {
+      try await Task.sleep(for:.milliseconds(100))
+      guard interaction.isCurrent(ticket),try await inputBinding(binding.tty)==binding,
+        try await tabs.assistantVerifiedInputIdentity(tabID:tabId)==identity else { throw MacAssistantError("The input changed after dismissing the quota notice. Its window stays open.") }
+      let value=try await MacAssistantComposerRendering.shared.read(ticket:ticket,raw:{try self.focusedText()})
+      if !Self.accountQuotaNotice(value) { return value }
+    }
+    throw MacAssistantError("The quota notice is still visible. Dismiss it manually, then check recovery. No credits or work were requested.")
+  }
   func closeWindow(_ expected:[MainWorkspaceLiveTab]) async throws {
     closingWindow=true
     do {
@@ -135,6 +182,7 @@ enum MainWorkspaceTitleCensus {
     // single-tab commands retain the exact native target through each confirmation.
     var remaining=expected.sorted{$0.position<$1.position}
     while let original=remaining.last {
+      try await accountPermit?()
       let fresh=try await inspectRemainingForClose(original,ticket:ticket)
       guard let anchor=fresh.tabs.first(where:{$0.tabId==fresh.anchorId}) else { throw AssistantProtocolError.invalid }
       let current=fresh.tabs.filter{$0.group==anchor.group}.sorted{$0.position<$1.position}
@@ -148,7 +196,7 @@ enum MainWorkspaceTitleCensus {
           throw MacAssistantError("The tab owner changed during its close confirmation. Close was cancelled.")
         }
         if original.kind=="codex",original.historical != true {
-          let agent=try await Task.detached(operation:{try MacTerminalResponseReader().inputBinding(tty:original.tty)}).value
+          let agent=try await inputBinding(original.tty)
           guard agent.instanceId==original.owner,agent.conversation?.sessionId==original.sessionId,agent.directory==original.directory else {
             throw MacAssistantError("The agent changed during its close confirmation. Close was cancelled.")
           }
@@ -282,6 +330,7 @@ enum MainWorkspaceTitleCensus {
   }
   func snapshot(windowContaining tabId:String) async throws -> MainWorkspaceWindowSnapshot {
     do {
+      diagnosticStep?("snapshot-activate")
       try await exposeFullScreen(entries:nil,savingTabId:tabId)
       let original=exitedFullScreen
       var anchor=tabId
@@ -289,8 +338,10 @@ enum MainWorkspaceTitleCensus {
         let identified=try await inventory(captureDrafts:true)
         guard let current=identified.first(where:{$0.tty==original.tty}) else { throw MacAssistantError("The selected Main tab changed during inspection.") };anchor=current.tabId
       }
+      diagnosticStep?("snapshot-catalog")
       _=try await tabs.catalog()
       guard let group=tabs.assistantSnapshot(tabID:anchor)?.groupID else { throw MacAssistantError("The chosen Main window changed. Refresh and choose it again.") }
+      diagnosticStep?("snapshot-inventory")
       var captured=try await inventory(captureDrafts:true,captureGroup:group)
       if original != nil { for i in captured.indices where captured[i].group==String(group) { captured[i].fullScreen=true } }
       if !closingWindow { await endRestore() }
@@ -325,6 +376,7 @@ enum MainWorkspaceTitleCensus {
       guard interaction.isCurrent(ticket) else { throw MacAssistantError("You changed Terminal during the snapshot. Save again when ready.") }
       let current=try await tabs.catalog()
       guard current.tabs.contains(where:{$0.id==id}) else { throw MacAssistantError("The tab identity changed. Refresh before saving.") }
+      if current.selectedTabId==id,NSWorkspace.shared.frontmostApplication?.bundleIdentifier=="com.apple.Terminal" { return }
       do { _=try await tabs.focus(tabID:id,expectedRevision:current.revision);return }
       catch let failure as MacTerminalTabFailure where attempt<2 && ["focus_failed","layout_unavailable"].contains(failure.code) {
         // Retry selection only, never creation or input. Native AX focus may
@@ -335,7 +387,9 @@ enum MainWorkspaceTitleCensus {
   }
   private func inventory(captureDrafts: Bool,captureGroup:Int?) async throws -> [MainWorkspaceLiveTab] {
     let initial=try await tabs.catalog();var output:[MainWorkspaceLiveTab]=[]
+    diagnosticStep?("inventory-titles")
     let names=NSRunningApplication.runningApplications(withBundleIdentifier:"com.apple.Terminal").isEmpty ? [:] : try await customTitles()
+    diagnosticStep?("inventory-receipts")
     guard !captureDrafts || initial.tabs.count==names.count else { throw MacAssistantError("Some Terminal tabs are hidden by macOS. Show their windows or leave full screen and retry. The saved roster and hidden tabs were preserved.") }
     let jobsURL=FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/ClawDad/Assistant/state.json")
     let jobState=(try? Data(contentsOf:jobsURL)).flatMap{try? JSONDecoder().decode([String:AssistantValue].self,from:$0)}
@@ -355,6 +409,7 @@ enum MainWorkspaceTitleCensus {
         // only needs to visit unbound tabs; known live inputs remain untouched.
         let shouldCapture=requiresIdentity && (captureGroup != nil || snapshot?.tty.isEmpty != false)
         if let ticket,shouldCapture {
+          diagnosticStep?("inventory-focus")
           captureIndex += 1;try captureProgress?(captureIndex,capturing.count)
           guard interaction.isCurrent(ticket) else { throw MacAssistantError("You changed Terminal during the snapshot. Your input was preserved; save again when ready.") }
           do {
@@ -372,7 +427,8 @@ enum MainWorkspaceTitleCensus {
         if requiresIdentity { owners[tab.tty]=owner.identity;lifetimes[tab.tty]=lifetime }
         var bindingIssue:String?
         let agent:MacCodexInputBinding?
-        do { agent=try await Task.detached{try MacTerminalResponseReader().inputBinding(tty:tab.tty)}.value }
+        diagnosticStep?("inventory-binding")
+        do { agent=try await inputBinding(tab.tty) }
         catch { agent=nil;if owner.shell==nil { bindingIssue=error.localizedDescription } }
         var directory: String
         if let agent { directory=agent.directory } else { directory=(try? await shellDirectory(tab.tty)) ?? "" }
@@ -383,17 +439,21 @@ enum MainWorkspaceTitleCensus {
         if focused,NSWorkspace.shared.frontmostApplication?.bundleIdentifier=="com.apple.Terminal",
           let expectedIdentity,(try? await tabs.catalog())?.selectedTabId==descriptor.id,
           let readTicket=try? interaction.ticket(),
-          let value=try? await MacAssistantComposerRendering.shared.read(ticket:readTicket,raw:{ try self.focusedText() }),
+          let rawValue=try? await MacAssistantComposerRendering.shared.read(ticket:readTicket,raw:{ try self.focusedText() }),
           interaction.isCurrent(readTicket),(try? await tabs.inputIdentity())==expectedIdentity,
           (try? await tabs.catalog())?.selectedTabId==descriptor.id {
+          var value=rawValue
+          if let agent,requiresIdentity { value=try await dismissAccountQuotaNotice(value,binding:agent,tabId:descriptor.id,identity:expectedIdentity,ticket:readTicket) }
           screen=value
           let observation=agent != nil ? assistantObserveDraft(value,viewportRows:assistantTerminalRows(tab.tty)) : nil
           let known=agent.flatMap{retainedDraft?($0,expectedIdentity,owner,value,readTicket)}
           let text=observation?.requiresWholeDraftAuthorization==true ? known : observation?.text ?? (owner.shell != nil ? MacAssistantShellDraft.read(value)?.text:nil)
           let offset=agent?.conversation.flatMap{try? MacAssistantSubmissionLog.capture($0.path).offset}
           draft=MainWorkspaceDraft(text:text,limitation:text==nil ? (observation?.reason ?? "This input cannot be recovered automatically."):nil,capturedAt:Date(),transcriptOffset:offset)
+          if let agent,requiresIdentity { try accountCaptureGuard?(agent,value,known) }
         }
         var historical:MainWorkspaceAgentBindings.Record?
+        diagnosticStep?("inventory-history")
         if let agent,let conversation=agent.conversation,let lifetime {
           try bindings.remember(.init(tty:tab.tty,lifetime:lifetime,process:agent.instanceId,directory:agent.directory,
             sessionId:conversation.sessionId,path:conversation.path.path,executable:agent.executable))
@@ -409,7 +469,7 @@ enum MainWorkspaceTitleCensus {
         }
         if agent != nil && agent?.conversation==nil { bindingIssue="Codex is fresh and has not persisted a resumable conversation. Finish your first intended turn, then save this window." }
         if requiresIdentity,lifetime==nil { bindingIssue="This tab's login lifetime could not be verified. Refresh before saving." }
-        let config=agent?.conversation.flatMap{Self.resumeConfiguration($0.path)}
+        let config=(agent?.conversation?.path ?? historical.map{URL(fileURLWithPath:$0.path)}).flatMap{Self.resumeConfiguration($0)}
         var receiptIds:[String]=[]
         if let conversation=agent?.conversation {
           for row in pending {
@@ -455,7 +515,13 @@ enum MainWorkspaceTitleCensus {
         FileManager.default.fileExists(atPath:path),let executable=entry.executable,FileManager.default.isExecutableFile(atPath:executable) else {
         throw MacAssistantError("The saved Codex conversation or executable is unavailable. Restore that session or save its current identified tab; no substitute conversation was started.")
       }
-      guard let session=try? MacCodexConversation.load(path:URL(fileURLWithPath:path),sessionRoot:MacTerminalResponseReader().sessionRoot),session.sessionId==id else {
+      let roots=accountCaptureGuard == nil ? [MacTerminalResponseReader().sessionRoot]:accountHistoryRoots+[MacTerminalResponseReader().sessionRoot]
+      let verified=roots.contains { root in
+        guard case .conversation(let session)=try? MacCodexConversation.metadata(path:URL(fileURLWithPath:path),sessionRoot:root,
+          acceptedSources:accountCaptureGuard == nil ? ["cli"]:["cli","vscode"]) else { return false }
+        return session.sessionId==id
+      }
+      guard verified else {
         throw MacAssistantError("The saved transcript header does not verify this exact CLI conversation. If it was archived, restore its original history first; no replacement conversation was started.")
       }
       let help=try MacTerminalResponseReader().run(executable,["resume","--help"])
@@ -468,14 +534,24 @@ enum MainWorkspaceTitleCensus {
   nonisolated static func resumeConfiguration(_ path:URL)->(model:String,effort:String?)? {
     guard let handle=try? FileHandle(forReadingFrom:path) else { return nil };defer{try? handle.close()}
     guard let end=try? handle.seekToEnd() else { return nil }
-    // Bounded tail; missing historical settings stay inherited by Codex resume.
-    try? handle.seek(toOffset:end>1024*1024 ? end-1024*1024:0)
-    guard let data=try? handle.readToEnd() else { return nil }
-    for line in data.split(separator:10).reversed() {
-      guard let row=try? JSONSerialization.jsonObject(with:line) as? [String:Any],row["type"] as? String=="turn_context",
-        let p=row["payload"] as? [String:Any],let model=p["model"] as? String,!model.isEmpty,model.utf8.count<128 else { continue }
-      let effort=p["effort"] as? String
-      return (model,effort?.range(of:#"^[a-z_]{1,24}$"#,options:.regularExpression) != nil ? effort:nil)
+    // Research turns can produce many megabytes after their turn_context. Walk
+    // backward with bounded memory and skip large tool records instead of
+    // treating a one-megabyte tail as proof that model settings are absent.
+    var offset=end,partial=Data(),discarding=false
+    while offset>0 {
+      let count=Int(min(offset,256*1024));offset-=UInt64(count)
+      guard (try? handle.seek(toOffset:offset)) != nil,let data=try? handle.read(upToCount:count) else { return nil }
+      var lines=Array(data+partial).split(separator:UInt8(10),omittingEmptySubsequences:false).map { Data($0) }
+      partial=lines.isEmpty ? Data():lines.removeFirst()
+      if discarding,!lines.isEmpty { lines.removeLast();discarding=false }
+      if partial.count>2*1024*1024 { partial.removeAll();discarding=true }
+      if offset==0,!discarding { lines.insert(partial,at:0) }
+      for line in lines.reversed() where line.count<=2*1024*1024 && line.range(of:Data("\"turn_context\"".utf8)) != nil {
+        guard let row=try? JSONSerialization.jsonObject(with:line) as? [String:Any],row["type"] as? String=="turn_context",
+          let p=row["payload"] as? [String:Any],let model=p["model"] as? String,!model.isEmpty,model.utf8.count<128 else { continue }
+        let effort=p["effort"] as? String
+        return (model,effort?.range(of:#"^[a-z_]{1,24}$"#,options:String.CompareOptions.regularExpression) != nil ? effort:nil)
+      }
     }
     return nil
   }
@@ -485,8 +561,14 @@ enum MainWorkspaceTitleCensus {
   }
   private func title(_ value:String,tty:String) async throws {
     guard tty.range(of:#"^/dev/tty[A-Za-z0-9]+$"#,options:.regularExpression) != nil else { throw AssistantProtocolError.invalid }
-    let result=try await script("tell application \"Terminal\"\nset matches to {}\nrepeat with w in windows\nrepeat with t in tabs of w\nif tty of t is \(Self.appleString(tty)) then set end of matches to t\nend repeat\nend repeat\nif (count matches) is not 1 then error \"Target changed\"\nset t to item 1 of matches\nset custom title of t to \(Self.appleString(value))\nreturn custom title of t\nend tell")
+    let result=try await script(Self.titleScript(value,tty:tty))
     guard result==value else { throw MacAssistantError("The saved tab name could not be verified.") }
+  }
+  static func titleScript(_ value:String,tty:String)->String {
+    // Terminal keeps a missing-value scripting window after its Settings panel
+    // closes. Enumerate verified window IDs, as in the read-only census, before
+    // locating the unique TTY. A real window/tab read failure still aborts.
+    "tell application \"Terminal\"\nset matches to {}\nset windowIds to id of windows\nrepeat with windowId in windowIds\nif (contents of windowId) is not missing value then\nset w to window id (contents of windowId)\nrepeat with t in tabs of w\nif tty of t is \(Self.appleString(tty)) then set end of matches to t\nend repeat\nend if\nend repeat\nif (count matches) is not 1 then error \"Target changed\"\nset t to item 1 of matches\nset custom title of t to \(Self.appleString(value))\nreturn custom title of t\nend tell"
   }
   func create(marker:String,anchor:MainWorkspaceLiveTab?) async throws -> MainWorkspaceLiveTab {
     let ticket=try ensure();let before=try await inventory(captureDrafts:false)
@@ -527,7 +609,7 @@ enum MainWorkspaceTitleCensus {
   func configure(_ tab:MainWorkspaceLiveTab,entry:MainWorkspaceEntry,requestId:String,allowLaunch:Bool) async throws -> MainWorkspaceLiveTab {
     let ticket=try ensure();let state=try await tabs.catalog()
     _=try await tabs.focus(tabID:tab.tabId,expectedRevision:state.revision)
-    if let agent=try? await Task.detached{try MacTerminalResponseReader().inputBinding(tty:tab.tty)}.value {
+    if let agent=try? await inputBinding(tab.tty) {
       guard agent.conversation?.sessionId==entry.sessionId,agent.directory==entry.directory else { throw MacAssistantError("The pending tab owns another conversation. It was preserved.") }
       return try await verified(tab,entry:entry)
     }
@@ -539,19 +621,23 @@ enum MainWorkspaceTitleCensus {
     guard allowLaunch else { throw MacAssistantError("A previous launch has uncertain delivery. Complete its visible startup or inspect the pending launch draft. ClawDad will not press Enter again automatically.") }
     var lease:String?
     if let session=entry.sessionId {
-      let receipt=try await runtime.json("/v1/assistant/main-workspace/claim",["id":.string(requestId),"sessionId":.string(session)])
-      guard receipt["allowed"]?.bool==true,let token=receipt["token"]?.string else { throw MacAssistantError("The saved thread's live ownership could not be verified.") };lease=token
+      if let accountClaim { lease=try await accountClaim(requestId,session) }
+      else {
+        let receipt=try await runtime.json("/v1/assistant/main-workspace/claim",["id":.string(requestId),"sessionId":.string(session)])
+        guard receipt["allowed"]?.bool==true,let token=receipt["token"]?.string else { throw MacAssistantError("The saved thread's live ownership could not be verified.") };lease=token
+      }
     }
     do {
       let latest=entry.conversationPath.flatMap{Self.resumeConfiguration(URL(fileURLWithPath:$0))}
       let settings=((latest?.model ?? entry.model).map{" --model \(Self.quoted($0))"} ?? "") + ((latest?.effort ?? entry.effort).map{" -c \(Self.quoted("model_reasoning_effort=\"\($0)\""))"} ?? "")
-      let command="cd -- \(Self.quoted(entry.directory))" + (entry.kind=="codex" ? " && \(Self.quoted(entry.executable!)) resume \(Self.quoted(entry.sessionId!)) --cd \(Self.quoted(entry.directory))\(settings)\(MacTerminalProjectLaunch.titleOptions)":"")
+      let command=try accountResumeCommand?(entry) ?? ("cd -- \(Self.quoted(entry.directory))" + (entry.kind=="codex" ? " && \(Self.quoted(entry.executable!)) resume \(Self.quoted(entry.sessionId!)) --cd \(Self.quoted(entry.directory))\(settings)\(MacTerminalProjectLaunch.titleOptions)":""))
       var target:[String:AssistantValue]=["tabId":.string(tab.tabId),"inputToken":inspected["inputToken"]!,"inputSessionId":inspected["inputSessionId"]!,"mode":.string("insert"),"expectedText":.string(""),"text":.string(command)]
       _=try await controls.execute("terminal.native.type",args:target,input:input)
       let fresh=try await controls.inspect(tabId:tab.tabId,input:input,ticket:ticket)
       guard fresh["draftText"]?.string==command,interaction.isCurrent(ticket) else { throw MacAssistantError("The launch draft changed. It was preserved.") }
       target=["tabId":.string(tab.tabId),"inputToken":fresh["inputToken"]!,"inputSessionId":fresh["inputSessionId"]!,"key":.string("enter"),"intent":.string("submit")]
       if let lease { _=try await runtime.json("/v1/assistant/main-workspace/check",["token":.string(lease)]) }
+      try await accountPermit?()
       _=try await controls.execute("terminal.key",args:target,input:input)
       var result:MainWorkspaceLiveTab?
       for _ in 0..<30 {
@@ -658,12 +744,20 @@ enum MainWorkspaceTitleCensus {
       _=try await tabs.move(.moveRequest(tabId:tab.tabId,neighborTabId:managed[index],placeBefore:true,expectedRevision:state.revision,requestId:UUID().uuidString))
     }
     let currentOrder=try await rebound()
+    diagnosticStep?("layout-catalog")
     let state=try await tabs.catalog()
     guard state.tabs.filter({currentOrder.map(\.tabId).contains($0.id)}).map(\.id)==currentOrder.map(\.tabId) else { throw MacAssistantError("The saved tab order has not been confirmed. Show the full tab bar and retry.") }
-    _=try await tabs.focus(tabID:currentOrder.first{$0.owner==selectedOwner}?.tabId ?? currentOrder[0].tabId,expectedRevision:state.revision)
+    diagnosticStep?("layout-focus")
+    let selected=currentOrder.first{$0.owner==selectedOwner}?.tabId ?? currentOrder[0].tabId
+    if state.selectedTabId != selected || NSWorkspace.shared.frontmostApplication?.bundleIdentifier != "com.apple.Terminal" {
+      _=try await tabs.focus(tabID:selected,expectedRevision:state.revision)
+    }
     // Check every exact TTY/name before sizing the normal window.
+    diagnosticStep?("layout-names")
     try await verifyNativeNames(currentOrder,ticket:ticket)
+    diagnosticStep?("layout-frame")
     try await fillAvailableDisplay(ticket:ticket)
+    diagnosticStep?("layout-verified")
     exitedFullScreen=nil
   }
   private func windowBounds(_ window:AXUIElement) throws -> CGRect {
@@ -726,7 +820,7 @@ enum MainWorkspaceTitleCensus {
       _=try await tabs.catalog()
       let unmatched=named.filter { tab,name in
         guard let id=tabs.assistantIdentifier(tty:tab.tty),let native=tabs.assistantSnapshot(tabID:id) else { return true }
-        return native.customTitle != name
+        return !Self.restoredNameMatches(native,name:name)
       }
       if unmatched.isEmpty { return }
       if attempt==0 {
@@ -738,6 +832,12 @@ enum MainWorkspaceTitleCensus {
       try await Task.sleep(for:.milliseconds(200))
     }
     throw MacAssistantError("The conversations and drafts are restored, but Terminal has not confirmed its saved tab names. Refresh to verify the same tabs; they will not be recreated.")
+  }
+  static func restoredNameMatches(_ snapshot:MacTerminalTabSnapshot,name:String)->Bool {
+    // A single-tab window without a visible tab bar exposes its composed
+    // window title through AX. The independently read configured title remains
+    // the exact tab name; substring matching would accept unrelated names.
+    snapshot.customTitle==name || snapshot.configuredTitle==name
   }
 }
 

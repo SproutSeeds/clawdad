@@ -55,6 +55,18 @@ struct MacCodexAccountProcess {
     return facts(bytes.prefix(size))
   }
 
+  /// Select history from this foreground process, never from a project-name
+  /// search. Private retained profiles may have a different history root.
+  static func ownerReader(tty:String) throws -> MacTerminalResponseReader {
+    var reader=MacTerminalResponseReader();reader.acceptedConversationSources=["cli","vscode"]
+    let owner=try MacTerminalResponseReader.inputOwner(reader.run("/bin/ps",["-t",String(tty.dropFirst(5)),"-o","pid=,pgid=,tpgid=,stat=,lstart=,comm="]))
+    guard let facts=readFacts(owner.pid),let home=facts.codexHome ?? facts.home.map({$0+"/.codex"}) else { throw failure("authorization_home_unavailable") }
+    reader.sessionRoot=URL(fileURLWithPath:home,isDirectory:true).appendingPathComponent("sessions",isDirectory:true)
+    let binding=try reader.inputBinding(tty:tty)
+    guard binding.pid==owner.pid,readFacts(owner.pid)==facts else { throw failure("process_home_changed") }
+    return reader
+  }
+
   /// Retain only reviewed launch flags. Positional prompts and initial images
   /// must never be replayed. Unknown options remain an actionable stop.
   static func options(_ arguments:[String],allowVerifiedAccountRouting:Bool=false) throws -> [String] {
@@ -76,15 +88,18 @@ struct MacCodexAccountProcess {
       if argument=="-c" || argument=="--config" {
         guard index+1<arguments.count else { throw failure("incomplete_launch_option") }
         let option=arguments[index+1]
+        // Choosing Keychain storage is a supported CLI setting, including for
+        // manually launched profiles. It does not prove the cached account.
+        // Every recreated process uses the separately verified destination.
+        if option=="cli_auth_credentials_store=\"keyring\"" {index += 2;continue}
         if allowVerifiedAccountRouting {
-          if option=="cli_auth_credentials_store=\"keyring\"" {index += 2;continue}
           if option.hasPrefix("sqlite_home="),let data=String(option.dropFirst("sqlite_home=".count)).data(using:.utf8),
             let directory=try? JSONDecoder().decode(String.self,from:data),directory.hasPrefix("/"),
             !directory.unicodeScalars.contains(where:CharacterSet.controlCharacters.contains) {index += 2;continue}
         }
         // User-supplied provider credentials, arbitrary instructions and paths
         // are never serialized as process evidence. They need explicit support.
-        guard option.range(of:#"^(features\.[A-Za-z0-9_]+=(true|false)|model_reasoning_effort="?[a-z_]+"?)$"#,options:.regularExpression) != nil else { throw failure("unsupported_configuration_override") }
+        guard option=="tui.terminal_title=[]" || option.range(of:#"^(features\.[A-Za-z0-9_]+=(true|false)|model_reasoning_effort="?[a-z_]+"?)$"#,options:.regularExpression) != nil else { throw failure("unsupported_configuration_override") }
         output += [argument,option];index += 2;continue
       }
       if values.contains(argument) {

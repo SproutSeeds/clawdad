@@ -155,6 +155,11 @@
           accounts["accounts"] = .array(["first", "second", "third"].map { name in
             .object(["id":.string(name), "email":.string(name+"@example.test"), "authentication":.string("verified")])
           })
+          if ProcessInfo.processInfo.arguments.contains("--clawdad-accounts-window-test") {
+            accounts["capabilities"] = .object(["ready":.bool(true),"windowRebuild":.bool(true),"skipTerminalSessions":.bool(false)])
+            accounts["windows"] = .array([1,2].map { n in .object(["id":.string("window-\(n)"),"tabId":.string("anchor-\(n)"),
+              "title":.string("Terminal window \(n)"),"count":.number(Double(n+1))]) })
+          }
         }
         if action=="accounts.add" {
           var entries=accounts["accounts"]?.array ?? []
@@ -162,6 +167,9 @@
           accounts["accounts"] = .array(entries);accounts["revision"] = .number((accounts["revision"]?.number ?? 0)+1)
         }
         if action=="accounts.switch" {
+          if ProcessInfo.processInfo.arguments.contains("--clawdad-accounts-window-test"),args["windowSelection"]?.object?["id"]?.string != "window-2" {
+            throw AssistantProtocolError.invalid
+          }
           let ready = accounts["capabilities"]?.object?["ready"]?.bool == true
           let operation: AssistantValue = .object(["id":.string(id),"targetId":args["accountId"] ?? .null,"status":.string(ready ? "waiting" : "needs_setup"),"fenced":.bool(ready),"reason":.string(ready ? "2 earlier work receipts need reconciliation before switching. Review affected sessions or cancel this switch to keep using the current account." : "Live switching needs isolated verification. Current work is preserved.")])
           accounts["activeOperation"] = operation

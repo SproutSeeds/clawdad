@@ -72,7 +72,7 @@ func assistantEditableDraft(_ screen: String, allowQueueFooter: Bool, allowColla
 func assistantComposerFooter(_ line: String, allowQueue: Bool) -> Bool {
   let value = line.trimmingCharacters(in: .whitespaces)
   if allowQueue, value.range(of: #"^[a-z+ ⇧←]+ to queue message\b"#, options: .regularExpression) != nil { return true }
-  return value.range(of: #"^(?:enter to (?:send|submit)\b|gpt[-\s]|\d+% context left\b|\? for shortcuts\b|(?:press )?ctrl\+c again to (?:quit|exit)\b)"#,
+  return value.range(of: #"^(?:enter to (?:send|submit)\b|gpt[-\s]|Luna Reserve\b|\d+% context left\b|\? for shortcuts\b|(?:press )?ctrl\+c again to (?:quit|exit)\b)"#,
     options: [.regularExpression, .caseInsensitive]) != nil
 }
 

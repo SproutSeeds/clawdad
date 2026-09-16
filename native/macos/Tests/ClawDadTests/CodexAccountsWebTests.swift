@@ -3,6 +3,53 @@ import WebKit
 @testable import ClawDad
 
 @MainActor final class CodexAccountsWebTests: XCTestCase {
+  func testExactWindowSelectionHasOneSwitchAndPreservesNavigation() async throws {
+    let repo=URL(fileURLWithPath:#filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    let root=FileManager.default.temporaryDirectory.appendingPathComponent("accounts-ui-fixture-"+UUID().uuidString)
+    try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
+    let process=Process();process.executableURL=URL(fileURLWithPath:"/usr/bin/env")
+    process.arguments=["node",repo.appendingPathComponent("test/fixtures/codex-accounts-desktop-server.mjs").path,root.path]
+    process.standardOutput=Pipe();process.standardError=Pipe();try process.run()
+    defer{process.terminate();try? FileManager.default.removeItem(at:root)}
+    for _ in 0..<100 where !FileManager.default.fileExists(atPath:root.appendingPathComponent("ready.json").path){try await Task.sleep(for:.milliseconds(50))}
+    let config=try JSONSerialization.jsonObject(with:Data(contentsOf:root.appendingPathComponent("ready.json"))) as! [String:String]
+    let base=try XCTUnwrap(URL(string:try XCTUnwrap(config["baseURL"])))
+    let view=WKWebView(frame:CGRect(x:0,y:0,width:980,height:900))
+    let window=NSWindow(contentRect:view.frame,styleMask:[.titled,.closable],backing:.buffered,defer:false)
+    window.contentView=view;window.orderFront(nil);defer{window.orderOut(nil)}
+    view.load(URLRequest(url:base));try await wait(view,"!!document.getElementById('weeklyUsage')?.onclick")
+    try await view.evaluateJavaScript("document.getElementById('weeklyUsage').click();document.getElementById('codexAccounts').open=true")
+    try await wait(view,"document.getElementById('codexAccounts').textContent.includes('fixture@example.test')")
+    try await view.evaluateJavaScript("const fields=document.querySelectorAll('#codexAccounts input');fields[0].value='second@example.test';fields[0].dispatchEvent(new Event('input'));[...document.querySelectorAll('button')].find(b=>b.textContent==='Save account entry').click()")
+    try await wait(view,"document.getElementById('codexAccountSwitch')!==null")
+    try await view.evaluateJavaScript("[...document.querySelectorAll('button')].find(b=>b.textContent==='Connect account on Mac').click()")
+    try await wait(view,"document.getElementById('codexAccounts').textContent.includes('Saved subscription sign-in verified')")
+    _=try await URLSession.shared.data(from:base.appendingPathComponent("fixture/windows"))
+    try await view.evaluateJavaScript("[...document.querySelectorAll('button')].find(b=>b.textContent==='Refresh account status').click()")
+    try await wait(view,"document.getElementById('codexAccountWindow').options.length===3")
+    let disabled=try await view.evaluateJavaScript("document.getElementById('codexAccountSwitch').disabled") as? Bool;XCTAssertEqual(disabled,true)
+    try await view.evaluateJavaScript("const w=document.getElementById('codexAccountWindow');w.value='window-2';w.dispatchEvent(new Event('change'))")
+    try await wait(view,"!document.getElementById('codexAccountSwitch').disabled")
+    for width in [390,980] {
+      view.setFrameSize(NSSize(width:width,height:900));window.setContentSize(view.frame.size)
+      try await Task.sleep(for:.milliseconds(100))
+      let fits=try await view.evaluateJavaScript("[...document.querySelectorAll('#codexAccountWindow,#codexAccountSwitch')].every(n=>n.getBoundingClientRect().height>=44&&n.getBoundingClientRect().right<=innerWidth)") as? Bool;XCTAssertEqual(fits,true)
+      if let folder=ProcessInfo.processInfo.environment["CLAWDAD_ACCOUNTS_TEST_ARTIFACTS"] {
+        let shot=try await view.takeSnapshot(configuration:nil)
+        if let data=shot.tiffRepresentation,let bitmap=NSBitmapImageRep(data:data),let png=bitmap.representation(using:.png,properties:[:]){try png.write(to:URL(fileURLWithPath:folder).appendingPathComponent("accounts-window-web-\(width).png"))}
+      }
+    }
+    try await view.evaluateJavaScript("document.getElementById('codexAccountSwitch').click();document.getElementById('codexAccountSwitch').click()")
+    try await wait(view,"document.getElementById('codexAccountSwitchStatus').textContent.includes('Waiting')")
+    let (data,_)=try await URLSession.shared.data(from:base.appendingPathComponent("fixture/evidence"))
+    let evidence=try JSONSerialization.jsonObject(with:data) as! [String:Any]
+    let requests=(evidence["requests"] as? [[String:Any]])?.filter{$0["action"] as? String=="accounts.switch"} ?? []
+    XCTAssertEqual(requests.count,1);XCTAssertEqual((requests.first?["windowSelection"] as? [String:String]),["id":"window-2","tabId":"anchor-2"])
+    try await view.evaluateJavaScript("[...document.querySelectorAll('button')].find(b=>b.textContent==='Cancel switch').click()")
+    try await wait(view,"document.getElementById('codexAccountSwitchStatus').textContent.includes('cancelled')")
+    try await view.evaluateJavaScript("document.getElementById('weeklyUsageClose').click()")
+    let closed=try await view.evaluateJavaScript("!document.getElementById('weeklyUsageDialog').open") as? Bool;XCTAssertEqual(closed,true)
+  }
   func testRealWebControlsShareAccountReceiptsAndKeepAuthenticationGuarded() async throws {
     let repo=URL(fileURLWithPath:#filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     let root=FileManager.default.temporaryDirectory.appendingPathComponent("accounts-ui-fixture-"+UUID().uuidString)
