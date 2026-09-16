@@ -21,7 +21,7 @@ runtime.accounts.authorizations=new CodexAccountAuthorizations({root:path.join(r
         if(method==='account/rateLimits/read')return {accountId:id,rateLimits:{limitId:'codex',primary:{windowDurationMins:10080,usedPercent:88,resetsAt:2000000000}}};
         if(method==='account/login/start'){
           const account=await runtime.accounts.transaction(s=>s.accounts.find(a=>a.id===id));
-          completeSignIn=()=>{saved.set(id,account.email);for(const fn of listeners)fn({method:'account/login/completed',params:{loginId:id,success:true}});};
+          completeSignIn=()=>{saved.set(id,account.email);for(const fn of listeners)fn({method:'account/login/completed',params:{loginId:id,success:true}});for(const fn of listeners)fn({method:'account/updated',params:{authMode:'chatgpt'}});};
           return {type:'chatgpt',loginId:id,authUrl:'https://auth.openai.com/fixture-only'};
         }
         throw Error('Only synthetic account reads and sign-in are available');

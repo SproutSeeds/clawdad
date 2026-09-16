@@ -25,7 +25,7 @@ async function fixture(t,{complete=true,email,openFailure=false}={}) {
     const id=path.basename(home),expected=id===a.id?a.email:b.email,listeners=new Set();
     const connection={home,closed:false,connect:async()=>{},verifyStorage:async()=>{},
       subscribe(fn){listeners.add(fn);return()=>listeners.delete(fn);},
-      complete(){credentials.set(id,{email:email||expected,entitlement:id});for(const fn of listeners)fn({method:'account/login/completed',params:{loginId:'login-'+id,success:true}});},
+      complete(){credentials.set(id,{email:email||expected,entitlement:id});for(const fn of listeners)fn({method:'account/login/completed',params:{loginId:'login-'+id,success:true}});for(const fn of listeners)fn({method:'account/updated',params:{authMode:'chatgpt'}});},
       close(){if(connection.closed)return;connection.closed=true;for(const fn of listeners)fn({method:'clawdad/accountConnectionClosed'});},
       async request(method,args){calls.push({id,method,args});const auth=credentials.get(id);
         if(method==='account/read')return {account:auth?{type:'chatgpt',email:auth.email,planType:'pro'}:null};

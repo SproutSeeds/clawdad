@@ -1,5 +1,7 @@
 # Retained Codex sign-in and session transition implementation
 
+Latest live checkpoint: [September 15 sign-in verification](codex-account-signin-live-2026-09-15.md). The first account is now verified after process reopening; the second browser ceremony is pending. That check exposed and repaired a login-completion/account-reload race. The earlier timeout below remains historical evidence.
+
 ## Current verified baseline
 
 Source checkpoint c87b091 contains the guarded controller and synthetic transitions. Installed Mac build 145 and Codex CLI 0.154.0 are unchanged. The nine inherited dirty paths are classified and preserved. Neither the OpenAI desktop app nor ChatGPT browser sign-in is a prerequisite for running Terminal Codex.
