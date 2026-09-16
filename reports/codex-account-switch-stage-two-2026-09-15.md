@@ -1,6 +1,6 @@
 # Retained Codex sign-in and session transition implementation
 
-Latest live checkpoint: [September 15 sign-in verification](codex-account-signin-live-2026-09-15.md). The first account is now verified after process reopening; the second browser ceremony is pending. That check exposed and repaired a login-completion/account-reload race. The earlier timeout below remains historical evidence.
+Latest live checkpoint: [September 15 sign-in verification](codex-account-signin-live-2026-09-15.md). Both accounts are independently retained, registered in the actual saved-account list, and verified after reopening the controller using their stored homes. A real disposable paginated conversation and fork also retained exact text/IDs under both accounts; explicit setting restoration was verified separately after preserving a fork-inheritance test failure. Sun has 0% allowance and provider-denied execution until September 19 at 7:57:20 AM CDT. The login-readiness race is repaired; all 772 runtime tests passed. The earlier timeout and pending-sign-in notes below are historical evidence. Full production session switching remains unimplemented and gated.
 
 ## Current verified baseline
 

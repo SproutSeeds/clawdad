@@ -110,6 +110,31 @@ test('missing explicit sign-in intent and unsafe account identities are rejected
   await assert.rejects(f.service.request({account:{...a,id:'..'},requestId:'two',confirmed:true}),/explicitly/);
   assert.equal(f.connections.length,0);
 });
+test('an approved retained home is registered only after exact verification and survives controller restart',async t=>{
+  const f=await fixture(t),home=path.join(f.root,'retained-cody');await fs.mkdir(home,{mode:0o700});
+  f.credentials.set('retained-cody',{email:a.email,entitlement:a.id});
+  const args={account:a,requestId:'register',mode:'verify',confirmed:true,retainedHome:home};
+  await f.service.request(args);await f.finish();
+  const saved=(await f.service.snapshot()).profiles[0];assert.equal(saved.home,home);assert.equal(saved.authentication,'verified');assert.ok(saved.retainedVerifiedAt);
+  await f.service.request(args);assert.equal(f.connections.length,1);
+  await f.service.close();const next=new CodexAccountAuthorizations(f.options);t.after(()=>next.close());
+  await next.request({account:a,requestId:'reopen-registered',mode:'verify'});await until(()=>next.tasks.size===0);
+  assert.equal(f.connections.at(-1).home,home);assert.equal((await next.snapshot()).profiles[0].authentication,'verified');
+  assert.equal(f.opened.length,0);assert.ok(!f.calls.some(c=>c.method==='account/login/start'));
+  await assert.rejects(next.request({account:b,requestId:'alias-home',mode:'verify',confirmed:true,retainedHome:home}),/another saved account/);
+});
+test('retained registration rejects external, missing and symlinked homes or a wrong account without adopting the path',async t=>{
+  const f=await fixture(t),home=path.join(f.root,'retained-wrong');await fs.mkdir(home,{mode:0o700});
+  const args={account:a,requestId:'register',mode:'verify',confirmed:true};
+  await assert.rejects(f.service.request({...args,retainedHome:os.homedir()}),/inside ClawDad/);
+  await assert.rejects(f.service.request({...args,retainedHome:path.join(f.root,'missing')}),/ENOENT/);
+  const link=path.join(f.root,'linked');await fs.symlink(home,link,'dir');
+  await assert.rejects(f.service.request({...args,retainedHome:link}),/private, local/);
+  await assert.rejects(f.service.request({...args,confirmed:false,retainedHome:home}),/explicit/);
+  f.credentials.set('retained-wrong',{email:b.email,entitlement:b.id});
+  await f.service.request({...args,retainedHome:home});await f.finish();
+  const p=(await f.service.snapshot()).profiles[0];assert.equal(p.home,undefined);assert.notEqual(p.authentication,'verified');assert.equal(f.opened.length,0);
+});
 test('account-only process enforces private homes, keyring storage, RPC boundary and sanitized environment',async t=>{
   const temporary=await fs.mkdtemp(path.join(os.tmpdir(),'clawdad-profile-')),root=await fs.realpath(temporary);
   t.after(()=>fs.rm(root,{recursive:true,force:true}));let invocation,child;
