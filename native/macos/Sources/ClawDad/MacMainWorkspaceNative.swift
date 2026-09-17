@@ -277,7 +277,7 @@ enum MainWorkspaceTitleCensus {
     return names
   }
   private func activateForWorkspace() async throws {
-    _=try ensure()
+    let ticket=try ensure()
     if NSRunningApplication.runningApplications(withBundleIdentifier:"com.apple.Terminal").isEmpty {
       // Launch first, then discover macOS-restored windows before requesting
       // any new window. Never combine launch and creation in a blind retry.
@@ -285,11 +285,44 @@ enum MainWorkspaceTitleCensus {
       try await Task.sleep(for:.milliseconds(750))
     }
     guard let app=NSRunningApplication.runningApplications(withBundleIdentifier:"com.apple.Terminal").first else { throw MacAssistantError("Terminal is still starting. Retry after its windows appear.") }
-    if !app.isActive {
-      app.activate(options:[.activateIgnoringOtherApps])
-      for _ in 0..<15 { if app.isActive { return };try await Task.sleep(for:.milliseconds(100)) }
-      throw MacAssistantError("Show Terminal on the Mac and retry Main Workspace.")
+    let pid=app.processIdentifier
+    try await Self.verifyTerminalActivation(ready:{
+      guard self.interaction.isCurrent(ticket) else { throw MacCodexInputFailure(code:"manual_input_changed",message:"You used the Mac while Terminal was being activated. Your work was preserved.") }
+      guard !MacConsoleSessionState.isLocked() else { throw MacCodexInputFailure(code:"mac_locked",message:"Unlock the Mac before continuing this Terminal operation.") }
+      guard AXIsProcessTrusted() else { throw MacCodexInputFailure(code:"accessibility_required",message:"Allow ClawDad in System Settings > Privacy & Security > Accessibility, then check recovery.") }
+      guard NSRunningApplication.runningApplications(withBundleIdentifier:"com.apple.Terminal").first?.processIdentifier==pid else {
+        throw MacCodexInputFailure(code:"terminal_process_changed",message:"Terminal restarted during activation. Refresh its exact window before continuing.")
+      }
+      return NSWorkspace.shared.frontmostApplication?.processIdentifier==pid
+    },request:{app.activate(options:[.activateIgnoringOtherApps])},fallback:{
+      // Address the already verified process, so an exited Terminal cannot be
+      // relaunched by a bundle-targeted fallback. Reuse existing AX permission.
+      let terminal=AXUIElementCreateApplication(pid)
+      AXUIElementSetMessagingTimeout(terminal,1)
+      let result=AXUIElementSetAttributeValue(terminal,kAXFrontmostAttribute as CFString,kCFBooleanTrue)
+      guard result == .success else {
+        self.diagnosticStep?("terminal-activation-ax-error:\(result.rawValue)")
+        throw MacCodexInputFailure(code:"terminal_activation_failed",message:"macOS could not bring Terminal forward. Your window and account were preserved. Bring Terminal forward on the Mac, then check recovery.")
+      }
+    },pause:{try await Task.sleep(for:.milliseconds(100))},diagnostic:self.diagnosticStep)
+  }
+  static func verifyTerminalActivation(ready:() throws -> Bool,request:()->Bool,
+    fallback:() async throws -> Void,pause:() async throws -> Void,diagnostic:((String)->Void)?=nil) async throws {
+    if try ready() { diagnostic?("terminal-already-foreground");return }
+    let accepted=request();diagnostic?(accepted ? "terminal-activation-requested":"terminal-activation-rejected")
+    // One supported activation fallback; never retry input, tab creation or
+    // closure. Recheck lock, manual control and exact PID before every step.
+    for attempt in 0..<30 {
+      if try ready() { diagnostic?("terminal-foreground-verified");return }
+      if attempt==(accepted ? 5:0) {
+        diagnostic?("terminal-activation-fallback")
+        try await fallback()
+        if try ready() { diagnostic?("terminal-foreground-verified");return }
+      }
+      try await pause()
     }
+    if try ready() { diagnostic?("terminal-foreground-verified");return }
+    throw MacCodexInputFailure(code:"terminal_activation_unverified",message:"ClawDad could not bring Terminal to the foreground. Your window and account were preserved. Bring Terminal forward on the Mac, then check recovery.")
   }
   private func exposeFullScreen(entries:[MainWorkspaceEntry]?,savingTabId:String?) async throws {
     try await activateForWorkspace()

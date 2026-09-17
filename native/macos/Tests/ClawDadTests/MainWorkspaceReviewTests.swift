@@ -3,6 +3,40 @@ import ClawDadRemoteAssistProtocol
 @testable import ClawDad
 
 @MainActor final class MainWorkspaceReviewTests: XCTestCase {
+  func testTerminalAlreadyForegroundRequiresNoActivation() async throws {
+    try await MacMainWorkspaceNative.verifyTerminalActivation(ready:{true},request:{XCTFail();return false},fallback:{XCTFail()},pause:{XCTFail()})
+  }
+  func testRejectedActivationUsesOneFallbackAndRequiresObservedForeground() async throws {
+    var foreground=false,requests=0,fallbacks=0
+    try await MacMainWorkspaceNative.verifyTerminalActivation(ready:{foreground},request:{requests+=1;return false},fallback:{fallbacks+=1;foreground=true},pause:{XCTFail()})
+    XCTAssertEqual(requests,1);XCTAssertEqual(fallbacks,1)
+  }
+  func testDelayedForegroundSurvivesOldDeadlineWithoutRepeatedActivation() async throws {
+    var elapsed=0,fallbacks=0
+    try await MacMainWorkspaceNative.verifyTerminalActivation(ready:{elapsed>=24},request:{true},fallback:{fallbacks+=1},pause:{elapsed+=1})
+    XCTAssertEqual(elapsed,24);XCTAssertEqual(fallbacks,1)
+  }
+  func testLockManualInputOrProcessChangeStopsBeforeFallback() async throws {
+    for code in ["mac_locked","manual_input_changed","terminal_process_changed"] {
+      var observations=0
+      do {
+        try await MacMainWorkspaceNative.verifyTerminalActivation(ready:{observations+=1;if observations>1 {throw MacCodexInputFailure(code:code,message:"Fixture boundary")};return false},request:{true},fallback:{XCTFail()},pause:{XCTFail()})
+        XCTFail()
+      } catch let error as MacCodexInputFailure { XCTAssertEqual(error.code,code) }
+    }
+  }
+  func testActivationTimeoutIsBoundedAndFallbackPermissionFailureIsPreserved() async throws {
+    var waits=0,fallbacks=0
+    do {
+      try await MacMainWorkspaceNative.verifyTerminalActivation(ready:{false},request:{true},fallback:{fallbacks+=1},pause:{waits+=1})
+      XCTFail()
+    } catch let error as MacCodexInputFailure { XCTAssertEqual(error.code,"terminal_activation_unverified") }
+    XCTAssertEqual(waits,30);XCTAssertEqual(fallbacks,1)
+    do {
+      try await MacMainWorkspaceNative.verifyTerminalActivation(ready:{false},request:{false},fallback:{throw MacCodexInputFailure(code:"automation_denied",message:"Fixture permission")},pause:{XCTFail()})
+      XCTFail()
+    } catch let error as MacCodexInputFailure { XCTAssertEqual(error.code,"automation_denied") }
+  }
   func fixture() throws -> (MainTerminalWorkspace,MainWorkspaceFixture,URL) {
     let root=FileManager.default.temporaryDirectory.appendingPathComponent("workspace-review-"+UUID().uuidString)
     let native=MainWorkspaceFixture()
