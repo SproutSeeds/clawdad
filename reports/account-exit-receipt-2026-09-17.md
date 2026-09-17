@@ -32,10 +32,16 @@ BackToTheFort>
 
 ## Release and continuation
 
-Mac **0.7.0 (157)** is being signed/notarized. Final installation and recovery status will be recorded here. iPhone **0.7.0 (100)** already contains the Cancel/reconnect repair and needs no change for this native parser fix.
+Mac **0.7.0 (157)** was signed, notarized, stapled and installed at **06:43:03 UTC**, from source commit `182d218c8fb97b9e8b7ca655d117b632e350c096`. The installed binary matches the signed package; build 156 remains recoverable at `/Applications/.ClawDad-before-157.app`. App notarization `e89218ad-9420-438e-9500-bd1f40cf8d58` and DMG notarization `5547a7dc-8b49-445a-a51c-e457ee6cc8dc` were accepted. Artifacts: `native/macos/dist/releases/0.7.0-beta.20-macos-157-exit-receipt/`.
 
-The stopped operation has no completed window capture. Native worker updates can refresh transient catalog IDs. Recovery must verify the exact selected window again; it must not overwrite its selection from names or silently treat a different window as the original.
+Native HTTP health at **06:43:37 UTC** verified the existing runtime, window-rebuild capability, one nine-tab window and all original Terminal process/thread owners unchanged. iPhone **0.7.0 (100)** already contains the Cancel/reconnect repair and needs no change for this native parser fix.
+
+The stopped operation has no completed window capture. This worker update refreshed its transient catalog IDs. Before installation, the original selection matched the current catalog; after installation, all nine exact native backing-window-ID/TTY pairs and all Terminal process/thread owners matched. Terminal's frontmost-first enumeration reordered those same pairs; membership was compared independently of that display order. The current catalog has exactly one corresponding physical window. Original destination remains `codyshanemitchell@gmail.com`.
+
+Recovery uses the existing user-control endpoints: cancel and verify the undispatched obsolete preflight, then register the same requested destination with the verified current window and a fresh durable request. It does not rewrite the original operation or its selection. Exact request and acceptance receipts are retained in the candidate evidence directory. An account transition is not claimed complete merely because that replacement request is accepted; its controller must still capture, authenticate and verify restoration.
 
 ## Workspace classification
 
 This lane owns `MainWorkspaceAgentBindings.swift`, its focused tests in `MainTerminalWorkspaceTests.swift`, and this report. Existing native build/storage scripts, release skills/plugin manifest, artwork, cloud/native and marketing-site changes are preserved. Candidate, archive and release artifacts remain in canonical ignored native distribution paths. No CLI publication or infrastructure change is included.
+
+`git diff --check` passed. ORP hygiene remains `dirty_classified`, zero unclassified paths, `safe_to_expand=true`; the nine inherited dirty buckets are preserved.
