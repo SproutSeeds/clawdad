@@ -13,7 +13,7 @@ export function codexAccountsPanel(root,{request=async body=>{
   emailLabel.append(email);workspaceLabel.append(workspace);
   const button=(text,action)=>{const b=el('button',text);b.type='button';b.onclick=action;return b;};
   const picker=el('select'),pickerLabel=el('label','Account');picker.id='codexAccountSelector';pickerLabel.htmlFor=picker.id;pickerLabel.append(picker);
-  const windowPicker=el('select'),windowLabel=el('label','Terminal window to recreate'),windowHelp=el('p','Starts by verifying this window, saves recovery, then recreates it on the selected account with the same conversations and drafts. If work or an input needs attention, the switch stops and explains why. Other windows stay open. You choose when to continue work.');
+  const windowPicker=el('select'),windowLabel=el('label','Terminal window to recreate'),windowHelp=el('p','Recreates this window on the selected account with the same conversations and empty inputs. Unsent drafts do not block switching. Recoverable text is saved separately; unreadable drafts are skipped. Running or queued work still needs to finish or be stopped explicitly. Other windows stay open. You choose when to continue work.');
   windowPicker.id='codexAccountWindow';windowLabel.htmlFor=windowPicker.id;windowLabel.append(windowPicker);
   status.setAttribute('role','status');status.setAttribute('aria-live','polite');status.tabIndex=-1;
   status.id='codexAccountSwitchStatus';

@@ -79,7 +79,7 @@ enum MainWorkspaceTitleCensus {
   var diagnosticStep: ((String)->Void)?
   // Used only by the private, explicitly accepted account-window controller.
   // Ordinary snapshot/restore behavior and its canonical storage are unchanged.
-  var accountCaptureGuard: ((MacCodexInputBinding,String,String?) throws -> Void)?
+  var accountCaptureGuard: ((MacCodexInputBinding,String,String?) throws -> String?)?
   var accountPermit: (() async throws -> Void)?
   var accountResumeCommand: ((MainWorkspaceEntry) throws -> String)?
   var accountClaim: ((String,String) async throws -> String)?
@@ -186,7 +186,7 @@ enum MainWorkspaceTitleCensus {
       let fresh=try await inspectRemainingForClose(original,ticket:ticket)
       guard let anchor=fresh.tabs.first(where:{$0.tabId==fresh.anchorId}) else { throw AssistantProtocolError.invalid }
       let current=fresh.tabs.filter{$0.group==anchor.group}.sorted{$0.position<$1.position}
-      guard MainTerminalWorkspace.sameWindow(remaining,current,drafts:true),interaction.isCurrent(ticket),
+      guard MainTerminalWorkspace.sameWindow(remaining,current,drafts:accountCaptureGuard == nil),interaction.isCurrent(ticket),
         let target=current.first(where:{$0.tty==original.tty}) else {
         throw MacAssistantError("The remaining window's tabs, owners or input changed. Earlier closures are preserved; inspect before continuing.")
       }
@@ -484,10 +484,13 @@ enum MainWorkspaceTitleCensus {
           screen=value
           let observation=agent != nil ? assistantObserveDraft(value,viewportRows:assistantTerminalRows(tab.tty)) : nil
           let known=agent.flatMap{retainedDraft?($0,expectedIdentity,owner,value,readTicket)}
-          let text=observation?.requiresWholeDraftAuthorization==true ? known : observation?.text ?? (owner.shell != nil ? MacAssistantShellDraft.read(value)?.text:nil)
+          var text=observation?.requiresWholeDraftAuthorization==true ? known : observation?.text ?? (owner.shell != nil ? MacAssistantShellDraft.read(value)?.text:nil)
+          if let agent,requiresIdentity,let validate=accountCaptureGuard { text=try validate(agent,value,known) }
           let offset=agent?.conversation.flatMap{try? MacAssistantSubmissionLog.capture($0.path).offset}
           draft=MainWorkspaceDraft(text:text,limitation:text==nil ? (observation?.reason ?? "This input cannot be recovered automatically."):nil,capturedAt:Date(),transcriptOffset:offset)
-          if let agent,requiresIdentity { try accountCaptureGuard?(agent,value,known) }
+        }
+        if requiresIdentity,agent != nil,accountCaptureGuard != nil,screen==nil {
+          throw MacAssistantError("\(descriptor.title): its native queue could not be inspected. Show that tab before retrying; unsent drafts themselves do not block switching.")
         }
         var historical:MainWorkspaceAgentBindings.Record?
         diagnosticStep?("inventory-history")

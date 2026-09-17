@@ -17,6 +17,8 @@ import ClawDadRemoteAssistProtocol
   var captures=0,captureDelay=0
   var visits:[String]=[]
   var afterCapture:(()->Void)?
+  var capturedDraft:((MainWorkspaceLiveTab)throws->String?)?
+  var recoveredDrafts:[String:String]=[:]
   func snapshot(windowContaining tabId:String) async throws -> MainWorkspaceWindowSnapshot {
     captures += 1
     let tabs=try await inventory(captureDrafts:true)
@@ -42,7 +44,11 @@ import ClawDadRemoteAssistProtocol
   func inventory(captureDrafts:Bool) async throws -> [MainWorkspaceLiveTab] {
     if slowInventory { try await Task.sleep(for:.milliseconds(50)) }
     if selectedOnlyInLightInventory && !captureDrafts { return live.filter(\.selected) }
-    return refreshedSelection ? live.map { var tab=$0;tab.selected=false;return tab }:live
+    var result=refreshedSelection ? live.map { var tab=$0;tab.selected=false;return tab }:live
+    if captureDrafts,let capturedDraft {
+      for i in result.indices { let text=try capturedDraft(result[i]);result[i].draft?.text=text }
+    }
+    return result
   }
   func windowChoices(observations:[MainWorkspaceLiveTab]) async throws -> [MainWorkspaceWindowChoice] {
     try MainTerminalWorkspace.windowChoices(live)
@@ -62,7 +68,10 @@ import ClawDadRemoteAssistProtocol
     if crashLaunch { crashLaunch=false;throw MacAssistantError("Launch acknowledgement lost") }
     return result
   }
-  func recoverDraft(_ tab:MainWorkspaceLiveTab,entry:MainWorkspaceEntry) async throws { recovers += 1 }
+  func recoverDraft(_ tab:MainWorkspaceLiveTab,entry:MainWorkspaceEntry) async throws {
+    recovers += 1
+    if let text=entry.draft?.text { recoveredDrafts[entry.sessionId ?? entry.id]=text }
+  }
   func finish(_ ordered:[MainWorkspaceLiveTab],selectedId:String?) async throws {
     finishes += 1
     for (index,tab) in ordered.enumerated() { let i=live.firstIndex{$0.tabId==tab.tabId}!;live[i].position=index+1;live[i].selected=tab.tabId==selectedId;live[i].fullScreen=false }

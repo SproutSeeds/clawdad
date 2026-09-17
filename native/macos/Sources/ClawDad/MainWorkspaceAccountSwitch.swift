@@ -59,6 +59,7 @@ enum AccountWindowReceiptEvidence {
     var target: Target?
     var progress: [String: MainWorkspaceStep] = [:]
     var message: String?
+    var draftPolicy: String?
   }
   let root: URL
   let native: any MainWorkspaceNative
@@ -98,7 +99,7 @@ enum AccountWindowReceiptEvidence {
       ((attributes[.posixPermissions] as? NSNumber)?.intValue ?? 0o777)&0o077==0,
       (attributes[.size] as? NSNumber)?.intValue ?? Int.max <= 16*1024*1024 else { throw MacAssistantError("Account window recovery storage needs inspection.") }
     let record=try JSONDecoder().decode(Record.self,from:Data(contentsOf:url))
-    guard record.version==1,record.operationId==id,record.captureHash==Self.hash(record.tabs,record.launches) else { throw MacAssistantError("The account window recovery identity changed. Its data was preserved.") }
+    guard record.version==1,record.operationId==id,[nil,"retainOnly"].contains(record.draftPolicy),record.captureHash==Self.hash(record.tabs,record.launches) else { throw MacAssistantError("The account window recovery identity changed. Its data was preserved.") }
     return record
   }
   private func save(_ value: Record) throws {
@@ -148,7 +149,7 @@ enum AccountWindowReceiptEvidence {
     for tab in tabs {
       try verifyReceipts(tab)
       guard tab.identityIssue==nil,tab.lifetime != nil,["codex","shell"].contains(tab.kind),
-        tab.draft?.text != nil,(tab.pendingReceipts ?? []).isEmpty,
+        (tab.pendingReceipts ?? []).isEmpty,
         tab.kind != "codex" || tab.sessionId != nil && tab.model != nil && tab.effort != nil && tab.executable != nil else {
         throw MacAssistantError("\(tab.name): \(tab.identityIssue ?? tab.draft?.limitation ?? "Resolve its pending deliveries or resumable conversation before switching.") Its tab stays open.")
       }
@@ -159,7 +160,8 @@ enum AccountWindowReceiptEvidence {
       try native.checkDirectory(entry);entries.append(entry)
     }
     guard try generation()==ticket else { throw MacAssistantError("You used Terminal while it was being captured. Its window and drafts remain unchanged; review before retrying.") }
-    let record=Record(operationId:operationId,selection:windowId,tabs:tabs,entries:entries,launches:launches,generation:ticket,captureHash:Self.hash(tabs,launches))
+    var record=Record(operationId:operationId,selection:windowId,tabs:tabs,entries:entries,launches:launches,generation:ticket,captureHash:Self.hash(tabs,launches))
+    record.draftPolicy="retainOnly"
     try save(record);diagnosticStep?("capture-saved");return record
   }
   func restore(operationId: String, target: Target) async throws -> Record {
@@ -178,7 +180,7 @@ enum AccountWindowReceiptEvidence {
       let current=try await native.snapshot(windowContaining:anchor.tabId)
       guard let selected=current.tabs.first(where:{$0.tabId==current.anchorId}) else { throw AssistantProtocolError.invalid }
       let members=current.tabs.filter{$0.group==selected.group}.sorted{$0.position<$1.position}
-      guard MainTerminalWorkspace.sameWindow(record.tabs,members,drafts:true) else { throw MacAssistantError("The captured window or draft changed. Nothing was closed. Cancel and review the current lineup.") }
+      guard MainTerminalWorkspace.sameWindow(record.tabs,members,drafts:record.draftPolicy != "retainOnly") else { throw MacAssistantError("The captured window or draft changed. Nothing was closed. Cancel and review the current lineup.") }
       for tab in members { try verifyReceipts(tab);_=try await inspectLaunch(tab) }
       for entry in record.entries { try native.checkDirectory(entry) }
       try await permit(operationId)
@@ -222,7 +224,15 @@ enum AccountWindowReceiptEvidence {
         diagnosticStep?("restore-verify-owner")
         try await verifyOwner(ready,target,operationId)
         diagnosticStep?("restore-recover-draft")
-        try await native.recoverDraft(ready,entry:entry)
+        var recoveryEntry=entry
+        if record.draftPolicy=="retainOnly" {
+          // Cody explicitly chose to ignore unsent input during account switches.
+          // Keep known text in the durable recovery record, but resume empty.
+          recoveryEntry.draft=nil
+          if entry.draft?.text?.isEmpty==false { step.message="Unsent text saved in account recovery; the input was left empty." }
+          else if entry.draft?.text==nil { step.message="Unsent input could not be copied; the input was left empty." }
+        }
+        try await native.recoverDraft(ready,entry:recoveryEntry)
         step.phase="restored";record.progress[entry.id]=step;try save(record);tab=ready
       }
       guard let ready=tab else { throw AssistantProtocolError.invalid }
@@ -234,7 +244,10 @@ enum AccountWindowReceiptEvidence {
     guard ordered.count==record.entries.count else { throw AssistantProtocolError.invalid }
     diagnosticStep?("restore-layout")
     try await native.finish(ordered,selectedId:record.entries.first{$0.binding?.selected==true}.flatMap{found[$0.id]?.tabId})
-    record.stage="verified";record.message="The chosen window is restored on the selected account. Its exact conversations and drafts are ready; no tasks were submitted.";try save(record)
+    record.stage="verified";record.message=record.draftPolicy=="retainOnly"
+      ? "The window is restored with the same conversations and empty inputs. Recoverable unsent text remains in account recovery. No tasks were submitted."
+      : "The chosen window is restored on the selected account. Its exact conversations and drafts are ready; no tasks were submitted."
+    try save(record)
     return record
   }
 }

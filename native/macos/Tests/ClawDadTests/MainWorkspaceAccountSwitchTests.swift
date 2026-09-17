@@ -3,6 +3,37 @@ import ClawDadRemoteAssistProtocol
 @testable import ClawDad
 
 @MainActor final class MainWorkspaceAccountSwitchTests:XCTestCase {
+  func testAccountWindowPlainDraftCaptureRestoreAndRetryUsesProductionValidation() async throws {
+    for text in ["please implement this","Café 🦞 — keep this unsent",""] {
+      let (native,root)=try fixture(),store=engine(native,root)
+      for i in native.live.indices { native.live[i].draft?.text=text }
+      native.capturedDraft={tab in
+        MacCodexAccountWindow.recoverableDraft("› \(tab.draft?.text ?? "")\n  gpt-6-astra max",retained:nil,target:tab.name)
+      }
+      let saved=try await capture(store,native)
+      XCTAssertEqual(saved.entries[0].draft?.text,text)
+      let restored=try await engine(native,root).restore(operationId:"fixture-switch",target:target)
+      XCTAssertEqual(restored.stage,"verified")
+      XCTAssertEqual(saved.draftPolicy,"retainOnly")
+      XCTAssertTrue(native.recoveredDrafts.isEmpty,"Saved drafts must never be reinserted or submitted")
+      _=try await engine(native,root).restore(operationId:"fixture-switch",target:target)
+      XCTAssertEqual(native.closes,1);XCTAssertEqual(native.launches,3);XCTAssertEqual(native.recovers,3)
+    }
+  }
+  func testOpaqueMultilineImagesAndPromptTextDoNotBecomeDraftBlockers() async throws {
+    let payload=String(repeating:"A Unicode 🦞 research line.\n",count:20)
+    let screen="› [Pasted Content \(payload.count) chars]\n  gpt-6-astra max"
+    XCTAssertEqual(MacCodexAccountWindow.recoverableDraft(screen,retained:payload,target:"Fixture"),payload)
+    for screen in [screen,"› first line\n  second line\n  gpt-6-astra max","› [Image #1]\n  gpt-6-astra max","› 1. Yes, continue\nPress enter to continue"] {
+      XCTAssertNil(MacCodexAccountWindow.recoverableDraft(screen,retained:nil,target:"Exact fixture tab"))
+      let (native,root)=try fixture(),store=engine(native,root)
+      native.capturedDraft={tab in MacCodexAccountWindow.recoverableDraft(screen,retained:nil,target:tab.name) }
+      let captured=try await capture(store,native)
+      XCTAssertNil(captured.entries[0].draft?.text)
+      let result=try await store.restore(operationId:"fixture-switch",target:target)
+      XCTAssertEqual(result.stage,"verified");XCTAssertEqual(native.closes,1);XCTAssertTrue(native.recoveredDrafts.isEmpty)
+    }
+  }
   func testReportedReceiptsReadOnlyWhenRequested() throws {
     guard ProcessInfo.processInfo.environment["CLAWDAD_ACCOUNT_RECEIPTS_READONLY"]=="1" else { throw XCTSkip("Explicit read-only incident receipt check") }
     let file=FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/ClawDad/Assistant/state.json")
@@ -120,14 +151,16 @@ import ClawDadRemoteAssistProtocol
     _=try await engine(native,root).restore(operationId:"fixture-switch",target:target)
     XCTAssertEqual(native.closes,1);XCTAssertEqual(native.creates,3);XCTAssertEqual(native.launches,3)
   }
-  func testDraftChangesAndBusyStatePreventClosing() async throws {
+  func testUnsentDraftChangesDoNotBlockButBusyStateStillPreventsClosing() async throws {
     let (native,root)=try fixture(),store=engine(native,root)
     _=try await capture(store,native);native.live[0].draft?.text="User corrected the draft"
-    do{_=try await store.restore(operationId:"fixture-switch",target:target);XCTFail("Changed draft must be preserved")}catch{}
-    XCTAssertEqual(native.closes,0)
-    native.live[0].draft?.text="draft 0";native.live[0].isBusy=true
+    native.live[0].isBusy=true
     do{_=try await store.restore(operationId:"fixture-switch",target:target);XCTFail("Busy work must stay open")}catch{}
     XCTAssertEqual(native.closes,0)
+    native.live[0].isBusy=false
+    let restored=try await store.restore(operationId:"fixture-switch",target:target)
+    XCTAssertEqual(restored.stage,"verified")
+    XCTAssertEqual(native.closes,1);XCTAssertTrue(native.recoveredDrafts.isEmpty)
   }
   func testPartialCloseRemainsUncertainAndNeverClosesAgainOrCreatesDuplicate() async throws {
     let (native,root)=try fixture(),store=engine(native,root)
@@ -145,8 +178,8 @@ import ClawDadRemoteAssistProtocol
     do{_=try await store.restore(operationId:"fixture-switch",target:target);XCTFail()}catch{}
     XCTAssertEqual(native.closes,0)
   }
-  func testOpaqueDraftQueueAndFreshSessionCannotBeCapturedForClosing() async throws {
-    for mode in 0..<3 {
+  func testAcceptedQueueAndFreshSessionCannotBeCapturedForClosing() async throws {
+    for mode in 1..<3 {
       let (native,root)=try fixture(),store=engine(native,root)
       if mode==0 {native.live[0].draft?.text=nil}
       if mode==1 {native.live[0].pendingReceipts=["accepted-native-queue"]}

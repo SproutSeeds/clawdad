@@ -209,7 +209,7 @@ struct CodexAccountsView: View {
                 .frame(minHeight:44)
                 .disabled(switching)
               }
-              Text("Starts by verifying this window, saves recovery, then recreates it on the selected account with the same conversations and drafts. If work or an input needs attention, the switch stops and explains why. Other windows stay open. You choose when to continue work.")
+              Text("Recreates this window on the selected account with the same conversations and empty inputs. Unsent drafts do not block switching. Recoverable text is saved separately; unreadable drafts are skipped. Running or queued work still needs to finish or be stopped explicitly. Other windows stay open. You choose when to continue work.")
                 .font(.footnote).fixedSize(horizontal:false,vertical:true)
               if windows.isEmpty, !switching { Text("Refresh to load Terminal windows on your Mac.").font(.footnote) }
             }

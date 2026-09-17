@@ -13,18 +13,29 @@ import ClawDadRemoteAssistProtocol
     self.runtime=runtime;native=MacMainWorkspaceNative(runtime:runtime)
     self.root=root ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/ClawDad/Accounts/WindowSwitches")
     native.accountCaptureGuard={binding,screen,retained in
-      let draft=assistantObserveDraft(screen,viewportRows:assistantTerminalRows(binding.tty))
-      guard draft.text != nil || retained != nil,!draft.requiresWholeDraftAuthorization || retained != nil,
-        draft.text?.isEmpty==true || retained != nil else {
-        throw MacAssistantError("This tab's input cannot be recovered (\(draft.reasonCode)). Keep the draft or copy it to a saved draft before switching; nothing was cleared.")
-      }
+      let text=Self.recoverableDraft(screen,retained:retained,viewportRows:assistantTerminalRows(binding.tty),
+        target:"\(URL(fileURLWithPath:binding.directory).lastPathComponent) (\(binding.tty))")
       guard !screen.components(separatedBy:.newlines).contains(where:{$0.trimmingCharacters(in:.whitespaces)=="• Queued follow-up inputs"}) else {
         throw MacAssistantError("Native queued work remains. Let it finish or review it before switching; queued messages will not be replayed.")
       }
       guard let path=binding.conversation?.path else { throw MacAssistantError("This fresh agent has no saved conversation yet.") }
       var activity=MacCodexRequestActivityLog()
       guard try !activity.read(path) else { throw MacAssistantError("This agent is still working. Switch stopped; finish or explicitly stop its work, then check recovery.") }
+      return text
     }
+  }
+  nonisolated static func recoverableDraft(_ screen:String,retained:String?,viewportRows:Int?=nil,target:String) -> String? {
+    let draft=assistantObserveDraft(screen,viewportRows:viewportRows)
+    guard let visible=draft.text else { return nil }
+    if draft.requiresWholeDraftAuthorization {
+      // The caller supplies retained text only after exact live process,
+      // session, input generation and collapsed-paste verification.
+      return retained
+    }
+    // One fully visible line has no visual-wrap/newline ambiguity. Preserve it
+    // as an unsent draft even when Cody typed it rather than using our paste tool.
+    guard !visible.contains("\n") else { return nil }
+    return visible
   }
   private func permit(_ id:String) async throws {
     let result=try await runtime.json("/v1/assistant/accounts/native-permit",["operationId":.string(id)])

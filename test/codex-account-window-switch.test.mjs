@@ -9,7 +9,30 @@ import {CodexAccountSwitchAdapter} from '../lib/codex-account-switch-adapter.mjs
 import {readAccountWindow} from '../lib/codex-account-window-switch.mjs';
 const hash=s=>createHash('sha256').update(s).digest('hex');
 
-async function fixture(t,{cold=false,count=2}={}){
+test('unsent drafts can be retained separately or unreadable without blocking the account transport',async t=>{
+  for(const draftText of ['please implement this',null]) {
+    const f=await fixture(t,{draftPolicy:'retainOnly',draftText});
+    await f.request();await f.accounts.advance();
+    const op=(await f.accounts.snapshot()).activeOperation;
+    assert.equal(op.status,'completed',op.reason);
+    assert.deepEqual(f.effects,['authenticate','close-and-recreate']);
+    assert.deepEqual(f.nativeActions,['window.capture','window.restore','window.verify']);
+    const saved=await readAccountWindow(f.root,'window-switch');
+    assert.equal(saved.draftPolicy,'retainOnly');assert.equal(saved.entries[0].draft.text,draftText);
+    await f.request();await f.accounts.advance();assert.equal(f.nativeActions.length,3);
+  }
+});
+
+test('busy owner is reported instead of unrelated uncaptured draft placeholders',async t=>{
+  const f=await fixture(t,{count:5});const inventory=f.adapter.inventory;
+  f.adapter.inventory=async()=>{const v=await inventory();v.consumers.find(c=>c.id==='pid:4').busy=true;return v;};
+  await f.request();await f.accounts.advance();
+  const op=(await f.accounts.snapshot()).activeOperation;
+  assert.equal(op.status,'needs_attention');assert.match(op.reason,/still working/);
+  assert.doesNotMatch(op.reason,/draft or pending deliveries/);assert.deepEqual(f.effects,[]);
+});
+
+async function fixture(t,{cold=false,count=2,draftPolicy,draftText}={}){
   const root=await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(),'clawdad-window-switch-')));
   let busy=false,failCapture=false,account=hash('old'),working=true,worker,prepared;
   const effects=[],nativeActions=[];
@@ -33,10 +56,10 @@ async function fixture(t,{cold=false,count=2}={}){
       await adapter.transport.prepare(envelope);
       if(job.action==='window.capture'){
         if(failCapture){await adapter.transport.complete({...envelope,reasonCode:'native_account_control_unavailable',message:'The original draft cannot be recovered. Its window remains open.'});return;}
-        const record={version:1,operationId:job.operationId,selection:choice.id,captureHash:hash('exact capture'),stage:'captured',
+        const record={version:1,operationId:job.operationId,selection:choice.id,captureHash:hash('exact capture'),stage:'captured',draftPolicy,
           tabs:owners.map(o=>({tty:o.tty,owner:o.processIdentity,kind:'codex',sessionId:o.sessionId,directory:o.directory,name:o.tabId})),launches:{},
           entries:owners.map((o,i)=>({id:'entry-'+i,directory:o.directory,kind:'codex',sessionId:o.sessionId,
-            conversationPath:'/fixtures/'+o.sessionId,executable:'/codex',draft:{text:'Exact 🌿\n'+('word '.repeat(1000))},pendingReceipts:[]}))};
+            conversationPath:'/fixtures/'+o.sessionId,executable:'/codex',draft:{text:draftText===undefined?'Exact 🌿\n'+('word '.repeat(1000)):draftText},pendingReceipts:[]}))};
         await fs.mkdir(path.join(root,'WindowSwitches'),{mode:0o700});
         await fs.writeFile(path.join(root,'WindowSwitches',job.operationId+'.json'),JSON.stringify(record),{mode:0o600});
         await adapter.transport.complete({...envelope,result:{stage:'captured',captureHash:record.captureHash}});
