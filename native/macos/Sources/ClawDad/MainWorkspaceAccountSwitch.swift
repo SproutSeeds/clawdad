@@ -35,6 +35,8 @@ enum AccountWindowReceiptEvidence {
 /// Account recovery is independent from the user's named snapshot library.
 /// Every irreversible boundary is saved before dispatch. A retry reconciles
 /// original owners/creation markers; it never replays an uncertain close/launch.
+// Historical test adapter, excluded from production builds.
+#if DEBUG
 @MainActor final class MainWorkspaceAccountSwitch {
   struct Launch: Codable, Equatable {
     var authorizationHome: String
@@ -251,3 +253,5 @@ enum AccountWindowReceiptEvidence {
     return record
   }
 }
+
+#endif

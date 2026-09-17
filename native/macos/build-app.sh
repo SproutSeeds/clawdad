@@ -145,6 +145,18 @@ chmod +x "$runtime_dir/bin/node"
 cp "$repo_root/package.json" "$runtime_dir/package.json"
 ditto "$repo_root/bin" "$runtime_dir/bin"
 ditto "$repo_root/lib" "$runtime_dir/lib"
+# Terminal-account controllers are retained in source history and debug fixtures,
+# but are absent from the signed production runtime.
+retired_account_modules=(
+  codex-accounts codex-account-consumers codex-account-switch-runtime
+  codex-account-switch-adapter codex-account-switch-scope
+  codex-account-window-switch codex-account-terminal-handoff
+  codex-account-native-driver codex-account-native-transport codex-account-shell-launch
+)
+for module in "${retired_account_modules[@]}"; do
+  rm -f "$runtime_dir/lib/$module.mjs"
+done
+
 ditto "$repo_root/web" "$runtime_dir/web"
 ditto "$repo_root/templates" "$runtime_dir/templates"
 ditto "$repo_root/node_modules" "$runtime_dir/node_modules"

@@ -1,3 +1,5 @@
+// Retired Terminal account controller: retained for historical regression fixtures only.
+#if DEBUG
 import AppKit
 import ApplicationServices
 import Foundation
@@ -353,3 +355,5 @@ import ClawDadRemoteAssistProtocol
     throw fail("unsupported_account_native_action")
   }
 }
+
+#endif

@@ -106,11 +106,12 @@ struct WeeklyUsageButton: View {
         .accessibilityIdentifier("clawdad.weeklyUsage.\(location)")
         .accessibilityLabel("Weekly allowance details")
         .accessibilityValue(session.weeklyUsage?.summary(now: timeline.date) ?? "Weekly allowance unavailable")
-        .accessibilityHint("Shows the reset time, last successful refresh and reading status")
+        .accessibilityHint("Preview saved accounts and allowance, or activate an account for ClawDad")
         .popover(isPresented: $showingUsage) {
-          WeeklyUsageSheet().frame(idealWidth: 320, maxWidth: 320, idealHeight: 360, maxHeight: 360)
+          WeeklyUsageSheet().frame(idealWidth: 350, idealHeight: 550)
 #if os(iOS)
-            .presentationCompactAdaptation(.popover)
+            .presentationCompactAdaptation(.sheet)
+            .presentationDetents([.medium, .large])
 #endif
         }
         Spacer(minLength: 0)
@@ -123,64 +124,17 @@ struct WeeklyUsageButton: View {
 }
 
 struct WeeklyUsageSheet: View {
-  @EnvironmentObject private var session: CloudSession
   @Environment(\.dismiss) private var dismiss
-  @State private var showingAccounts = false
   var body: some View {
     NavigationStack {
-      ScrollView {
-        TimelineView(.periodic(from: .now, by: 30)) { timeline in
-          VStack(alignment: .leading, spacing: 16) {
-            if let identity = session.weeklyUsage?.subscription, let email = identity.email {
-              Text(email).font(.headline).textSelection(.enabled)
-              Text("\(identity.plan ?? "Subscription") · Workspace: \(identity.workspaceName ?? "Not exposed by Codex")").font(.footnote)
-            }
-            Text(session.weeklyUsage?.summary(now: timeline.date) ?? "Weekly allowance unavailable").font(.headline)
-              .accessibilityIdentifier("clawdad.weeklyUsage.detail-summary")
-            Text(session.weeklyUsage?.resetsAt.map { WeeklyUsage.resetText($0) } ?? "Reset time: Not yet available")
-              .accessibilityIdentifier("clawdad.weeklyUsage.reset")
-            Text(WeeklyUsage.refreshedText(session.weeklyUsage?.observedAt))
-              .accessibilityIdentifier("clawdad.weeklyUsage.refreshed")
-            if session.weeklyUsage?.ordinaryUsageAllowed == false {
-              Text("Codex reported that included subscription usage was unavailable at this refresh. A shorter usage window can apply even with weekly allowance remaining.").font(.footnote)
-              if let window = session.weeklyUsage?.shortWindow {
-                Text("Shorter window: \(window.remainingPercent.formatted())% remaining. \(WeeklyUsage.resetText(window.resetsAt))").font(.footnote)
-              }
-            }
-            if let explanation = session.weeklyUsage?.readingExplanation(now: timeline.date)
-              ?? (session.weeklyUsage == nil ? "A current weekly allowance reading has not arrived from your Mac yet. Connect to your Mac and choose Check allowance to try again." : nil) {
-              Text(explanation).accessibilityIdentifier("clawdad.weeklyUsage.explanation")
-            }
-            ForEach(session.weeklyUsage?.alerts ?? []) { alert in
-              Label(alert.title, systemImage: "exclamationmark.triangle").font(.subheadline)
-            }
-            Button("Check allowance") { session.requestWeeklyUsage() }.frame(minHeight: 44)
-            Button { showingAccounts = true } label: {
-              Text("Codex accounts and switching").frame(minHeight: 44).contentShape(Rectangle())
-            }
-              .accessibilityIdentifier("clawdad.accounts.open")
-          }
-          .frame(maxWidth: .infinity, alignment: .leading).padding()
-        }
-      }
-      .background(ClawDadTheme.background).foregroundStyle(ClawDadTheme.cream)
-      .navigationTitle("Weekly allowance")
+      CodexAccountsView().navigationTitle("Weekly allowance")
 #if os(iOS)
-      .navigationBarTitleDisplayMode(.inline)
+        .navigationBarTitleDisplayMode(.inline)
 #endif
-      .toolbar { ToolbarItem(placement: .confirmationAction) {
-        Button("Done") { dismiss() }.frame(minWidth: 44, minHeight: 44).keyboardShortcut(.cancelAction)
-      } }
+        .toolbar { ToolbarItem(placement: .confirmationAction) {
+          Button("Done") { dismiss() }.keyboardShortcut(.cancelAction).frame(minWidth: 44, minHeight: 44)
+        } }
     }.preferredColorScheme(.dark)
-      .sheet(isPresented: $showingAccounts) {
-        NavigationStack {
-          CodexAccountsView()
-            .toolbar { ToolbarItem(placement: .cancellationAction) {
-              Button("Back") { showingAccounts = false }.frame(minWidth: 44, minHeight: 44)
-                .accessibilityLabel("Back to weekly allowance").keyboardShortcut(.cancelAction)
-            } }
-        }.preferredColorScheme(.dark)
-      }
   }
 }
 

@@ -1,149 +1,89 @@
-// Account actions use the existing authenticated Assistant transport. No model,
-// call, microphone or sign-in starts merely by viewing this panel.
+// One computer-owned active account; the dropdown is a read-only preview.
 export function codexAccountsPanel(root,{request=async body=>{
-  const r=await fetch('/v1/assistant/request',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
-  const value=await r.json();if(!r.ok)throw Error(value.error||'Account controls are unavailable.');return value;
+  const response=await fetch('/v1/assistant/request',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+  const value=await response.json();if(!response.ok)throw Error(value.error||'Connect to your Mac to check accounts.');return value;
 },storage=localStorage}={}){
-  const el=(tag,text)=>{const n=document.createElement(tag);if(text)n.textContent=text;return n;};
-  const title=el('h3','Codex accounts'),current=el('p'),status=el('p'),list=el('div'),error=el('p');error.setAttribute('role','status');
-  const help=el('p','Subscription sign-in stays with Codex. Account switching does not enable API billing.');
-  const details=el('details'),summary=el('summary','Add account'),email=el('input'),workspace=el('input');
-  const emailLabel=el('label','Account email'),workspaceLabel=el('label','Workspace label (optional)');
-  email.type='email';email.autocomplete='email';email.maxLength=254;workspace.maxLength=120;
-  emailLabel.append(email);workspaceLabel.append(workspace);
-  const button=(text,action)=>{const b=el('button',text);b.type='button';b.onclick=action;return b;};
-  const picker=el('select'),pickerLabel=el('label','Account');picker.id='codexAccountSelector';pickerLabel.htmlFor=picker.id;pickerLabel.append(picker);
-  const windowPicker=el('select'),windowLabel=el('label','Terminal window to recreate'),windowHelp=el('p','Recreates this window on the selected account with the same conversations and empty inputs. Unsent drafts do not block switching. Recoverable text is saved separately; unreadable drafts are skipped. Running or queued work still needs to finish or be stopped explicitly. Other windows stay open. You choose when to continue work.');
-  windowPicker.id='codexAccountWindow';windowLabel.htmlFor=windowPicker.id;windowLabel.append(windowPicker);
-  status.setAttribute('role','status');status.setAttribute('aria-live','polite');status.tabIndex=-1;
-  status.id='codexAccountSwitchStatus';
-  const actions=el('div'),sessions=el('div');sessions.id='codexAccountSessions';
-  let state,busy=false,pending,preview,loading=false,selectedWindow='',selectedId=storage.getItem('clawdad.codex.accounts.selection.v1')||'';
-  const storageKey='clawdad.codex.accounts.pending.v1';
-  try{pending=JSON.parse(storage.getItem(storageKey)||'null');}catch{}
-  const save=button('Save account entry',()=>send('accounts.add',{email:email.value,workspaceLabel:workspace.value,expectedRevision:state.revision}));
-  const retry=button('Retry pending request',()=>send()),refresh=button('Refresh account status',()=>load());
-  const explanation=el('p','An entry records your choice. It becomes authenticated only after supported sign-in is verified.');
-  details.append(summary,emailLabel,workspaceLabel,explanation,save);
-  root.append(title,status,error,retry,actions,sessions,current,help,pickerLabel,windowLabel,windowHelp,list,details,refresh);
+  const el=(tag,text='')=>{const n=document.createElement(tag);n.textContent=text;return n;};
+  const button=(text,fn)=>{const b=el('button',text);b.type='button';b.onclick=fn;return b;};
+  const active=el('p'),picker=el('select'),label=el('label','Account to view'),usage=el('strong'),reset=el('p'),checked=el('p'),explanation=el('p');
+  picker.id='codexAccountSelector';label.htmlFor=picker.id;label.append(picker);
+  const card=el('section'),status=el('p'),error=el('p'),workspace=el('p');card.className='account-glass-card';
+  status.id='codexAccountSwitchStatus';status.setAttribute('role','status');error.setAttribute('role','status');
+  const activate=button('Activate',()=>send('accounts.activate',{accountId:selected,expectedRevision:state.revision,confirmed:true}));activate.id='codexAccountSwitch';
+  const refresh=button('Refresh reading',()=>preview(true));refresh.className='account-secondary';
+  const recover=button('Retry activation',()=>send('accounts.retry',{operationId:state.activeOperation.id,confirmed:true}));
+  const cancel=button('Cancel activation',()=>send('accounts.cancel',{operationId:state.activeOperation.id}));
+  const retry=button('Retry request',()=>send());
+  const signIn=button('Sign in on Mac',()=>send('accounts.signin',{accountId:selected,confirmed:true,reauthenticate:true}));
+  const signInCancel=button('Cancel sign-in',()=>send('accounts.cancel_signin',{operationId:account()?.authorization?.operation?.requestId}));
+  const more=el('details'),summary=el('summary','Add account'),email=el('input'),emailLabel=el('label','Email');
+  email.type='email';email.autocomplete='email';email.maxLength=254;emailLabel.append(email);
+  const add=button('Save account',()=>send('accounts.add',{email:email.value,expectedRevision:state.revision}));
+  more.append(summary,emailLabel,el('p','Complete subscription sign-in on your Mac after saving.'),add);
+  const help=el('p','Active for this Mac’s ClawDad projects, Assistant and supervisor reviews.');help.className='account-scope';
+  card.append(label,usage,reset,checked,explanation,workspace,refresh,signIn,signInCancel,activate);
+  root.append(active,card,status,error,recover,cancel,retry,more,help);
+  let state,selected='',busy=false,loading=false,pending;
+  const key='clawdad.app-account.pending.v2';try{pending=JSON.parse(storage.getItem(key)||'null');}catch{}
+  const account=()=>state?.accounts?.find(a=>a.id===selected);
+  const date=value=>new Intl.DateTimeFormat(undefined,{weekday:'short',month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit',timeZoneName:'short'}).format(new Date(value));
   function render(){
-    current.textContent=state?.current?.email?`${state.current.email} · ${state.current.plan||'Subscription'}${state.current.status==='current'?'':' · Last verified reading'}`:'Verified Codex account unavailable';
-    const operation=state?.activeOperation,target=state?.accounts?.find(a=>a.id===operation?.targetId),stopped=operation?.status==='needs_attention';
-    status.textContent=(busy?(pending?.action==='accounts.switch'?'Requesting switch…':'Checking account…')+'\n':'')
-      +(operation?.reason?(stopped?'Switch stopped\n':operation.status==='cancelled'?'Switch cancelled\n':target?`Switch to ${target.email}\n`:'')+operation.reason
-        +(operation.fenced&&!stopped&&operation.stage?'\n'+operation.stage.replaceAll('_',' '):''):'Choose an account, then tap Switch to this account.');
-    const entries=state?.accounts||[];
-    if(!entries.some(a=>a.id===selectedId))selectedId=pending?.accountId||operation?.targetId||entries[0]?.id||'';
-    // Keep the native selector node/options stable while the status polls.
-    const options=entries.map(a=>({id:a.id,label:a.email+(a.workspaceLabel?' · '+a.workspaceLabel:'')}));
-    if(picker.dataset.options!==JSON.stringify(options)){
-      picker.replaceChildren(...options.map(a=>{const o=el('option',a.label);o.value=a.id;return o;}));picker.dataset.options=JSON.stringify(options);
-    }
-    picker.value=selectedId;picker.disabled=busy||!!pending||!entries.length;
-    const windows=operation?.fenced&&operation.windowSelection?[operation.windowSelection]:state?.windows||[];
-    if(!windows.some(w=>w.id===selectedWindow))selectedWindow=windows.length===1?windows[0].id:'';
-    const windowOptions=windows.map(w=>({id:w.id,label:`${w.title} · ${w.count} tabs`}));
-    if(windowPicker.dataset.options!==JSON.stringify(windowOptions)){
-      windowPicker.replaceChildren(...[{id:'',label:'Choose window'},...windowOptions].map(w=>{const o=el('option',w.label);o.value=w.id;return o;}));windowPicker.dataset.options=JSON.stringify(windowOptions);
-    }
-    windowPicker.value=selectedWindow;windowPicker.disabled=busy||!!pending||!!operation?.fenced;
-    windowLabel.hidden=windowHelp.hidden=!state?.capabilities?.windowRebuild;
-    list.replaceChildren();actions.replaceChildren();
-    sessions.replaceChildren();
-    if(state?.windowProgress){
-      const p=state.windowProgress;sessions.append(el('h4','Window recovery · '+p.stage.replaceAll('_',' ')));
-      if(p.message)sessions.append(el('p',p.message));
-      for(const tab of p.tabs||[])sessions.append(el('p',`${tab.name} · ${tab.status.replaceAll('_',' ')}`));
-    }
-    if(operation?.status!=='cancelled'&&operation?.sessions?.length){
-      sessions.append(el('h4','Session progress'));
-      for(const c of operation.sessions){
-        const row=el('section'),progress=c.switchState||'checking';
-        row.append(el('strong',`${c.title||c.kind} · ${progress[0].toUpperCase()+progress.slice(1)}`));
-        if(c.tty?.startsWith('/dev/tty'))row.append(el('p',[c.directory,c.tty].filter(Boolean).join(' · ')));
-        if(c.reason)row.append(el('p',c.reason));
-        if(state.capabilities?.skipTerminalSessions&&c.canSkip){
-          const skip=button('Leave this tab unchanged',()=>send('accounts.skip_session',{operationId:operation.id,accountId:operation.targetId,
-            consumerId:c.id,skipIdentity:c.skipIdentity,confirmed:true}));
-          skip.setAttribute('aria-label',`Leave ${c.title||'Terminal session'} unchanged for this account switch`);
-          skip.dataset.consumerId=c.id;skip.disabled=busy||!!pending;row.append(skip);
-        }
-        sessions.append(row);
-      }
-      if(!state?.capabilities?.windowRebuild)sessions.append(el('p','Skipped tabs stay open with their work intact. Their accounts may differ from the selected account.'));
-    }
-    for(const account of entries.filter(a=>a.id===selectedId)){
-      const row=el('section'),name=el('strong',account.email),label=el('p',account.workspaceLabel?`${account.workspaceLabel} · label supplied by you`:'Codex does not provide a workspace name here.');
-      const authorization=account.authorization,signIn=authorization?.operation;
-      const auth=el('p',account.authentication==='verified'?'Saved subscription sign-in verified':'First sign-in or verification required');
-      row.append(name,label,auth);
-      if(authorization?.verifiedAt)row.append(el('p',`Last checked: ${new Date(authorization.verifiedAt).toLocaleString()}`));
-      if(signIn?.reason)row.append(el('p',signIn.reason));
-      const connecting=['checking','starting','awaiting_user','cancelling'].includes(signIn?.status);
-      if(state.canConnectAccounts){
-        const connect=button(account.authentication==='verified'?'Check saved sign-in':'Connect account on Mac',()=>send(
-          account.authentication==='verified'?'accounts.verify_signin':'accounts.signin',{accountId:account.id,confirmed:true}));
-        connect.disabled=busy||!!pending||connecting||!!operation?.fenced;row.append(connect);
-        if(account.authentication!=='verified'){
-          const check=button('Check saved sign-in',()=>send('accounts.verify_signin',{accountId:account.id}));
-          check.disabled=busy||!!pending||connecting||!!operation?.fenced;row.append(check);
-          if(signIn?.status==='needs_check'||signIn?.status==='needs_attention'){
-            const reconnect=button('Reconnect account on Mac',()=>send('accounts.signin',{accountId:account.id,confirmed:true,reauthenticate:true}));
-            reconnect.disabled=busy||!!pending||connecting||!!operation?.fenced;row.append(reconnect);
-          }
-        }
-        if(connecting)row.append(button('Cancel sign-in',()=>send('accounts.cancel_signin',{operationId:signIn.requestId})));
-      }
-      const inspect=button('Review affected sessions',async()=>{
-        if(busy||loading)return;busy=true;render();
-        try{const result=await request({action:'accounts.preview',accountId:account.id});preview=result.accountPreview;error.textContent='';render();}
-        catch(e){error.textContent=e.message;}finally{busy=false;render();}
-      });
-      const select=button(operation?.fenced?(stopped?'Switch stopped · check recovery':operation.cancelRequested?'Cancelling switch':'Switch in progress'):state?.capabilities?.ready?'Switch to this account':'Prepare account switch',()=>{
-        const window=windows.find(w=>w.id===selectedWindow);
-        send('accounts.switch',{accountId:account.id,expectedRevision:state.revision,confirmed:true,...(state.capabilities?.windowRebuild?{windowSelection:{id:window.id,tabId:window.tabId}}:{})});
-      });
-      inspect.disabled=busy||!!pending;select.disabled=busy||!!pending||connecting||!!operation?.fenced||state?.capabilities?.windowRebuild&&!selectedWindow;select.id='codexAccountSwitch';row.append(inspect,select);list.append(row);
-    }
-    if(preview){const box=el('details'),label=el('summary','Affected sessions');box.open=true;box.append(label);
-      for(const c of preview.observation?.consumers||[])box.append(el('p',`${c.title||c.kind}${c.sessionId?' · '+c.sessionId:''}\n${c.reason||''}`));
-      for(const reason of preview.observation?.reasons||[])box.append(el('p',reason));list.append(box);}
-    if(state?.activeOperation?.fenced){actions.append(state.activeOperation.cancelRequested
-      ?button('Continue original switch',()=>send('accounts.continue',{operationId:state.activeOperation.id,confirmed:true}))
-      :button('Cancel switch',()=>send('accounts.cancel',{operationId:state.activeOperation.id})),
-      button('Check recovery',()=>send('accounts.reconcile',{})));for(const b of actions.querySelectorAll('button'))b.disabled=busy||!!pending;}
-    if(state?.activeOperation?.retainedReceipts?.length)list.append(el('p',`${state.activeOperation.retainedReceipts.length} earlier delivery receipts remain saved for review. Account switching will not retry those messages.`));
-    save.disabled=busy||!!pending||!state||!email.checkValidity()||!email.value.trim();refresh.disabled=busy;
-    retry.hidden=!pending;retry.disabled=busy;root.setAttribute('aria-busy',String(busy));
+    const entries=state?.accounts||[],activeAccount=entries.find(a=>a.id===state.activeAccountId);
+    active.textContent='Active · '+(activeAccount?.email||state?.current?.email||'Checking account…');
+    if(!entries.some(a=>a.id===selected))selected=state?.activeAccountId||entries[0]?.id||'';
+    const options=entries.map(a=>({id:a.id,label:a.email+(a.id===state.activeAccountId?' · Active':'')}));
+    if(picker.dataset.options!==JSON.stringify(options)){picker.replaceChildren(...options.map(a=>{const o=el('option',a.label);o.value=a.id;return o;}));picker.dataset.options=JSON.stringify(options);}
+    picker.value=selected;picker.disabled=!entries.length;
+    const entry=account(),reading=entry?.usage,auth=entry?.authorization,ceremony=auth?.operation,op=state?.activeOperation;
+    usage.textContent=reading?.remainingPercent==null?'Weekly allowance unavailable':`${reading.remainingPercent}% weekly remaining`;
+    reset.textContent=reading?.resetsAt?'Resets '+date(reading.resetsAt*1000):'Reset time unavailable';
+    checked.textContent=reading?.observedAt?'Last checked '+date(reading.observedAt):'No verified reading yet';
+    workspace.textContent='Workspace: '+(auth?.subscription?.workspaceName||'Not exposed by Codex');
+    const stale=reading?.status!=='current'||Date.now()-Date.parse(reading?.observedAt||'')>300000;
+    explanation.textContent=stale?(reading?.message||'This is an older reading. Refresh to check the current allowance.'):
+      reading?.ordinaryUsageAllowed===false?'Subscription access is currently limited. Activation is available; model work may need to wait for the applicable limit to reset.':'';
+    const connecting=['checking','starting','awaiting_user','cancelling'].includes(ceremony?.status),isActive=selected===state?.activeAccountId;
+    activate.textContent=isActive&&!op?.fenced?'Active':op?.fenced&&op.targetId===selected?'Activating…':'Activate';
+    activate.disabled=busy||!!pending||isActive&&!op?.fenced||!!op?.fenced||entry?.authentication!=='verified'||state?.capabilities?.appOnly!==true;
+    activate.setAttribute('aria-label',isActive?'Active ClawDad account':'Activate '+(entry?.email||'selected account'));
+    status.textContent=op?.reason||(!state?'Loading accounts…':state.capabilities?.appOnly!==true?'Update ClawDad on the Mac to use app-only account activation.':'');
+    recover.hidden=op?.status!=='needs_attention';recover.disabled=busy||!!pending;
+    cancel.hidden=!op?.fenced||!['preflight','authenticate'].includes(op.phase);cancel.disabled=busy||!!pending;
+    refresh.disabled=busy||connecting||!selected;
+    signIn.hidden=!entry||entry.authentication==='verified'||connecting;signIn.disabled=busy||!!pending;
+    signInCancel.hidden=!connecting;signInCancel.disabled=busy||!!pending;
+    if(connecting)explanation.textContent=ceremony.reason||'Checking saved sign-in…';
+    retry.hidden=!pending;retry.disabled=busy;add.disabled=busy||!!pending||!state||!email.checkValidity()||!email.value.trim();
+    root.setAttribute('aria-busy',String(busy));
   }
-  picker.onchange=()=>{selectedId=picker.value;storage.setItem('clawdad.codex.accounts.selection.v1',selectedId);preview=null;render();};
-  windowPicker.onchange=()=>{selectedWindow=windowPicker.value;render();};
   function accept(value){
+    const before=state?.activeAccountId;
     state=value.accounts||state;
-    const received=pending?.action==='accounts.switch'&&state?.operations?.some(o=>o.id===pending.requestId&&o.targetId===pending.accountId)
-      ||['accounts.signin','accounts.verify_signin'].includes(pending?.action)&&state?.accounts?.some(a=>a.id===pending.accountId&&a.authorization?.operation?.requestId===pending.requestId);
-    if(received||pending&&value.accountReceipt?.accepted===true&&value.accountReceipt.requestId===pending.requestId&&value.accountReceipt.accountId===pending.accountId){pending=null;storage.removeItem(storageKey);error.textContent='';}
+    if(before!==state?.activeAccountId)window.dispatchEvent(new Event('clawdad-account-updated'));
+    if(pending&&(value.accountReceipt?.requestId===pending.requestId||state?.operations?.some(o=>o.id===pending.requestId))){pending=null;storage.removeItem(key);}
+    if(value.accountReceipt?.accepted===false)error.textContent=value.accountReceipt.error;
   }
   async function send(action,args){
-    if(busy)return;
-    if(!pending){pending={action,...args,requestId:crypto.randomUUID()};storage.setItem(storageKey,JSON.stringify(pending));}
-    busy=true;error.textContent='';render();status.scrollIntoView({block:'nearest'});status.focus({preventScroll:true});
-    try{const value=await request(pending);accept(value);if(action==='accounts.add'&&value.accountReceipt?.account?.id){selectedId=value.accountReceipt.account.id;storage.setItem('clawdad.codex.accounts.selection.v1',selectedId);}error.textContent=value.accountReceipt?.accepted===false?value.accountReceipt.error:'';pending=null;storage.removeItem(storageKey);}
-    catch(e){error.textContent=e.message+' Your pending selection is retained; Retry uses the same request.';}
-    finally{busy=false;render();}
+    if(busy)return;if(!pending){pending={action,...args,requestId:crypto.randomUUID()};storage.setItem(key,JSON.stringify(pending));}
+    busy=true;error.textContent='';render();
+    try{const result=await request(pending);accept(result);if(result.accountReceipt?.account?.id)selected=result.accountReceipt.account.id;
+      pending=null;storage.removeItem(key);window.dispatchEvent(new Event('clawdad-account-updated'));}
+    catch(e){error.textContent=e.message+' Retry keeps this same request.';}finally{busy=false;render();}
   }
-  async function load(){if(busy||loading)return;loading=true;try{const result=await request({action:'accounts.status',...(pending?{receiptId:pending.requestId}:{})});
-    if(!busy){accept(result);render();
-      if(state?.capabilities?.windowRebuild&&!state?.activeOperation?.fenced){const windows=await request({action:'accounts.windows'});if(!busy){accept(windows);render();}}
-    }
-  }catch(e){error.textContent=e.message;}finally{loading=false;}}
-  // Poll only an open panel with a pending ceremony. Rendering never starts
-  // authentication; the Mac owns completion after the panel closes.
-  const poll=setInterval(()=>{if(root.isConnected&&root.open!==false&&!busy
-    &&(pending||state?.activeOperation?.fenced||state?.accounts?.some(a=>['checking','starting','awaiting_user','cancelling'].includes(a.authorization?.operation?.status))))void load();},1500);
-  email.oninput=render;workspace.oninput=render;
-  return {load,render,dispose:()=>clearInterval(poll)};
+  async function preview(force=false){
+    if(!selected)return;
+    const id=selected;
+    try{const result=await request({action:force?'accounts.refresh':'accounts.preview',accountId:id,requestId:crypto.randomUUID()});accept(result);render();}
+    catch(e){error.textContent=e.message;}
+  }
+  async function load(){
+    if(loading||busy)return;loading=true;
+    try{accept(await request({action:'accounts.status',...(pending?{receiptId:pending.requestId}:{})}));render();}
+    catch(e){error.textContent=e.message;}finally{loading=false;}
+  }
+  picker.onchange=()=>{selected=picker.value;render();void preview(true);};email.oninput=render;
+  const poll=setInterval(()=>{if(root.isConnected&&root.closest('dialog')?.open!==false)void load();},2000);
+  return {load:async()=>{await load();void preview(true);},render,dispose:()=>clearInterval(poll)};
 }
-
 const root=document.getElementById('codexAccounts');
-if(root){const panel=codexAccountsPanel(root);root.addEventListener('toggle',()=>{if(root.open)void panel.load();});}
+if(root){const panel=codexAccountsPanel(root);window.addEventListener('clawdad-open-usage',()=>void panel.load());}

@@ -73,6 +73,7 @@
 		BF951FE4C7753B69F9EDFFE7 /* AssistantCaptureRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E1742773FEE684AF62701C4 /* AssistantCaptureRecovery.swift */; };
 		C3944C0556BE915A23DFD01D /* AssistantChatDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E624474D662739AE0389B11 /* AssistantChatDraft.swift */; };
 		C94E7212185A49D92DA02824 /* MobileAssistant.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9F3B8E8409978BFFE0C10D1 /* MobileAssistant.swift */; };
+		CC599DF2E5113E78907A22C0 /* AppAccountPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B49DAC6639EC442D443718D /* AppAccountPicker.swift */; };
 		D1BCAA9F0E429DF09D1DC3BE /* SpeechBoostUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9ED14DF01B173CB2A4D42A97 /* SpeechBoostUITests.swift */; };
 		D731500D2FDC95AD252DCE84 /* NotificationDelegateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03C9C8BAB9D59120FB52BC50 /* NotificationDelegateTests.swift */; };
 		DA856C77B9663DCAB80C7092 /* AssistantAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3286351CBEADFC96A79F1EE4 /* AssistantAudio.swift */; };
@@ -114,6 +115,7 @@
 		061444F36751011C7753FD06 /* RemoteQuickChat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteQuickChat.swift; sourceTree = "<group>"; };
 		088F57A9C660D2D5A01BEF9B /* VoiceSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceSettings.swift; sourceTree = "<group>"; };
 		0AED4051022C101DAD6FC4F4 /* ProjectReadbackUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectReadbackUITests.swift; sourceTree = "<group>"; };
+		0B49DAC6639EC442D443718D /* AppAccountPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppAccountPicker.swift; sourceTree = "<group>"; };
 		10F1B258EA5FA2916837629C /* AssistantListeningInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantListeningInput.swift; sourceTree = "<group>"; };
 		11E193EDE43AF5D11AADF538 /* ClawDadMobileUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClawDadMobileUITests.swift; sourceTree = "<group>"; };
 		147A8BFF03CEDB70896BAB51 /* AppAttestClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppAttestClient.swift; sourceTree = "<group>"; };
@@ -234,6 +236,7 @@
 		608F0F3ECB17C5E58327A700 /* ClawDadMobile */ = {
 			isa = PBXGroup;
 			children = (
+				0B49DAC6639EC442D443718D /* AppAccountPicker.swift */,
 				147A8BFF03CEDB70896BAB51 /* AppAttestClient.swift */,
 				3286351CBEADFC96A79F1EE4 /* AssistantAudio.swift */,
 				C0F7E6B29B4820AAB88ABF58 /* AssistantAudioDiagnostics.swift */,
@@ -485,6 +488,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				CC599DF2E5113E78907A22C0 /* AppAccountPicker.swift in Sources */,
 				FF0A3F9F33A94874E1F92846 /* AppAttestClient.swift in Sources */,
 				DA856C77B9663DCAB80C7092 /* AssistantAudio.swift in Sources */,
 				836D0BEEDB207BA0D7163DE8 /* AssistantAudioDiagnostics.swift in Sources */,
@@ -700,7 +704,7 @@
 				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 100;
+				CURRENT_PROJECT_VERSION = 102;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_NS_ASSERTIONS = NO;
@@ -797,7 +801,7 @@
 				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 100;
+				CURRENT_PROJECT_VERSION = 102;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -908,7 +912,7 @@
 				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 100;
+				CURRENT_PROJECT_VERSION = 102;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_NS_ASSERTIONS = NO;

@@ -2,33 +2,32 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import http from 'node:http';
 import {AssistantRuntime,assistantHttp} from '../../lib/assistant-runtime.mjs';
-import {CodexAccounts} from '../../lib/codex-accounts.mjs';
+import {CodexAppAccounts as CodexAccounts} from '../../lib/codex-app-accounts.mjs';
+import {CodexAccountLayout} from '../../lib/codex-account-layout.mjs';
 import {CodexAccountAuthorizations} from '../../lib/codex-account-authorizations.mjs';
 const selected=process.argv[2];if(!selected||!path.basename(selected).startsWith('accounts-ui-fixture-'))throw Error('An isolated fixture path is required.');
-const root=await fs.realpath(selected);
+const root=await fs.realpath(selected);await fs.chmod(root,0o700);
 const runtime=new AssistantRuntime({root:path.join(root,'Assistant'),coordinator:{stop(){},prepare(){throw Error('Fixture cannot start Codex');}}});
 const usage={snapshot:async()=>({status:'current',accountKey:'a'.repeat(64),remainingPercent:12,resetsAt:2000000000,validUntil:2000000000000,
   observedAt:new Date().toISOString(),alerts:[],subscription:{method:'chatgpt',email:'fixture@example.test',plan:'pro'}})};
 usage.freshReading=usage.snapshot;
 runtime.accounts=new CodexAccounts({root:path.join(root,'Accounts'),usage,inspectConsumers:async()=>({complete:false,consumers:[],reasons:['Synthetic inventory only.']})});
-const saved=new Map();let completeSignIn;
-runtime.accounts.authorizations=new CodexAccountAuthorizations({root:path.join(root,'Accounts'),binary:'/fixture-only/codex',
-  open:async()=>queueMicrotask(()=>completeSignIn()),createProcess:({home})=>{
-    const id=path.basename(home),listeners=new Set();
-    return {connect:async()=>{},verifyStorage:async()=>{},close(){},subscribe(fn){listeners.add(fn);return()=>listeners.delete(fn);},
-      async request(method){
-        if(method==='account/read')return {account:saved.has(id)?{type:'chatgpt',email:saved.get(id),planType:'pro'}:null};
-        if(method==='account/rateLimits/read')return {accountId:id,rateLimits:{limitId:'codex',primary:{windowDurationMins:10080,usedPercent:88,resetsAt:2000000000}}};
-        if(method==='account/login/start'){
-          const account=await runtime.accounts.transaction(s=>s.accounts.find(a=>a.id===id));
-          completeSignIn=()=>{saved.set(id,account.email);for(const fn of listeners)fn({method:'account/login/completed',params:{loginId:id,success:true}});for(const fn of listeners)fn({method:'account/updated',params:{authMode:'chatgpt'}});};
-          return {type:'chatgpt',loginId:id,authUrl:'https://auth.openai.com/fixture-only'};
-        }
-        throw Error('Only synthetic account reads and sign-in are available');
-      }};
-  }});
-await runtime.load();let requests=[],waiting=false,dropSwitch=false,targetKey='a'.repeat(64);
-runtime.accounts.readWork=async()=>({complete:true,jobs:waiting?[{id:'fixture-pending-work',action:'legacy.dispatch',fingerprint:'fixture-request',status:'working'}]:[{id:'fixture-pending-work',action:'legacy.dispatch',fingerprint:'fixture-request',status:'completed'}]});
+const profiles=[],jobs=[],requests=[];let drops=0;
+runtime.accounts.authorizations={snapshot:async()=>({profiles}),request:async()=>({status:'verified'})};
+const canonical=path.join(root,'History');await fs.mkdir(canonical,{mode:0o700});
+for(const name of ['sessions','archived_sessions','thread-writer-locks'])await fs.mkdir(path.join(canonical,name),{mode:0o700});
+const layouts=new Map();
+for(const [index,email] of ['fixture@example.test','second@example.test'].entries()){
+  const entry=(await runtime.accounts.add({email,requestId:'add-'+index,expectedRevision:index})).account;
+  const home=path.join(root,entry.id);await fs.mkdir(home,{mode:0o700});
+  layouts.set(entry.id,await new CodexAccountLayout({root}).prepare({canonicalHome:canonical,profileHome:home}));
+  profiles.push({accountId:entry.id,email,home,authentication:'verified',accountKey:(index?'b':'a').repeat(64),verifiedAt:new Date().toISOString(),remainingPercent:index?0:65,resetsAt:2e9});
+}
+runtime.accounts.readWork=async()=>({complete:true,jobs});
+runtime.accounts.adapter={capture:async()=>({kind:'absent'}),prepare:async(op,target)=>({method:'chatgpt',email:target.email,accountKey:profiles.find(p=>p.accountId===target.id).accountKey}),transition:async()=>({}),
+  verify:async op=>{const p=profiles.find(p=>p.accountId===op.targetId);return {accountKey:p.accountKey,runtime:{authorizationHome:p.home,sqliteHome:canonical,layout:layouts.get(p.accountId)}};}};
+await runtime.load();await runtime.accounts.request({accountId:profiles[0].accountId,requestId:'initial',expectedRevision:2,confirmed:true});await runtime.accounts.advance();
+runtime.accounts.start({intervalMs:30});
 const page=await fs.readFile(new URL('../../web/index.html',import.meta.url),'utf8');
 const dialog=page.match(/<dialog id="weeklyUsageDialog"[\s\S]*?<\/dialog>/)?.[0];
 if(!dialog)throw Error('The production allowance dialog is missing.');
@@ -45,27 +44,9 @@ const server=http.createServer(async(req,res)=>{
     res.setHeader('content-type',url.pathname.endsWith('.css')?'text/css; charset=utf-8':'application/javascript; charset=utf-8');res.end(await fs.readFile(new URL('../../web'+url.pathname,import.meta.url)));return;
   }
   if(url.pathname==='/v1/codex/weekly-usage')return json(res,200,await usage.snapshot());
-  if(url.pathname==='/fixture/ready'){
-    waiting=true;dropSwitch=true;
-    runtime.accounts.inspectConsumers=async()=>({complete:true,consumers:[{id:'fixture-room',kind:'terminal_codex',pid:99998,tty:'/dev/ttys098',processIdentity:'fixture-room-owner',title:'RoomWave',sessionId:null,busy:null,recoverable:false,pendingReceipts:[],reason:'No verified resumable conversation.'}],reasons:[]});
-    runtime.accounts.adapter={capabilities:{ready:true,skipTerminalSessions:true},captureRecovery:async observation=>({fingerprint:observation.fingerprint,entries:[]}),
-      authenticate:async({target})=>({state:'verified',email:target.email,accountKey:targetKey,method:'chatgpt',workspaceVerified:true}),
-      verify:async()=>({accountKey:targetKey,allConsumersVerified:true,freshUsage:true})};
-    runtime.accounts.start({intervalMs:50});return json(res,200,{ok:true});
-  }
-  if(url.pathname==='/fixture/finish'){waiting=false;return json(res,200,{ok:true});}
-  if(url.pathname==='/fixture/windows'){
-    waiting=true;
-    const windows=[1,2].map(n=>({id:'window-'+n,tabId:'anchor-'+n,title:'Terminal window '+n,count:n+1,tabs:[]}));
-    runtime.accounts.inspectConsumers=async()=>({complete:true,consumers:[],reasons:[]});
-    runtime.accounts.adapter={capabilities:{ready:true,windowRebuild:true,skipTerminalSessions:false},
-      windows:{choices:windows,windows:async()=>({windows,complete:true,reasons:[]}),select:async choice=>{
-        const found=windows.find(w=>w.id===choice?.id&&w.tabId===choice?.tabId);if(!found)throw Error('Exact fixture window required');return found;
-      },progress:async()=>null},captureRecovery:async observation=>({fingerprint:observation.fingerprint,entries:[]})};
-    runtime.accounts.start({intervalMs:50});return json(res,200,{ok:true});
-  }
+  if(url.pathname==='/fixture/drop'){drops=1;return json(res,200,{ok:true});}
   if(url.pathname==='/fixture/evidence')return json(res,200,{requests,state:await runtime.accounts.snapshot(),jobs:runtime.state.jobs});
-  if(await assistantHttp(req,res,url,runtime,{json,readBody:async r=>{let text='';for await(const chunk of r)text+=chunk;const body=JSON.parse(text);requests.push(body);if(body.action==='accounts.switch'&&dropSwitch){dropSwitch=false;res.end=()=>res.destroy();}return body;}}))return;
+  if(await assistantHttp(req,res,url,runtime,{json,readBody:async r=>{let text='';for await(const chunk of r)text+=chunk;const body=JSON.parse(text);requests.push(body);if(body.action==='accounts.activate'&&drops){drops--;res.end=()=>res.destroy();}return body;}}))return;
   json(res,404,{error:'Fixture route unavailable'});
 });
 server.listen(0,'127.0.0.1',async()=>{await fs.writeFile(path.join(root,'ready.json'),JSON.stringify({baseURL:`http://127.0.0.1:${server.address().port}`}));});

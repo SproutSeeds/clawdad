@@ -1,3 +1,5 @@
+// Retired Terminal account controller: retained for historical regression fixtures only.
+#if DEBUG
 import Foundation
 import ClawDadRemoteAssistProtocol
 
@@ -142,3 +144,5 @@ import ClawDadRemoteAssistProtocol
       "message":record.message.map(AssistantValue.string) ?? .null]
   }
 }
+
+#endif

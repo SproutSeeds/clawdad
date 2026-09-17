@@ -95,6 +95,13 @@ test('local draft receipts, busy/queued state and changed settings block capture
   f.state.queue=[];await f.driver.observe({operationId:'switch',capture:true});f.state.settings.reasoningEffort='high';
   await assert.rejects(f.driver.observe({operationId:'switch'}),e=>e.code==='shared_settings_changed');
 });
+test('unmaterialized first-turn history has an actionable specific failure and causes no process effect',async t=>{
+  const f=await fixture(t),original=f.client.request.bind(f.client);
+  f.client.request=async(method,args)=>{if(method==='thread/turns/list')throw Error('thread '+id+' is not materialized yet; thread/turns/list is unavailable before first user message');return original(method,args);};
+  await assert.rejects(f.driver.observe({operationId:'switch',capture:true}),e=>e.code==='shared_thread_not_persisted'&&e.appAccountSafe===true);
+  assert.equal(f.state.stopped,undefined);assert.equal(f.state.launched,undefined);
+  assert.equal(f.state.calls.some(c=>/turn\/|thread\/unsubscribe/.test(c.method)),false);
+});
 test('no replay after unknown RPC delivery; exact target permission is required for every effect',async t=>{
   const f=await fixture(t),source=await f.driver.observe({operationId:'switch',capture:true});
   const args={operationId:'switch',requestId:'d'.repeat(64),source,target:{accountKey:source.accountKey},thread:source.threads[0]};

@@ -1,3 +1,5 @@
+// Retired Terminal account controller: retained for historical regression fixtures only.
+#if DEBUG
 import Foundation
 
 /// Parses only the response to a deliberately dispatched local /status command.
@@ -42,3 +44,5 @@ struct MacCodexAccountStatus:Equatable,Codable {
       provider:values["Model provider"]!,directory:directory,sessionId:session.lowercased(),permissions:values["Permissions"]!)
   }
 }
+
+#endif

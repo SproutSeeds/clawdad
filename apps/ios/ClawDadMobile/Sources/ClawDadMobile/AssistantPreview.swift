@@ -147,73 +147,25 @@
     }
     func research(_ action: String, args: [String: AssistantValue], id: String) throws -> [String: AssistantValue] {
       if action.hasPrefix("accounts.") {
-        var accounts=state["codexAccounts"]?.object ?? ["version":.number(1),"revision":.number(0),"accounts":.array([]),
-          "canConnectAccounts":.bool(true),
-          "current":.object(["email":.string("fixture@example.test"),"plan":.string("pro"),"status":.string("current")]),
-          "capabilities":.object(["ready":.bool(false),"reasons":.array([.object(["message":.string("Keeping both Codex accounts signed in independently still needs the isolated two-account verification.")])])])]
-        if ProcessInfo.processInfo.arguments.contains("--clawdad-accounts-switch-test"), state["codexAccounts"] == nil {
-          accounts["capabilities"] = .object(["ready":.bool(true),"skipTerminalSessions":.bool(true)])
-          accounts["accounts"] = .array(["first", "second", "third"].map { name in
-            .object(["id":.string(name), "email":.string(name+"@example.test"), "authentication":.string("verified")])
-          })
-          if ProcessInfo.processInfo.arguments.contains("--clawdad-accounts-window-test") {
-            accounts["capabilities"] = .object(["ready":.bool(true),"windowRebuild":.bool(true),"skipTerminalSessions":.bool(false)])
-            accounts["windows"] = .array([1,2].map { n in .object(["id":.string("window-\(n)"),"tabId":.string("anchor-\(n)"),
-              "title":.string("Terminal window \(n)"),"count":.number(Double(n+1))]) })
-          }
+        var accounts=state["codexAccounts"]?.object ?? ["version":.number(1),"revision":.number(0),"activeAccountId":.string("first"),
+          "canConnectAccounts":.bool(true),"capabilities":.object(["ready":.bool(true),"appOnly":.bool(true)]),
+          "accounts":.array(["first","second","third"].enumerated().map { index,name in
+            .object(["id":.string(name),"email":.string(name+"@example.test"),"authentication":.string("verified"),
+              "usage":.object(["remainingPercent":.number(Double(65-index*20)),"resetsAt":.number(2000000000),"observedAt":.string("2026-09-17T10:00:00Z"),"status":.string("stale"),"message":.string("Last verified reading. Refresh to check current allowance.")])])
+          })]
+        if action=="accounts.activate" {
+          let operation:AssistantValue = .object(["id":.string(id),"targetId":args["accountId"] ?? .null,"status":.string("completed"),"phase":.string("complete"),"fenced":.bool(false),"reason":.string("Active for ClawDad. Terminal authentication is unchanged.")])
+          accounts["activeAccountId"]=args["accountId"];accounts["activeOperation"]=operation;accounts["operations"] = .array([operation])
+          accounts["revision"] = .number((accounts["revision"]?.number ?? 0)+1)
         }
         if action=="accounts.add" {
           var entries=accounts["accounts"]?.array ?? []
-          if !entries.contains(where:{$0.object?["id"]?.string==id}) { entries.append(.object(["id":.string(id),"email":args["email"] ?? .string("second@example.test"),"workspaceLabel":args["workspaceLabel"] ?? .string(""),"authentication":.string("needs_sign_in")])) }
+          entries.append(.object(["id":.string(id),"email":args["email"] ?? .null,"authentication":.string("needs_sign_in")]))
           accounts["accounts"] = .array(entries);accounts["revision"] = .number((accounts["revision"]?.number ?? 0)+1)
         }
-        if action=="accounts.switch" {
-          if ProcessInfo.processInfo.arguments.contains("--clawdad-accounts-window-test"),args["windowSelection"]?.object?["id"]?.string != "window-2" {
-            throw AssistantProtocolError.invalid
-          }
-          let ready = accounts["capabilities"]?.object?["ready"]?.bool == true
-          let operation: AssistantValue = .object(["id":.string(id),"targetId":args["accountId"] ?? .null,"status":.string(ready ? "waiting" : "needs_setup"),"fenced":.bool(ready),"reason":.string(ready ? "2 earlier work receipts need reconciliation before switching. Review affected sessions or cancel this switch to keep using the current account." : "Live switching needs isolated verification. Current work is preserved.")])
-          accounts["activeOperation"] = operation
-          accounts["operations"] = .array([operation])
-          if ProcessInfo.processInfo.arguments.contains("--clawdad-accounts-window-test"), var stopped=operation.object {
-            stopped["status"] = .string("needs_attention")
-            stopped["windowSelection"] = accounts["windows"]?.array?.first{$0.object?["id"]==args["windowSelection"]?.object?["id"]}
-            stopped["sessions"] = .array([.object(["id":.string("shared"),"title":.string("ClawDad project threads"),"tty":.string("??"),"switchState":.string("stopped")])])
-            accounts["activeOperation"] = .object(stopped)
-            accounts["operations"] = .array([.object(stopped)])
-            // A cold reopen/status poll may have no cached live windows.
-            accounts["windows"] = .array([])
-          }
-          if ProcessInfo.processInfo.arguments.contains("--clawdad-accounts-skip-test"), var selected = operation.object {
-            selected["sessions"] = .array([.object(["id":.string("room"),"title":.string("RoomWave"),"switchState":.string("waiting"),"canSkip":.bool(true),"skipIdentity":.string(String(repeating:"a",count:64)),"reason":.string("This agent has no verified resumable conversation.")])])
-            accounts["activeOperation"] = .object(selected)
-          }
-        }
-        if action=="accounts.skip_session" {
-          var operation=accounts["activeOperation"]?.object ?? [:]
-          operation["reason"] = .string("RoomWave left unchanged. Checking the remaining sessions.")
-          operation["sessions"] = .array([.object(["id":.string("room"),"title":.string("RoomWave"),"switchState":.string("skipped"),"canSkip":.bool(false),"reason":.string("Left untouched. Its account is not verified by this switch.")])])
-          accounts["activeOperation"] = .object(operation)
-        }
-        if action=="accounts.cancel" || action=="accounts.reconcile" {
-          var operation=accounts["activeOperation"]?.object ?? [:]
-          operation["fenced"] = .bool(false)
-          operation["status"] = .string(action=="accounts.cancel" ? "cancelled" : "completed")
-          operation["reason"] = .string(action=="accounts.cancel" ? "Account switch cancelled. Existing work was preserved." : "All fixture sessions verified on the selected account.")
-          accounts["activeOperation"] = .object(operation); accounts["operations"] = .array([.object(operation)])
-        }
-        if action=="accounts.signin" || action=="accounts.verify_signin" {
-          accounts["accounts"] = .array((accounts["accounts"]?.array ?? []).map { value in
-            var entry=value.object ?? [:]
-            if entry["id"]?.string==args["accountId"]?.string {
-              entry["authentication"] = .string("verified")
-              entry["authorization"] = .object(["operation":.object(["requestId":.string(id),"status":.string("verified"),"reason":.string("Fixture sign-in verified. Existing agents have not been switched.")])])
-            }
-            return .object(entry)
-          })
-        }
         state["codexAccounts"] = .object(accounts)
-        return ["accounts":.object(accounts),"accountReceipt":.object(["account":.object(["id":.string(id)])])]
+        let receiptID=args["receiptId"] ?? .string(id)
+        return ["accounts":.object(accounts),"accountReceipt":.object(["requestId":receiptID,"accepted":.bool(true),"accountId":args["accountId"] ?? accounts["activeAccountId"] ?? .null])]
       }
       if action.hasPrefix("settings.") { return try modelSettings(action, args: args) }
       if action.hasPrefix("mainworkspace.") {

@@ -3933,7 +3933,7 @@ fs.writeFileSync(
       headers: {"content-type":"application/json", "tailscale-user-login":"tester@example.com"},
       body: JSON.stringify({action:"accounts.add",email:"fixture@example.test",requestId:"isolation-account",expectedRevision:0})});
     assert.equal(accountResponse.status,200,await accountResponse.text());
-    const accountState = JSON.parse(await readFile(path.join(home, "native/Accounts/switch-state.json"), "utf8"));
+    const accountState = JSON.parse(await readFile(path.join(home, "native/Accounts/app-accounts.json"), "utf8"));
     assert.equal(accountState.accounts.length,1);
     assert.equal(accountState.accounts[0].email,"fixture@example.test");
     assert.equal(accountState.activeOperationId,null);

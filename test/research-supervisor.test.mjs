@@ -55,6 +55,19 @@ test('installation stays off and consumes no review/usage calls; conversation ha
   const f=await fixture(t);await f.supervisor.tick();
   assert.equal(f.reviewCount(),0);assert.equal(f.readCount(),0);assert.equal((await f.supervisor.snapshot()).threads.length,0);
 });
+test('app activation rebinds future reviews without enabling or resuming a supervisor',async t=>{
+  const f=await fixture(t),thread=await f.enable();
+  await f.supervisor.control('research.pause',managementArgs(thread),'pause-before-account');
+  await f.supervisor.accountActivated({accountKey:'c'.repeat(64),operationId:'activation'});
+  assert.equal(thread.accountKey,'c'.repeat(64));assert.equal(thread.status,'paused');assert.equal(f.reviewCount(),0);
+  assert.equal(f.deliveries.length,0);assert.equal(thread.target.sessionId,session);
+});
+test('explicit project budget authorization is paused and retained under its original account',async t=>{
+  const f=await fixture(t),thread=await f.enable();
+  await f.budget.transaction(async()=>{f.budget.state.accounts[accountKey].policies||={};f.budget.state.accounts[accountKey].policies[thread.id]={mode:'override',minimumRemaining:5};await f.budget.save();});
+  await f.supervisor.accountActivated({accountKey:'c'.repeat(64),operationId:'activation'});
+  assert.equal(thread.accountKey,accountKey);assert.equal(thread.status,'paused');assert.match(thread.reason,/account-specific/);assert.equal(f.reviewCount(),0);
+});
 test('review uses exact override snapshot and a settings change preserves active review, thread state and budget',async t=>{
   const f=await fixture(t),thread=await f.enable();
   const settings=new AssistantModelSettings({file:path.join(f.root,'models.json'),readCatalog:async()=>({authenticated:true,models:[

@@ -13,7 +13,9 @@
     const title = usage?.remainingPercent == null ? 'Weekly allowance unavailable'
       : `${usage.remainingPercent}% weekly remaining${fresh ? '' : ' · Stale'}`;
     const text = title + (usage?.resetsAt ? '\nResets ' + reset(usage.resetsAt) : '');
-    button.textContent = title;
+    button.replaceChildren(document.createTextNode(title+' '));
+    const info=document.createElement('span');info.textContent='ⓘ';info.setAttribute('aria-hidden','true');button.append(info);
+    button.setAttribute('aria-label',title+'. Account and allowance details');
     const identity=usage?.subscription;
     detail.textContent = (identity?.email?`${identity.email} · ${identity.plan||'Subscription'}\nWorkspace: ${identity.workspaceName||'Not exposed by Codex'}\n\n`:'')
       +text+(usage?.observedAt?'\nLast refreshed '+new Date(usage.observedAt).toLocaleString():'')
@@ -37,7 +39,7 @@
     catch { if (usage) usage.status = 'stale'; }
     finally { pending = false; render(); }
   }
-  window.openClawDadUsage = () => { if (!dialog.open) dialog.showModal(); void refresh(); };
+  window.openClawDadUsage = () => { if (!dialog.open) dialog.showModal(); void refresh(); window.dispatchEvent(new Event('clawdad-open-usage')); };
   button.onclick = window.openClawDadUsage;
   const close = () => { dialog.close(); button.focus(); };
   document.getElementById('weeklyUsageClose').onclick = close;
@@ -48,4 +50,5 @@
   permission.onclick = () => { window.clawDadEnableUsageNotifications?.(); };
   void refresh(); setInterval(() => { render(); if (!document.hidden) void refresh(); }, 30_000);
   window.addEventListener('focus', refresh);
+  window.addEventListener('clawdad-account-updated',refresh);
 })();

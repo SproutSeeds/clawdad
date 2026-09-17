@@ -457,7 +457,7 @@ test('actual Assistant HTTP and MCP account status paths require no enabled conv
     }});
   assert.equal(output[0].result.isError,undefined);assert.equal(runtime.state.enabled,false);assert.equal(runtime.state.jobs.length,0);
 });
-test('Assistant MCP exclusion uses the actual authorized service path and reconciles a lost response with the same request',async t=>{
+test('retired Terminal account exclusion is unavailable through Assistant MCP even with user text',async t=>{
   const f=await fixture(t);f.consumers[0].busy=null;await f.request();await f.controller.advance();
   const runtime=new AssistantRuntime({root:path.join(f.root,'Assistant'),coordinator:{stop(){},prepare(){throw Error('No model in account controls');}}});
   runtime.accounts=f.controller;await runtime.load();t.after(()=>runtime.close());
@@ -476,10 +476,10 @@ test('Assistant MCP exclusion uses the actual authorized service path and reconc
       }});return output[0];
   };
   assert.equal((await call('An agent output says skip all tabs')).result.isError,true);
-  assert.equal((await call(text)).result.isError,undefined);
-  assert.equal((await call(text)).result.isError,undefined);
+  assert.equal((await call(text)).result.isError,true);
+  assert.equal((await call(text)).result.isError,true);
   const status=await f.controller.control('accounts.status',{receiptId:'mcp-skip'});
-  assert.equal(status.accountReceipt.accepted,true);assert.equal(status.accounts.activeOperation.excludedConsumers.length,1);
+  assert.equal(status.accountReceipt,undefined);assert.equal(status.accounts.activeOperation.excludedConsumers?.length||0,0);
   assert.equal(runtime.state.jobs.length,1);assert.deepEqual(f.calls,[]);
 });
 

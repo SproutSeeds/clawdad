@@ -313,7 +313,6 @@ final class MacSystemReadiness {
   }
 
   func openCodexLogin(resetCredentials: Bool = false) throws {
-    try MacCodexAccountAdmission.requireNoTransition()
     guard let codexPath = detectedCodexPath() else {
       throw NSError(
         domain: "ClawDad",

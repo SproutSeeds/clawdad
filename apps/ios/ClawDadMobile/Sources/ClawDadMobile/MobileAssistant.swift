@@ -382,7 +382,7 @@ final class MobileAssistantController: ObservableObject {
       if action=="accounts.cancel",loseCancelAfter,preview.failedAccountCancelRequest==nil {
         preview.failedAccountCancelRequest=id;throw AssistantProtocolError.timedOut
       }
-      if action == "accounts.switch", ProcessInfo.processInfo.arguments.contains("--clawdad-accounts-switch-test") {
+      if action == "accounts.activate", ProcessInfo.processInfo.arguments.contains("--clawdad-accounts-switch-test") {
         try await Task.sleep(for: .seconds(4))
         if ProcessInfo.processInfo.arguments.contains("--clawdad-accounts-lost-reply-test") { throw AssistantProtocolError.timedOut }
       }

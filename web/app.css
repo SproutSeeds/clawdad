@@ -5560,3 +5560,19 @@ button.detail-backdrop:focus-visible:not(:disabled) {
 #codexAccounts select { cursor: pointer; font: inherit; max-width: 100%; }
 #codexAccountSwitchStatus { overflow-wrap: anywhere; }
 #codexAccountSwitch { font-weight: 700; border: 1px solid #c89639; }
+
+/* App account preview and activation share one translucent, readable surface. */
+.weekly-usage-dialog { background: linear-gradient(145deg,#302b28e8,#141111e8); backdrop-filter: blur(28px) saturate(140%); -webkit-backdrop-filter: blur(28px) saturate(140%); border: 1px solid #ffffff30; border-radius: 26px; box-shadow: 0 24px 80px #0008, inset 0 1px #ffffff24; }
+.weekly-usage-header { background: #282320ed; backdrop-filter: blur(18px); border-radius: 16px; top: -22px; }
+.weekly-usage-header h2 { font-size: 1.1rem; }
+#codexAccounts .account-glass-card { padding: 16px; border: 1px solid #ffffff26; border-radius: 20px; background: #ffffff0a; box-shadow: inset 0 1px #ffffff10; }
+#codexAccounts select, #codexAccounts input { border: 1px solid #ffffff35; border-radius: 12px; padding: 10px 12px; background: #ffffff10; color: #ffebbc; min-height: 48px; }
+#codexAccounts option { background: #242020; color: #ffebbc; }
+#codexAccounts strong { display:block; font-size:1.35rem; margin-top:18px; }
+#codexAccounts p { font-size:.86rem; line-height:1.5; overflow-wrap:anywhere; }
+#codexAccounts button { border:1px solid #ffffff28; border-radius:14px; background:#ffffff12; color:#ffebbc; padding:10px 14px; margin:4px 0; }
+#codexAccounts #codexAccountSwitch { width:100%; background:linear-gradient(145deg,#ffe6aa,#e6bd65); color:#241b0b; min-height:48px; margin-top:12px; }
+#codexAccounts button:disabled { opacity:.58; cursor:default; }
+#codexAccounts .account-scope { opacity:.8; }
+#codexAccounts :focus-visible { outline:2px solid #ffe6aa; outline-offset:3px; }
+@media (prefers-reduced-transparency: reduce) { .weekly-usage-dialog,.weekly-usage-header { background:#242020; backdrop-filter:none; -webkit-backdrop-filter:none; } }

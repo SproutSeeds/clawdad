@@ -14,8 +14,8 @@ final class MacAssistantBridge {
   private var loop: Task<Void, Never>?
   var diagnosticStep: ((String) -> Void)?
   private var inventoryRequested = false
-  private var accountInventoryRequest: String?
-  private var accountInventory: (id:String, value:AssistantValue)?
+  private var accountProcessRequest: String?
+  private var accountProcesses: (id:String, value:AssistantValue)?
   private var accountProfileRequest: (id:String,home:String)?
   private var accountProfileObservation: (id:String,value:AssistantValue)?
   private var pendingBindings: [AssistantValue] = []
@@ -37,24 +37,6 @@ final class MacAssistantBridge {
   private let workerId = UUID().uuidString
   private let interaction = MacAssistantInteractionGate.shared
   private let nativeInput = MacAssistantTerminalInput()
-  private lazy var accountWindow:MacCodexAccountWindow = {
-    let native=MacCodexAccountWindow(runtime:runtime,root:root.deletingLastPathComponent().appendingPathComponent("Accounts/WindowSwitches"))
-    native.retainedDraft={ [weak self] binding,identity,foreground,screen,generation in
-      self?.draftProvenance.text(context:.init(input:identity,process:binding.instanceId,session:binding.conversation?.sessionId,
-        foreground:foreground.identity,generation:generation),screen:screen)
-    }
-    native.diagnosticStep={ [weak self] step in self?.diagnosticStep?("account-window:"+step) }
-    return native
-  }()
-  private lazy var accountControl:MacCodexAccountNative = {
-    let native=MacCodexAccountNative(root:root.deletingLastPathComponent().appendingPathComponent("Accounts/NativeRecovery",isDirectory:true))
-    native.retainedDraft={ [weak self] binding,identity,foreground,screen,generation in
-      self?.draftProvenance.text(context:.init(input:identity,process:binding.instanceId,session:binding.conversation?.sessionId,
-        foreground:foreground.identity,generation:generation),screen:screen)
-    }
-    native.diagnosticStep={ [weak self] step in self?.diagnosticStep?("account:"+step) }
-    return native
-  }()
   private lazy var mainWorkspace:MainTerminalWorkspace = {
     let native=MacMainWorkspaceNative(runtime:runtime)
     native.retainedDraft={ [weak self] binding,identity,foreground,screen,generation in
@@ -86,7 +68,7 @@ final class MacAssistantBridge {
           var observation: [String: AssistantValue] = ["workerId": .string(workerId)]
           // Account requests have bounded deadlines. Do not put the same slow
           // workspace/history sweep in front of their own exact inspection.
-          let accountInspectionPending=accountInventoryRequest != nil || accountProfileRequest != nil
+          let accountInspectionPending=accountProcessRequest != nil || accountProfileRequest != nil
           if observeWorkspaces && !accountInspectionPending { await mainWorkspace.automaticSnapshot() }
           if inventoryRequested && !accountInspectionPending {
             diagnosticStep?("activity")
@@ -98,62 +80,18 @@ final class MacAssistantBridge {
               observation["catalogError"] = .string(error.localizedDescription)
             }
           }
-          if let request=accountInventoryRequest {
-            if accountInventory?.id != request {
-              let started=Date()
-              let heartbeat=Task { [runtime] in
-                while !Task.isCancelled {
-                  _=try? await runtime.json("/v1/assistant/native/heartbeat",[:])
-                  try? await Task.sleep(for:.seconds(2))
-                }
-              }
-              defer { heartbeat.cancel() }
-              var entries:[AssistantValue]=[],complete=true,reasonCode:String?
-              do {
-                let catalog=try await tabs.catalog()
-                observation["catalog"] = try .encode(catalog)
-                for tab in try await tabs.assistantAccountShells() {
-                  do {
-                    var fields=try await Task.detached { try MacCodexAccountProcess.inspect(tty:tab.tty,reader:MacCodexAccountProcess.ownerReader(tty:tab.tty)) }.value
-                    if let id=tabs.assistantIdentifier(tty:tab.tty),let native=tabs.assistantSnapshot(tabID:id) {
-                      fields["tabId"] = .string(id)
-                      fields["windowId"] = .string("terminal-window-\(native.groupID)")
-                      fields["title"] = .string(catalog.tabs.first{$0.id==id}?.title ?? "Terminal agent")
-                      fields["position"] = .number(Double(native.position))
-                    } else {
-                      fields["title"] = .string(fields["directory"]?.string.map{URL(fileURLWithPath:$0).lastPathComponent} ?? "Terminal agent")
-                    }
-                    entries.append(.object(fields))
-                  } catch let error as MacCodexInputFailure where error.code=="no_codex_process" {
-                    // Shell-only tabs need no authentication transition.
-                  } catch {
-                    complete=false
-                    entries.append(.object(["tty":.string(tab.tty),
-                      "reasonCode":.string((error as? MacCodexInputFailure)?.code ?? "process_inspection_failed")]))
-                  }
-                }
-              } catch { complete=false;reasonCode=(error as? MacTerminalTabFailure)?.code ?? "terminal_catalog_unavailable" }
-              var inventory:[String:AssistantValue]=["id":.string(request),"complete":.bool(complete),"consumers":.array(entries)]
-              do {
-                inventory["windows"] = try .encode(await accountWindow.native.windowChoices(observations:[]))
-              } catch { inventory["complete"] = .bool(false) }
-              if let reasonCode {
-                inventory["reasonCode"] = .string(reasonCode)
-                inventory["reason"] = .string("Terminal inventory needs attention (\(reasonCode)). Existing windows and work were preserved.")
-              }
+          if let request=accountProcessRequest {
+            if accountProcesses?.id != request {
+              var value:[String:AssistantValue] = ["id":.string(request)]
               do {
                 let owners=try await Task.detached {try MacCodexAccountActivity.allOwners()}.value
-                inventory["processes"] = owners["processes"]
-                inventory["processesObservedAt"] = owners["observedAt"]
-                inventory["processesComplete"] = .bool(true)
-              } catch {
-                inventory["processesComplete"] = .bool(false)
-                inventory["processesReasonCode"] = .string((error as? MacCodexInputFailure)?.code ?? "process_inventory_failed")
-              }
-              inventory["elapsedMs"] = .number(Date().timeIntervalSince(started)*1000)
-              accountInventory=(request,.object(inventory))
+                value["processes"] = owners["processes"]
+                value["processesObservedAt"] = owners["observedAt"]
+                value["processesComplete"] = .bool(true)
+              } catch { value["processesComplete"] = .bool(false) }
+              accountProcesses=(request,.object(value))
             }
-            observation["accountInventory"] = accountInventory?.value
+            observation["accountProcesses"] = accountProcesses?.value
           }
           // History discovery is read-only and never selects a tab or replays input.
           var bindings: [AssistantValue] = []
@@ -199,46 +137,13 @@ final class MacAssistantBridge {
           let next = try await runtime.json("/v1/assistant/native/poll", observation)
           pendingBindings = next["pendingBindings"]?.array ?? []
           inventoryRequested = next["inventoryRequested"]?.bool ?? (next["enabled"]?.bool == true)
-          accountInventoryRequest = next["accountInventoryRequest"]?.string
-          if accountInventoryRequest==nil { accountInventory=nil }
+          accountProcessRequest = next["accountProcessRequest"]?.string
+          if accountProcessRequest==nil { accountProcesses=nil }
           if let request=next["accountProfileRequest"]?.object,let id=request["id"]?.string,let home=request["home"]?.string {
             accountProfileRequest=(id,home)
           } else { accountProfileRequest=nil;accountProfileObservation=nil }
-          if let job=next["accountJob"]?.object,let id=job["id"]?.string,let dispatch=job["dispatchId"]?.string,
-            job["workerId"]?.string==workerId,let action=job["action"]?.string,let args=job["args"]?.object {
-            let envelope:[String:AssistantValue]=["id":.string(id),"workerId":.string(workerId),"dispatchId":.string(dispatch)]
-            var completion=envelope
-            let heartbeat=Task { [runtime] in
-              while !Task.isCancelled {_=try? await runtime.json("/v1/assistant/native/heartbeat",[:]);try? await Task.sleep(for:.seconds(2))}
-            }
-            do {
-              // An unanswered prepare never authorizes repeating an effect.
-              // The durable service mailbox reconciles it after reconnection.
-              _=try await runtime.json("/v1/assistant/native/account-prepare",envelope)
-              diagnosticStep?("account:prepared:"+action)
-              if action.hasPrefix("window.") {
-                completion["result"] = .object(try await accountWindow.execute(action:action,args:args))
-              } else { completion["result"] = .object(try await accountControl.execute(action:action,args:args,requestId:id)) }
-            }catch {
-              diagnosticStep?("account-error-type:"+String(reflecting:type(of:error))+":"+String((error as NSError).code))
-              completion["reasonCode"] = .string((error as? MacCodexInputFailure)?.code ?? "native_account_control_unavailable")
-              // Window adapter messages are local, authored recovery guidance;
-              // OAuth/provider failures never use this projection.
-              if action.hasPrefix("window."),let local=error as? MacAssistantError {
-                completion["message"] = .string(local.localizedDescription)
-              } else if action.hasPrefix("window."),let local=error as? MacCodexInputFailure {
-                completion["message"] = .string(local.message)
-              } else if action.hasPrefix("window."),let local=error as? MacTerminalTabFailure {
-                completion["message"] = .string(local.message)
-              }
-            }
-            heartbeat.cancel()
-            diagnosticStep?("account:result:"+(completion["reasonCode"]?.string ?? "observed"))
-            while !Task.isCancelled {
-              do{_=try await runtime.json("/v1/assistant/native/account-result",completion);break}
-              catch{try? await Task.sleep(for:.seconds(1))}
-            }
-          }
+          // Legacy account jobs have no native dispatcher. Account activation
+          // cannot focus, type into, stop, close or recreate any Terminal tab.
           if let job = next["job"]?.object, let id = job["id"]?.string {
             diagnosticStep?("execute:" + (job["action"]?.string ?? "unknown"))
             let completion: [String: AssistantValue]

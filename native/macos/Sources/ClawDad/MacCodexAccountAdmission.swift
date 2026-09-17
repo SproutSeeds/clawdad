@@ -1,3 +1,5 @@
+// Retired Terminal account controller: retained for historical regression fixtures only.
+#if DEBUG
 import Foundation
 
 /// Read-only protection for legacy native sign-in buttons. They must not
@@ -37,3 +39,5 @@ enum MacCodexAccountAdmission {
     NSError(domain: "ClawDad.CodexAccounts", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
   }
 }
+
+#endif

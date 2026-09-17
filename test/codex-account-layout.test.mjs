@@ -48,12 +48,16 @@ test('concurrent layout requests and restart after a partially applied layout co
   assert.equal((await other.prepare(f.input)).state,'verified');
   assert.equal(await fs.realpath(path.join(f.profileHome,'skills')),path.join(f.canonicalHome,'skills'));
 });
-test('changed canonical files, missing external state and substituted links block launch with recoverable receipts',async t=>{
+test('atomic canonical config replacement remains shared while replaced history and substituted links block launch',async t=>{
   const f=await fixture(t),receipt=await f.layout.prepare(f.input);
   await fs.writeFile(path.join(f.canonicalHome,'replacement'),'model="different"');
   await fs.rename(path.join(f.canonicalHome,'replacement'),path.join(f.canonicalHome,'config.toml'));
-  await assert.rejects(f.layout.verify(receipt),{code:'layout_changed'});
+  await f.layout.verify(receipt);
+  assert.equal(await fs.readFile(path.join(f.profileHome,'config.toml'),'utf8'),'model="different"');
   await assert.rejects(f.layout.prepare(f.input),{code:'layout_changed'});
+  await fs.rename(path.join(f.canonicalHome,'sessions'),path.join(f.canonicalHome,'sessions-old'));
+  await fs.mkdir(path.join(f.canonicalHome,'sessions'),{mode:0o700});
+  await assert.rejects(f.layout.verify(receipt),{code:'layout_changed'});
   const g=await fixture(t),other=await g.layout.prepare(g.input);
   await fs.unlink(path.join(g.profileHome,'sessions'));await fs.symlink(g.root,path.join(g.profileHome,'sessions'));
   await assert.rejects(g.layout.verify(other),{code:'profile_resource_conflict'});

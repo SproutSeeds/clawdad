@@ -2,6 +2,6 @@
 import {installAccountShellLauncher,removeAccountShellLauncher} from '../lib/codex-account-shell-install.mjs';
 try{
   const action=process.argv[2];
-  if(!['--install','--remove'].includes(action))throw Error('Choose --install or --remove explicitly.');
+  if(action!=='--remove')throw Error('Terminal account switching is retired. Only --remove is supported.');
   console.log(JSON.stringify(await (action==='--install'?installAccountShellLauncher():removeAccountShellLauncher())));
 }catch(error){console.error(error.message);process.exitCode=1;}

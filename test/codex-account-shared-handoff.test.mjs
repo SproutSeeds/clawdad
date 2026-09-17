@@ -69,7 +69,8 @@ test('foreign target owner or unexpected thread blocks automatic restoration',as
 test('concurrent requests converge and same account preserves the original server',async t=>{
   const f=await fixture(t);const results=await Promise.all([f.controller().run(f.args),f.controller().run(f.args)]);
   assert.ok(results.every(r=>r.phase==='verified'));assert.equal(f.state.effects.filter(e=>e==='launch').length,1);
-  const g=await fixture(t);g.args.target.accountKey=a;
+  const g=await fixture(t);g.source.authorizationHome='/profile/a';g.state.value.authorizationHome='/profile/a';
+  g.args.target.accountKey=a;g.args.target.authorizationHome=g.source.authorizationHome;
   assert.equal((await g.controller().run(g.args)).alreadySelected,true);assert.deepEqual(g.state.effects,[]);
 });
 test('paused permission prevents the next effect and retained history remains intact',async t=>{
