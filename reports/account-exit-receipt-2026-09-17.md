@@ -45,3 +45,5 @@ Recovery uses the existing user-control endpoints: cancel and verify the undispa
 This lane owns `MainWorkspaceAgentBindings.swift`, its focused tests in `MainTerminalWorkspaceTests.swift`, and this report. Existing native build/storage scripts, release skills/plugin manifest, artwork, cloud/native and marketing-site changes are preserved. Candidate, archive and release artifacts remain in canonical ignored native distribution paths. No CLI publication or infrastructure change is included.
 
 `git diff --check` passed. ORP hygiene remains `dirty_classified`, zero unclassified paths, `safe_to_expand=true`; the nine inherited dirty buckets are preserved.
+
+Recovery acceptance: the original undispatched operation was verified cancelled. At 2026-09-17T06:47:25.582Z, the existing controller accepted `retry-bc137d3f-mac157` for the same Cody account and verified nine-tab window, with `status=checking`, `phase=preflight`. Full capture/authentication/restore completion remains unverified. No polling for completion holds this Terminal turn open.
