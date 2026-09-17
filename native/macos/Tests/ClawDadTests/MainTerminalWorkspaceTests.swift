@@ -448,6 +448,55 @@ import ClawDadRemoteAssistProtocol
     XCTAssertNil(journal.exited(tty:record.tty,lifetime:record.lifetime,screen:screen.replacingOccurrences(of:id,with:UUID().uuidString)))
     XCTAssertNil(journal.exited(tty:record.tty,lifetime:record.lifetime,screen:screen+"\ncommand output\nBackToTheFort> "))
   }
+  func testMultilineCodexExitReceiptRetainsExactThreadAcrossDisplayWrapping() throws {
+    let (_,_,root)=try fixture(),file=root.appendingPathComponent("bindings.json")
+    let id="00000000-0000-4000-8000-000000000001"
+    let record=MainWorkspaceAgentBindings.Record(tty:"/dev/ttys001",lifetime:"original-login",process:"exited-owner",directory:"/actual/project",sessionId:id,path:"/exact/history",executable:"/codex")
+    try MainWorkspaceAgentBindings(file:file).remember(record)
+    // Reopen durable evidence as a new worker would. Never infer project from
+    // the inherited shell directory or the non-authoritative picker title.
+    let journal=MainWorkspaceAgentBindings(file:file)
+    let block="To continue this session, run:\n  codex resume \(id)\nOr run codex resume and select Investigate problem 23 next steps."
+    for width in [18,40,80,180] {
+      let wrapped=block.components(separatedBy:"\n").map { line in
+        stride(from:0,to:line.count,by:width).map { offset in String(line.dropFirst(offset).prefix(width)) }.joined(separator:"\n")
+      }.joined(separator:"\n")
+      let screen="Earlier output\n"+wrapped+"\nBackToTheFort> \n\n"
+      XCTAssertEqual(journal.exited(tty:record.tty,lifetime:record.lifetime,screen:screen),record,"width \(width)")
+      XCTAssertNil(journal.exited(tty:record.tty,lifetime:"reused-tty",screen:screen))
+    }
+    XCTAssertTrue(MainWorkspaceAgentBindings.exitReceipt("To continue this session, run:\n  codex resume \(id)\nBackToTheFort> ",sessionId:id))
+    XCTAssertTrue(MainWorkspaceAgentBindings.exitReceipt("To continue this session, run codex\nresume \(id)\nBackToTheFort> ",sessionId:id))
+    for invalid in [
+      block.replacingOccurrences(of:id,with:UUID().uuidString)+"\nBackToTheFort> ",
+      block+"\nBackToTheFort> echo user-draft",
+      block+"\nBackToTheFort> echo stale\nfinished.\nBackToTheFort> ",
+      block+"\nTo continue this session, run:\n  codex resume \(UUID().uuidString)\nBackToTheFort> ",
+      block+"\nTo continue this session, run:\n  codex resume \(UUID().uuidString)\nOr run codex resume and select Another conversation.\nBackToTheFort> ",
+      "Interrupted without an exit receipt\nBackToTheFort> ",
+      "Or run codex resume and select Investigate problem 23 next steps.\nBackToTheFort> ",
+      "Discussed codex resume \(id)\nBackToTheFort> ",
+      block+"\nUnexpected output\nBackToTheFort> "
+    ] { XCTAssertFalse(MainWorkspaceAgentBindings.exitReceipt(invalid,sessionId:id),invalid) }
+  }
+  func testReportedErdosExitReceiptReadOnly() throws {
+    guard let screenPath=ProcessInfo.processInfo.environment["CLAWDAD_EXIT_RECEIPT_SCREEN"] else { throw XCTSkip("Explicit read-only incident evidence check") }
+    let id="01a06f86-95ab-7ed0-aa7d-650e8cafa58d",tty="/dev/ttys000"
+    let foreground=try MacAssistantForeground.read(tty:tty)
+    XCTAssertEqual(foreground.shell,"zsh")
+    let file=FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/ClawDad/MainTerminalWorkspace/verified-agent-bindings.json")
+    let journal=MainWorkspaceAgentBindings(file:file),lifetime=try MacTerminalTitleMetadata.currentLifetime(tty)
+    let known=try XCTUnwrap(journal.known(tty:tty,lifetime:lifetime))
+    XCTAssertEqual(known.sessionId,id)
+    let screen=try String(contentsOfFile:screenPath,encoding:.utf8)
+    XCTAssertFalse(screen.components(separatedBy:.newlines).contains("To continue this session, run codex resume \(id)"),"The old one-line format is absent in this incident")
+    let recovered=try XCTUnwrap(journal.exited(tty:tty,lifetime:lifetime,screen:screen))
+    XCTAssertEqual(recovered.sessionId,id)
+    XCTAssertEqual(recovered.directory,"/Volumes/Code_2TB/code/erdos-problems")
+    let conversation=try XCTUnwrap(MacCodexConversation.load(path:URL(fileURLWithPath:recovered.path),sessionRoot:MacTerminalResponseReader().sessionRoot))
+    XCTAssertEqual(conversation.sessionId,id)
+    XCTAssertEqual(try MacAssistantForeground.read(tty:tty),foreground)
+  }
   func testInterruptedAtomicSavePreservesLastCompleteVersionAndSameIDCanRetry() async throws {
     let (store,native,root)=try fixture();try await save(store);let before=try store.read()
     native.live.removeLast()

@@ -37,8 +37,26 @@ final class MainWorkspaceAgentBindings {
       let draft=MacAssistantShellDraft.read(screen),draft.text.isEmpty else { return false }
     let lines=screen.components(separatedBy:.newlines).filter{!$0.trimmingCharacters(in:.whitespaces).isEmpty}
     guard lines.count>=2 else { return false }
-    // Match the final CLI exit instruction immediately before the empty prompt,
-    // not a mentioned UUID, title, old command or an arbitrary same-directory file.
-    return lines[lines.count-2].trimmingCharacters(in:.whitespaces)=="To continue this session, run codex resume \(sessionId)"
+    // Match a complete final native exit block, including Codex's multiline
+    // command and optional named-picker hint. Display wrapping may split words
+    // or the UUID. The exact UUID remains mandatory; a title is never identity.
+    // The bounded suffix must end at this empty shell prompt, with no intervening
+    // shell prompt/command that could turn an older exit into current evidence.
+    let body=Array(lines.dropLast().suffix(32))
+    let legacy="Tocontinuethissession,runcodexresume\(sessionId)"
+    let command="Tocontinuethissession,run:codexresume\(sessionId)"
+    let picker="Orruncodexresumeandselect"
+    for start in body.indices {
+      let block=body[start...]
+      guard !block.contains(where:{MacAssistantShellDraft.read($0) != nil}) else { continue }
+      let compact=block.joined().filter{!$0.isWhitespace}
+      if compact==legacy || compact==command { return true }
+      if compact.hasPrefix(command+picker) {
+        let title=compact.dropFirst(command.count+picker.count)
+        if title.count>1 && title.last==".", !title.contains("Tocontinuethissession,run"),
+          !title.contains(picker) { return true }
+      }
+    }
+    return false
   }
 }
