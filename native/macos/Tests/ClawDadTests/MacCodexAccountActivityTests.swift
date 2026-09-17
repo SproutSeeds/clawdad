@@ -58,6 +58,28 @@ final class MacCodexAccountActivityTests:XCTestCase {
     for invalid in ["unreadable",row("10")+"\n"+row("10")] {XCTAssertThrowsError(try MacCodexAccountActivity.rows(invalid))}
     XCTAssertThrowsError(try MacCodexAccountActivity.inspect(home:"relative"))
   }
+  func testBareCommandUsesExactRunningExecutableAndPreservesLifetimeDigest() throws {
+    let table=row("10","codex"),binary="/fixture/versions/0.154.0/codex"
+    let result=try MacCodexAccountActivity.allOwners(run:{_,_ in table},read:{_ in
+      .init(arguments:["codex","app-server","--listen","unix://"],home:"/fixture/user",alternateAuthentication:false)
+    },executablePath:{pid in XCTAssertEqual(pid,"10");return binary})
+    let owner=try XCTUnwrap(result["processes"]?.array?.first?.object)
+    XCTAssertEqual(owner["executable"]?.string,binary)
+    XCTAssertEqual(owner["processLifetime"]?.string,try MacCodexAccountActivity.rows(table).first?.identity)
+    XCTAssertEqual(owner["serverOptions"]?.array,[]);XCTAssertNil(owner["reasonCode"])
+  }
+  func testMissingOrChangingExecutableCannotAuthorizeRestart() throws {
+    for mode in 0..<3 {
+      var reads=0
+      let result=try MacCodexAccountActivity.allOwners(run:{_,_ in self.row("10","codex")},read:{_ in
+        .init(arguments:["codex","app-server","--listen","unix://"],home:"/fixture/user",alternateAuthentication:false)
+      },executablePath:{_ in
+        reads += 1
+        return mode==0 ? nil : mode==1 ? "codex" : reads==1 ? "/version/one/codex":"/version/two/codex"
+      })
+      XCTAssertEqual(result["processes"]?.array?.first?.object?["reasonCode"]?.string,"server_executable_unavailable")
+    }
+  }
   func testLiveActivityIsReadOnlyAndNeverChangesAccountState() throws {
     guard ProcessInfo.processInfo.environment["CLAWDAD_ACCOUNT_READONLY_LIVE"]=="1" else {throw XCTSkip("Explicit read-only account activity census")}
     let home=FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex").path

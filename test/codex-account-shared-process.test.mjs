@@ -62,3 +62,29 @@ test('a lost launch observation reconciles the exact operation marker without re
   assert.equal(await next.verifyOwnership({...args,observed:{...observed,accountLaunchRequestId:'c'.repeat(64)}}),false);
   await assert.rejects(next.launch(args),{code:'shared_launch_uncertain'});assert.equal(f.calls.filter(c=>c.launch).length,1);
 });
+test('bare ps command retains its lifetime while exact native executable drives recreation',async t=>{
+  const f=await fixture(t),live=f.getLive();
+  live.text=live.text.replace('/fixture/codex','codex');
+  live.processLifetime=createHash('sha256').update(live.text.split(' ').join('\0')).digest('hex');
+  live.executable='/fixture/versions/0.154.0/codex';f.setLive(live);
+  const source=await f.driver.observe();
+  assert.equal(source.processIdentity,await f.driver.exactDigest(source.pid));
+  await f.driver.stopIdle({operationId:f.operationId,source});
+  // The spawn fixture represents the newly created PID's native executable.
+  const spawn=f.options.spawnProcess;f.driver.spawnProcess=(binary,args,opts)=>{
+    const result=spawn(binary,args,opts);f.getLive().executable=binary;return result;
+  };
+  await f.driver.launch({operationId:f.operationId,requestId:f.requestId,source,target:f.target});
+  assert.equal(f.calls.find(c=>c.launch).launch,'/fixture/versions/0.154.0/codex');
+});
+test('launch validation identifies the failed predicate and never stops an uncertain owner',async t=>{
+  const f=await fixture(t),original={...f.getLive()};
+  for(const [field,value,code] of [
+    ['executable','codex','shared_executable_unverified'],['authorizationHome',null,'shared_home_unverified'],
+    ['processLifetime',null,'shared_lifetime_unverified'],['serverOptions',null,'shared_options_unverified'],
+    ['alternateAuthentication',true,'shared_authentication_route_unverified'],['kind','exec','shared_process_kind_unverified'],
+    ['reasonCode','server_executable_unavailable','shared_native_launch_unverified']]){
+    f.setLive({...original,[field]:value});await assert.rejects(f.driver.observe(),{code});
+  }
+  assert.equal(f.calls.filter(c=>c.signal||c.launch).length,0);
+});

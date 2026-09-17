@@ -59,6 +59,25 @@ test('transient identity reads retry boundedly and short polling reuses only the
   clock+=5001;failures=10;await assert.rejects(f.driver.account(f.client),{code:'shared_account_read_unavailable'});assert.equal(reads,6);
   assert.equal(f.state.calls.some(c=>c.method==='account/login/start'),false);
 });
+test('revoked source authentication permits only an explicitly held, verified empty original server',async t=>{
+  const f=await fixture(t),request=f.client.request.bind(f.client);let accountReads=0;
+  f.owner.executable='/verified/codex';f.owner.serverOptions=[];
+  f.client.request=async(method,args)=>{if(method==='account/rateLimits/read'){accountReads++;throw Error('401 Unauthorized token_revoked');}return request(method,args);};
+  await assert.rejects(f.driver.observe({operationId:'switch',capture:true}),{code:'shared_authentication_expired'});
+  f.state.loaded=[];
+  await assert.rejects(f.driver.observe({operationId:'switch'}),{code:'shared_authentication_expired'});
+  f.state.permitted=false;
+  await assert.rejects(f.driver.observe({operationId:'switch',capture:true}),/Paused/);
+  f.state.permitted=true;
+  const source=await f.driver.observe({operationId:'switch',capture:true});
+  assert.equal(source.accountKey,null);assert.equal(source.accountVerified,false);assert.equal(source.emptySourceAccountUnavailable,true);
+  assert.deepEqual(source.threads,[]);
+  assert.equal((await f.driver.observe({operationId:'switch',source})).emptySourceAccountUnavailable,true);
+  f.owner.pid=456;f.owner.processIdentity='destination';
+  await assert.rejects(f.driver.observe({operationId:'switch',source}),{code:'shared_authentication_expired'});
+  assert.equal(accountReads,6,'Revoked tokens are not pointlessly retried');
+  assert.equal(f.state.calls.some(c=>/login|turn\/|thread\/resume|thread\/unsubscribe/.test(c.method)),false);
+});
 test('supported RPC capture verifies complete history/account/settings, keeps unsubscribe separate from release',async t=>{
   const f=await fixture(t);const source=await f.driver.observe({operationId:'switch',capture:true});
   assert.equal(source.threads.length,1);assert.equal(source.threads[0].busy,false);assert.equal(source.accountVerified,true);

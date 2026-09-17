@@ -15,6 +15,7 @@ import {readAccountOwners} from '../../lib/codex-account-owner-scope.mjs';
 import {researchSave} from '../../lib/research-budget.mjs';
 
 const name=process.argv[2];
+const pathLaunch=process.argv[4]==='--path-launch';
 let resuming=process.argv[3]==='--resume-approved-two-account-fixture';
 if(!['--approved-two-account-fixture','--resume-approved-two-account-fixture'].includes(process.argv[3])||!/^shared-process-[a-z0-9-]+$/.test(name||''))throw Error('Use an explicitly approved shared-process-* fixture');
 const base=path.join(os.homedir(),'Library/Application Support/ClawDad/Accounts/verification-2026-09-15'),fixture=path.join(base,'thread-continuity-1');
@@ -64,8 +65,8 @@ try{
   if(!resuming){
   const launch=selectedCodexLaunch({verified:true,layoutVerified:true,method:'chatgpt',accountId:'fixture',operationId:activeOperation,...target('cody')});
   const log=await fs.open(path.join(root,'initial-server.log'),'wx',0o600);
-  const child=spawn('/opt/homebrew/bin/codex',withCodexAccountLaunch(['app-server','--listen','unix://'+socketPath],launch),
-    {cwd:fixture,env:launch.env,stdio:['ignore',log.fd,log.fd]});await log.close();child.on('error',()=>{});
+  const child=spawn(pathLaunch?'codex':'/opt/homebrew/bin/codex',withCodexAccountLaunch(['app-server','--listen','unix://'+socketPath],launch),
+    {cwd:fixture,env:{...launch.env,PATH:'/opt/homebrew/bin:'+process.env.PATH},stdio:['ignore',log.fd,log.fd]});await log.close();child.on('error',()=>{});
   evidence.initialPID=child.pid;await save();
   for(let n=0;n<200;n++){if(await fs.stat(socketPath).catch(()=>null))break;await sleep(50);}
   const client=new CodexSharedClient({socketPath});
@@ -74,6 +75,7 @@ try{
   }
   for(const profile of ['sun','cody'].slice(evidence.transitions.length)){
     activeOperation=name+'-'+profile;const source=resuming?previous.source:await driver.observe({operationId:activeOperation,capture:true});resuming=false;
+    if(pathLaunch&&source.executable!==await fs.realpath('/opt/homebrew/bin/codex'))throw Error('The exact PATH-launched executable was not preserved');
     if(source.threads.length!==1||source.threads[0].id!==thread)throw Error('Loaded synthetic identity differs');
     evidence.baseline||=hash(source.threads);if(hash(source.threads)!==evidence.baseline)throw Error('Synthetic history/settings/draft changed');
     evidence.source=source;await save();let result;const started=Date.now();

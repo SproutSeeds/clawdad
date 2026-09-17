@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {CodexAccountSharedHandoff} from '../lib/codex-account-shared-handoff.mjs';
+import {CodexAccountSharedHandoff,validateSharedAccountCapture} from '../lib/codex-account-shared-handoff.mjs';
 
 const a='a'.repeat(64),b='b'.repeat(64),h='c'.repeat(64);
 async function fixture(t){
@@ -75,4 +75,18 @@ test('concurrent requests converge and same account preserves the original serve
 test('paused permission prevents the next effect and retained history remains intact',async t=>{
   const f=await fixture(t);f.state.allow=false;await assert.rejects(f.controller().run(f.args),/Paused/);
   assert.deepEqual(f.state.effects,[]);assert.deepEqual(f.state.value.threads,f.source.threads);
+});
+test('expired empty source restarts exactly once and still requires a verified destination',async t=>{
+  const f=await fixture(t);
+  Object.assign(f.source,{threads:[],accountKey:null,accountVerified:false,emptySourceAccountUnavailable:true,
+    executable:'/verified/codex',authorizationHome:'/original',serverOptions:[]});
+  f.state.value=structuredClone(f.source);
+  const launch=f.driver.launch;f.driver.launch=async args=>{const r=await launch(args);f.state.value.accountVerified=true;delete f.state.value.emptySourceAccountUnavailable;return r;};
+  assert.equal((await f.controller().run(f.args)).phase,'verified');
+  await f.controller().run(f.args);assert.deepEqual(f.state.effects,['stop','launch']);
+  for(const change of [s=>s.threads=[{id:'unverified-thread'}],s=>s.accountKey=a,s=>s.executable='codex',s=>s.dispatchHeld=false]){
+    const bad=structuredClone(f.source);change(bad);assert.throws(()=>validateSharedAccountCapture(bad));
+  }
+  f.state.value.accountVerified=false;
+  await assert.rejects(f.controller().run(f.args),{code:'shared_account_completed_changed'});
 });

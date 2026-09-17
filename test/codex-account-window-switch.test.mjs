@@ -94,6 +94,23 @@ test('busy work stops promptly; explicit retry captures once, authenticates befo
   await f.request();await f.accounts.advance();assert.equal(f.nativeActions.length,3);
   assert.equal((await readAccountWindow(f.root,'window-switch')).entries.length,2);
 });
+test('window switch retains an exact empty expired shared source without claiming its account is verified',async t=>{
+  const f=await fixture(t,{count:9,draftPolicy:'retainOnly',draftText:null}),inventory=f.adapter.inventory;
+  const source={kind:'server',pid:88,processIdentity:'shared-life',socketPath:'/private/shared.sock',
+    authorizationHome:'/old',executable:'/verified/codex',serverOptions:[],threads:[],inventoryComplete:true,dispatchHeld:true,
+    accountKey:null,accountVerified:false,emptySourceAccountUnavailable:true};
+  f.adapter.inventory=async()=>{const v=await inventory();v.consumers.push({id:'shared',kind:'shared_app_server',pid:88,
+    processIdentity:source.processIdentity,busy:false,pendingReceipts:[],reason:''});return v;};
+  f.adapter.sharedDriver={observe:async()=>structuredClone(source)};
+  f.adapter.shared={run:async({source:s,target})=>{assert.equal(s.emptySourceAccountUnavailable,true);assert.equal(s.accountKey,null);assert.ok(target.accountKey);return {phase:'verified'};}};
+  await f.request();await f.accounts.advance();
+  const op=(await f.accounts.snapshot()).activeOperation;
+  assert.equal(op.status,'completed',op.reason);
+  const retained=op.recovery.entries.find(e=>e.id==='shared').shared;
+  assert.equal(retained.accountVerified,false);assert.equal(retained.emptySourceAccountUnavailable,true);assert.deepEqual(retained.threads,[]);
+  assert.deepEqual(f.effects,['authenticate','close-and-recreate']);
+  await f.accounts.advance();assert.deepEqual(f.effects,['authenticate','close-and-recreate']);
+});
 test('cold tab without cached UI identity is captured and matched by exact live TTY/process/session; no other window is touched',async t=>{
   const f=await fixture(t,{cold:true});await f.request();await f.accounts.advance();
   const op=(await f.accounts.snapshot()).activeOperation;

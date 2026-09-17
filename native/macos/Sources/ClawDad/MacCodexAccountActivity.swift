@@ -55,6 +55,7 @@ struct MacCodexAccountActivity {
   /// transient in the process reader.
   static func allOwners(run:(String,[String]) throws->String=macTerminalResponseCommand,
     read:(String)->MacCodexAccountProcess.Facts?=MacCodexAccountProcess.readFacts,
+    executablePath:(String)->String?=runningExecutable,
     now:()->Date=Date.init) throws->[String:AssistantValue] {
     func snapshot() throws->[ProcessRow] {try rows(run("/bin/ps",["-axo","pid=,uid=,lstart=,comm="]))}
     let before=try snapshot();var entries:[AssistantValue]=[]
@@ -66,6 +67,13 @@ struct MacCodexAccountActivity {
         entry["kind"] = .string("app_server")
         do {entry["serverOptions"] = .array(try serverOptions(facts.arguments,managed:facts.accountTransitionId != nil).map(AssistantValue.string))}
         catch let error as MacCodexInputFailure {entry["reasonCode"] = .string(error.code)}
+        // ps comm can be only "codex" for a PATH-launched server. Keep that
+        // original column in the lifetime digest, but obtain the executable
+        // for recreation from this exact live PID, never a current PATH lookup.
+        if let executable=executablePath(process.pid),executable.hasPrefix("/"),
+          executablePath(process.pid)==executable {
+          entry["executable"] = .string(executable)
+        } else {entry["reasonCode"] = .string("server_executable_unavailable")}
       } else {entry["kind"] = .string(facts.arguments.contains("exec") ? "exec":"codex")}
       entry["accountTransitionId"] = facts.accountTransitionId.map(AssistantValue.string) ?? .null
       entry["accountLaunchRequestId"] = facts.accountLaunchRequestId.map(AssistantValue.string) ?? .null
@@ -73,6 +81,16 @@ struct MacCodexAccountActivity {
     }
     guard try snapshot()==before else{throw failure("process_inventory_changed")}
     return ["complete":.bool(true),"processes":.array(entries),"observedAt":.number(now().timeIntervalSince1970*1000)]
+  }
+  static func runningExecutable(_ pid:String)->String? {
+    guard let process=Int32(pid),process>0 else{return nil}
+    var buffer=[CChar](repeating:0,count:4096)
+    let count=buffer.withUnsafeMutableBytes{proc_pidpath(process,$0.baseAddress,UInt32($0.count))}
+    guard count>0,count<buffer.count else{return nil}
+    let executable=String(cString:buffer)
+    guard executable.hasPrefix("/"),!executable.unicodeScalars.contains(where:CharacterSet.controlCharacters.contains),
+      FileManager.default.isExecutableFile(atPath:executable) else{return nil}
+    return executable
   }
   static func serverOptions(_ arguments:[String],managed:Bool) throws->[String] {
     guard arguments.count>1 else{throw failure("server_arguments_unavailable")}
