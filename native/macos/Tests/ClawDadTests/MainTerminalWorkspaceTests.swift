@@ -235,6 +235,17 @@ import ClawDadRemoteAssistProtocol
     XCTAssertEqual(try store.read().roster.entries.count,2);XCTAssertEqual(try store.read().previous.last?.entries.count,3)
     XCTAssertEqual(native.creates,0)
   }
+  func testColdExistingTabsAreNotCountedAsNewCreations() throws {
+    let (_,native,_)=try fixture(),original=native.live[0]
+    var cold=original;cold.tty="cold-existing-tty";cold.tabId="cold-id";cold.owner="cold-owner"
+    var new=original;new.tty="new-tty";new.owner="new-owner";new.tabId="new-id";new.name="ClawDad Restore cold-fixture"
+    let prior:Set<String>=[original.tty,cold.tty],physical=prior.union([new.tty])
+    XCTAssertThrowsError(try MacMainWorkspaceNative.verifiedCreation(before:[original],after:[original,cold,new],tty:new.tty,marker:new.name,anchor:nil))
+    XCTAssertEqual(try MacMainWorkspaceNative.verifiedCreation(before:[original],after:[original,cold,new],tty:new.tty,marker:new.name,anchor:nil,existingTTYs:prior,observedTTYs:physical),new)
+    XCTAssertEqual(try MacMainWorkspaceNative.verifiedCreation(before:[original],after:[original,new],tty:new.tty,marker:new.name,anchor:nil,existingTTYs:prior,observedTTYs:physical),new)
+    XCTAssertThrowsError(try MacMainWorkspaceNative.verifiedCreation(before:[original],after:[original,new],tty:new.tty,marker:new.name,anchor:nil,existingTTYs:prior,observedTTYs:physical.union(["unexpected-new-tty"])))
+    XCTAssertThrowsError(try MacMainWorkspaceNative.verifiedCreation(before:[original],after:[original,new],tty:new.tty,marker:new.name,anchor:nil,existingTTYs:prior,observedTTYs:[new.tty]))
+  }
   func testUnavailableDirectoryWaitsThenSafeRetryRestoresOnlyMissing() async throws {
     let (store,native,_)=try fixture();try await save(store);native.live=[];native.missing=["/same"]
     let waiting=try await restore(store,"missing");XCTAssertEqual(waiting["status"]?.string,"waiting");XCTAssertEqual(native.creates,1)

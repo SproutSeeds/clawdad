@@ -23,7 +23,7 @@ import ClawDadRemoteAssistProtocol
       }
       guard let path=binding.conversation?.path else { throw MacAssistantError("This fresh agent has no saved conversation yet.") }
       var activity=MacCodexRequestActivityLog()
-      guard try !activity.read(path) else { throw MacAssistantError("This agent is still working. The switch will wait for completion, exhaustion or interruption to settle.") }
+      guard try !activity.read(path) else { throw MacAssistantError("This agent is still working. Switch stopped; finish or explicitly stop its work, then check recovery.") }
     }
   }
   private func permit(_ id:String) async throws {

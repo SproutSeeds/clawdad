@@ -15,13 +15,19 @@ import {CodexManagedLogin} from '../../lib/codex-managed-login.mjs';
 import {CodexSharedClient,codexProcessOwners} from '../../lib/codex-thread-control.mjs';
 import {readAccountWindow} from '../../lib/codex-account-window-switch.mjs';
 import {researchSave} from '../../lib/research-budget.mjs';
+import {CodexAccounts} from '../../lib/codex-accounts.mjs';
+import {CodexAccountSwitchAdapter} from '../../lib/codex-account-switch-adapter.mjs';
+import {inspectManagedAccountConsumers} from '../../lib/codex-account-consumers.mjs';
+import {readAccountSharedSummary} from '../../lib/codex-account-switch-runtime.mjs';
 
 const name=process.argv[2],run=promisify(execFile);
 if(!/^window-[a-z0-9-]+$/.test(name||'')||process.argv[3]!=='--approved-two-account-fixture')throw Error('Explicit new disposable window fixture required');
 const base=path.join(os.homedir(),'Library/Application Support/ClawDad/Accounts/verification-2026-09-15');
 const fixture=path.join(base,'thread-continuity-1'),project=path.join(fixture,'project'),thread='01a0a848-cb86-7033-ae6f-ce006f5b51bb';
 const root='/private/tmp/clawdad-terminal-coverage-account-'+name,accountRoot=path.join(root,'Accounts');
-const continuing=process.argv[4]==='--continue-restore';
+const controllerRecovery=process.argv[4]==='--controller-recover';
+const continuing=process.argv[4]==='--continue-restore'||controllerRecovery;
+const controller=process.argv[4]==='--controller'||controllerRecovery;
 const reconcile=process.argv[4]==='--reconcile-existing'||continuing;
 const attempt=Number(process.argv[5]||1);if(!Number.isInteger(attempt)||attempt<1||attempt>12)throw Error('Invalid reconciliation attempt');
 const prior=reconcile?JSON.parse(await fs.readFile(path.join(root,'evidence.json'),'utf8')):null;
@@ -35,7 +41,11 @@ const evidence={name,root,thread,startedAt:new Date().toISOString(),state:'prefl
 const write=()=>researchSave(path.join(root,'evidence.json'),evidence);
 const q=s=>"'"+s.replaceAll("'","'\\''")+"'",a=s=>JSON.stringify(s),apple=async s=>(await run('/usr/bin/osascript',['-e',s],{timeout:30000})).stdout.trim();
 const existing=(await codexProcessOwners()).filter(o=>o.threads.includes(thread));
-if(existing.length&&(!reconcile||existing.length!==1||'/dev/'+existing[0].tty!==prior.originalTTY))throw Error('Disposable thread already has another owner; preserve it');
+const resumedState=controllerRecovery?JSON.parse(await fs.readFile(path.join(accountRoot,'switch-state.json'),'utf8')):null;
+const resumeOperation=resumedState?.operations[resumedState.activeOperationId];
+const resumeRecord=controllerRecovery?await readAccountWindow(accountRoot,resumeOperation.id):null;
+const expectedTTY=resumeRecord?.progress?.[resumeRecord.entries[0].id]?.binding?.tty||prior?.originalTTY;
+if(existing.length&&(!reconcile||existing.length!==1||'/dev/'+existing[0].tty!==expectedTTY))throw Error('Disposable thread already has another owner; preserve it');
 const find=async dir=>{for(const e of await fs.readdir(dir,{withFileTypes:true})){const p=path.join(dir,e.name);if(e.isDirectory()){const v=await find(p);if(v)return v;}else if(e.name.endsWith(thread+'.jsonl'))return p;}};
 const history=await find(path.join(fixture,'sessions'));if(!history)throw Error('Original synthetic history unavailable');
 const historyHash=async()=>{const h=createHash('sha256');for(const line of (await fs.readFile(history,'utf8')).split('\n').filter(Boolean)){
@@ -53,12 +63,49 @@ evidence.accounts=Object.entries(accounts).map(([profile,v])=>({profile,email:v.
 const runtime=new AssistantRuntime({root:path.join(root,'Assistant'),coordinator:{run(){throw Error('No model work in fixture');},stop(){}}});
 await runtime.load();const shared=new CodexSharedClient();runtime.appServer={client:shared,readOwners:codexProcessOwners,close:async()=>shared.close()};
 let operation,tty,worker,server;
-const adapter={root:accountRoot,windows:{},permit:async({operationId})=>{if(operation?.id!==operationId)throw Error('Only the exact disposable operation is allowed');return operation;}};
+let adapter={root:accountRoot,windows:{},permit:async({operationId})=>{if(operation?.id!==operationId)throw Error('Only the exact disposable operation is allowed');return operation;}};
 runtime.accounts={adapter,admission:async()=>({allowed:true}),deliveryAdmission:async()=>({allowed:true})};
-const transport=new CodexAccountNativeTransport({root:path.join(accountRoot,'NativeTransport'),authorize:async r=>
+let transport=new CodexAccountNativeTransport({root:path.join(accountRoot,'NativeTransport'),authorize:async r=>
   r.operationId===operation?.id&&(['window.capture','window.restore','window.verify'].includes(r.action)||['observe','stop'].includes(r.action)&&r.args.source?.tty===tty)});
 runtime.accountNativeControl=transport;
-const driver=new CodexAccountNativeDriver({transport,identities:[],permit:async()=>{},waitMs:300000});
+let driver=new CodexAccountNativeDriver({transport,identities:[],permit:async()=>{},waitMs:300000});
+const profileEntries={};let selectedProfile,verifiedAccount=accounts.cody.accountKey;
+if(controller){
+  runtime.accounts=new CodexAccounts({root:accountRoot,usage:{snapshot:async()=>({accountKey:verifiedAccount}),freshReading:async()=>({accountKey:verifiedAccount})}});
+  for(const profile of ['cody','sun']){
+    const state=await runtime.accounts.snapshot();
+    profileEntries[profile]=state.accounts.find(a=>a.email===accounts[profile].subscription.email)||(await runtime.accounts.add({email:accounts[profile].subscription.email,requestId:'add-'+profile,expectedRevision:state.revision})).account;
+  }
+  const identity=async profile=>{
+    const p=new CodexAccountProfileProcess({home:path.join(base,profile),binary:'/opt/homebrew/bin/codex'});
+    try{await p.connect();const v=await new CodexManagedLogin({rpc:(...args)=>p.request(...args)}).identity(accounts[profile].subscription.email);
+      if(v.accountKey!==accounts[profile].accountKey)throw Error('Disposable retained account changed');return v;
+    }finally{p.close();}
+  };
+  const target=()=>({authorizationHome:path.join(base,selectedProfile),sqliteHome:path.join(fixture,'index'),accountKey:accounts[selectedProfile].accountKey});
+  adapter=new CodexAccountSwitchAdapter({root:accountRoot,accounts:runtime.accounts,runtime,windowRebuild:true,
+    inventory:async()=>{
+      const v=await inspectManagedAccountConsumers(runtime,{readShared:owner=>readAccountSharedSummary(undefined,owner)});
+      // The live shared service is read-only evidence and explicitly outside
+      // this disposable window test. Production shared transitions have their
+      // separate RPC/process fixtures; never restart Cody's service here.
+      return {...v,consumers:v.consumers.filter(c=>c.kind!=='shared_app_server').map(c=>c.tty===tty?{...c,tabId:null,windowId:null}:c)};
+    },profiles:{identities:async()=>[],prepare:async({target:account})=>{
+      selectedProfile=['cody','sun'].find(p=>profileEntries[p].id===account.id);await identity(selectedProfile);
+      return {state:'verified',method:'chatgpt',email:account.email,accountKey:accounts[selectedProfile].accountKey,workspaceVerified:true};
+    },target:async()=>target(),verify:async()=>{await identity(selectedProfile);verifiedAccount=accounts[selectedProfile].accountKey;return {...target(),freshUsage:true};}},
+    sharedDriver:{},verifyPending:async()=>true});
+  adapter.capabilities.selectedRuntimeRouting=false;
+  runtime.accounts.adapter=adapter;runtime.accounts.inspectConsumers=args=>adapter.inspect(args);
+  transport=adapter.transport;driver=adapter.native;runtime.accountNativeControl=transport;
+  evidence.productionController=true;evidence.injectedColdBinding=true;
+  if(controllerRecovery){
+    const active=(await runtime.accounts.snapshot()).activeOperation;
+    selectedProfile=['cody','sun'].find(p=>profileEntries[p].id===active.targetId);
+    if(!resumeRecord||resumeRecord.entries.length!==1||resumeRecord.entries[0].sessionId!==thread||resumeRecord.entries[0].directory!==project
+      ||active.id!==name+'-'+selectedProfile||active.phase!=='transition')throw Error('Exact disposable controller recovery required');
+  }
+}
 const token=randomUUID();const json=(r,c,v)=>{r.writeHead(c,{'Content-Type':'application/json'});r.end(JSON.stringify(v));};
 server=http.createServer(async(req,res)=>{
   void fs.appendFile(path.join(root,'http-stages.jsonl'),JSON.stringify({at:new Date().toISOString(),path:req.url})+'\n',{mode:0o600});
@@ -69,7 +116,7 @@ server=http.createServer(async(req,res)=>{
 await new Promise(r=>server.listen(0,'127.0.0.1',r));await researchSave(path.join(root,'connection.json'),{baseURL:'http://127.0.0.1:'+server.address().port});await fs.writeFile(path.join(root,'native-server.token'),token,{mode:0o600});
 try{
   const command=`unset HISTFILE; cd -- ${q(project)} && env -u OPENAI_API_KEY -u CODEX_API_KEY -u CODEX_ACCESS_TOKEN -u OPENAI_BASE_URL CODEX_HOME=${q(path.join(base,'cody'))} /opt/homebrew/bin/codex resume ${q(thread)} --cd ${q(project)} --model gpt-6-astra -c 'model_reasoning_effort="low"' -c 'cli_auth_credentials_store="keyring"' --no-alt-screen --sandbox read-only --ask-for-approval never`;
-  const created=reconcile?[prior.originalTTY,prior.originalWindowId]:(await apple(`tell application "Terminal"\nset t to do script ${a(command)}\nset custom title of t to ${a('ClawDad account QA '+name)}\nactivate\nreturn (tty of t) & "|" & (id of front window as text)\nend tell`)).split('|');
+  const created=reconcile?[expectedTTY,prior.originalWindowId]:(await apple(`tell application "Terminal"\nset t to do script ${a(command)}\nset custom title of t to ${a('ClawDad account QA '+name)}\nactivate\nreturn (tty of t) & "|" & (id of front window as text)\nend tell`)).split('|');
   [tty,evidence.originalWindowId]=created;evidence.originalTTY=tty;
   if(!/^\/dev\/ttys\d+$/.test(tty)||!/^\d+$/.test(evidence.originalWindowId))throw Error('Fixture identity unavailable');
   await write();
@@ -81,12 +128,34 @@ try{
   }
   const remaining=['sun','cody'].filter(p=>!evidence.transitions.some(t=>t.profile===p));
   for(const profile of remaining){
-    const resume=continuing&&profile===remaining[0];
+    const resume=continuing&&!controller&&profile===remaining[0];
     const resumeId=process.argv[6]||name+'-sun-reconciled-3';
     if(resume&&!resumeId.startsWith(name+'-'+profile+'-reconciled-'))throw Error('Exact disposable checkpoint required');
-    const id=resume?resumeId:name+'-'+profile+(reconcile?'-reconciled-'+attempt:'');operation={id,strategy:'window-rebuild-v1',phase:'preflight'};
-    let capture;
-    if(resume){
+    const id=resume?resumeId:name+'-'+profile+(reconcile&&!controller?'-reconciled-'+attempt:'');operation={id,strategy:'window-rebuild-v1',phase:'preflight'};
+    let capture,controllerCompleted=false;
+    if(controller){
+      const recovery=controllerRecovery&&profile===remaining[0];
+      if(recovery){
+        await runtime.accounts.control('accounts.reconcile',{});
+      }else{
+      const census=await runtime.accountConsumerInventory(),catalog=runtime.observation.catalog;
+      const tab=census.consumers.find(t=>t.tty===tty)?.tabId||catalog.tabs.find(t=>t.tty===tty)?.id;
+      const selection=census.windows.find(w=>w.tabs.some(t=>t.tabId===tab));
+      if(selection?.count!==1)throw Error('Only the verified one-tab disposable window is authorized');
+      const state=await runtime.accounts.snapshot();
+      const request={action:'accounts.switch',accountId:profileEntries[profile].id,requestId:id,expectedRevision:state.revision,confirmed:true,windowSelection:{id:selection.id,tabId:selection.tabId}};
+      const response=await fetch('http://127.0.0.1:'+server.address().port+'/v1/assistant/request',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify(request)});
+      if(!response.ok)throw Error('Disposable switch request rejected');
+      await runtime.accounts.advance();
+      // Duplicate HTTP acceptance cannot dispatch another close or launch.
+      await fetch('http://127.0.0.1:'+server.address().port+'/v1/assistant/request',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify(request)});
+      await runtime.accounts.advance();
+      }
+      const accepted=(await runtime.accounts.snapshot()).activeOperation;
+      if(accepted.status!=='completed')throw Error(accepted.reason);
+      capture={captureHash:(await readAccountWindow(accountRoot,id)).captureHash};controllerCompleted=true;
+    }
+    if(controllerCompleted){}else if(resume){
       const record=await readAccountWindow(accountRoot,id);if(!record||!['captured','closing','restoring','verified'].includes(record.stage))throw Error('No disposable restoration to reconcile');
       capture={captureHash:record.captureHash};evidence.restoredAfterWorkerRestart=true;
     }else{
@@ -102,9 +171,9 @@ try{
     operation.phase='transition';operation.destinationAccountKey=accounts[profile].accountKey;operation.recovery={entries:[{window:{captureHash:capture.captureHash}}]};
     const target={authorizationHome:path.join(base,profile),sqliteHome:path.join(fixture,'index'),accountKey:accounts[profile].accountKey};
     const delivery=id+'-restore'+(resume?'-recovery-'+attempt:'');
-    const restored=await driver.call(id,'window.restore',{operationId:id,target},delivery);
-    const repeated=await driver.call(id,'window.restore',{operationId:id,target},delivery);
-    const verified=await driver.call(id,'window.verify',{operationId:id},id+'-verify');
+    const restored=controllerCompleted?{stage:'verified',count:1}:await driver.call(id,'window.restore',{operationId:id,target},delivery);
+    const repeated=controllerCompleted?restored:await driver.call(id,'window.restore',{operationId:id,target},delivery);
+    const verified=controllerCompleted?restored:await driver.call(id,'window.verify',{operationId:id},id+'-verify');
     const record=await readAccountWindow(accountRoot,id),bound=record.progress[record.entries[0].id].binding;
     if(restored.stage!=='verified'||repeated.stage!=='verified'||verified.stage!=='verified'||bound.sessionId!==thread||bound.directory!==project)throw Error('Native restore incomplete');
     tty=bound.tty;

@@ -174,6 +174,15 @@
           let operation: AssistantValue = .object(["id":.string(id),"targetId":args["accountId"] ?? .null,"status":.string(ready ? "waiting" : "needs_setup"),"fenced":.bool(ready),"reason":.string(ready ? "2 earlier work receipts need reconciliation before switching. Review affected sessions or cancel this switch to keep using the current account." : "Live switching needs isolated verification. Current work is preserved.")])
           accounts["activeOperation"] = operation
           accounts["operations"] = .array([operation])
+          if ProcessInfo.processInfo.arguments.contains("--clawdad-accounts-window-test"), var stopped=operation.object {
+            stopped["status"] = .string("needs_attention")
+            stopped["windowSelection"] = accounts["windows"]?.array?.first{$0.object?["id"]==args["windowSelection"]?.object?["id"]}
+            stopped["sessions"] = .array([.object(["id":.string("shared"),"title":.string("ClawDad project threads"),"tty":.string("??"),"switchState":.string("stopped")])])
+            accounts["activeOperation"] = .object(stopped)
+            accounts["operations"] = .array([.object(stopped)])
+            // A cold reopen/status poll may have no cached live windows.
+            accounts["windows"] = .array([])
+          }
           if ProcessInfo.processInfo.arguments.contains("--clawdad-accounts-skip-test"), var selected = operation.object {
             selected["sessions"] = .array([.object(["id":.string("room"),"title":.string("RoomWave"),"switchState":.string("waiting"),"canSkip":.bool(true),"skipIdentity":.string(String(repeating:"a",count:64)),"reason":.string("This agent has no verified resumable conversation.")])])
             accounts["activeOperation"] = .object(selected)

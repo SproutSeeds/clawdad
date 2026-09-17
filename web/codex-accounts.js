@@ -13,7 +13,7 @@ export function codexAccountsPanel(root,{request=async body=>{
   emailLabel.append(email);workspaceLabel.append(workspace);
   const button=(text,action)=>{const b=el('button',text);b.type='button';b.onclick=action;return b;};
   const picker=el('select'),pickerLabel=el('label','Account');picker.id='codexAccountSelector';pickerLabel.htmlFor=picker.id;pickerLabel.append(picker);
-  const windowPicker=el('select'),windowLabel=el('label','Terminal window to recreate'),windowHelp=el('p','Waits for work to finish or stop, saves recovery, verifies the account, then recreates the chosen window with the same conversations and drafts. Other windows stay open. You choose when to continue work.');
+  const windowPicker=el('select'),windowLabel=el('label','Terminal window to recreate'),windowHelp=el('p','Starts by verifying this window, saves recovery, then recreates it on the selected account with the same conversations and drafts. If work or an input needs attention, the switch stops and explains why. Other windows stay open. You choose when to continue work.');
   windowPicker.id='codexAccountWindow';windowLabel.htmlFor=windowPicker.id;windowLabel.append(windowPicker);
   status.setAttribute('role','status');status.setAttribute('aria-live','polite');status.tabIndex=-1;
   status.id='codexAccountSwitchStatus';
@@ -28,9 +28,10 @@ export function codexAccountsPanel(root,{request=async body=>{
   root.append(title,status,error,retry,actions,sessions,current,help,pickerLabel,windowLabel,windowHelp,list,details,refresh);
   function render(){
     current.textContent=state?.current?.email?`${state.current.email} · ${state.current.plan||'Subscription'}${state.current.status==='current'?'':' · Last verified reading'}`:'Verified Codex account unavailable';
-    const operation=state?.activeOperation,target=state?.accounts?.find(a=>a.id===operation?.targetId);
+    const operation=state?.activeOperation,target=state?.accounts?.find(a=>a.id===operation?.targetId),stopped=operation?.status==='needs_attention';
     status.textContent=(busy?(pending?.action==='accounts.switch'?'Requesting switch…':'Checking account…')+'\n':'')
-      +(operation?.reason?(target?`Switch to ${target.email}\n`:'')+operation.reason:'Choose an account, then tap Switch to this account.');
+      +(operation?.reason?(stopped?'Switch stopped\n':operation.status==='cancelled'?'Switch cancelled\n':target?`Switch to ${target.email}\n`:'')+operation.reason
+        +(operation.fenced&&!stopped&&operation.stage?'\n'+operation.stage.replaceAll('_',' '):''):'Choose an account, then tap Switch to this account.');
     const entries=state?.accounts||[];
     if(!entries.some(a=>a.id===selectedId))selectedId=pending?.accountId||operation?.targetId||entries[0]?.id||'';
     // Keep the native selector node/options stable while the status polls.
@@ -39,7 +40,7 @@ export function codexAccountsPanel(root,{request=async body=>{
       picker.replaceChildren(...options.map(a=>{const o=el('option',a.label);o.value=a.id;return o;}));picker.dataset.options=JSON.stringify(options);
     }
     picker.value=selectedId;picker.disabled=busy||!!pending||!entries.length;
-    const windows=state?.windows||[];
+    const windows=operation?.fenced&&operation.windowSelection?[operation.windowSelection]:state?.windows||[];
     if(!windows.some(w=>w.id===selectedWindow))selectedWindow=windows.length===1?windows[0].id:'';
     const windowOptions=windows.map(w=>({id:w.id,label:`${w.title} · ${w.count} tabs`}));
     if(windowPicker.dataset.options!==JSON.stringify(windowOptions)){
@@ -54,12 +55,12 @@ export function codexAccountsPanel(root,{request=async body=>{
       if(p.message)sessions.append(el('p',p.message));
       for(const tab of p.tabs||[])sessions.append(el('p',`${tab.name} · ${tab.status.replaceAll('_',' ')}`));
     }
-    if(operation?.sessions?.length){
+    if(operation?.status!=='cancelled'&&operation?.sessions?.length){
       sessions.append(el('h4','Session progress'));
       for(const c of operation.sessions){
-        const row=el('section'),progress=c.switchState||'waiting';
+        const row=el('section'),progress=c.switchState||'checking';
         row.append(el('strong',`${c.title||c.kind} · ${progress[0].toUpperCase()+progress.slice(1)}`));
-        if(c.tty)row.append(el('p',[c.directory,c.tty].filter(Boolean).join(' · ')));
+        if(c.tty?.startsWith('/dev/tty'))row.append(el('p',[c.directory,c.tty].filter(Boolean).join(' · ')));
         if(c.reason)row.append(el('p',c.reason));
         if(state.capabilities?.skipTerminalSessions&&c.canSkip){
           const skip=button('Leave this tab unchanged',()=>send('accounts.skip_session',{operationId:operation.id,accountId:operation.targetId,
@@ -98,7 +99,7 @@ export function codexAccountsPanel(root,{request=async body=>{
         try{const result=await request({action:'accounts.preview',accountId:account.id});preview=result.accountPreview;error.textContent='';render();}
         catch(e){error.textContent=e.message;}finally{busy=false;render();}
       });
-      const select=button(operation?.fenced?'Switch in progress':state?.capabilities?.ready?'Switch to this account':'Prepare account switch',()=>{
+      const select=button(operation?.fenced?(stopped?'Switch stopped · check recovery':operation.cancelRequested?'Cancelling switch':'Switch in progress'):state?.capabilities?.ready?'Switch to this account':'Prepare account switch',()=>{
         const window=windows.find(w=>w.id===selectedWindow);
         send('accounts.switch',{accountId:account.id,expectedRevision:state.revision,confirmed:true,...(state.capabilities?.windowRebuild?{windowSelection:{id:window.id,tabId:window.tabId}}:{})});
       });

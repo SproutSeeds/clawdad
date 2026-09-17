@@ -572,6 +572,14 @@ enum MainWorkspaceTitleCensus {
   }
   func create(marker:String,anchor:MainWorkspaceLiveTab?) async throws -> MainWorkspaceLiveTab {
     let ticket=try ensure();let before=try await inventory(captureDrafts:false)
+    // AX inventory may omit cold, unbound controls. Terminal's scripting TTY
+    // census is complete without visiting them; discovering an old tab after
+    // creation must not count it as a second newly created tab.
+    let physical=try await tabs.assistantAccountShells().map(\.tty)
+    let existingTTYs=Set(physical)
+    guard existingTTYs.count==physical.count,physical.allSatisfy({!$0.isEmpty}),interaction.isCurrent(ticket) else {
+      throw MacAssistantError("The physical Terminal tab inventory changed before creation. Refresh; no tab was created.")
+    }
     let tty:String
     if let anchor {
       let state=try await tabs.catalog()
@@ -583,17 +591,21 @@ enum MainWorkspaceTitleCensus {
       tty=try await script("tell application \"Terminal\"\nlaunch\nset t to do script \"\"\nset custom title of t to \(Self.appleString(marker))\nactivate\nreturn tty of t\nend tell")
     }
     var after=try await inventory(captureDrafts:false)
-    if (try? Self.verifiedCreation(before:before,after:after,tty:tty,marker:marker,anchor:anchor))==nil {
+    let observedTTYs=Set(try await tabs.assistantAccountShells().map(\.tty))
+    if (try? Self.verifiedCreation(before:before,after:after,tty:tty,marker:marker,anchor:anchor,existingTTYs:existingTTYs,observedTTYs:observedTTYs))==nil {
       // New Tab and its marker title can replace native AX controls, leaving
       // the old standalone tab temporarily unbound. Re-identify those controls
       // by native focus/readback; never request another tab to repair visibility.
       after=try await inventory(captureDrafts:true)
     }
-    return try Self.verifiedCreation(before:before,after:after,tty:tty,marker:marker,anchor:anchor)
+    guard interaction.isCurrent(ticket) else { throw MacAssistantError("Terminal input changed during creation. Inspect its saved receipt; no second tab will be created.") }
+    return try Self.verifiedCreation(before:before,after:after,tty:tty,marker:marker,anchor:anchor,existingTTYs:existingTTYs,observedTTYs:Set(try await tabs.assistantAccountShells().map(\.tty)))
   }
-  static func verifiedCreation(before:[MainWorkspaceLiveTab],after:[MainWorkspaceLiveTab],tty:String,marker:String,anchor:MainWorkspaceLiveTab?) throws -> MainWorkspaceLiveTab {
-    let additions=after.filter{tab in !before.contains{$0.tty==tab.tty}}
-    guard additions.count==1,let created=additions.first,created.tty==tty,created.name==marker else {
+  static func verifiedCreation(before:[MainWorkspaceLiveTab],after:[MainWorkspaceLiveTab],tty:String,marker:String,anchor:MainWorkspaceLiveTab?,existingTTYs:Set<String>?=nil,observedTTYs:Set<String>?=nil) throws -> MainWorkspaceLiveTab {
+    let prior=existingTTYs ?? Set(before.map(\.tty))
+    let additions=after.filter{!prior.contains($0.tty)}
+    guard additions.count==1,let created=additions.first,created.tty==tty,created.name==marker,
+      observedTTYs==nil || observedTTYs!.subtracting(prior)==[tty] else {
       throw MacAssistantError("Creation was requested once, but the new tab's exact TTY and restore marker are not uniquely visible. Reinspect this receipt; another tab will not be created.")
     }
     if let anchor {
@@ -601,7 +613,7 @@ enum MainWorkspaceTitleCensus {
         throw MacAssistantError("The new tab exists, but its original window anchor is still unbound or changed. Refresh to reconcile its identity; no second tab will be created.")
       }
     }
-    guard before.allSatisfy({old in after.contains{$0.tty==old.tty}}) else {
+    guard prior.isSubset(of:observedTTYs ?? Set(after.map(\.tty))) else {
       throw MacAssistantError("The new tab exists, but Terminal temporarily omitted an original tab. Reinspect to reconcile the complete window; creation will not repeat.")
     }
     return created

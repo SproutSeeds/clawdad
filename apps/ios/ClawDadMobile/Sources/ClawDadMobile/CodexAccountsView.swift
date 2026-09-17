@@ -27,6 +27,8 @@ struct CodexAccountsView: View {
   private var selectedWindow: [String: AssistantValue]? { windows.first{$0["id"]?.string==selectedWindowId} }
   private var rebuildsWindow: Bool { state["capabilities"]?.object?["windowRebuild"]?.bool==true }
   private var switching: Bool { operation["fenced"]?.bool == true }
+  private var stopped: Bool { operation["status"]?.string == "needs_attention" }
+  private var switchLabel: String { stopped ? "Switch stopped · check recovery" : operation["cancelRequested"]?.bool == true ? "Cancelling switch" : "Switch in progress" }
   private var operationEmail: String { entries.first { $0["id"] == operation["targetId"] }?["email"]?.string ?? "selected account" }
   private var activity: String {
     switch pending?["action"]?.string {
@@ -46,9 +48,12 @@ struct CodexAccountsView: View {
         VStack(alignment: .leading, spacing: 8) {
           if busy { ProgressView(activity).accessibilityIdentifier("clawdad.accounts.progress") }
           if let reason = operation["reason"]?.string {
-            Label(switching ? "Switch to \(operationEmail)" : (operation["status"]?.string == "completed" ? ((operation["skippedConsumers"]?.array ?? []).isEmpty ? "Switch complete" : "Switch complete with skipped tabs") : "Account switch"), systemImage: switching ? "clock" : "info.circle")
+            Label(stopped ? "Switch stopped" : switching ? "Switch to \(operationEmail)" : (operation["status"]?.string == "completed" ? ((operation["skippedConsumers"]?.array ?? []).isEmpty ? "Switch complete" : "Switch complete with skipped tabs") : operation["status"]?.string == "cancelled" ? "Switch cancelled" : "Account switch"), systemImage: stopped ? "exclamationmark.circle" : switching ? "clock" : "info.circle")
               .font(.headline)
             Text(reason).accessibilityIdentifier("clawdad.accounts.switchStatus")
+            if switching, !stopped, let stage=operation["stage"]?.string {
+              Text(stage.replacingOccurrences(of:"_",with:" ").capitalized).font(.footnote)
+            }
           } else if !busy { Text("Choose an account, then switch when ready.").font(.footnote) }
           if !statusError.isEmpty { Text(statusError).foregroundStyle(.yellow) }
           if !error.isEmpty { Text(error).foregroundStyle(.yellow).accessibilityIdentifier("clawdad.accounts.error") }
@@ -68,16 +73,16 @@ struct CodexAccountsView: View {
         .disabled(busy)
       }
 
-      if let sessions = operation["sessions"]?.array, !sessions.isEmpty {
+      if operation["status"]?.string != "cancelled", let sessions = operation["sessions"]?.array, !sessions.isEmpty {
         Section("Session progress") {
           ForEach(Array(sessions.enumerated()), id: \.offset) { _, item in
             if let consumer = item.object {
               let title = consumer["title"]?.string ?? "Terminal session"
-              let progress = consumer["switchState"]?.string ?? "waiting"
+              let progress = consumer["switchState"]?.string ?? "checking"
               VStack(alignment: .leading, spacing: 6) {
-                Label(title + " · " + progress.capitalized, systemImage: progress == "switched" ? "checkmark.circle" : progress == "skipped" ? "minus.circle" : "clock")
+                Label(title + " · " + progress.capitalized, systemImage: progress == "switched" ? "checkmark.circle" : progress == "stopped" ? "exclamationmark.circle" : ["skipped","cancelled"].contains(progress) ? "minus.circle" : "clock")
                   .fixedSize(horizontal: false, vertical: true)
-                if let tty = consumer["tty"]?.string {
+                if let tty = consumer["tty"]?.string, tty.hasPrefix("/dev/tty") {
                   Text([consumer["directory"]?.string,tty].compactMap { $0 }.joined(separator:" · ")).font(.caption).textSelection(.enabled)
                 }
                 if let reason = consumer["reason"]?.string, !reason.isEmpty { Text(reason).font(.footnote) }
@@ -158,6 +163,13 @@ struct CodexAccountsView: View {
               }
             }
             if rebuildsWindow {
+              if switching, let window=operation["windowSelection"]?.object {
+                VStack(alignment:.leading,spacing:4) {
+                  Text("Selected Terminal window").font(.caption)
+                  Text("\(window["title"]?.string ?? "Terminal window") · \(Int(window["count"]?.number ?? 0)) tabs")
+                    .fixedSize(horizontal:false,vertical:true)
+                }.accessibilityIdentifier("clawdad.accounts.selectedWindow")
+              } else {
               Picker("Terminal window to recreate", selection:$selectedWindowId) {
                 Text("Choose window").tag("")
                 ForEach(windows.indices,id:\.self) { index in
@@ -168,9 +180,10 @@ struct CodexAccountsView: View {
               }.accessibilityIdentifier("clawdad.accounts.window")
                 .frame(minHeight:44)
                 .disabled(switching)
-              Text("Waits for work to finish or stop, then saves recovery, verifies the account, and recreates this window with the same conversations and drafts. Other windows stay open. You choose when to continue work.")
+              }
+              Text("Starts by verifying this window, saves recovery, then recreates it on the selected account with the same conversations and drafts. If work or an input needs attention, the switch stops and explains why. Other windows stay open. You choose when to continue work.")
                 .font(.footnote).fixedSize(horizontal:false,vertical:true)
-              if windows.isEmpty { Text("Refresh to load Terminal windows on your Mac.").font(.footnote) }
+              if windows.isEmpty, !switching { Text("Refresh to load Terminal windows on your Mac.").font(.footnote) }
             }
             accountButton("Review affected sessions") { inspect(account) }
             Button {
@@ -178,7 +191,7 @@ struct CodexAccountsView: View {
               if rebuildsWindow,let selectedWindow { args["windowSelection"] = .object(["id":selectedWindow["id"] ?? .null,"tabId":selectedWindow["tabId"] ?? .null]) }
               perform("accounts.switch", args:args)
             } label: {
-              Text(switching ? "Switch in progress" : (state["capabilities"]?.object?["ready"]?.bool == true ? "Switch to this account" : "Prepare account switch"))
+              Text(switching ? switchLabel : (state["capabilities"]?.object?["ready"]?.bool == true ? "Switch to this account" : "Prepare account switch"))
                 .frame(maxWidth: .infinity, minHeight: 44)
             }.buttonStyle(.borderedProminent).disabled(switching || connecting || rebuildsWindow && selectedWindow==nil)
               .accessibilityIdentifier("clawdad.accounts.switch")

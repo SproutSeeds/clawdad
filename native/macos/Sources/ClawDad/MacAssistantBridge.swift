@@ -114,7 +114,7 @@ final class MacAssistantBridge {
                 observation["catalog"] = try .encode(catalog)
                 for tab in try await tabs.assistantAccountShells() {
                   do {
-                    var fields=try await Task.detached { try MacCodexAccountProcess.inspect(tty:tab.tty) }.value
+                    var fields=try await Task.detached { try MacCodexAccountProcess.inspect(tty:tab.tty,reader:MacCodexAccountProcess.ownerReader(tty:tab.tty)) }.value
                     if let id=tabs.assistantIdentifier(tty:tab.tty),let native=tabs.assistantSnapshot(tabID:id) {
                       fields["tabId"] = .string(id)
                       fields["windowId"] = .string("terminal-window-\(native.groupID)")

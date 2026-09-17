@@ -54,6 +54,15 @@ import XCTest
     // Lost HTTP acknowledgment is resolved by status, never by a new switch ID.
     let enabled=NSPredicate(format:"enabled == true")
     expectation(for: enabled,evaluatedWith:cancel);waitForExpectations(timeout:8)
+    if window {
+      XCTAssertTrue(app.staticTexts["Switch stopped"].exists)
+      XCTAssertFalse(app.staticTexts["??"].exists)
+      let captured=app.descendants(matching:.any).matching(identifier:"clawdad.accounts.selectedWindow").firstMatch
+      show(captured,actionable:false)
+      XCTAssertTrue(app.staticTexts["Terminal window 2 · 3 tabs"].exists)
+      show(change,actionable:false)
+      XCTAssertEqual(change.label,"Switch stopped · check recovery")
+    }
     if skip {
       let leave=app.buttons["clawdad.accounts.skip.room"]
       show(leave);XCTAssertGreaterThanOrEqual(leave.frame.height,43.99)

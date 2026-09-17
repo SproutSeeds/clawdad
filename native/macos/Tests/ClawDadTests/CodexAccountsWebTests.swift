@@ -40,7 +40,9 @@ import WebKit
       }
     }
     try await view.evaluateJavaScript("document.getElementById('codexAccountSwitch').click();document.getElementById('codexAccountSwitch').click()")
-    try await wait(view,"document.getElementById('codexAccountSwitchStatus').textContent.includes('Waiting')")
+    try await wait(view,"document.getElementById('codexAccountSwitchStatus').textContent.includes('Switch stopped')")
+    let stateVisible=try await view.evaluateJavaScript("document.getElementById('codexAccountSwitch').textContent==='Switch stopped · check recovery'&&document.getElementById('codexAccountWindow').value==='window-2'") as? Bool
+    XCTAssertEqual(stateVisible,true)
     let (data,_)=try await URLSession.shared.data(from:base.appendingPathComponent("fixture/evidence"))
     let evidence=try JSONSerialization.jsonObject(with:data) as! [String:Any]
     let requests=(evidence["requests"] as? [[String:Any]])?.filter{$0["action"] as? String=="accounts.switch"} ?? []
