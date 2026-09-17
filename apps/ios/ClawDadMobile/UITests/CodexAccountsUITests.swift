@@ -10,14 +10,18 @@ import XCTest
   func testSkipAtAccessibilityTextSize() throws { try checkSwitch(lostReply:false,skip:true,largeText:true) }
   func testChosenWindowSwitchKeepsExactSelectionAndCanCancel() throws { try checkSwitch(lostReply:false,window:true) }
   func testChosenWindowAtAccessibilityTextSize() throws { try checkSwitch(lostReply:true,largeText:true,window:true) }
+  func testCancelRetriesSameRequestAfterLostConnectionAndConversationReopen() throws { try checkSwitch(lostReply:false,cancelFailure:"before") }
+  func testAcceptedCancelLostReplyUnlocksControlsFromStatus() throws { try checkSwitch(lostReply:false,cancelFailure:"after") }
 
-  private func checkSwitch(lostReply: Bool,skip:Bool=false,largeText:Bool=false,window:Bool=false) throws {
+  private func checkSwitch(lostReply: Bool,skip:Bool=false,largeText:Bool=false,window:Bool=false,cancelFailure:String?=nil) throws {
     continueAfterFailure = false
     let app = XCUIApplication()
     app.launchArguments = ["--clawdad-app-store-preview", "workspace", "--clawdad-weekly-usage-test", "--clawdad-assistant-test", "--clawdad-accounts-switch-test"]
     if lostReply { app.launchArguments.append("--clawdad-accounts-lost-reply-test") }
     if skip { app.launchArguments.append("--clawdad-accounts-skip-test") }
     if window { app.launchArguments.append("--clawdad-accounts-window-test") }
+    if cancelFailure=="before" { app.launchArguments.append("--clawdad-cancel-before-accept-test") }
+    if cancelFailure=="after" { app.launchArguments.append("--clawdad-cancel-lost-reply-test") }
     if largeText { app.launchArguments += ["-UIPreferredContentSizeCategoryName","UICTContentSizeCategoryAccessibilityXL"] }
     app.launch()
     let usage = app.buttons["clawdad.weeklyUsage.main"]
@@ -73,9 +77,15 @@ import XCTest
     }
     let shot=XCTAttachment(screenshot:app.screenshot());shot.name=lostReply ? "Switch lost reply reconciled" : "Switch accepted and waiting";shot.lifetime = .keepAlways;add(shot)
     show(cancel,up:true);cancel.tap()
+    if cancelFailure=="before" {
+      XCTAssertTrue(app.staticTexts["clawdad.accounts.error"].waitForExistence(timeout:5))
+      XCTAssertTrue(cancel.isEnabled,"Cancel itself must allow the original pending request to retry")
+      app.buttons["Back to weekly allowance"].tap();open.tap()
+      show(cancel,up:true);XCTAssertTrue(cancel.isEnabled);cancel.tap()
+    }
     XCTAssertTrue(app.staticTexts["Account switch cancelled. Existing work was preserved."].waitForExistence(timeout:5))
     app.buttons["Back to weekly allowance"].tap();open.tap()
-    show(picker);XCTAssertEqual(picker.value as? String,"second@example.test",picker.debugDescription)
+    show(picker);XCTAssertTrue(picker.isEnabled);XCTAssertEqual(picker.value as? String,"second@example.test",picker.debugDescription)
     XCTAssertFalse(app.buttons["End voice conversation"].exists)
   }
 

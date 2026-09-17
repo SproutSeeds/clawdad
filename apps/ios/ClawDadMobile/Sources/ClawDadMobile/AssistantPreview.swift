@@ -9,6 +9,7 @@
   /// UI acceptance fixtures never send keyboard events or connect to a real host.
   @MainActor
   final class AssistantPreview {
+    var failedAccountCancelRequest: String?
     static let replyConversation = "11111111-1111-4111-8111-111111111111"
     static let replyRequest = "22222222-2222-4222-8222-222222222222"
     static let replyID = "assistant:\(replyRequest):final"

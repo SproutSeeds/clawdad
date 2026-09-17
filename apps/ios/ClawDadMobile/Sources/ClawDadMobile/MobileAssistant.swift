@@ -370,7 +370,18 @@ final class MobileAssistantController: ObservableObject {
     id: String = UUID().uuidString.lowercased()) async throws -> [String: AssistantValue] {
     #if DEBUG
     if let preview {
+      let loseCancelBefore=ProcessInfo.processInfo.arguments.contains("--clawdad-cancel-before-accept-test")
+      let loseCancelAfter=ProcessInfo.processInfo.arguments.contains("--clawdad-cancel-lost-reply-test")
+      if action=="accounts.cancel",loseCancelBefore || loseCancelAfter {
+        if let original=preview.failedAccountCancelRequest,original != id { throw AssistantProtocolError.invalid }
+        if loseCancelBefore,preview.failedAccountCancelRequest==nil {
+          preview.failedAccountCancelRequest=id;throw AssistantProtocolError.timedOut
+        }
+      }
       let reply = try preview.research(action, args: args, id: id)
+      if action=="accounts.cancel",loseCancelAfter,preview.failedAccountCancelRequest==nil {
+        preview.failedAccountCancelRequest=id;throw AssistantProtocolError.timedOut
+      }
       if action == "accounts.switch", ProcessInfo.processInfo.arguments.contains("--clawdad-accounts-switch-test") {
         try await Task.sleep(for: .seconds(4))
         if ProcessInfo.processInfo.arguments.contains("--clawdad-accounts-lost-reply-test") { throw AssistantProtocolError.timedOut }

@@ -1,6 +1,31 @@
 import SwiftUI
 import ClawDadRemoteAssistProtocol
 
+enum CodexAccountRequestRecovery {
+  static func retryCancel(_ pending: [String:AssistantValue]?, operation: [String:AssistantValue]) -> Bool {
+    guard let pending,pending["action"]?.string=="accounts.cancel",let id=pending["operationId"]?.string,!id.isEmpty else { return false }
+    return id==operation["id"]?.string
+  }
+  static func acknowledged(_ pending: [String:AssistantValue], reply: [String:AssistantValue]) -> Bool {
+    guard let id=pending["requestId"]?.string,!id.isEmpty else { return false }
+    if let receipt=reply["accountReceipt"]?.object,receipt["requestId"]?.string==id,receipt["accepted"]?.bool==true {
+      if let account=pending["accountId"]?.string { return receipt["accountId"]?.string==account }
+      if let operation=pending["operationId"]?.string { return receipt["operationId"]?.string==operation }
+    }
+    // A cancelled exact operation also satisfies an older unacknowledged
+    // Cancel, including cancellation completed from the desktop. This never
+    // clears a pending switch, sign-in, or a different operation's request.
+    guard pending["action"]?.string=="accounts.cancel",let target=pending["operationId"]?.string,!target.isEmpty,
+      let state=reply["accounts"]?.object else { return false }
+    var operations=state["operations"]?.array?.compactMap(\.object) ?? []
+    if let active=state["activeOperation"]?.object { operations.append(active) }
+    return operations.contains { operation in
+      operation["id"]?.string==target && (operation["cancelRequested"]?.bool==true ||
+        operation["status"]?.string=="cancelled" && operation["fenced"]?.bool==false)
+    }
+  }
+}
+
 struct CodexAccountsView: View {
   @EnvironmentObject private var assistant: MobileAssistantController
   @EnvironmentObject private var session: CloudSession
@@ -28,6 +53,7 @@ struct CodexAccountsView: View {
   private var rebuildsWindow: Bool { state["capabilities"]?.object?["windowRebuild"]?.bool==true }
   private var switching: Bool { operation["fenced"]?.bool == true }
   private var stopped: Bool { operation["status"]?.string == "needs_attention" }
+  private var retryingCancel: Bool { CodexAccountRequestRecovery.retryCancel(pending,operation:operation) }
   private var switchLabel: String { stopped ? "Switch stopped · check recovery" : operation["cancelRequested"]?.bool == true ? "Cancelling switch" : "Switch in progress" }
   private var operationEmail: String { entries.first { $0["id"] == operation["targetId"] }?["email"]?.string ?? "selected account" }
   private var activity: String {
@@ -59,13 +85,15 @@ struct CodexAccountsView: View {
           if !error.isEmpty { Text(error).foregroundStyle(.yellow).accessibilityIdentifier("clawdad.accounts.error") }
           if pending != nil && !busy {
             Text("Checking whether the Mac received your request. Retry keeps the same request ID.").font(.footnote)
-            accountButton("Retry pending request") { perform() }
+            if !retryingCancel { accountButton("Retry pending request") { perform() } }
           }
           if switching {
             if operation["cancelRequested"]?.bool == true {
               accountButton("Continue original switch") { perform("accounts.continue", args: ["operationId": operation["id"] ?? .null, "confirmed": .bool(true)]) }.disabled(pending != nil)
             } else {
-              accountButton("Cancel switch") { perform("accounts.cancel", args: ["operationId": operation["id"] ?? .null]) }.disabled(pending != nil)
+              accountButton("Cancel switch") { perform("accounts.cancel", args: ["operationId": operation["id"] ?? .null]) }
+                .disabled(pending != nil && !retryingCancel)
+                .accessibilityHint(retryingCancel ? "Retry cancellation using the same request." : "Cancel this account switch.")
             }
             accountButton("Check recovery") { perform("accounts.reconcile") }.disabled(pending != nil)
           }
@@ -309,8 +337,7 @@ struct CodexAccountsView: View {
       let receivedSignIn = ["accounts.signin", "accounts.verify_signin"].contains(request["action"]?.string ?? "") && entries.contains {
         $0["id"] == request["accountId"] && $0["authorization"]?.object?["operation"]?.object?["requestId"]?.string == id
       }
-      let receipt = reply["accountReceipt"]?.object
-      let receivedRequest = receipt?["requestId"]?.string == id && receipt?["accepted"]?.bool == true && receipt?["accountId"] == request["accountId"]
+      let receivedRequest = CodexAccountRequestRecovery.acknowledged(request,reply:reply)
       if receivedSwitch || receivedSignIn || receivedRequest {
         pending = nil; UserDefaults.standard.removeObject(forKey: pendingKey); error = ""
       }
