@@ -3,6 +3,35 @@ import CryptoKit
 import Darwin
 import ClawDadRemoteAssistProtocol
 
+enum AccountWindowReceiptEvidence {
+  static func collect(_ jobs: [[String: AssistantValue]], sessionId: String, tabId: String) -> (pending: [String], retained: [String]) {
+    var pending: [String] = [], retained: [String] = []
+    for row in jobs {
+      let args=row["args"]?.object ?? [:], target=row["sessionId"]?.string ?? args["sessionId"]?.string
+      guard let action=row["action"]?.string,action.hasPrefix("terminal."),
+        target==sessionId || target==nil && args["tabId"]?.string==tabId,
+        let id=row["id"]?.string else { continue }
+      let status=row["status"]?.string ?? "unknown", result=row["result"]?.object ?? [:]
+      if ["terminal.inspect","terminal.observe","terminal.context","terminal.native.inspect"].contains(action) { continue }
+      if ["completed","cancelled","inserted","cleared","replaced","not_dispatched"].contains(status) { continue }
+      if ["attention","interrupted"].contains(status) {
+        let enter=action=="terminal.key" && args["key"]?.string=="enter" && args["intent"]?.string=="submit"
+        let guarded=["terminal.send","terminal.queue","terminal.insert","terminal.prompt"].contains(action) || enter
+        let unprepared=guarded && status=="attention" && row["preparedAt"]?.string==nil && row["error"]?.string != nil
+        let unsent=enter && result["keySent"]?.bool==false && result["turnAccepted"]?.bool != true ||
+          action=="terminal.queue" && result["tabSent"]?.bool==false && result["queueAccepted"]?.bool != true
+        // Insert is draft-only, including failures after paste. The account
+        // capture separately verifies the current exact draft, idle owner and
+        // empty native queue. Keep its receipt; never repeat the old paste.
+        let dispatched=["keySent","tabSent","turnAccepted","queueAccepted","submitted"].contains{result[$0]?.bool==true}
+        if !dispatched && (unprepared || unsent || action=="terminal.insert") { retained.append(id);continue }
+      }
+      pending.append(id)
+    }
+    return (pending,retained)
+  }
+}
+
 /// Account recovery is independent from the user's named snapshot library.
 /// Every irreversible boundary is saved before dispatch. A retry reconciles
 /// original owners/creation markers; it never replays an uncertain close/launch.
@@ -91,6 +120,11 @@ import ClawDadRemoteAssistProtocol
     let bytes=(try! encoder.encode(tabs))+(try! encoder.encode(launches))
     return SHA256.hash(data:bytes).map{String(format:"%02x",$0)}.joined()
   }
+  private func verifyReceipts(_ tab: MainWorkspaceLiveTab) throws {
+    if let receipts=tab.pendingReceipts,!receipts.isEmpty {
+      throw MacCodexInputFailure(code:"account_window_delivery_unresolved",message:"\(tab.name): \(receipts.count) pending or uncertain delivery receipt(s) need reconciliation (\(receipts.prefix(3).joined(separator:", "))). Nothing was closed.")
+    }
+  }
   func capture(operationId: String, windowId: String, tabId: String) async throws -> Record {
     let fd=try lock();defer{flock(fd,LOCK_UN);close(fd)}
     if let old=try read(operationId) {
@@ -112,6 +146,7 @@ import ClawDadRemoteAssistProtocol
       Set(tabs.map(\.tty)).count==tabs.count else { throw MacAssistantError("The chosen window's membership changed. Nothing was closed.") }
     var launches:[String:Launch]=[:],entries:[MainWorkspaceEntry]=[]
     for tab in tabs {
+      try verifyReceipts(tab)
       guard tab.identityIssue==nil,tab.lifetime != nil,["codex","shell"].contains(tab.kind),
         tab.draft?.text != nil,(tab.pendingReceipts ?? []).isEmpty,
         tab.kind != "codex" || tab.sessionId != nil && tab.model != nil && tab.effort != nil && tab.executable != nil else {
@@ -144,7 +179,7 @@ import ClawDadRemoteAssistProtocol
       guard let selected=current.tabs.first(where:{$0.tabId==current.anchorId}) else { throw AssistantProtocolError.invalid }
       let members=current.tabs.filter{$0.group==selected.group}.sorted{$0.position<$1.position}
       guard MainTerminalWorkspace.sameWindow(record.tabs,members,drafts:true) else { throw MacAssistantError("The captured window or draft changed. Nothing was closed. Cancel and review the current lineup.") }
-      for tab in members { _=try await inspectLaunch(tab) }
+      for tab in members { try verifyReceipts(tab);_=try await inspectLaunch(tab) }
       for entry in record.entries { try native.checkDirectory(entry) }
       try await permit(operationId)
       record.target=target;record.stage="closing";try save(record)

@@ -32,6 +32,9 @@ struct MainWorkspaceLiveTab: Codable, Equatable {
   var identityIssue: String? = nil
   var historical: Bool? = nil
   var isBusy: Bool? = nil
+  // Account recovery retains these original receipts without treating an
+  // inactive draft-only failure as a queued message or replaying its input.
+  var retainedReceipts: [String]? = nil
 }
 struct MainWorkspaceEntry: Codable, Equatable, Identifiable {
   var id: String

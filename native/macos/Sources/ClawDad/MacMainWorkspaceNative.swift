@@ -393,7 +393,11 @@ enum MainWorkspaceTitleCensus {
     guard !captureDrafts || initial.tabs.count==names.count else { throw MacAssistantError("Some Terminal tabs are hidden by macOS. Show their windows or leave full screen and retry. The saved roster and hidden tabs were preserved.") }
     let jobsURL=FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/ClawDad/Assistant/state.json")
     let jobState=(try? Data(contentsOf:jobsURL)).flatMap{try? JSONDecoder().decode([String:AssistantValue].self,from:$0)}
-    let pending=(jobState?["jobs"]?.array ?? []).compactMap(\.object).filter { row in
+    if accountCaptureGuard != nil,jobState?["jobs"]?.array==nil {
+      throw MacAssistantError("The delivery receipt history could not be read. Nothing was closed; check recovery after it is available.")
+    }
+    let jobs=(jobState?["jobs"]?.array ?? []).compactMap(\.object)
+    let pending=jobs.filter { row in
       ["agent_queued","submitted","attention","queued"].contains(row["status"]?.string ?? "") && (row["action"]?.string?.hasPrefix("terminal.") ?? false)
     }
     let selected=initial.selectedTabId
@@ -470,18 +474,23 @@ enum MainWorkspaceTitleCensus {
         if agent != nil && agent?.conversation==nil { bindingIssue="Codex is fresh and has not persisted a resumable conversation. Finish your first intended turn, then save this window." }
         if requiresIdentity,lifetime==nil { bindingIssue="This tab's login lifetime could not be verified. Refresh before saving." }
         let config=(agent?.conversation?.path ?? historical.map{URL(fileURLWithPath:$0.path)}).flatMap{Self.resumeConfiguration($0)}
-        var receiptIds:[String]=[]
+        var receiptIds:[String]=[],retainedReceiptIds:[String]?
         if let conversation=agent?.conversation {
-          for row in pending {
-            let target=row["sessionId"]?.string ?? row["args"]?.object?["sessionId"]?.string
-            if target==conversation.sessionId,let id=row["id"]?.string { receiptIds.append(id) }
+          if accountCaptureGuard != nil {
+            let receipts=AccountWindowReceiptEvidence.collect(jobs,sessionId:conversation.sessionId,tabId:descriptor.id)
+            receiptIds=receipts.pending;retainedReceiptIds=receipts.retained
+          } else {
+            for row in pending {
+              let target=row["sessionId"]?.string ?? row["args"]?.object?["sessionId"]?.string
+              if target==conversation.sessionId,let id=row["id"]?.string { receiptIds.append(id) }
+            }
           }
         }
         output.append(MainWorkspaceLiveTab(tabId:descriptor.id,group:String(tab.groupID),tty:tab.tty,owner:agent?.instanceId ?? owner.identity,
           directory:directory,kind:agent != nil || historical != nil ? "codex":owner.shell != nil ? "shell":"unsupported",sessionId:agent?.conversation?.sessionId ?? historical?.sessionId,
           conversationPath:agent?.conversation?.path.path ?? historical?.path,executable:agent?.executable ?? historical?.executable,name:MacTerminalProjectTitles.shared.explicitName(tty: tab.tty) ?? (names[tab.tty]?.hasPrefix("ClawDad Restore ")==true ? names[tab.tty]! : (tab.generatedTitle && !directory.isEmpty ? URL(fileURLWithPath: directory).lastPathComponent : descriptor.title)),
           position:tab.position,selected:selections[descriptor.id] ?? false,fullScreen:focused ? fullScreen():false,draft:draft,model:config?.model,effort:config?.effort,pendingReceipts:receiptIds,nameIsExplicit:MacTerminalProjectTitles.shared.explicitName(tty: tab.tty) != nil,
-          lifetime:lifetime,identityIssue:bindingIssue,historical:historical != nil,isBusy:descriptor.isBusy))
+          lifetime:lifetime,identityIssue:bindingIssue,historical:historical != nil,isBusy:descriptor.isBusy,retainedReceipts:retainedReceiptIds))
       }
       if let ticket,captureGroup != nil {
         // One full pass, then checks that need no tab switching. User input

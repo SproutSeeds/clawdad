@@ -3,6 +3,75 @@ import ClawDadRemoteAssistProtocol
 @testable import ClawDad
 
 @MainActor final class MainWorkspaceAccountSwitchTests:XCTestCase {
+  func testReportedReceiptsReadOnlyWhenRequested() throws {
+    guard ProcessInfo.processInfo.environment["CLAWDAD_ACCOUNT_RECEIPTS_READONLY"]=="1" else { throw XCTSkip("Explicit read-only incident receipt check") }
+    let file=FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/ClawDad/Assistant/state.json")
+    let state=try JSONDecoder().decode([String:AssistantValue].self,from:Data(contentsOf:file))
+    let jobs=try XCTUnwrap(state["jobs"]?.array).compactMap(\.object)
+    let receipts=AccountWindowReceiptEvidence.collect(jobs,sessionId:"01a06f70-051d-76e2-ab41-0d816990fcd8",tabId:"b93b7f06-c993-402c-b584-deeb9931d0d7")
+    let reported:Set<String>=["4b1f67cc-bb87-43aa-b008-c5e561503dde","bd4a5243-ed34-48fe-96e5-0b60e7776142","d634f3e0-63da-4903-9dc7-21e8736c9801","ace71105-38a2-4ab4-a2da-b2f9b9747382","59d13ea1-8191-4ae9-ad98-158982e29412"]
+    XCTAssertTrue(reported.isSubset(of:Set(receipts.retained)))
+    XCTAssertTrue(reported.isDisjoint(with:Set(receipts.pending)))
+    print("Read-only receipt evidence: \(reported.count) original incident failures retained; \(receipts.pending.count) active/uncertain blockers")
+  }
+  func testHistoricalFailedActionsRemainRecordedWithoutBlockingWindowCapture() async throws {
+    // The five receipts which blocked the real nine-tab capture: four native
+    // pre-prepare failures, and one uncertain draft-only insertion.
+    let actions=["terminal.queue","terminal.queue","terminal.queue","terminal.insert","terminal.send"]
+    let jobs=actions.enumerated().map { index,action -> [String:AssistantValue] in
+      var job:[String:AssistantValue]=["id":.string("old-\(index)"),"action":.string(action),"status":.string("attention"),
+        "args":.object(["sessionId":.string("session-0")]),"error":.string("Retained historical failure")]
+      if action=="terminal.insert" { job["preparedAt"] = .string("2026-09-10T23:13:29Z") }
+      return job
+    }
+    let evidence=AccountWindowReceiptEvidence.collect(jobs,sessionId:"session-0",tabId:"tab-0")
+    XCTAssertTrue(evidence.pending.isEmpty);XCTAssertEqual(evidence.retained.count,5)
+    let (native,root)=try fixture(),store=engine(native,root)
+    native.live[0].pendingReceipts=evidence.pending;native.live[0].retainedReceipts=evidence.retained
+    let captured=try await capture(store,native)
+    XCTAssertEqual(captured.tabs[0].retainedReceipts,evidence.retained)
+    XCTAssertEqual(try engine(native,root).read("fixture-switch")?.tabs[0].retainedReceipts,evidence.retained)
+    _=try await store.restore(operationId:"fixture-switch",target:target)
+    XCTAssertEqual(native.closes,1);XCTAssertEqual(native.recovers,3)
+    XCTAssertEqual(jobs[3]["status"]?.string,"attention","Original receipt status is never cleared or replayed")
+  }
+  func testActiveAndUncertainSubmittedReceiptsRemainBlockingWithExactTargeting() {
+    func job(_ status:String,_ result:[String:AssistantValue]=[:],prepared:Bool=true)->[String:AssistantValue] {
+      var value:[String:AssistantValue]=["id":.string("delivery"),"action":.string("terminal.queue"),"status":.string(status),
+        "sessionId":.string("exact"),"args":.object(["tabId":.string("old-catalog-id")]),"result":.object(result),"error":.string("Failure")]
+      if prepared {value["preparedAt"] = .string("time")};return value
+    }
+    for status in ["queued","sending","running","working","submitted","agent_queued","attention","interrupted","unknown"] {
+      XCTAssertEqual(AccountWindowReceiptEvidence.collect([job(status)],sessionId:"exact",tabId:"new-id").pending,["delivery"],status)
+    }
+    let unsent=job("attention",["tabSent":.bool(false)])
+    XCTAssertEqual(AccountWindowReceiptEvidence.collect([unsent],sessionId:"exact",tabId:"new-id").retained,["delivery"])
+    for flag in ["tabSent","queueAccepted","turnAccepted","submitted"] {
+      XCTAssertEqual(AccountWindowReceiptEvidence.collect([job("attention",[flag:.bool(true)],prepared:false)],sessionId:"exact",tabId:"new-id").pending,["delivery"])
+    }
+    XCTAssertTrue(AccountWindowReceiptEvidence.collect([job("running")],sessionId:"different-session",tabId:"old-catalog-id").pending.isEmpty)
+    var targeted=job("running");targeted["sessionId"]=nil
+    XCTAssertEqual(AccountWindowReceiptEvidence.collect([targeted],sessionId:"exact",tabId:"old-catalog-id").pending,["delivery"])
+    XCTAssertTrue(AccountWindowReceiptEvidence.collect([targeted],sessionId:"exact",tabId:"different-id").pending.isEmpty)
+  }
+  func testPendingDeliveryFailureNamesItsReceiptInsteadOfSuggestingMissingHistory() async throws {
+    let (native,root)=try fixture(),store=engine(native,root)
+    native.live[0].pendingReceipts=["uncertain-tab-dispatch"]
+    do { _=try await capture(store,native);XCTFail("Uncertain delivery must remain held") }
+    catch let error as MacCodexInputFailure {
+      XCTAssertEqual(error.code,"account_window_delivery_unresolved")
+      XCTAssertTrue(error.message.contains("uncertain-tab-dispatch"))
+    }
+    XCTAssertEqual(native.closes,0);XCTAssertEqual(native.creates,0)
+  }
+  func testNewUncertainDeliveryAfterCaptureStopsBeforeWindowClose() async throws {
+    let (native,root)=try fixture(),store=engine(native,root)
+    _=try await capture(store,native)
+    native.live[0].pendingReceipts=["new-uncertain-delivery"]
+    do { _=try await store.restore(operationId:"fixture-switch",target:target);XCTFail("Recheck delivery evidence before closing") }
+    catch let error as MacCodexInputFailure { XCTAssertEqual(error.code,"account_window_delivery_unresolved") }
+    XCTAssertEqual(native.closes,0);XCTAssertEqual(native.creates,0)
+  }
   func testSingleTabComposedWindowTitleUsesIndependentExactConfiguredName() {
     let row=MacTerminalTabSnapshot(windowID:5,windowIndex:1,tabIndex:1,customTitle:"project — Research — codex resume exact — 80×24",tty:"/dev/ttys099",isSelectedInWindow:true,configuredTitle:"Research")
     XCTAssertTrue(MacMainWorkspaceNative.restoredNameMatches(row,name:"Research"))
