@@ -1,0 +1,110 @@
+{
+  "macBuild": 163,
+  "iPhoneBuild": 103,
+  "physicalDevice": "iPhone 15 Pro Max",
+  "transport": "USB and iPhone Mirroring",
+  "previewDidNotActivate": true,
+  "completedPhoneActivations": 2,
+  "singleReceiptPerActivation": true,
+  "originalAccountRestored": true,
+  "originalAuthorizationHomeRestored": true,
+  "runtimeReportsOriginalAccount": true,
+  "runtimeUsesSelectedProfile": true,
+  "histories": [
+    {
+      "turnsUnchanged": true,
+      "modelUnchanged": true,
+      "effortUnchanged": true,
+      "directoryUnchanged": true
+    },
+    {
+      "turnsUnchanged": true,
+      "modelUnchanged": true,
+      "effortUnchanged": true,
+      "directoryUnchanged": true
+    },
+    {
+      "turnsUnchanged": true,
+      "modelUnchanged": true,
+      "effortUnchanged": true,
+      "directoryUnchanged": true
+    },
+    {
+      "turnsUnchanged": true,
+      "modelUnchanged": true,
+      "effortUnchanged": true,
+      "directoryUnchanged": true
+    }
+  ],
+  "terminalSessions": [
+    {
+      "pid": 36493,
+      "status": "unchanged"
+    },
+    {
+      "pid": 58159,
+      "status": "unchanged"
+    },
+    {
+      "pid": 6017,
+      "status": "unchanged"
+    },
+    {
+      "pid": 30058,
+      "status": "unchanged"
+    },
+    {
+      "pid": 54463,
+      "status": "unchanged"
+    },
+    {
+      "pid": 51532,
+      "status": "exited_after_switches"
+    },
+    {
+      "pid": 56262,
+      "status": "exited_after_switches"
+    }
+  ],
+  "shellUnchanged": true,
+  "conversationUnchanged": true,
+  "assistantMessagesUnchanged": true,
+  "draftsUnchanged": true,
+  "appReceiptsUnchanged": true,
+  "reconnectCheck": "passed",
+  "wifiRestored": true,
+  "verifiedAt": "2026-09-18T05:21:43.921856+00:00",
+  "status": "PASS_ACCOUNT_FLOW",
+  "ethernetRemainsConnected": true,
+  "physicalUI": {
+    "testFlightUpdated102To103": true,
+    "activeIdentityAgreesWithMac": true,
+    "previewPreservesRuntime": true,
+    "alternateAccountActive": true,
+    "originalAccountActiveAgain": true,
+    "disconnectObserved": true,
+    "reconnectObserved": true,
+    "freshAllowanceAndIdentityAfterReconnect": true,
+    "doneReturnsToWorkspace": true,
+    "originalReceiptsRetained": true,
+    "noActivationReplayedOnReconnect": true
+  },
+  "terminalLifetime": {
+    "status": "INCONCLUSIVE_FOR_TWO_PROCESSES",
+    "initialCount": 7,
+    "unchangedCount": 5,
+    "exitedPids": [
+      51532,
+      56262
+    ],
+    "exitObservedAt": "2026-09-18T05:09:11Z",
+    "sharedTty": "ttys003",
+    "switchStopTargets": [
+      84171,
+      28009
+    ],
+    "processControl": "Exact verified positive PID, SIGINT only; detached app-server launches.",
+    "exitCause": "Not established. User confirmation of a Terminal closure is pending."
+  },
+  "rawEvidencePrivacy": "Raw device metadata, app state, histories and system logs remain in the private app-support verification directory; no physical screenshots or account identifiers are published."
+}

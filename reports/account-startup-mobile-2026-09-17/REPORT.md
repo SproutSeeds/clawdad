@@ -1,6 +1,6 @@
 # Mac 163 and iPhone 103 account activation recovery
 
-Mac 0.7.0 (163) is installed and running. iPhone 0.7.0 (103) is processed by Apple and available to the existing ClawDad Internal TestFlight group. The account selected before installation is still verified by the running app server from the same isolated profile home. Physical iPhone acceptance remains pending because both paired devices are unavailable to device tools; iPhone Mirroring also reports that Mac Wi-Fi is off.
+Mac 0.7.0 (163) is installed and running. iPhone 0.7.0 (103) is processed by Apple and available to the existing ClawDad Internal TestFlight group. The account selected before installation is still verified by the running app server from the same isolated profile home. On September 18, build 103 was installed through TestFlight on the physical iPhone 15 Pro Max, and account preview, activation in both directions, and reconnection passed. The Terminal process-lifetime qualification below remains separate from those phone results.
 
 ## Behavior
 
@@ -26,7 +26,7 @@ Mac 0.7.0 (163) is installed and running. iPhone 0.7.0 (103) is processed by App
 | Assistant state | Conversation identity, messages, drafts and delivery receipts unchanged |
 | Terminal preservation | All 7 observed Codex processes retain PID, parent, TTY, start time and executable; shell configuration unchanged |
 | TestFlight | Build 103 VALID, assigned to ClawDad Internal, IN_BETA_TESTING; release notes read back |
-| Physical iPhone | Pending: paired device unavailable |
+| Physical iPhone | Build 103 installed; account preview, activation round trip, restored identity and reconnection passed |
 
 The native Mac test proves a startup timeout clears automatically with zero manual retry requests. The simulator cases cover account preview/activation, lost acknowledgement and large text, waiting for Mac, waiting for app work, explicit recovery, and unavailable identity. Final fixture screenshots are in `ios-ui-final/`. Simulator proof does not establish physical-device behavior.
 
@@ -43,9 +43,17 @@ Raw production snapshots remain under the private app-support verification direc
 - iPhone archive: `apps/ios/ClawDadMobile/build/releases/0.7.0-103-account-recovery/ClawDadMobile.xcarchive`.
 - Apple build ID: `28fa1a64-ead5-4da8-99a9-f81d3c51af1a`. The existing internal TestFlight group is the distribution destination. Public App Store review, external TestFlight review, npm, and Sparkle were outside this deployment.
 
-## Remaining acceptance
+## Physical acceptance on September 18
 
-Install build 103 from TestFlight on the physical iPhone, connect it to this Mac, preview an account without activating it, and verify that the reported active account stays unchanged. Then exercise an authorized account activation, reconnect, and confirm the active identity and original receipt. The automated coverage already exercises startup recovery, pending work, cancellation, lost acknowledgement, and explicit recovery; those results do not replace this phone check.
+The iPhone was reached over USB, updated from build 102 to 103 through TestFlight, and operated through iPhone Mirroring. Existing access was restored after Cody completed sign-in. Previewing another saved account changed its allowance display while the Mac's selected runtime and activation receipt stayed unchanged.
+
+Two phone-originated activations completed: the alternate account, then the original account. Each retained one original operation receipt, and the app-server protocol verified the selected identity and authorization home. The account epoch advanced from 1 to 3. The phone showed Activating, an unavailable active identity during the server transition, and the verified active account after completion.
+
+The phone's Disconnect and Connect controls were exercised. After reconnection it showed the original active account and a fresh allowance, with no repeated activation. Done returned to the workspace. Mirroring's automated scrolling did not move the Settings view, so Cody scrolled to the connection controls; this was an automation limitation, not a claimed failure of physical touch scrolling.
+
+All four saved full-history hashes, models, reasoning settings and directories matched the pre-check snapshot. Assistant conversation identity, messages, drafts, delivery receipts, and shell configuration were unchanged. Five of the seven initial Terminal process identities also matched. The two other processes in `ttys003` exited at 00:09:11 CDT, after both switch handoffs had verified; their exit cause has not yet been established. Switch receipts targeted only app-server PIDs 84171 and 28009. The installed process-control module matches the reviewed source and signals only the exact verified positive PID with SIGINT. Full seven-process lifetime preservation is therefore not claimed for this phone check; user confirmation of a separate Terminal closure is pending.
+
+Mac Wi-Fi was enabled with Cody's permission for Mirroring, then restored to off. Ethernet remained connected. The Mac's original account and profile were restored. Physical checks sent no model turns. Raw device metadata, production state, and OS logs remain private; sanitized results are in `physical-iphone-verification.json`.
 
 ## Workspace handoff
 

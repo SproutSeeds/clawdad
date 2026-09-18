@@ -26,8 +26,12 @@
       "failed": 0
     },
     "physicalIPhone": {
-      "status": "PENDING",
-      "reason": "Paired devices unavailable; iPhone Mirroring reports Mac Wi-Fi off."
+      "status": "PASS_ACCOUNT_FLOW",
+      "verifiedAt": "2026-09-18T05:21:43.921856+00:00",
+      "build": 103,
+      "device": "iPhone 15 Pro Max",
+      "evidence": "physical-iphone-verification.json",
+      "terminalLifetime": "Five process identities unchanged; two observed exits require attribution."
     }
   },
   "logSha256": {
@@ -51,6 +55,7 @@
     "release-verification.json",
     "testflight-status.json",
     "source-manifest.json",
-    "ios-ui-final/manifest.json"
+    "ios-ui-final/manifest.json",
+    "physical-iphone-verification.json"
   ]
 }
