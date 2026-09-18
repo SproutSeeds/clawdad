@@ -1,0 +1,24 @@
+{
+  "recordedAt": "2026-09-18T17:15:33.944188+00:00",
+  "head": "185878c58612791d98893cf688abc16ac825386a",
+  "branch": "codex/hermes-hybrid-supervisor-ui",
+  "status": " M .agents/skills/clawdad-release/SKILL.md\n M lib/assistant-app-server.mjs\n M lib/assistant-coordinator.mjs\n M lib/assistant-mcp.mjs\n M lib/assistant-presentation.mjs\n M lib/assistant-runtime.mjs\n M lib/codex-account-work-evidence.mjs\n M lib/codex-app-account-runtime.mjs\n M lib/codex-thread-control.mjs\n M native/macos/build-app.sh\n M native/macos/package-release.sh\n M plugins/clawdad-codex-integration/.codex-plugin/plugin.json\n M plugins/clawdad-codex-integration/skills/clawdad-release/SKILL.md\n M test/assistant-coordinator.test.mjs\n M test/assistant-presentation.test.mjs\n?? assets/wordmark-explorations/\n?? cloud/native/\n?? lib/assistant-turn-control-instructions.mjs\n?? lib/assistant-turn-control.mjs\n?? marketing-site/\n?? native/macos/storage-workflow.sh\n?? reports/assistant-tool-coverage-2026-09-17/\n?? reports/assistant-turn-control-2026-09-17/\n?? reports/assistant-turn-control-release-2026-09-17/\n?? reports/multi-provider-thread-audit-2026-09-17/\n?? reports/windows-desktop-audit-2026-09-17/\n?? test/assistant-turn-control.test.mjs\n",
+  "trackedDirty": {
+    ".agents/skills/clawdad-release/SKILL.md": "edab4bd33d7e8f1b5e420a898ed22beb34b8e1c9e28873e3100662e6a5d0736b",
+    "lib/assistant-app-server.mjs": "b7bcc773215f38dc835fc455173b0f8ebe09fb94762dc704596452116ab2fb89",
+    "lib/assistant-coordinator.mjs": "4cbb8735cbf9f985dc47c9d34d7ae38e69648c30d9ee33e5c87f6a37a6a8542d",
+    "lib/assistant-mcp.mjs": "1de647d09293fa74269c260e0db9e0e01760803186b3a713ae72b2b85a926602",
+    "lib/assistant-presentation.mjs": "2e35b3b81b407ce96b834259727566fa172dac4bb7dbb642d70b5bb5077355b6",
+    "lib/assistant-runtime.mjs": "0630949715ecfd34d59b08cb4eca3a7cc680de2e5e54d3cdb2d13963e58fe3f3",
+    "lib/codex-account-work-evidence.mjs": "d66d02acb398a198247ec4f5cb1b9b6e9a1be0e49569d6ac0f12a7c5b708fb13",
+    "lib/codex-app-account-runtime.mjs": "0ad30ccc1ef1e41e898fcfde91c7f772122f2e09eb20155bd86f9327306f34b4",
+    "lib/codex-thread-control.mjs": "f8edc064a7456eea275cc8e0b1f6cffbb656c82856b24c2d14a5da7d3c39e4e5",
+    "native/macos/build-app.sh": "8f9a09a85ac5c247ec01c151ac9ce963b431008b595c65a96721f25201e95e0d",
+    "native/macos/package-release.sh": "8e01162feca8b592b265fdc1328506fcde6abfe80d9a0506dbdd052106d79569",
+    "plugins/clawdad-codex-integration/.codex-plugin/plugin.json": "2c7588b4d98dca91017a007581f506ec6880c79c1f11f82571824ac40c1dc4c5",
+    "plugins/clawdad-codex-integration/skills/clawdad-release/SKILL.md": "edab4bd33d7e8f1b5e420a898ed22beb34b8e1c9e28873e3100662e6a5d0736b",
+    "test/assistant-coordinator.test.mjs": "62209bee3ec1d19c2af57a6662e8a5004ad26c501756cb8022a2355b5e60aee5",
+    "test/assistant-presentation.test.mjs": "d49ef5b83fb5c354595c95bda3ef9b35927d0e5be8ec17eeb20efcfcad76c4be"
+  },
+  "scope": "Native ClawDad app-server unification, persisted host permissions, subscription-only routing, tools and computer-use parity."
+}

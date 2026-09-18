@@ -33,6 +33,7 @@ async function fixture(t){
     if(method==='thread/name/set'){thread.name=args.name;return {};}
     if(method==='thread/unarchive'){thread.archived=false;return {thread};}
     if(method==='thread/resume'){loaded.add(args.threadId);return {thread};}
+    if(method==='thread/unsubscribe')return {status:'unsubscribed'};
     if(method==='thread/queue/add'){
       const entry={id:id(),...args};queue.set(args.threadId,[...(queue.get(args.threadId)||[]),entry]);
       if(loseReply){loseReply=false;throw Object.assign(Error('Lost acknowledgement'),{uncertain:true});}return {queuedSubmission:entry};

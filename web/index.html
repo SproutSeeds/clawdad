@@ -359,6 +359,7 @@
               <div class="composer-tools-mode-group" aria-label="Access mode">
                 <label class="composer-tools-label" for="composerAccessSelect">Access</label>
                 <select id="composerAccessSelect" class="composer-access-select" name="access">
+                  <option value="host">Computer default</option>
                   <option value="repo">Repo scoped</option>
                   <option value="full">Full access</option>
                 </select>
@@ -782,6 +783,23 @@
             </div>
           </section>
 
+          <section id="agentAccessSettings" class="settings-section" aria-labelledby="agentAccessTitle">
+            <div id="agentAccessTitle" class="settings-section-title">Agent access</div>
+            <p class="settings-root-meta">Saved on this computer for new Assistant and app-server requests. Your selected ChatGPT subscription supplies the intelligence.</p>
+            <div data-form class="assistant-model-form">
+              <label for="agentAccessMode">Files and commands</label>
+              <select id="agentAccessMode" name="mode"><option value="full">Full computer access</option><option value="workspace">Project folders</option><option value="read-only">Read only</option></select>
+              <label for="agentAccessReviewer">Additional permission requests</label>
+              <select id="agentAccessReviewer" name="reviewer"><option value="auto_review">Automatic safety review</option><option value="user">Ask me</option></select>
+              <label><input type="checkbox" name="nativeTools"> Enable ClawDad tools</label>
+              <label><input type="checkbox" name="computerUse"> Enable computer and Terminal control</label>
+              <p class="settings-root-meta">Computer control also uses the system permissions shown under Remote Assist. Connected tools retain their own sign-ins. Research reviewers evaluate evidence with read-only access.</p>
+              <button data-save type="button" class="detail-action-button">Save agent access</button>
+            </div>
+            <button data-refresh type="button" class="detail-action-button">Refresh permissions and questions</button>
+            <div role="status" class="settings-root-meta"></div>
+            <div data-decisions></div>
+          </section>
           <section id="assistantModelSettings" class="settings-section" aria-labelledby="assistantModelSettingsTitle">
             <div class="settings-section-title" id="assistantModelSettingsTitle">Assistant
               <button type="button" popovertarget="assistantModelInfo" class="assistant-info" aria-label="About Assistant model settings">ⓘ</button>

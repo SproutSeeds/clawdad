@@ -48,6 +48,8 @@ struct AssistantModelSettingsPanel: View {
           Spacer()
           AssistantSettingsInfo()
         }
+        NavigationLink("Agent access and pending questions") { AgentAccessSettingsView(controller: controller) }
+          .frame(minHeight: 44).accessibilityIdentifier("clawdad.settings.agent-access")
         if let configuration {
           editor("Main Assistant", scope: "main", choice: configuration.main, configuration: configuration)
           Divider()
@@ -96,6 +98,156 @@ struct AssistantModelSettingsPanel: View {
       guard let settings = reply["settings"] else { throw AssistantProtocolError.invalid }
       configuration = try JSONDecoder().decode(AssistantModelConfiguration.self, from: JSONEncoder().encode(settings))
       error = ""
+    } catch { self.error = error.localizedDescription }
+  }
+}
+
+private struct AgentAccessPolicy: Codable, Equatable {
+  var mode: String
+  var reviewer: String
+  var nativeTools: Bool
+  var computerUse: Bool
+}
+private struct AgentAccessConfiguration: Codable {
+  var revision: Int
+  var policy: AgentAccessPolicy
+}
+private struct AgentPendingDecision: Codable, Identifiable {
+  var id: String
+  var method: String
+  var params: [String: AssistantValue]
+}
+
+private struct AgentAccessSettingsView: View {
+  @ObservedObject var controller: MobileAssistantController
+  @Environment(\.dismiss) private var dismiss
+  @State private var configuration: AgentAccessConfiguration?
+  @State private var policy = AgentAccessPolicy(mode: "full", reviewer: "auto_review", nativeTools: true, computerUse: true)
+  @State private var decisions: [AgentPendingDecision] = []
+  @State private var busy = false
+  @State private var status = ""
+  @State private var pending: (id: String, args: [String: AssistantValue])?
+  var body: some View {
+    Form {
+      Section("This computer") {
+        Picker("Files and commands", selection: $policy.mode) {
+          Text("Full computer access").tag("full")
+          Text("Project folders").tag("workspace")
+          Text("Read only").tag("read-only")
+        }
+        Picker("Additional permissions", selection: $policy.reviewer) {
+          Text("Automatic safety review").tag("auto_review")
+          Text("Ask me").tag("user")
+        }
+        Toggle("ClawDad tools", isOn: $policy.nativeTools)
+        Toggle("Computer and Terminal control", isOn: $policy.computerUse)
+        Text("Saved on the selected computer for new Assistant and app-server requests. Your selected ChatGPT subscription supplies the intelligence. Current work keeps its permissions.")
+          .font(.caption).foregroundStyle(.secondary)
+        Text("Computer control also needs the desktop system permissions shown under Remote Assist. Connected tools keep their own sign-ins. Research reviewers evaluate evidence with read-only access.")
+          .font(.caption).foregroundStyle(.secondary)
+        Button("Save agent access") { Task { await save() } }.disabled(configuration == nil)
+          .accessibilityIdentifier("clawdad.settings.agent-access.save")
+      }.disabled(busy)
+      if !status.isEmpty { Section { Text(status).font(.caption) } }
+      Section { Button("Refresh permissions and questions") { Task { await refresh() } }.disabled(busy) }
+      ForEach(decisions) { decision in
+        Section("Agent needs your decision") {
+          NavigationLink(decision.params["reason"]?.string ?? decision.params["message"]?.string ?? decision.method) {
+            AgentDecisionView(controller: controller, decision: decision) { await refresh() }
+          }
+        }
+      }
+    }
+    .navigationTitle("Agent access").clawDadInlineNavigationTitle()
+    #if os(iOS)
+    .navigationBarBackButtonHidden(true)
+    #endif
+    .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Back") { dismiss() }.keyboardShortcut(.cancelAction) } }
+    .task { await refresh() }
+    .onChange(of: controller.settingsScope) { _, _ in dismiss() }
+  }
+  private func refresh() async {
+    guard !busy else { return }; busy = true; defer { busy = false }
+    do {
+      let reply = try await controller.settingsRequest("access.read")
+      guard let value = reply["access"] else { throw AssistantProtocolError.invalid }
+      let saved = try JSONDecoder().decode(AgentAccessConfiguration.self, from: JSONEncoder().encode(value))
+      configuration = saved; policy = saved.policy
+      decisions = try JSONDecoder().decode([AgentPendingDecision].self, from: JSONEncoder().encode(reply["pendingDecisions"] ?? .array([])))
+      status = reply["nativeOnline"]?.bool == true ? "Connected to this computer." : "Keep the desktop app open for native control."
+    } catch { status = error.localizedDescription }
+  }
+  private func save() async {
+    guard !busy, let configuration else { return }; busy = true; defer { busy = false }
+    do {
+      let args: [String: AssistantValue] = ["policy": try .encode(policy), "expectedRevision": .number(Double(configuration.revision))]
+      if pending?.args != args { pending = (UUID().uuidString.lowercased(), args) }
+      guard let pending else { return }
+      let reply = try await controller.settingsRequest("access.update", args: pending.args, id: pending.id)
+      guard let value = reply["access"] else { throw AssistantProtocolError.invalid }
+      self.configuration = try JSONDecoder().decode(AgentAccessConfiguration.self, from: JSONEncoder().encode(value))
+      self.pending = nil; status = "Saved for subsequent requests on this computer."
+    } catch { status = error.localizedDescription }
+  }
+}
+
+private struct AgentDecisionView: View {
+  @ObservedObject var controller: MobileAssistantController
+  let decision: AgentPendingDecision
+  var saved: () async -> Void
+  @Environment(\.dismiss) private var dismiss
+  @State private var answers: [String: String] = [:]
+  @State private var content = "{}"
+  @State private var error = ""
+  @State private var busy = false
+  private var questions: [[String: AssistantValue]] { decision.params["questions"]?.array?.compactMap(\.object) ?? [] }
+  var body: some View {
+    Form {
+      Section {
+        Text(decision.params["reason"]?.string ?? decision.params["message"]?.string ?? decision.method)
+        if let command = decision.params["command"]?.string { Text(command).font(.caption.monospaced()).textSelection(.enabled) }
+        ForEach(Array(questions.enumerated()), id: \.offset) { _, question in
+          let id = question["id"]?.string ?? ""
+          Text(question["question"]?.string ?? question["header"]?.string ?? "Answer")
+          if let options = question["options"]?.array {
+            ForEach(Array(options.enumerated()), id: \.offset) { _, option in
+              if let label = option.object?["label"]?.string { Button(label) { answers[id] = label } }
+            }
+          }
+          TextField("Your answer", text: Binding(get: { answers[id] ?? "" }, set: { answers[id] = $0 }), axis: .vertical)
+        }
+        if decision.method == "mcpServer/elicitation/request" {
+          Text("Connected tool response (JSON)").font(.caption)
+          TextEditor(text: $content).frame(minHeight: 120)
+        }
+      }
+      Section {
+        Button(questions.isEmpty ? "Allow once" : "Submit answers") { Task { await send("approve") } }
+        Button("Decline", role: .destructive) { Task { await send("decline") } }
+        if !error.isEmpty { Text(error).foregroundStyle(ClawDadTheme.gold) }
+      }
+    }.disabled(busy).navigationTitle("Agent decision").clawDadInlineNavigationTitle()
+    #if os(iOS)
+    .navigationBarBackButtonHidden(true)
+    #endif
+    .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Back") { dismiss() }.keyboardShortcut(.cancelAction) } }
+    .onChange(of: controller.settingsScope) { _, _ in dismiss() }
+  }
+  private func send(_ choice: String) async {
+    guard !busy else { return }; busy = true; defer { busy = false }
+    do {
+      var args: [String: AssistantValue] = ["approvalId": .string(decision.id), "decision": .string(choice)]
+      if !questions.isEmpty {
+        args["answers"] = .object(Dictionary(uniqueKeysWithValues: questions.map { question in
+          let id = question["id"]?.string ?? ""
+          return (id, .object(["answers": .array([.string(answers[id] ?? "")])]))
+        }))
+      }
+      if decision.method == "mcpServer/elicitation/request", choice == "approve" {
+        args["content"] = try JSONDecoder().decode(AssistantValue.self, from: Data(content.utf8))
+      }
+      _ = try await controller.settingsRequest("access.decide", args: args)
+      await saved(); dismiss()
     } catch { self.error = error.localizedDescription }
   }
 }

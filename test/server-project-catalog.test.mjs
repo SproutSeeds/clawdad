@@ -486,6 +486,21 @@ test("app shell injects a fresh build fingerprint for frontend assets", async ()
     assert.match(jsResponse.headers.get("cache-control") || "", /immutable/u);
     assert.equal(jsResponse.headers.get("pragma"), null);
 
+    // A missing imported module prevents the entire Assistant/Settings bundle
+    // from executing even when the app shell itself returns 200.
+    const modules=[...html.matchAll(/<script[^>]+src="([^"]+\.js(?:\?[^"]*)?)"/gu)].map(match=>new URL(match[1],baseUrl));
+    const seenModules=new Set();
+    for(const url of modules){
+      if(seenModules.has(url.pathname))continue;seenModules.add(url.pathname);
+      const response=await fetch(url,{headers:{"tailscale-user-login":"tester@example.com"}});
+      assert.equal(response.status,200,`missing browser module ${url.pathname}`);
+      assert.match(response.headers.get('content-type')||'',/javascript/u);
+      const source=await response.text();
+      for(const match of source.matchAll(/\bimport\s+(?:[^;'"\n]+?\s+from\s*)?['"](\.\.?\/[^'"]+)['"]/gu))modules.push(new URL(match[1],url));
+      assert.ok(seenModules.size<100,'browser module graph must remain bounded');
+    }
+    assert.ok(seenModules.has('/agent-access-settings.js'));
+
     const cssPath = html.match(/href="([^"]*\/app\.css\?v=[^"]+)"/u)?.[1];
     assert.ok(cssPath, "expected app shell to reference versioned app.css");
     const cssResponse = await fetch(new URL(cssPath, baseUrl), {

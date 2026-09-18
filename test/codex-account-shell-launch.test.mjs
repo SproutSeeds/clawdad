@@ -44,7 +44,7 @@ test('fresh manual launches pin each selected account and preserve exact argumen
   const launch=id=>launchSelectedCodex({...s,args,id,execute:(...values)=>calls.push(values)});
   await launch('first');selected='sun';await launch('second');
   assert.equal(calls[0][2].CODEX_HOME,path.join(s.root,'dough'));assert.equal(calls[1][2].CODEX_HOME,path.join(s.root,'sun'));
-  for(const [,argv,env] of calls){const split=argv.indexOf('resume')+1;assert.deepEqual([...argv.slice(1,split),...argv.slice(split+4)],args);assert.equal(env.HOME,s.env.HOME);assert.match(env.CLAWDAD_ACCOUNT_LAUNCH_REQUEST_ID,/^[a-f0-9]{64}$/);}
+  for(const [,argv,env] of calls){const split=argv.indexOf('resume')+1;assert.deepEqual([...argv.slice(1,split),...argv.slice(split+s.route('dough').configArgs.length)],args);assert.equal(env.HOME,s.env.HOME);assert.match(env.CLAWDAD_ACCOUNT_LAUNCH_REQUEST_ID,/^[a-f0-9]{64}$/);}
   assert.notEqual(calls[0][2].CLAWDAD_ACCOUNT_LAUNCH_REQUEST_ID,calls[1][2].CLAWDAD_ACCOUNT_LAUNCH_REQUEST_ID);
   assert.ok(!(await fs.readFile(s.launches.file('first'),'utf8')).includes('Line one'));assert.ok(!(await fs.readFile(s.launches.file('first'),'utf8')).includes('/project with spaces'));
   await assert.rejects(launch('first'),/already has a receipt/);assert.equal(calls.length,2);

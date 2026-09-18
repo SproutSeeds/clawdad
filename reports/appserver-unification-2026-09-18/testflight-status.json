@@ -1,0 +1,14 @@
+{
+  "at": "2026-09-18T18:00:15.239Z",
+  "beta": {
+    "groupId": "bbba6b69-7ac4-4d56-bc41-e9456d56b02e",
+    "groupName": "ClawDad Internal",
+    "buildId": "df124c68-5a53-48f9-ab60-532290d3ec0f",
+    "buildNumber": "104",
+    "processingState": "VALID",
+    "usesNonExemptEncryption": false,
+    "assignedToGroup": true,
+    "appLocalizationConfigured": true,
+    "buildLocalizationConfigured": true
+  }
+}

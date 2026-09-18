@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {spawn} from 'node:child_process';
+import {spawn,spawnSync} from 'node:child_process';
 import {selectedCodexLaunch,withCodexAccountLaunch} from '../lib/codex-account-launch.mjs';
 import {AssistantCoordinator,assistantExecArguments} from '../lib/assistant-coordinator.mjs';
 import {ResearchReviewRunner} from '../lib/research-evidence.mjs';
@@ -11,6 +11,16 @@ import {ResearchReviewRunner} from '../lib/research-evidence.mjs';
 const profile=name=>({verified:true,operationId:'switch-'+name,accountId:name,accountKey:(name==='one'?'a':'b').repeat(64),
   method:'chatgpt',authorizationHome:'/private/profiles/'+name,sqliteHome:'/private/history',layoutVerified:true});
 const launch=name=>selectedCodexLaunch(profile(name));
+
+test('installed Codex parser retains account overrides beside per-exec configuration without a model call',async t=>{
+  const binary=process.env.CLAWDAD_TEST_CODEX_BINARY||'/opt/homebrew/bin/codex';
+  try{await fs.access(binary,fs.constants.X_OK);}catch{t.skip('Installed Codex binary unavailable');return;}
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'account-parser-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));
+  const route={...launch('one'),configArgs:['-c','cli_auth_credentials_store="diagnostic_invalid_store"']};
+  const result=spawnSync(binary,withCodexAccountLaunch(['exec','--skip-git-repo-check','-c','model_reasoning_effort="low"','-'],route),
+    {input:'',encoding:'utf8',timeout:10000,env:{...route.env,CODEX_HOME:root}});
+  assert.match(result.stderr,/diagnostic_invalid_store/);assert.doesNotMatch(result.stderr,/No prompt provided via stdin/);
+});
 
 test('selected subscription launch omits inherited API routing and preserves unrelated environment',()=>{
   const env={PATH:'/bin',HOME:'/Users/fixture',SYNTHETIC:'keep',OPENAI_API_KEY:'fixture-only',CODEX_API_KEY:'fixture-only',
@@ -28,7 +38,8 @@ test('account flags preserve image-only positional captions, stdin and exact res
   for(const text of ['', '  \r\n', 'A normal message']){
     const original=assistantExecArguments({root:'/private/test',sessionId,images:['/private/test/image.png'],text});
     const routed=withCodexAccountLaunch(original,launch('one'));
-    assert.deepEqual(routed.slice(4),original);assert.ok(routed.includes(sessionId));assert.equal(routed.at(-1),original.at(-1));
+    assert.equal(routed[0],'exec');assert.deepEqual(routed.slice(1,1+launch('one').configArgs.length),launch('one').configArgs);
+    assert.deepEqual([routed[0],...routed.slice(1+launch('one').configArgs.length)],original);assert.ok(routed.includes(sessionId));assert.equal(routed.at(-1),original.at(-1));
   }
 });
 

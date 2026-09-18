@@ -1416,7 +1416,7 @@ final class CloudSession: ObservableObject {
   func sendMessage(
     _ message: String,
     dispatchMode: String = "direct",
-    permissionMode: String = "approve",
+    permissionMode: String = "host",
     imageAttachments: [MobileImageAttachment] = []
   ) {
     let text = message.trimmingCharacters(in: .whitespacesAndNewlines)

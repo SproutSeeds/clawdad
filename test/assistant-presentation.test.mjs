@@ -63,3 +63,25 @@ test('directory names are readable and CLI commands never become card titles',()
   assert.equal(assistantTaskName('RoomWave'),'RoomWave');
   assert.equal(assistantTaskName('cody — codex --sandbox read-only'),'Terminal agent');
 });
+
+test('exact-turn receipt rows remain readable without a final reply and preserve evidence stages',()=>{
+  const jobs=[
+    {id:'steer',action:'appserver.steer',status:'submitted',args:{text:'Literal clarification'},turnId:'same-turn',
+      result:{summary:'Context accepted; recorded delivery awaits verification.'}},
+    {id:'uncertain',action:'appserver.interrupt',status:'attention',args:{},turnId:'same-turn',
+      result:{summary:'Outcome uncertain; reconcile this original receipt.'}},
+    {id:'stopped',action:'appserver.interrupt',status:'completed',args:{},turnId:'same-turn',
+      result:{summary:'Turn interrupted. Command and downstream tool termination are unverified. Completed effects remain.'}},
+  ].map(job=>({...job,threadId:'synthetic-thread',controlReceipt:{targetIdentity:{providerHome:'/private/owner'},authorization:{quote:'private audit record'}}}));
+  const state={jobs,messages:[]},before=structuredClone(state),view=assistantPresentation(state);
+  assert.equal(view.tasks.length,3);
+  assert.deepEqual(view.tasks.map(job=>job.status),['submitted','attention','completed']);
+  assert.equal(view.tasks[0].requestText,'Literal clarification');
+  assert.equal(view.tasks[1].requestText,'Stop the inspected ClawDad turn');
+  for(let i=0;i<jobs.length;i++){
+    assert.ok(view.tasks[i].response.startsWith(jobs[i].result.summary));
+    assert.ok(view.tasks[i].response.includes('Turn: same-turn. Receipt: '+jobs[i].id));
+    assert.equal(view.tasks[i].result,undefined);assert.equal(view.tasks[i].controlReceipt,undefined);
+  }
+  assert.deepEqual(state,before);assert.equal(view.messages.length,0);
+});

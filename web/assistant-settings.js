@@ -30,7 +30,7 @@ if(section){
     form.append(text('label','Model'),model,text('label','Reasoning effort'),effort,save,note);validate();
     let pending=null;
     form.onsubmit=async event=>{
-      event.preventDefault();save.disabled=true;
+      event.preventDefault();event.stopPropagation();save.disabled=true;
       const args={scope,threadId:supervisor?.id||null,inherit:inheritance.checked,selection:inheritance.checked?null:{model:model.value,reasoningEffort:effort.value},expectedRevision:configuration.revision};
       const fingerprint=JSON.stringify(args);if(pending?.fingerprint!==fingerprint)pending={fingerprint,requestId:crypto.randomUUID()};
       try{configuration=await request('settings.update',{...args,requestId:pending.requestId});render();status.textContent='Saved. Applies to subsequent turns or reviews.';}

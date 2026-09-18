@@ -113,7 +113,7 @@ const state = {
   projectRootsLoading: false,
   dispatchPending: false,
   dispatchMode: "direct",
-  accessMode: "repo",
+  accessMode: "host",
   modelOptions: [],
   modelCatalogProject: "",
   modelsLoading: false,
@@ -548,7 +548,7 @@ const composerReasoningEffortKey = "clawdad-composer-reasoning-effort-v1";
 const voiceInputDeviceKey = "clawdad-voice-input-device-v1";
 const newSessionSelectValue = "__clawdad_new_session__";
 const dispatchModes = ["direct", "queue"];
-const accessModes = ["repo", "full"];
+const accessModes = ["host", "repo", "full"];
 const dispatchModeDetails = {
   direct: {
     label: "Direct",
@@ -13707,18 +13707,18 @@ function normalizeDispatchMode(value) {
 }
 
 function normalizeAccessMode(value) {
-  return accessModes.includes(value) ? value : "repo";
+  return accessModes.includes(value) ? value : "host";
 }
 
 function permissionModeForAccessMode(value = state.accessMode) {
-  return normalizeAccessMode(value) === "full" ? "full" : "approve";
+  return {host:"host",repo:"approve",full:"full"}[normalizeAccessMode(value)];
 }
 
 function restoreComposerAccessMode() {
   try {
     state.accessMode = normalizeAccessMode(localStorage.getItem(composerAccessModeKey));
   } catch {
-    state.accessMode = "repo";
+    state.accessMode = "host";
   }
 }
 
@@ -13747,7 +13747,7 @@ function updateAccessModeControl() {
   if (elements.composerAccessSelect.value !== mode) {
     elements.composerAccessSelect.value = mode;
   }
-  elements.composerAccessSelect.title = mode === "full" ? "Full access" : "Repo scoped";
+  elements.composerAccessSelect.title = {host:"Computer default",full:"Full access",repo:"Repo scoped"}[mode];
 }
 
 function normalizeCodexModelOption(value = {}) {

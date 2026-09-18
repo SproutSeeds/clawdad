@@ -1,6 +1,7 @@
 import {createSpeechAudio,speechDeviceId,syncSpeechOutput} from './speech-output.js';
 import {researchSupervisorPanel} from './research-supervisor.js';
 import './assistant-settings.js';
+import './agent-access-settings.js';
 const $ = (id) => document.getElementById(id);
 const dialog = $('assistantDialog');
 if (dialog) {

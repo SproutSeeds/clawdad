@@ -3,6 +3,9 @@ set -euo pipefail
 
 script_dir=${0:A:h}
 repo_root=${script_dir:h:h}
+source "$script_dir/storage-workflow.sh"
+trap clawdad_storage_end EXIT
+clawdad_storage_begin
 package_version="${CLAWDAD_RELEASE_VERSION:-$(node -p "require('${repo_root}/package.json').version")}"
 app_version="${CLAWDAD_APP_VERSION:-0.7.0}"
 app_build="${CLAWDAD_APP_BUILD:-42}"
@@ -16,6 +19,9 @@ release_dir="${CLAWDAD_RELEASE_DIR:-$script_dir/dist/releases/$package_version}"
 app_dir="$script_dir/dist/ClawDad.app"
 appcast_dir="$release_dir/appcast"
 staging_dir="$release_dir/dmg-root"
+if [[ -n "$clawdad_storage_temp" ]]; then
+  staging_dir="$clawdad_storage_temp/dmg-root"
+fi
 zip_name="ClawDad-${package_version}-mac${artifact_suffix}.zip"
 dmg_name="ClawDad-${package_version}-mac${artifact_suffix}.dmg"
 zip_path="$appcast_dir/$zip_name"

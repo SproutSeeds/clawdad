@@ -80,14 +80,15 @@ test('revoked source authentication preserves fully verified idle threads and re
   f.owner.pid=456;f.owner.processIdentity='destination';
   await assert.rejects(f.driver.observe({operationId:'switch',source}),{code:'shared_authentication_expired'});
   assert.equal(accountReads,7,'Revoked tokens are not pointlessly retried');
-  assert.equal(f.state.calls.some(c=>/login|turn\/|thread\/unsubscribe/.test(c.method)),false);
+  assert.equal(f.state.calls.some(c=>/login|turn\//.test(c.method)),false);
+  assert.equal(f.state.calls.filter(c=>c.method==='thread/unsubscribe').length,1,'the settings reader releases only its own subscription');
 });
 test('supported RPC capture verifies complete history/account/settings, keeps unsubscribe separate from release',async t=>{
   const f=await fixture(t);const source=await f.driver.observe({operationId:'switch',capture:true});
   assert.equal(source.threads.length,1);assert.equal(source.threads[0].busy,false);assert.equal(source.accountVerified,true);
   const args={operationId:'switch',requestId:'b'.repeat(64),source,target:{accountKey:source.accountKey},thread:source.threads[0]};
   await f.driver.release(args);await f.driver.release(args);
-  assert.equal(f.state.calls.filter(c=>c.method==='thread/unsubscribe').length,1);
+  assert.equal(f.state.calls.filter(c=>c.method==='thread/unsubscribe').length,2,'one inspection cleanup and one idempotent release');
   assert.equal((await f.driver.observe({...args})).threads.length,1);
   await assert.rejects(f.driver.stopIdle({...args,requestId:'c'.repeat(64)}),e=>e.code==='shared_owner_not_released');
   assert.equal(f.state.stopped,undefined);
@@ -104,7 +105,8 @@ test('unmaterialized first-turn history has an actionable specific failure and c
   f.client.request=async(method,args)=>{if(method==='thread/turns/list')throw Error('thread '+id+' is not materialized yet; thread/turns/list is unavailable before first user message');return original(method,args);};
   await assert.rejects(f.driver.observe({operationId:'switch',capture:true}),e=>e.code==='shared_thread_not_persisted'&&e.appAccountSafe===true);
   assert.equal(f.state.stopped,undefined);assert.equal(f.state.launched,undefined);
-  assert.equal(f.state.calls.some(c=>/turn\/|thread\/unsubscribe/.test(c.method)),false);
+  assert.equal(f.state.calls.some(c=>/turn\//.test(c.method)),false);
+  assert.equal(f.state.calls.filter(c=>c.method==='thread/unsubscribe').length,1,'failed history inspection leaves no configuration-pinning subscription');
 });
 test('no replay after unknown RPC delivery; exact target permission is required for every effect',async t=>{
   const f=await fixture(t),source=await f.driver.observe({operationId:'switch',capture:true});
@@ -114,7 +116,7 @@ test('no replay after unknown RPC delivery; exact target permission is required 
   await assert.rejects(f.driver.launch(args),e=>e.code==='shared_rpc_delivery_uncertain');
   assert.equal((await f.driver.reconcile(args)).state,'uncertain');
   f.state.permitted=false;await assert.rejects(f.driver.release({...args,requestId:'e'.repeat(64)}),/Paused/);
-  assert.equal(f.state.calls.some(c=>c.method==='thread/unsubscribe'),false);
+  assert.equal(f.state.calls.filter(c=>c.method==='thread/unsubscribe').length,1,'the rejected release adds no subscription operation beyond inspection cleanup');
 });
 test('resume refuses foreign ownership and never sends a message or replaces history',async t=>{
   const f=await fixture(t),source=await f.driver.observe({operationId:'switch',capture:true});

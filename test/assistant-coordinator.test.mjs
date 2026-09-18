@@ -127,6 +127,13 @@ test('CLI arguments use an explicit conversation model, exact session, and stdin
   assert.ok(args.includes('model_reasoning_effort="low"'));
   assert.ok(args.includes('sandbox_mode="read-only"'));
   assert.ok(args.includes('mcp_servers.clawdad_assistant.required=true'));
+  const scopedApprovals=args.filter(arg=>arg.startsWith('mcp_servers.clawdad_assistant.tools.')&&arg.includes('.approval_mode='));
+  assert.deepEqual(scopedApprovals.map(arg=>arg.split('.')[3]).sort(),[
+    'inspect_thread','interrupt_thread','list_threads','list_workspaces','read_thread_history',
+    'reconcile_thread_request','steer_thread','task_status','workspace'].sort());
+  assert.ok(scopedApprovals.every(arg=>arg.endsWith('="approve"')));
+  assert.equal(args.some(arg=>arg.startsWith('mcp_servers.clawdad_assistant.default_tools_approval_mode=')),false);
+  assert.equal(args.some(arg=>arg.startsWith('approval_policy=')),false);
   assert.equal(JSON.parse(args.find(a=>a.startsWith('mcp_servers.clawdad_assistant.args=')).split('=').slice(1).join('='))[0],'/test/a\\b/mcp.mjs');
   assert.throws(()=>assistantExecArguments({root:'/tmp/assistant',sessionId:'--last'}),/invalid/);
 });
@@ -246,7 +253,7 @@ test('actual service death preserves interrupted work and blocks an orphaned chi
   let orphan;
   t.after(()=>{parent.kill('SIGKILL');if(orphan)try{process.kill(orphan,'SIGTERM');}catch{}});
   for(let i=0;i<500;i++){
-    const lease=JSON.parse(await fs.readFile(path.join(root,'conversation.lock'),'utf8').catch(()=>'{}'));
+    const lease=await fs.readFile(path.join(root,'conversation.lock'),'utf8').then(JSON.parse).catch(()=>({}));
     const state=JSON.parse(await fs.readFile(path.join(root,'state.json'),'utf8').catch(()=>'{}'));
     if(lease.childPid&&state.jobs?.find(job=>job.id==='interrupted-main')?.sessionId===id){orphan=lease.childPid;break;}
     await new Promise(resolve=>setTimeout(resolve,10));

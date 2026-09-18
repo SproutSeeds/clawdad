@@ -3,6 +3,7 @@ set -euo pipefail
 
 script_dir=${0:A:h}
 repo_root=${script_dir:h:h}
+source "$script_dir/storage-workflow.sh"
 app_name="ClawDad"
 bundle_id="earth.frg.ClawDad"
 app_version="${CLAWDAD_APP_VERSION:-0.7.0}"
@@ -30,8 +31,10 @@ cleanup_build_temps() {
   if [[ -n "$iconset_dir" ]]; then
     rm -rf "$iconset_dir"
   fi
+  clawdad_storage_end
 }
 trap cleanup_build_temps EXIT
+clawdad_storage_begin
 if [[ -n "$swift_scratch_path" ]]; then
   sparkle_framework_source="$swift_scratch_path/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
   swift_build_args=(

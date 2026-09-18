@@ -2273,9 +2273,9 @@ test("web composer exposes Direct and Queue dispatch modes", async () => {
   assert.ok(toolsMenuStart > modeStart);
   assert.ok(toolsMenuStart < sendStart);
   assert.match(source, /dispatchMode: "direct"/u);
-  assert.match(source, /accessMode: "repo"/u);
+  assert.match(source, /accessMode: "host"/u);
   assert.match(source, /const dispatchModes = \["direct", "queue"\]/u);
-  assert.match(source, /const accessModes = \["repo", "full"\]/u);
+  assert.match(source, /const accessModes = \["host", "repo", "full"\]/u);
   assert.match(source, /function permissionModeForAccessMode/u);
   assert.match(source, /async function refreshCodexModels/u);
   assert.match(source, /\/v1\/models\?project=/u);

@@ -1,0 +1,105 @@
+{
+  "at": "2026-09-18T19:05:26.729Z",
+  "macVersion": "0.7.0",
+  "macBuild": 167,
+  "iphoneVersion": "0.7.0",
+  "iphoneBuild": 104,
+  "tests": {
+    "passed": 1033,
+    "failed": 0,
+    "skipped": 0
+  },
+  "installedAssistant": {
+    "status": "completed",
+    "fileVerified": true,
+    "nativeVerified": true,
+    "capturedPolicy": {
+      "mode": "full",
+      "reviewer": "auto_review",
+      "computerUse": true,
+      "nativeTools": true,
+      "revision": 1
+    }
+  },
+  "installedManual": {
+    "status": "completed",
+    "fileVerified": true,
+    "nativeVerified": true,
+    "capturedPolicy": {
+      "mode": "full",
+      "reviewer": "auto_review",
+      "computerUse": true,
+      "nativeTools": true,
+      "revision": 1
+    }
+  },
+  "nativeCompletedActions": [
+    [
+      "computer.displays"
+    ],
+    [
+      "computer.displays",
+      "computer.capture"
+    ]
+  ],
+  "preservation": {
+    "at": "2026-09-18T19:05:26.729Z",
+    "assistant": {
+      "sameConversation": true,
+      "sameSession": true,
+      "sameDestination": true,
+      "messages": {
+        "baseline": 1245,
+        "preserved": 1245
+      },
+      "jobs": {
+        "baseline": 2312,
+        "preserved": 2312
+      }
+    },
+    "account": {
+      "sameEpoch": true,
+      "sameSelection": true
+    },
+    "terminal": {
+      "baseline": 6,
+      "preserved": 6
+    },
+    "permissions": {
+      "revision": 1,
+      "policy": {
+        "mode": "full",
+        "reviewer": "auto_review",
+        "computerUse": true,
+        "nativeTools": true
+      }
+    },
+    "build": "167",
+    "bundleFingerprint": "714a4c9d8491ba747b2a6689c427b3f2929088004256594f251010e0a4146470",
+    "copiedFingerprint": "714a4c9d8491ba747b2a6689c427b3f2929088004256594f251010e0a4146470"
+  },
+  "runtime": {
+    "at": "2026-09-18T19:06:12.451Z",
+    "httpStatus": 200,
+    "healthOk": true,
+    "subscription": {
+      "method": "chatgpt",
+      "status": "current",
+      "selectedAccountMatches": true
+    },
+    "sourceBundleRuntimeFilesVerified": 107,
+    "auxiliaryStateExists": true
+  },
+  "settingsUi": {
+    "loaded": true,
+    "policyPersistedAcrossUpgrade": true,
+    "escapeCloses": true
+  },
+  "macNotarization": {
+    "app": "Accepted",
+    "dmg": "Accepted"
+  },
+  "physicalIphoneCheck": "pending: iPhone Not Found",
+  "windowsCheck": "pending: SSH timed out",
+  "wifiRestored": "en1 Off"
+}

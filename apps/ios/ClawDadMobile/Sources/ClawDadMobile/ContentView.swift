@@ -24,7 +24,7 @@ struct ContentView: View {
   @State private var showingNewThreadPrompt = false
   @State private var newThreadName = ""
   @State private var dispatchMode = ClawDadDispatchMode.direct
-  @State private var accessMode = ClawDadAccessMode.repo
+  @State private var accessMode = ClawDadAccessMode.host
   @State private var scannerError = ""
   @State private var message = ""
   @State private var composerCopied = false
@@ -3867,6 +3867,7 @@ enum ClawDadDispatchMode: String, CaseIterable, Identifiable {
 }
 
 enum ClawDadAccessMode: String, CaseIterable, Identifiable {
+  case host
   case repo
   case full
 
@@ -3874,6 +3875,8 @@ enum ClawDadAccessMode: String, CaseIterable, Identifiable {
 
   var label: String {
     switch self {
+    case .host:
+      return "Computer default"
     case .repo:
       return "Repo scoped"
     case .full:
@@ -3883,6 +3886,8 @@ enum ClawDadAccessMode: String, CaseIterable, Identifiable {
 
   var permissionMode: String {
     switch self {
+    case .host:
+      return "host"
     case .repo:
       return "approve"
     case .full:
