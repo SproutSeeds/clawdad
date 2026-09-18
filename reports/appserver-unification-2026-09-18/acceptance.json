@@ -99,7 +99,7 @@
     "app": "Accepted",
     "dmg": "Accepted"
   },
-  "physicalIphoneCheck": "pending: iPhone Not Found",
-  "windowsCheck": "pending: SSH timed out",
+  "physicalIphoneCheck": "pending: deferred by owner on 2026-09-18; last observation iPhone Not Found",
+  "windowsCheck": "pending: deferred by owner on 2026-09-18; last observation SSH timed out",
   "wifiRestored": "en1 Off"
 }

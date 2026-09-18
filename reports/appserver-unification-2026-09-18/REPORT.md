@@ -30,6 +30,8 @@ Final checks caught and repaired missing Settings module routes, invalid nested 
 
 ## Remaining acceptance boundaries
 
+On September 18, 2026, the owner explicitly approved completing the Mac release with Windows verification and the physical iPhone check deferred. Both checks remain pending and do not block this Mac release.
+
 - Physical iPhone UI/reconnect acceptance for build 104 remains pending. Mirroring last reported iPhone Not Found. Simulator/build/distribution checks do not replace a physical check.
 - Windows Umbra was unreachable over SSH. Windows native control and Linux support are not certified by this Mac release.
 - Live native checks exercised display inspection/capture. Destructive computer input and Terminal mutations were covered with targeted receipt/ownership tests, not performed against the user's active work.

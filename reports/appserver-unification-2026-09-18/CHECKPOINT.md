@@ -8,6 +8,6 @@ Release artifacts: `native/macos/dist/releases/0.7.0-beta.20-macos-167-app-serve
 
 Final logs: `/tmp/clawdad-appserver-167-complete-tests.log`, `/tmp/clawdad-mac167-complete-package.log`, `/tmp/clawdad-native-acceptance-167.log`. Detailed private receipts and preservation evidence: `~/Library/Application Support/ClawDad/Accounts/verification-2026-09-18/appserver167/`.
 
-Mirroring's last result was iPhone Not Found. Windows Umbra SSH timed out. These physical/platform acceptance checks remain pending; no parity claim is made for them. Temporarily enabled Mac Wi-Fi en1 was restored to Off.
+Mirroring's last result was iPhone Not Found. Windows Umbra SSH timed out. The owner explicitly deferred both checks on September 18, 2026 and approved completing the Mac release. These physical/platform acceptance checks remain pending; no parity claim is made for them. Temporarily enabled Mac Wi-Fi en1 was restored to Off.
 
 Source destination: `origin/codex/hermes-hybrid-supervisor-ui`. This is the private native installation/internal TestFlight release; public npm, public appcast and external TestFlight were not published. Unrelated dirty work is explicitly classified in DIRTY_BUCKETS.md.
