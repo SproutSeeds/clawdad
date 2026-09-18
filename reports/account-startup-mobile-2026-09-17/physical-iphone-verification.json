@@ -59,11 +59,11 @@
     },
     {
       "pid": 51532,
-      "status": "exited_after_switches"
+      "status": "user_closed_terminal"
     },
     {
       "pid": 56262,
-      "status": "exited_after_switches"
+      "status": "user_closed_terminal"
     }
   ],
   "shellUnchanged": true,
@@ -74,7 +74,7 @@
   "reconnectCheck": "passed",
   "wifiRestored": true,
   "verifiedAt": "2026-09-18T05:21:43.921856+00:00",
-  "status": "PASS_ACCOUNT_FLOW",
+  "status": "PASS",
   "ethernetRemainsConnected": true,
   "physicalUI": {
     "testFlightUpdated102To103": true,
@@ -90,7 +90,7 @@
     "noActivationReplayedOnReconnect": true
   },
   "terminalLifetime": {
-    "status": "INCONCLUSIVE_FOR_TWO_PROCESSES",
+    "status": "RESOLVED_USER_CONFIRMED_CLOSURE",
     "initialCount": 7,
     "unchangedCount": 5,
     "exitedPids": [
@@ -104,7 +104,9 @@
       28009
     ],
     "processControl": "Exact verified positive PID, SIGINT only; detached app-server launches.",
-    "exitCause": "Not established. User confirmation of a Terminal closure is pending."
+    "exitCause": "Cody confirmed closing a Terminal tab or window around 00:09 CDT, explaining the two exits in ttys003. Attribution is user-confirmed; OS logs establish the exit time.",
+    "userConfirmation": "Yes, I closed one",
+    "confirmationRecordedAt": "2026-09-18T05:30:15.901041+00:00"
   },
   "rawEvidencePrivacy": "Raw device metadata, app state, histories and system logs remain in the private app-support verification directory; no physical screenshots or account identifiers are published."
 }

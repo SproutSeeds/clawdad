@@ -1,6 +1,6 @@
 # Mac 163 and iPhone 103 account activation recovery
 
-Mac 0.7.0 (163) is installed and running. iPhone 0.7.0 (103) is processed by Apple and available to the existing ClawDad Internal TestFlight group. The account selected before installation is still verified by the running app server from the same isolated profile home. On September 18, build 103 was installed through TestFlight on the physical iPhone 15 Pro Max, and account preview, activation in both directions, and reconnection passed. The Terminal process-lifetime qualification below remains separate from those phone results.
+Mac 0.7.0 (163) is installed and running. iPhone 0.7.0 (103) is processed by Apple and available to the existing ClawDad Internal TestFlight group. The account selected before installation is still verified by the running app server from the same isolated profile home. On September 18, build 103 was installed through TestFlight on the physical iPhone 15 Pro Max, and account preview, activation in both directions, and reconnection passed. Cody confirmed the separate Terminal closure, resolving the remaining process-lifetime question.
 
 ## Behavior
 
@@ -24,7 +24,7 @@ Mac 0.7.0 (163) is installed and running. iPhone 0.7.0 (103) is processed by App
 | Installed Mac readback | Native bridge online, selected account verified, activation complete |
 | Saved conversations | All 4 full turn-history hashes, models, reasoning settings and directories unchanged |
 | Assistant state | Conversation identity, messages, drafts and delivery receipts unchanged |
-| Terminal preservation | All 7 observed Codex processes retain PID, parent, TTY, start time and executable; shell configuration unchanged |
+| Terminal preservation during Mac installation | All 7 observed Codex processes retain PID, parent, TTY, start time and executable; shell configuration unchanged |
 | TestFlight | Build 103 VALID, assigned to ClawDad Internal, IN_BETA_TESTING; release notes read back |
 | Physical iPhone | Build 103 installed; account preview, activation round trip, restored identity and reconnection passed |
 
@@ -51,7 +51,7 @@ Two phone-originated activations completed: the alternate account, then the orig
 
 The phone's Disconnect and Connect controls were exercised. After reconnection it showed the original active account and a fresh allowance, with no repeated activation. Done returned to the workspace. Mirroring's automated scrolling did not move the Settings view, so Cody scrolled to the connection controls; this was an automation limitation, not a claimed failure of physical touch scrolling.
 
-All four saved full-history hashes, models, reasoning settings and directories matched the pre-check snapshot. Assistant conversation identity, messages, drafts, delivery receipts, and shell configuration were unchanged. Five of the seven initial Terminal process identities also matched. The two other processes in `ttys003` exited at 00:09:11 CDT, after both switch handoffs had verified; their exit cause has not yet been established. Switch receipts targeted only app-server PIDs 84171 and 28009. The installed process-control module matches the reviewed source and signals only the exact verified positive PID with SIGINT. Full seven-process lifetime preservation is therefore not claimed for this phone check; user confirmation of a separate Terminal closure is pending.
+All four saved full-history hashes, models, reasoning settings and directories matched the pre-check snapshot. Assistant conversation identity, messages, drafts, delivery receipts, and shell configuration were unchanged. Five of the seven initial Terminal process identities also matched. The two other processes in `ttys003` exited at 00:09:11 CDT, after both switch handoffs had verified. Asked whether he had closed a Terminal tab or window around that time, Cody confirmed, "Yes, I closed one." Their exit attribution is therefore resolved by user confirmation; the OS logs establish the exit time. Switch receipts targeted only app-server PIDs 84171 and 28009. The installed process-control module matches the reviewed source and signals only the exact verified positive PID with SIGINT.
 
 Mac Wi-Fi was enabled with Cody's permission for Mirroring, then restored to off. Ethernet remained connected. The Mac's original account and profile were restored. Physical checks sent no model turns. Raw device metadata, production state, and OS logs remain private; sanitized results are in `physical-iphone-verification.json`.
 

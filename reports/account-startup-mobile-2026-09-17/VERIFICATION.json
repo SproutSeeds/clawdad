@@ -26,12 +26,13 @@
       "failed": 0
     },
     "physicalIPhone": {
-      "status": "PASS_ACCOUNT_FLOW",
+      "status": "PASS",
       "verifiedAt": "2026-09-18T05:21:43.921856+00:00",
       "build": 103,
       "device": "iPhone 15 Pro Max",
       "evidence": "physical-iphone-verification.json",
-      "terminalLifetime": "Five process identities unchanged; two observed exits require attribution."
+      "terminalLifetime": "Five process identities unchanged; two exits explained by Cody's confirmed Terminal closure.",
+      "terminalAttributionResolvedAt": "2026-09-18T05:30:15.901041+00:00"
     }
   },
   "logSha256": {
