@@ -1,0 +1,56 @@
+{
+  "recordedAt": "2026-09-18T02:21:22.431504+00:00",
+  "sourceBase": "35e6e68f0745784413520317d3af6daa49ad8a93",
+  "macBuild": 163,
+  "iPhoneBuild": 103,
+  "checks": {
+    "nodeFull": {
+      "passed": 965,
+      "failed": 0,
+      "skipped": 0
+    },
+    "accountNode": {
+      "passed": 27,
+      "failed": 0
+    },
+    "mobileUnit": {
+      "passed": 6,
+      "failed": 0
+    },
+    "macWebView": {
+      "passed": 1,
+      "failed": 0
+    },
+    "iPhoneSimulatorUI": {
+      "passed": 6,
+      "failed": 0
+    },
+    "physicalIPhone": {
+      "status": "PENDING",
+      "reason": "Paired devices unavailable; iPhone Mirroring reports Mac Wi-Fi off."
+    }
+  },
+  "logSha256": {
+    "focused-node-final.log": "fc0f948130f46e4da84ce23f4e324e50c40ff36d9501fa73afe86b5e1bc6a989",
+    "node-tests-final.log": "f9494571ffb76747b0fe8b497ba36c5f0a4e2b0f5d092891d64b54f71a6e5118",
+    "mobile-unit.log": "2caf21874defc95dceb773b060d40e865236667b9a8585d14a49f65d5099dd0a",
+    "mac-ui-tests.log": "4da865270fb2de03afff79e718a95e1ce35741b650c839bd2192b799e2dd64ff",
+    "ios-ui-tests-final.log": "4443171c11223d1f8ce79b1824fbf5a0244409ef6537ab250633f74856dedb79",
+    "mac-package.log": "77e47d88a7126a4ba108dc896455f749be70853c3a0520201699fcb3589e2535",
+    "ios-archive.log": "9a6e43e0b2a029d11510eff50045e7a7fb0ad389553dc69cd44c9359d53a1c19",
+    "testflight-upload.log": "6d9fe57ce0277e4fda8c167f1f691688b88bef74fcb671356e71e8a275648100"
+  },
+  "iPhoneArchiveBinarySha256": "73a1c1a531e8cfd9f16e854a698a69835eac6736686064eae4c42bafe4270c4f",
+  "macUIReadback": {
+    "activeAccountVerified": true,
+    "pendingActivation": false,
+    "doneRestoresMainView": true
+  },
+  "evidence": [
+    "installed-verification.json",
+    "release-verification.json",
+    "testflight-status.json",
+    "source-manifest.json",
+    "ios-ui-final/manifest.json"
+  ]
+}

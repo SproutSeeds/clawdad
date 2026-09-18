@@ -45,7 +45,9 @@ export function codexAccountsPanel(root,{request=async body=>{
       reading?.ordinaryUsageAllowed===false?'Subscription access is currently limited. Activation is available; model work may need to wait for the applicable limit to reset.':'';
     const connecting=['checking','starting','awaiting_user','cancelling'].includes(ceremony?.status),isActive=selected===state?.activeAccountId;
     activate.textContent=isActive&&!op?.fenced?'Active':op?.fenced&&op.targetId===selected?
-      op.status==='needs_attention'?'Needs attention':op.status==='waiting'?'Waiting for app work…':'Activating…':'Activate';
+      op.status==='needs_attention'?'Needs attention':op.status==='waiting'?
+        op.reasonCode==='app_process_reader_unavailable'?'Waiting for Mac…':op.reasonCode==='accepted_app_work'||op.reasonCode==='shared_thread_working'||op.reasonCode==='shared_thread_pending'?'Waiting for app work…':'Checking app state…'
+        :'Activating…':'Activate';
     activate.disabled=busy||!!pending||isActive&&!op?.fenced||!!op?.fenced||entry?.authentication!=='verified'||state?.capabilities?.appOnly!==true;
     activate.setAttribute('aria-label',isActive?'Active ClawDad account':'Activate '+(entry?.email||'selected account'));
     status.textContent=op?.fenced?op.reason||'Checking activation…':!state?'Loading accounts…':state.requiresActivation?

@@ -47,6 +47,14 @@ test('crash after replacement launch reconciles exact ownership without a duplic
   f.state.failAfter=null;assert.equal((await f.controller().run(f.args)).phase,'verified');
   assert.equal(f.state.effects.filter(e=>e==='launch').length,1);
 });
+test('native reader timeout after process stop resumes from its durable receipt without replay',async t=>{
+  const f=await fixture(t),observe=f.driver.observe;let reads=0;
+  f.driver.observe=async()=>{if(++reads===4)throw Object.assign(Error('Native reader restarting'),{code:'app_process_reader_unavailable'});return observe();};
+  await assert.rejects(f.controller().run(f.args),{code:'app_process_reader_unavailable'});
+  assert.deepEqual(f.state.effects,['release','release','stop']);
+  assert.equal((await f.controller().run(f.args)).phase,'verified');
+  assert.deepEqual(f.state.effects,['release','release','stop','launch','resume','resume']);
+});
 test('unconfirmed launch never retries after an absent process without non-delivery proof',async t=>{
   const f=await fixture(t);f.driver.launch=async()=>{throw Error('Unknown delivery');};
   await assert.rejects(f.controller().run(f.args),/Unknown delivery/);

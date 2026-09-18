@@ -1,0 +1,15 @@
+{
+  "checkedAt": "2026-09-18T02:19:01.240Z",
+  "build": 103,
+  "id": "28fa1a64-ead5-4da8-99a9-f81d3c51af1a",
+  "processingState": "VALID",
+  "uploadedDate": "2026-09-17T19:08:07-07:00",
+  "assignedToInternalGroup": true,
+  "group": "ClawDad Internal",
+  "beta": {
+    "autoNotifyEnabled": true,
+    "internalBuildState": "IN_BETA_TESTING",
+    "externalBuildState": "READY_FOR_BETA_SUBMISSION"
+  },
+  "whatsNewMatchesSource": true
+}

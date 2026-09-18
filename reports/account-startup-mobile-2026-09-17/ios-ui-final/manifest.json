@@ -1,0 +1,92 @@
+[
+  {
+    "attachments" : [
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "D0054BFB-EAD2-4D1E-8DA4-A648AFB128D0",
+        "deviceName" : "ClawDad App Store 6.9",
+        "exportedFileName" : "C8E15705-4F03-4865-81AD-068CA91CF666.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "App accounts large text_0_91D6DB43-53D7-4DED-BAD2-4331A633EBAD.png",
+        "timestamp" : 1789697001.831
+      }
+    ],
+    "testIdentifier" : "CodexAccountsUITests/testAccessibleTextAndLostAcknowledgment()",
+    "testIdentifierURL" : "test://com.apple.xcode/ClawDadMobile/ClawDadMobileUITests/CodexAccountsUITests/testAccessibleTextAndLostAcknowledgment"
+  },
+  {
+    "attachments" : [
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "D0054BFB-EAD2-4D1E-8DA4-A648AFB128D0",
+        "deviceName" : "ClawDad App Store 6.9",
+        "exportedFileName" : "3D6422DC-C333-4868-BBB0-69BC77906AAA.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "App accounts glass_0_70B8F004-7457-4892-8253-78B15BFB2E43.png",
+        "timestamp" : 1789697018.812
+      }
+    ],
+    "testIdentifier" : "CodexAccountsUITests/testPreviewAndActivate()",
+    "testIdentifierURL" : "test://com.apple.xcode/ClawDadMobile/ClawDadMobileUITests/CodexAccountsUITests/testPreviewAndActivate"
+  },
+  {
+    "attachments" : [
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "D0054BFB-EAD2-4D1E-8DA4-A648AFB128D0",
+        "deviceName" : "ClawDad App Store 6.9",
+        "exportedFileName" : "4106E7CC-9AB0-43DB-B513-F746F17368BE.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "Account state attention_0_A5E163C8-8EF0-4E35-83CA-16F5E1B8779F.png",
+        "timestamp" : 1789697029.605
+      }
+    ],
+    "testIdentifier" : "CodexAccountsUITests/testRecoveryNeedsAttention()",
+    "testIdentifierURL" : "test://com.apple.xcode/ClawDadMobile/ClawDadMobileUITests/CodexAccountsUITests/testRecoveryNeedsAttention"
+  },
+  {
+    "attachments" : [
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "D0054BFB-EAD2-4D1E-8DA4-A648AFB128D0",
+        "deviceName" : "ClawDad App Store 6.9",
+        "exportedFileName" : "FA19D41C-CCED-4640-ADAC-F3A3A8BF760B.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "Account state unavailable_0_663985F9-EBA7-4239-B379-F7A64A3933D2.png",
+        "timestamp" : 1789697038.541
+      }
+    ],
+    "testIdentifier" : "CodexAccountsUITests/testUnavailableIdentity()",
+    "testIdentifierURL" : "test://com.apple.xcode/ClawDadMobile/ClawDadMobileUITests/CodexAccountsUITests/testUnavailableIdentity"
+  },
+  {
+    "attachments" : [
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "D0054BFB-EAD2-4D1E-8DA4-A648AFB128D0",
+        "deviceName" : "ClawDad App Store 6.9",
+        "exportedFileName" : "1317F755-52A3-4A3E-91CD-26ACBCE3DA3B.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "Account state work_0_AA468CD0-218C-4B16-A774-662C6EEB568B.png",
+        "timestamp" : 1789697047.333
+      }
+    ],
+    "testIdentifier" : "CodexAccountsUITests/testWaitingForAppWork()",
+    "testIdentifierURL" : "test://com.apple.xcode/ClawDadMobile/ClawDadMobileUITests/CodexAccountsUITests/testWaitingForAppWork"
+  },
+  {
+    "attachments" : [
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "D0054BFB-EAD2-4D1E-8DA4-A648AFB128D0",
+        "deviceName" : "ClawDad App Store 6.9",
+        "exportedFileName" : "BEF95B6B-3C77-4A19-834A-0BD06D4EA090.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "Account state mac_0_FCD2685A-C9A2-4D57-B86C-B26A9F7AEA09.png",
+        "timestamp" : 1789697056.313
+      }
+    ],
+    "testIdentifier" : "CodexAccountsUITests/testWaitingForMac()",
+    "testIdentifierURL" : "test://com.apple.xcode/ClawDadMobile/ClawDadMobileUITests/CodexAccountsUITests/testWaitingForMac"
+  }
+]

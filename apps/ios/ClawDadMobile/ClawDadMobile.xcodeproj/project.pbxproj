@@ -56,6 +56,7 @@
 		92590FA64F260AD34017423B /* AssistantListeningInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10F1B258EA5FA2916837629C /* AssistantListeningInput.swift */; };
 		930C8384655B365B43D6B7D6 /* PairedComputer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A248092D559C4CD1B15AECEC /* PairedComputer.swift */; };
 		99A55BE9948DD5DB46281F55 /* SpeechOutputDSP.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16094AA9855EF80736B284A2 /* SpeechOutputDSP.swift */; };
+		9B7244BDB7A365286F801115 /* AppAccountPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB4513FEF8BD7B6C56316C74 /* AppAccountPresentation.swift */; };
 		9D7B1B35ECE9677123D1BBFC /* CodexAccountsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66116C12D5655071F660BF27 /* CodexAccountsView.swift */; };
 		9FAEDA464727521A0D77839C /* RemoteAssist.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA4FB03C06FF3E3F780BF6B2 /* RemoteAssist.swift */; };
 		A108218C025FA0193F36DE60 /* VoiceSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 088F57A9C660D2D5A01BEF9B /* VoiceSettings.swift */; };
@@ -187,6 +188,7 @@
 		C0D5CBF6032351E28CD2AEF5 /* RemoteAssistIconGlossary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteAssistIconGlossary.swift; sourceTree = "<group>"; };
 		C0F7E6B29B4820AAB88ABF58 /* AssistantAudioDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantAudioDiagnostics.swift; sourceTree = "<group>"; };
 		C2057536FBECC2BA6153E6B9 /* ClawDadFileTransport */ = {isa = PBXFileReference; lastKnownFileType = folder; name = ClawDadFileTransport; path = ../../../native/ClawDadFileTransport; sourceTree = SOURCE_ROOT; };
+		CB4513FEF8BD7B6C56316C74 /* AppAccountPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppAccountPresentation.swift; sourceTree = "<group>"; };
 		D668F2D2DA41C5EF31F820B0 /* ClawDadMobileApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClawDadMobileApp.swift; sourceTree = "<group>"; };
 		D70593B6087D12EBB653329D /* RemoteImagePreparation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteImagePreparation.swift; sourceTree = "<group>"; };
 		D9A446032B25104E6A1BFFEB /* AssistantVoiceTurn.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantVoiceTurn.swift; sourceTree = "<group>"; };
@@ -237,6 +239,7 @@
 			isa = PBXGroup;
 			children = (
 				0B49DAC6639EC442D443718D /* AppAccountPicker.swift */,
+				CB4513FEF8BD7B6C56316C74 /* AppAccountPresentation.swift */,
 				147A8BFF03CEDB70896BAB51 /* AppAttestClient.swift */,
 				3286351CBEADFC96A79F1EE4 /* AssistantAudio.swift */,
 				C0F7E6B29B4820AAB88ABF58 /* AssistantAudioDiagnostics.swift */,
@@ -489,6 +492,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				CC599DF2E5113E78907A22C0 /* AppAccountPicker.swift in Sources */,
+				9B7244BDB7A365286F801115 /* AppAccountPresentation.swift in Sources */,
 				FF0A3F9F33A94874E1F92846 /* AppAttestClient.swift in Sources */,
 				DA856C77B9663DCAB80C7092 /* AssistantAudio.swift in Sources */,
 				836D0BEEDB207BA0D7163DE8 /* AssistantAudioDiagnostics.swift in Sources */,
@@ -704,7 +708,7 @@
 				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 102;
+				CURRENT_PROJECT_VERSION = 103;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_NS_ASSERTIONS = NO;
@@ -801,7 +805,7 @@
 				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 102;
+				CURRENT_PROJECT_VERSION = 103;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -912,7 +916,7 @@
 				CLAWDAD_FOUNDING_BETA_ACCESS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 102;
+				CURRENT_PROJECT_VERSION = 103;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 4QV4WR9G32;
 				ENABLE_NS_ASSERTIONS = NO;

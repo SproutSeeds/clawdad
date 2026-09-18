@@ -1,0 +1,97 @@
+[
+  {
+    "path": "lib/codex-app-accounts.mjs",
+    "scope": "account-recovery",
+    "sha256": "49d0088eed888284f688f2f12e1f1d2da3f4526a5de101c4e66ec9495e683c32"
+  },
+  {
+    "path": "web/codex-accounts.js",
+    "scope": "account-recovery",
+    "sha256": "bc425f7d09465104a447d539d70633357ae275fd43bf2d364409b84101e03e49"
+  },
+  {
+    "path": "test/codex-app-accounts.test.mjs",
+    "scope": "account-recovery",
+    "sha256": "b0ea0de1781b210e9aef16605a0c61a837266f1c46fea4eeb0dac7521ccb3e18"
+  },
+  {
+    "path": "test/codex-account-shared-handoff.test.mjs",
+    "scope": "account-recovery",
+    "sha256": "19258204c6bd69fd5b6e7a9e9217f44e3bd0686d019c77d112757599bf559c60"
+  },
+  {
+    "path": "test/fixtures/codex-accounts-desktop-server.mjs",
+    "scope": "account-recovery",
+    "sha256": "50df6f8cfec52f98b837349f4169777244931e7d5e21115e06e9a41e621c5ad0"
+  },
+  {
+    "path": "native/macos/Tests/ClawDadTests/CodexAccountsWebTests.swift",
+    "scope": "account-recovery",
+    "sha256": "ca39896e006191744780855d131c648e10fc60c0af22c0b43c20129ccaedf703"
+  },
+  {
+    "path": "lib/app-store-connect.mjs",
+    "scope": "account-recovery",
+    "sha256": "09d773e02dd64b0cc8afe4dc4157269fb98311e2b4f0e0cb51e30df9baa75140"
+  },
+  {
+    "path": "test/app-store-connect.test.mjs",
+    "scope": "account-recovery",
+    "sha256": "1fcbc0faa2c03bc7ff78050f7d9cbe6732893ff762556080e18b30796533face"
+  },
+  {
+    "path": "docs/releases/0.7.0-macos-163-ios-103-account-recovery.md",
+    "scope": "account-recovery",
+    "sha256": "48e9f8ac821e25d45add5f7e72b4d84f95c0857cff0af99f1d093d8570555ce3"
+  },
+  {
+    "path": "apps/ios/ClawDadMobile/project.yml",
+    "scope": "account-recovery",
+    "sha256": "39e40340271f9b5da024178d57b3627d6d4b46dd2d1d2b0e6bb949c65299e3f5"
+  },
+  {
+    "path": "apps/ios/ClawDadMobile/ClawDadMobile.xcodeproj/project.pbxproj",
+    "scope": "account-recovery",
+    "sha256": "de96e7820bd75ea543513b2a779fc6176d379362fffb006e044e4ed7a5fda881"
+  },
+  {
+    "path": "apps/ios/ClawDadMobile/Sources/ClawDadMobile/AppAccountPicker.swift",
+    "scope": "account-recovery",
+    "sha256": "1be8481821d4eabbd99e4e7c0a6160fab69a46a55ca58a0414b8956d44f9036f"
+  },
+  {
+    "path": "apps/ios/ClawDadMobile/Sources/ClawDadMobile/AppAccountPresentation.swift",
+    "scope": "account-recovery",
+    "sha256": "6b97f2724dbb1aba88e6ece825f3a53cf3b4b602e9f17e1080dc08291231d698"
+  },
+  {
+    "path": "apps/ios/ClawDadMobile/Sources/ClawDadMobile/AssistantPreview.swift",
+    "scope": "account-recovery",
+    "sha256": "331ddc438f2990dc023b0fcdaca91badaeb2c2ec9a9192e4986bd46f35c94ec7"
+  },
+  {
+    "path": "apps/ios/ClawDadMobile/UITests/CodexAccountsUITests.swift",
+    "scope": "account-recovery",
+    "sha256": "e5aff90e3561a035debf1a471f19969df6fc140e3a44cf738a60c711edbe7d0d"
+  },
+  {
+    "path": "apps/ios/ClawDadMobile/Tests/ClawDadMobileTests/AppAccountPresentationTests.swift",
+    "scope": "account-recovery",
+    "sha256": "4e98a91f1d838a7079b7086c556ff204060f775067181d6910dfbf1c0c897fd7"
+  },
+  {
+    "path": "native/macos/build-app.sh",
+    "scope": "inherited-build-tools",
+    "sha256": "8f9a09a85ac5c247ec01c151ac9ce963b431008b595c65a96721f25201e95e0d"
+  },
+  {
+    "path": "native/macos/package-release.sh",
+    "scope": "inherited-build-tools",
+    "sha256": "8e01162feca8b592b265fdc1328506fcde6abfe80d9a0506dbdd052106d79569"
+  },
+  {
+    "path": "native/macos/storage-workflow.sh",
+    "scope": "inherited-build-tools",
+    "sha256": "57db0f72a14079b956d7e6a3c3a99c6009bc459a5c364a6ae8c4335a0d32771f"
+  }
+]

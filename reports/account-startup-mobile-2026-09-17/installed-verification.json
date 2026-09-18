@@ -1,0 +1,89 @@
+{
+  "capturedAt": "2026-09-18T02:17:22.105Z",
+  "build": 163,
+  "server": {
+    "pid": 84171,
+    "selectedProfileHome": true,
+    "reportedSelectedAccount": true,
+    "sameProcess": true,
+    "loadedThreads": 0
+  },
+  "threads": [
+    {
+      "status": {
+        "type": "notLoaded"
+      },
+      "turnsUnchanged": true,
+      "modelUnchanged": true,
+      "effortUnchanged": true,
+      "directoryUnchanged": true
+    },
+    {
+      "status": {
+        "type": "notLoaded"
+      },
+      "turnsUnchanged": true,
+      "modelUnchanged": true,
+      "effortUnchanged": true,
+      "directoryUnchanged": true
+    },
+    {
+      "status": {
+        "type": "notLoaded"
+      },
+      "turnsUnchanged": true,
+      "modelUnchanged": true,
+      "effortUnchanged": true,
+      "directoryUnchanged": true
+    },
+    {
+      "status": {
+        "type": "notLoaded"
+      },
+      "turnsUnchanged": true,
+      "modelUnchanged": true,
+      "effortUnchanged": true,
+      "directoryUnchanged": true
+    }
+  ],
+  "terminal": [
+    {
+      "pid": 36493,
+      "unchanged": true
+    },
+    {
+      "pid": 58159,
+      "unchanged": true
+    },
+    {
+      "pid": 6017,
+      "unchanged": true
+    },
+    {
+      "pid": 30058,
+      "unchanged": true
+    },
+    {
+      "pid": 54463,
+      "unchanged": true
+    },
+    {
+      "pid": 51532,
+      "unchanged": true
+    },
+    {
+      "pid": 56262,
+      "unchanged": true
+    }
+  ],
+  "nativeOnline": true,
+  "shellUnchanged": true,
+  "conversationUnchanged": true,
+  "assistantMessagesUnchanged": true,
+  "draftsUnchanged": true,
+  "appReceiptsUnchanged": true,
+  "selectedRuntimeUnchanged": true,
+  "epoch": 1,
+  "operationStatus": "completed",
+  "pendingActivation": false
+}

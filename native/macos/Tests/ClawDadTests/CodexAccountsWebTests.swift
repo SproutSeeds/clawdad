@@ -42,12 +42,16 @@ import WebKit
       }
     }
     _=try await URLSession.shared.data(from:base.appendingPathComponent("fixture/drop"))
+    _=try await URLSession.shared.data(from:base.appendingPathComponent("fixture/native-wait"))
     try await view.evaluateJavaScript("document.getElementById('codexAccountSwitch').click();document.getElementById('codexAccountSwitch').click()")
+    try await wait(view,"document.getElementById('codexAccountSwitch').textContent==='Waiting for Mac…'")
+    _=try await URLSession.shared.data(from:base.appendingPathComponent("fixture/native-ready"))
     try await wait(view,"document.getElementById('codexAccounts').firstChild.textContent==='Active · second@example.test'&&document.getElementById('codexAccountSwitch').textContent==='Active'")
     let (data,_)=try await URLSession.shared.data(from:base.appendingPathComponent("fixture/evidence"))
     let evidence=try JSONSerialization.jsonObject(with:data) as! [String:Any]
     let requests=evidence["requests"] as? [[String:Any]] ?? []
     XCTAssertEqual(requests.filter{$0["action"] as? String=="accounts.activate"}.count,1)
+    XCTAssertEqual(requests.filter{$0["action"] as? String=="accounts.retry"}.count,0)
     XCTAssertTrue(requests.allSatisfy{$0["windowSelection"]==nil})
     XCTAssertEqual((evidence["jobs"] as? [Any])?.count,0)
     try await view.evaluateJavaScript("document.getElementById('weeklyUsageClose').click()")

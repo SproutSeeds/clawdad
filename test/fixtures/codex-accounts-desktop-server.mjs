@@ -12,7 +12,7 @@ const usage={snapshot:async()=>({status:'current',accountKey:'a'.repeat(64),rema
   observedAt:new Date().toISOString(),alerts:[],subscription:{method:'chatgpt',email:'fixture@example.test',plan:'pro'}})};
 usage.freshReading=usage.snapshot;
 runtime.accounts=new CodexAccounts({root:path.join(root,'Accounts'),usage,inspectConsumers:async()=>({complete:false,consumers:[],reasons:['Synthetic inventory only.']})});
-const profiles=[],jobs=[],requests=[];let drops=0,actualProfile=null,identityMismatch=false,identityUnavailable=false;
+const profiles=[],jobs=[],requests=[];let drops=0,actualProfile=null,identityMismatch=false,identityUnavailable=false,nativeUnavailable=false;
 runtime.accounts.readActive=async()=>{
   if(identityUnavailable)throw Error('Fixture server offline');
   const p=identityMismatch?profiles[1]:actualProfile;
@@ -29,7 +29,7 @@ for(const [index,email] of ['fixture@example.test','second@example.test'].entrie
   profiles.push({accountId:entry.id,email,home,authentication:'verified',accountKey:(index?'b':'a').repeat(64),verifiedAt:new Date().toISOString(),remainingPercent:index?0:65,resetsAt:2e9});
 }
 runtime.accounts.readWork=async()=>({complete:true,jobs});
-runtime.accounts.adapter={capture:async()=>({kind:'absent'}),prepare:async(op,target)=>({method:'chatgpt',email:target.email,accountKey:profiles.find(p=>p.accountId===target.id).accountKey}),transition:async()=>({}),
+runtime.accounts.adapter={capture:async()=>{if(nativeUnavailable)throw Object.assign(Error('Native reader starting'),{code:'app_process_reader_unavailable'});return {kind:'absent'};},prepare:async(op,target)=>({method:'chatgpt',email:target.email,accountKey:profiles.find(p=>p.accountId===target.id).accountKey}),transition:async()=>({}),
   verify:async op=>{const p=profiles.find(p=>p.accountId===op.targetId);actualProfile=p;return {accountKey:p.accountKey,runtime:{authorizationHome:p.home,sqliteHome:canonical,layout:layouts.get(p.accountId)}};}};
 await runtime.load();await runtime.accounts.request({accountId:profiles[0].accountId,requestId:'initial',expectedRevision:2,confirmed:true});await runtime.accounts.advance();
 runtime.accounts.start({intervalMs:30});
@@ -50,6 +50,8 @@ const server=http.createServer(async(req,res)=>{
   }
   if(url.pathname==='/v1/codex/weekly-usage')return json(res,200,await usage.snapshot());
   if(url.pathname==='/fixture/drop'){drops=1;return json(res,200,{ok:true});}
+  if(url.pathname==='/fixture/native-wait'){nativeUnavailable=true;return json(res,200,{ok:true});}
+  if(url.pathname==='/fixture/native-ready'){nativeUnavailable=false;return json(res,200,{ok:true});}
   if(url.pathname==='/fixture/identity-mismatch'){identityMismatch=true;return json(res,200,{ok:true});}
   if(url.pathname==='/fixture/identity-unavailable'){identityUnavailable=true;return json(res,200,{ok:true});}
   if(url.pathname==='/fixture/identity-reset'){identityMismatch=false;identityUnavailable=false;return json(res,200,{ok:true});}

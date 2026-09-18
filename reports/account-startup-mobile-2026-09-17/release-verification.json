@@ -1,0 +1,31 @@
+{
+  "bundle": {
+    "files": 3,
+    "mismatches": []
+  },
+  "runningRuntime": {
+    "files": 3,
+    "mismatches": []
+  },
+  "verifiedAt": "2026-09-18T02:18:19.871162+00:00",
+  "version": "0.7.0",
+  "build": "163",
+  "notarization": {
+    "app": {
+      "status": "Accepted",
+      "message": "Processing complete",
+      "id": "4c0b75a4-9c3b-4b59-96a9-3ce0dc65024b"
+    },
+    "dmg": {
+      "status": "Accepted",
+      "message": "Processing complete",
+      "id": "1ba26928-9670-4e30-b1d6-b1ba001c88b3"
+    }
+  },
+  "gatekeeper": "/Applications/ClawDad.app: accepted\nsource=Notarized Developer ID\norigin=Developer ID Application: Cody Mitchell (4QV4WR9G32)",
+  "dmgSha256": "aa49902ec544a45c915ee2256fa8e1099dafcef3f058c8af724e464fd446200f",
+  "sourceInputsVerified": 19,
+  "inheritedTrackedChangesPreserved": 15,
+  "rollbackCopyVerified": true,
+  "temporaryRetiredBundleRemoved": true
+}

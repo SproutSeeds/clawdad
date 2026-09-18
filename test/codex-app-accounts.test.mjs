@@ -18,7 +18,7 @@ async function fixture(t){
   for(const name of ['sessions','archived_sessions','thread-writer-locks'])await fs.mkdir(path.join(canonical,name),{mode:0o700});
   const layout=await new CodexAccountLayout({root}).prepare({canonicalHome:canonical,profileHome:home});
   const key='a'.repeat(64),jobs=[],effects=[],profiles=[];
-  const authorizations={snapshot:async()=>({profiles}),request:async args=>{effects.push('refresh');return args;}};
+  const authorizations={snapshot:async()=>({profiles}),request:async args=>{effects.push('refresh');return args;},close:async()=>{}};
   const adapter={capture:async()=>{effects.push('capture');return {kind:'absent'};},prepare:async(_,target)=>({method:'chatgpt',email:target.email,accountKey:key}),
     transition:async()=>{effects.push('transition');return {};},verify:async()=>({accountKey:key,runtime:{authorizationHome:home,sqliteHome:canonical,layout}})};
   const options={root,adapter,authorizations,readWork:async()=>({complete:true,jobs}),usage:{snapshot:async()=>({status:'unavailable'}),refresh:async()=>effects.push('usage')}};
@@ -156,4 +156,45 @@ test('active label uses observed server identity and never the allowance probe o
   current={...current,email:f.entry.email,accountKey:f.key,authorizationHome:f.home};assert.equal((await f.accounts.snapshot()).activeAccountId,f.entry.id);
   f.accounts.readActive=async()=>{throw Error('disconnected');};snapshot=await f.accounts.snapshot();
   assert.equal(snapshot.activeAccountId,null);assert.equal(snapshot.current.status,'unavailable');assert.equal(snapshot.current.email,undefined);
+});
+
+test('native reader startup waits with capped backoff and resumes the original activation across restart',async t=>{
+  const f=await fixture(t);let now=1000,reads=0;f.options.clock=()=>now;f.accounts.clock=f.options.clock;
+  const capture=f.adapter.capture;
+  f.adapter.capture=async op=>{reads++;if(reads<=6)throw Object.assign(Error('Reader starting'),{code:'app_process_reader_unavailable'});return capture(op);};
+  const original=await f.activate();let controller=f.accounts;
+  for(const delay of [3000,6000,12000,24000,30000,30000]){
+    await controller.advance();const op=(await controller.snapshot()).activeOperation;
+    assert.equal(op.id,original.id);assert.equal(op.status,'waiting');assert.equal(op.retryAt-now,delay);
+    const count=reads;await controller.advance();assert.equal(reads,count);assert.equal(f.effects.length,0);
+    now=op.retryAt;controller=new CodexAppAccounts(f.options);
+  }
+  controller.start({intervalMs:10});t.after(()=>controller.stop());
+  for(let i=0;i<100&&(await controller.snapshot()).activeOperation.status!=='completed';i++)await new Promise(r=>setTimeout(r,10));
+  const done=(await controller.snapshot()).activeOperation;
+  assert.equal(done.status,'completed');assert.equal(done.id,original.id);assert.equal(done.retryAt,null);
+  assert.equal(f.effects.filter(v=>v==='transition').length,1);
+});
+
+test('saved build-162 native timeout recovers automatically but uncertainty still requires explicit review',async t=>{
+  const f=await fixture(t);const op=await f.activate();
+  await f.accounts.transaction(async(s,save)=>{Object.assign(s.operations[op.id],{status:'needs_attention',reasonCode:'app_process_reader_unavailable'});await save();});
+  const restarted=new CodexAppAccounts(f.options);await restarted.advance();
+  assert.equal((await restarted.snapshot()).activeOperation.status,'completed');
+  const g=await fixture(t);let calls=0;
+  g.adapter.capture=async()=>{calls++;throw Object.assign(Error('Uncertain effect'),{code:'shared_account_delivery_uncertain'});};
+  await g.activate();await g.accounts.advance();await new CodexAppAccounts(g.options).advance();
+  assert.equal(calls,1);assert.equal((await g.accounts.snapshot()).activeOperation.status,'needs_attention');
+});
+
+test('native timeout after transition retries verification without repeating transition; cancellation stops retry',async t=>{
+  const f=await fixture(t);let now=1000,reads=0;f.accounts.clock=()=>now;
+  const verify=f.adapter.verify;f.adapter.verify=async op=>{if(reads++===0)throw Object.assign(Error('Reader unavailable'),{code:'app_process_reader_unavailable'});return verify(op);};
+  await f.activate();await f.accounts.advance();const waiting=(await f.accounts.snapshot()).activeOperation;
+  assert.equal(waiting.phase,'verify');assert.equal(waiting.status,'waiting');assert.equal(await f.accounts.selectedLaunch(),null);
+  now=waiting.retryAt;await f.accounts.advance();assert.equal((await f.accounts.snapshot()).activeOperation.status,'completed');
+  assert.equal(f.effects.filter(v=>v==='transition').length,1);
+  const g=await fixture(t);g.adapter.capture=async()=>{throw Object.assign(Error('Reader unavailable'),{code:'app_process_reader_unavailable'});};
+  const cancelled=await g.activate();await g.accounts.advance();await g.accounts.cancel({operationId:cancelled.id,requestId:'cancel'});
+  await new CodexAppAccounts(g.options).advance();assert.equal((await g.accounts.snapshot()).activeOperation.status,'cancelled');assert.equal(g.effects.length,0);
 });

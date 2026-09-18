@@ -1,0 +1,96 @@
+{
+  "app": {
+    "id": "6783090068",
+    "name": "ClawDad Mobile"
+  },
+  "builds": [
+    {
+      "id": "45fc5756-c124-4704-be70-d4deb58c3646",
+      "version": "102",
+      "uploadedDate": "2026-09-17T04:00:42-07:00",
+      "expirationDate": "2026-12-16T03:00:42-08:00",
+      "expired": false,
+      "minOsVersion": "18.0",
+      "lsMinimumSystemVersion": null,
+      "computedMinMacOsVersion": "15.0",
+      "computedMinVisionOsVersion": "2.0",
+      "iconAssetToken": {
+        "templateUrl": "https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/d1/c7/9b/d1c79b16-8c6c-68b7-8872-0cf15c95e438/AppIcon60x60@2x.png/{w}x{h}bb.{f}",
+        "width": 120,
+        "height": 120
+      },
+      "processingState": "VALID",
+      "buildAudienceType": "APP_STORE_ELIGIBLE",
+      "usesNonExemptEncryption": false
+    },
+    {
+      "id": "687c25c2-9ed8-4d9b-bb7d-2d55502018a4",
+      "version": "101",
+      "uploadedDate": "2026-09-17T01:15:02-07:00",
+      "expirationDate": "2026-12-16T00:15:02-08:00",
+      "expired": false,
+      "minOsVersion": "18.0",
+      "lsMinimumSystemVersion": null,
+      "computedMinMacOsVersion": "15.0",
+      "computedMinVisionOsVersion": "2.0",
+      "iconAssetToken": {
+        "templateUrl": "https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/f5/e6/85/f5e685df-661e-3a26-f6fc-93fa66c81345/AppIcon60x60@2x.png/{w}x{h}bb.{f}",
+        "width": 120,
+        "height": 120
+      },
+      "processingState": "VALID",
+      "buildAudienceType": "APP_STORE_ELIGIBLE",
+      "usesNonExemptEncryption": false
+    },
+    {
+      "id": "435ac5b6-903a-4caf-bb41-509724fec40e",
+      "version": "100",
+      "uploadedDate": "2026-09-16T22:56:09-07:00",
+      "expirationDate": "2026-12-15T21:56:09-08:00",
+      "expired": false,
+      "minOsVersion": "18.0",
+      "lsMinimumSystemVersion": null,
+      "computedMinMacOsVersion": "15.0",
+      "computedMinVisionOsVersion": "2.0",
+      "iconAssetToken": {
+        "templateUrl": "https://is1-ssl.mzstatic.com/image/thumb/Purple221/v4/bd/c1/05/bdc105b7-be13-6c76-8fd1-65a85b2f5860/AppIcon60x60@2x.png/{w}x{h}bb.{f}",
+        "width": 120,
+        "height": 120
+      },
+      "processingState": "VALID",
+      "buildAudienceType": "APP_STORE_ELIGIBLE",
+      "usesNonExemptEncryption": false
+    },
+    {
+      "id": "4027f34e-1e9b-4443-b788-9439b8edf0e4",
+      "version": "99",
+      "uploadedDate": "2026-09-16T21:43:36-07:00",
+      "expirationDate": "2026-12-15T20:43:36-08:00",
+      "expired": false,
+      "minOsVersion": "18.0",
+      "lsMinimumSystemVersion": null,
+      "computedMinMacOsVersion": "15.0",
+      "computedMinVisionOsVersion": "2.0",
+      "iconAssetToken": {
+        "templateUrl": "https://is1-ssl.mzstatic.com/image/thumb/Purple221/v4/9c/e5/d2/9ce5d29b-49cd-6594-86bd-85068af866b8/AppIcon60x60@2x.png/{w}x{h}bb.{f}",
+        "width": 120,
+        "height": 120
+      },
+      "processingState": "VALID",
+      "buildAudienceType": "APP_STORE_ELIGIBLE",
+      "usesNonExemptEncryption": false
+    }
+  ],
+  "groups": [
+    {
+      "id": "bbba6b69-7ac4-4d56-bc41-e9456d56b02e",
+      "name": "ClawDad Internal",
+      "isInternalGroup": true
+    },
+    {
+      "id": "bf3ea680-c7ce-4dd5-b434-83b2bb9aa382",
+      "name": "ClawDad Founding Customers",
+      "isInternalGroup": false
+    }
+  ]
+}

@@ -11,12 +11,12 @@ struct AppAccountPicker: View {
   @State private var email = ""
   @State private var error = ""
   @State private var busy = false
+  @State private var disconnected = false
   @State private var pending: [String: AssistantValue]?
   @FocusState private var editing: Bool
   private var entries: [[String: AssistantValue]] { state["accounts"]?.array?.compactMap(\.object) ?? [] }
   private var operation: [String: AssistantValue] { state["activeOperation"]?.object ?? [:] }
   private var activeID: String { state["activeAccountId"]?.string ?? "" }
-  private var activeEmail: String { entries.first { $0["id"]?.string == activeID }?["email"]?.string ?? state["current"]?.object?["email"]?.string ?? "Checking active account" }
   private var selected: [String: AssistantValue] { entries.first { $0["id"]?.string == selectedID } ?? [:] }
   private var reading: [String: AssistantValue] { selected["usage"]?.object ?? [:] }
   private var authorization: [String: AssistantValue] { selected["authorization"]?.object ?? [:] }
@@ -27,11 +27,14 @@ struct AppAccountPicker: View {
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 18) {
-        Label("Active · \(activeEmail)", systemImage: "checkmark.shield")
+        Label(AppAccountPresentation.activeTitle(state, disconnected: disconnected), systemImage: "checkmark.shield")
           .font(.footnote).fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("clawdad.accounts.active")
         accountCard
-        if let reason = operation["reason"]?.string {
+        if let reason = AppAccountPresentation.status(state) {
           Text(reason).font(.footnote).accessibilityIdentifier("clawdad.accounts.switchStatus")
+        }
+        if disconnected {
+          Text("Reconnect to your Mac to check the active account. Your selection is preserved.").font(.footnote).foregroundStyle(.yellow).accessibilityIdentifier("clawdad.accounts.connection")
         }
         if !error.isEmpty { Text(error).font(.footnote).foregroundStyle(.yellow).accessibilityIdentifier("clawdad.accounts.error") }
         if pending != nil && !busy { Button("Retry pending request") { perform() }.frame(minHeight: 44) }
@@ -59,7 +62,7 @@ struct AppAccountPicker: View {
     .foregroundStyle(ClawDadTheme.cream)
     .background(LinearGradient(colors: [Color(white: 0.12), Color(white: 0.04)], startPoint: .topLeading, endPoint: .bottomTrailing))
     .task(id: pendingKey) {
-      state = [:]; selectedID = ""; pending = nil
+      state = [:]; selectedID = ""; pending = nil; disconnected = false
       if let data = UserDefaults.standard.data(forKey: pendingKey) { pending = try? JSONDecoder().decode([String: AssistantValue].self, from: data) }
       await load(); await refreshSelected()
       while !Task.isCancelled { do { try await Task.sleep(for: .seconds(2)) } catch { break }; await load() }
@@ -115,13 +118,13 @@ struct AppAccountPicker: View {
       }
       Button { perform("accounts.activate", args: ["accountId": .string(selectedID), "expectedRevision": state["revision"] ?? .null, "confirmed": .bool(true)]) } label: {
         HStack {
-          if busy || switching { ProgressView().tint(ClawDadTheme.cream) } else if isActive { Image(systemName: "checkmark.circle.fill") }
-          Text(switching ? "Activating…" : isActive ? "Active for ClawDad" : "Activate account").fontWeight(.semibold)
+          if busy || switching && operation["status"]?.string != "needs_attention" { ProgressView().tint(ClawDadTheme.cream) } else if isActive { Image(systemName: "checkmark.circle.fill") }
+          Text(AppAccountPresentation.activationTitle(operation, isActive: isActive)).fontWeight(.semibold)
         }.frame(maxWidth: .infinity, minHeight: 48).contentShape(Rectangle())
       }.buttonStyle(.plain)
         .background(LinearGradient(colors: [.white.opacity(0.19), .white.opacity(0.06)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 16))
         .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.25), lineWidth: 1))
-        .disabled(busy || switching || pending != nil || isActive || state["capabilities"]?.object?["appOnly"]?.bool != true || selected["authentication"]?.string != "verified")
+        .disabled(busy || disconnected || switching || pending != nil || isActive || state["capabilities"]?.object?["appOnly"]?.bool != true || selected["authentication"]?.string != "verified")
         .accessibilityIdentifier("clawdad.accounts.activate")
         .accessibilityHint("Uses this subscription for subsequent ClawDad work on this Mac. Terminal stays independent.")
     }.padding(18)
@@ -130,13 +133,14 @@ struct AppAccountPicker: View {
   }
   private func accept(_ reply: [String: AssistantValue]) {
     let previous = activeID
+    disconnected = false
     if let value = reply["accounts"]?.object { state = value }
-    if selectedID.isEmpty || !entries.contains(where: { $0["id"]?.string == selectedID }) { selectedID = activeID.isEmpty ? entries.first?["id"]?.string ?? "" : activeID }
+    if selectedID.isEmpty || !entries.contains(where: { $0["id"]?.string == selectedID }) { selectedID = activeID.isEmpty ? state["selectedAccountId"]?.string ?? entries.first?["id"]?.string ?? "" : activeID }
     if previous != activeID { session.requestWeeklyUsage() }
     if let saved = pending, let id = saved["requestId"]?.string {
       let signInReceived = entries.contains { $0["authorization"]?.object?["operation"]?.object?["requestId"]?.string == id }
       if reply["accountReceipt"]?.object?["requestId"]?.string == id || reply["accountOperation"]?.object?["id"]?.string == id || signInReceived || CodexAccountRequestRecovery.acknowledged(saved, reply: reply) {
-        pending = nil; UserDefaults.standard.removeObject(forKey: pendingKey)
+        pending = nil; error = ""; UserDefaults.standard.removeObject(forKey: pendingKey)
       }
     }
     if let message = reply["accountReceipt"]?.object?["error"]?.string { error = message }
@@ -147,7 +151,7 @@ struct AppAccountPicker: View {
       let args: [String: AssistantValue] = pending?["requestId"].map { ["receiptId": $0] } ?? [:]
       let reply = try await assistant.settingsRequest("accounts.status", args: args)
       if scope == pendingKey { accept(reply) }
-    } catch { self.error = "Reconnect to your Mac to check the account. Your selection is preserved." }
+    } catch { if scope == pendingKey { disconnected = true } }
   }
   private func refreshSelected() async {
     guard !selectedID.isEmpty, !busy else { return }; let scope = pendingKey

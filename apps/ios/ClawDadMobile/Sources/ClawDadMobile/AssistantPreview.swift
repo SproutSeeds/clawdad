@@ -153,6 +153,20 @@
             .object(["id":.string(name),"email":.string(name+"@example.test"),"authentication":.string("verified"),
               "usage":.object(["remainingPercent":.number(Double(65-index*20)),"resetsAt":.number(2000000000),"observedAt":.string("2026-09-17T10:00:00Z"),"status":.string("stale"),"message":.string("Last verified reading. Refresh to check current allowance.")])])
           })]
+        if state["codexAccounts"] == nil {
+          let arguments=ProcessInfo.processInfo.arguments
+          let mode=arguments.firstIndex(of:"--clawdad-accounts-state").flatMap { index in arguments.indices.contains(index+1) ? arguments[index+1] : nil }
+          if let mode {
+            accounts["current"] = .object(["status":.string("current"),"email":.string("first@example.test")])
+            if mode=="unavailable" { accounts["activeAccountId"] = .null;accounts["current"] = .object(["status":.string("unavailable"),"message":.string("Reconnect to verify the running app account.")]) }
+            else {
+              accounts["activeOperation"] = .object(["id":.string("fixture-operation"),"targetId":.string("second"),"fenced":.bool(true),"phase":.string("preflight"),
+                "status":.string(mode=="attention" ? "needs_attention":"waiting"),
+                "reasonCode":.string(mode=="mac" ? "app_process_reader_unavailable":mode=="work" ? "accepted_app_work":"app_work_needs_reconciliation"),
+                "reason":.string(mode=="mac" ? "Waiting for the Mac connection. Activation will continue automatically when its process check is ready.":mode=="work" ? "Waiting for ClawDad project example (request fixture) to finish on its current account.":"This app request needs receipt recovery. Retry activation to check it again.")])
+            }
+          }
+        }
         if action=="accounts.activate" {
           let operation:AssistantValue = .object(["id":.string(id),"targetId":args["accountId"] ?? .null,"status":.string("completed"),"phase":.string("complete"),"fenced":.bool(false),"reason":.string("Active for ClawDad. Terminal authentication is unchanged.")])
           accounts["activeAccountId"]=args["accountId"];accounts["activeOperation"]=operation;accounts["operations"] = .array([operation])
