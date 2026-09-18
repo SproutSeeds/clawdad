@@ -29,8 +29,9 @@ export function codexAccountsPanel(root,{request=async body=>{
   const date=value=>new Intl.DateTimeFormat(undefined,{weekday:'short',month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit',timeZoneName:'short'}).format(new Date(value));
   function render(){
     const entries=state?.accounts||[],activeAccount=entries.find(a=>a.id===state.activeAccountId);
-    active.textContent='Active · '+(activeAccount?.email||state?.current?.email||'Checking account…');
-    if(!entries.some(a=>a.id===selected))selected=state?.activeAccountId||entries[0]?.id||'';
+    active.textContent=state?.current?.status==='unavailable'?'Active account unavailable':
+      'Active · '+(state?.current?.email||activeAccount?.email||(state?.requiresActivation?'Choose an account':'Checking account…'));
+    if(!entries.some(a=>a.id===selected))selected=state?.activeAccountId||state?.selectedAccountId||entries[0]?.id||'';
     const options=entries.map(a=>({id:a.id,label:a.email+(a.id===state.activeAccountId?' · Active':'')}));
     if(picker.dataset.options!==JSON.stringify(options)){picker.replaceChildren(...options.map(a=>{const o=el('option',a.label);o.value=a.id;return o;}));picker.dataset.options=JSON.stringify(options);}
     picker.value=selected;picker.disabled=!entries.length;
@@ -43,10 +44,13 @@ export function codexAccountsPanel(root,{request=async body=>{
     explanation.textContent=stale?(reading?.message||'This is an older reading. Refresh to check the current allowance.'):
       reading?.ordinaryUsageAllowed===false?'Subscription access is currently limited. Activation is available; model work may need to wait for the applicable limit to reset.':'';
     const connecting=['checking','starting','awaiting_user','cancelling'].includes(ceremony?.status),isActive=selected===state?.activeAccountId;
-    activate.textContent=isActive&&!op?.fenced?'Active':op?.fenced&&op.targetId===selected?'Activating…':'Activate';
+    activate.textContent=isActive&&!op?.fenced?'Active':op?.fenced&&op.targetId===selected?
+      op.status==='needs_attention'?'Needs attention':op.status==='waiting'?'Waiting for app work…':'Activating…':'Activate';
     activate.disabled=busy||!!pending||isActive&&!op?.fenced||!!op?.fenced||entry?.authentication!=='verified'||state?.capabilities?.appOnly!==true;
     activate.setAttribute('aria-label',isActive?'Active ClawDad account':'Activate '+(entry?.email||'selected account'));
-    status.textContent=op?.reason||(!state?'Loading accounts…':state.capabilities?.appOnly!==true?'Update ClawDad on the Mac to use app-only account activation.':'');
+    status.textContent=op?.fenced?op.reason||'Checking activation…':!state?'Loading accounts…':state.requiresActivation?
+      'Activate a saved account to start ClawDad work.':state.current?.status==='unavailable'?state.current.message||'Reconnect to verify the running app account.':
+      state.capabilities?.appOnly!==true?'Update ClawDad on the Mac to use app-only account activation.':'';
     recover.hidden=op?.status!=='needs_attention';recover.disabled=busy||!!pending;
     cancel.hidden=!op?.fenced||!['preflight','authenticate'].includes(op.phase);cancel.disabled=busy||!!pending;
     refresh.disabled=busy||connecting||!selected;

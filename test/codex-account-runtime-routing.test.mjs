@@ -17,8 +17,17 @@ test('native project workers verify their exact accepted receipt and selected ac
 test('shared startup uses selected routing; a transition hold permits existing health without creating or upgrading a process',async()=>{
   let gate={allowed:true},starts=0,checks=0;const launch={env:{CODEX_HOME:'/third'},configArgs:[]},options={socketPath:'/fixture/socket',env:{HOME:'/user'}};
   const accounts={admission:async()=>gate,selectedLaunch:async()=>launch,assertDelivery:async()=>{checks++;}};
-  const extra={accounts,exclusive:async(_path,fn)=>fn(),status:async()=>({ready:true,mode:'shared'}),ensure:async value=>{starts++;assert.equal(value.accountLaunch,launch);assert.equal(value.env,launch.env);return {ready:true};}};
+  const extra={accounts,verify:async()=>{},exclusive:async(_path,fn)=>fn(),status:async()=>({ready:true,mode:'shared'}),ensure:async value=>{starts++;assert.equal(value.accountLaunch,launch);assert.equal(value.env,launch.env);return {ready:true};}};
   await ensureAccountSharedRuntime(options,extra);assert.equal(starts,1);
   gate={allowed:false,phase:'preflight'};await ensureAccountSharedRuntime(options,{...extra,receipt:{id:'accepted'}});assert.equal(checks,1);assert.equal(starts,1);
   gate={allowed:false,phase:'transition',reason:'switching'};await assert.rejects(ensureAccountSharedRuntime(options,extra),{code:'account_switch_pending'});assert.equal(starts,1);
+});
+
+test('an unselected native startup never launches a server using Terminal credentials',async()=>{
+  let launches=0;
+  await assert.rejects(ensureAccountSharedRuntime({socketPath:'/fixture/socket'}, {
+    accounts:{admission:async()=>({allowed:false,phase:'unselected',reasonCode:'app_account_required',reason:'Activate an app account.'})},
+    exclusive:async(_path,fn)=>fn(),status:async()=>({ready:true}),ensure:async()=>{launches++;}
+  }),{code:'app_account_required'});
+  assert.equal(launches,0);
 });

@@ -1,0 +1,89 @@
+{
+  "capturedAt": "2026-09-18T01:27:28.702Z",
+  "server": {
+    "pid": 84171,
+    "selectedProfileHome": true,
+    "reportedSelectedAccount": true,
+    "loadedThreads": 0
+  },
+  "threads": [
+    {
+      "status": {
+        "type": "notLoaded"
+      },
+      "turnsHash": "c1a80746738317da117d6256bb04280065ca3c77cc4809750fb91277673a98be",
+      "turnsUnchanged": true,
+      "modelUnchanged": true,
+      "effortUnchanged": true,
+      "directoryUnchanged": true
+    },
+    {
+      "status": {
+        "type": "notLoaded"
+      },
+      "turnsHash": "2a541caa34631dc4c0a58a30ec25bdbaa3bbc645c6cd9933ce7bbd51746004fe",
+      "turnsUnchanged": true,
+      "modelUnchanged": true,
+      "effortUnchanged": true,
+      "directoryUnchanged": true
+    },
+    {
+      "status": {
+        "type": "notLoaded"
+      },
+      "turnsHash": "e4971cb54dc7955f37b95cea27ceff2b8c11120f39c6e8f14bcf7deff2c0d319",
+      "turnsUnchanged": true,
+      "modelUnchanged": true,
+      "effortUnchanged": true,
+      "directoryUnchanged": true
+    },
+    {
+      "status": {
+        "type": "notLoaded"
+      },
+      "turnsHash": "9952c8bc67d122599c5990244721668cca2c0c08724bb22545ee27487222bdf9",
+      "turnsUnchanged": true,
+      "modelUnchanged": true,
+      "effortUnchanged": true,
+      "directoryUnchanged": true
+    }
+  ],
+  "terminal": [
+    {
+      "pid": 36493,
+      "unchanged": true
+    },
+    {
+      "pid": 58159,
+      "unchanged": true
+    },
+    {
+      "pid": 6017,
+      "unchanged": true
+    },
+    {
+      "pid": 30058,
+      "unchanged": true
+    },
+    {
+      "pid": 54463,
+      "unchanged": true
+    },
+    {
+      "pid": 51532,
+      "unchanged": true
+    },
+    {
+      "pid": 56262,
+      "unchanged": true
+    }
+  ],
+  "nativeOnline": true,
+  "shellUnchanged": true,
+  "conversationUnchanged": true,
+  "assistantMessagesUnchanged": true,
+  "draftsUnchanged": true,
+  "appReceiptsUnchanged": true,
+  "epoch": 1,
+  "operationStatus": "completed"
+}

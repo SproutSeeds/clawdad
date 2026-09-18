@@ -1,0 +1,25 @@
+{
+  "bundle": {
+    "files": 10,
+    "mismatches": []
+  },
+  "runningRuntime": {
+    "files": 10,
+    "mismatches": []
+  },
+  "version": "0.7.0",
+  "build": "162",
+  "notarization": {
+    "app": {
+      "id": "bd29de92-549d-43e6-83e2-d4379abc4c84",
+      "status": "Accepted",
+      "message": "Processing complete"
+    },
+    "dmg": {
+      "status": "Accepted",
+      "id": "8677956e-210b-4145-8b66-8d827af09fe7",
+      "message": "Processing complete"
+    }
+  },
+  "gatekeeper": "/Applications/ClawDad.app: accepted\nsource=Notarized Developer ID"
+}

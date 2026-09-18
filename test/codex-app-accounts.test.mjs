@@ -8,6 +8,7 @@ import {CodexAppAccounts} from '../lib/codex-app-accounts.mjs';
 import {AssistantRuntime} from '../lib/assistant-runtime.mjs';
 import {CodexAccountLayout} from '../lib/codex-account-layout.mjs';
 import {researchSave} from '../lib/research-budget.mjs';
+import {CodexAccountLegacyWork} from '../lib/codex-account-legacy-work.mjs';
 
 async function fixture(t){
   const root=await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(),'clawdad-app-accounts-')));
@@ -109,4 +110,50 @@ test('bounded read-only inventory races keep the same activation and never repla
   await f.accounts.advance();assert.equal((await f.accounts.snapshot()).activeOperation.status,'completed');
   const count=f.effects.length;await f.accounts.advance();assert.equal(f.effects.length,count);
   assert.equal((await f.accounts.snapshot()).activeOperation.id,op.id);
+});
+
+test('an answered project history receipt releases activation without rewriting history or replaying work',async t=>{
+  const f=await fixture(t);let historyStatus='working';
+  const work=new CodexAccountLegacyWork({root:path.join(f.root,'ProjectWork'),accounts:f.accounts,
+    inspectReceipt:async job=>({id:job.id,projectPath:job.projectPath,sessionId:job.sessionId,status:historyStatus})});
+  f.accounts.readWork=()=>work.snapshot();
+  const job=await work.reserve({id:'finished-request',fingerprint:'exact payload',projectPath:'/project/example',sessionId:'exact-thread'});
+  await work.prepare(job);await f.activate();await f.accounts.advance();
+  let op=(await f.accounts.snapshot()).activeOperation;
+  assert.equal(op.status,'waiting');assert.match(op.reason,/project example.*finished/);assert.equal(f.effects.length,0);
+  historyStatus='answered';await f.accounts.advance();
+  op=(await f.accounts.snapshot()).activeOperation;assert.equal(op.status,'completed');
+  assert.equal((await work.load(job.id)).status,'sending');assert.equal(historyStatus,'answered');
+  assert.equal(f.effects.filter(x=>x==='transition').length,1);
+});
+
+test('receipt recovery is explicit and retains the original request instead of claiming it is finishing',async t=>{
+  const f=await fixture(t);
+  f.jobs.push({id:'uncertain-request',action:'legacy.dispatch',fingerprint:'original',status:'attention',projectPath:'/project/review'});
+  await f.activate();await f.accounts.advance();
+  const op=(await f.accounts.snapshot()).activeOperation;
+  assert.equal(op.status,'needs_attention');assert.equal(op.reasonCode,'app_work_needs_reconciliation');
+  assert.match(op.reason,/project review.*uncertai.*receipt recovery/);assert.doesNotMatch(op.reason,/finishing|Terminal/);
+  assert.equal(f.effects.length,0);
+});
+
+test('native startup requires an isolated selection, while Terminal and read-only account controls remain available',async t=>{
+  const f=await fixture(t);f.accounts.requireSelection=true;
+  assert.equal((await f.accounts.admission()).reasonCode,'app_account_required');
+  await assert.rejects(f.accounts.selectedLaunch(),{code:'app_account_required'});
+  await assert.rejects(f.accounts.withWorkAdmission({id:'new',action:'message',fingerprint:'new'},()=>{throw Error('must not dispatch');}),{code:'app_account_required'});
+  let terminal=0;await f.accounts.withWorkAdmission({id:'terminal',action:'terminal.send',fingerprint:'text'},async()=>{terminal++;});assert.equal(terminal,1);
+  await f.activate();await f.accounts.advance();
+  const route=await f.accounts.selectedLaunch();assert.equal(route.env.CODEX_HOME,f.home);assert.equal((await f.accounts.admission()).allowed,true);
+});
+
+test('active label uses observed server identity and never the allowance probe or mismatched saved selection',async t=>{
+  const f=await fixture(t);f.accounts.usage.snapshot=async()=>({subscription:{email:'terminal@example.test'},status:'current'});
+  let current={status:'current',email:'server@example.test',accountKey:'b'.repeat(64),authorizationHome:'/old/home'};
+  f.accounts.readActive=async()=>current;
+  let snapshot=await f.accounts.snapshot();assert.equal(snapshot.current.email,'server@example.test');assert.equal(snapshot.activeAccountId,null);
+  await f.activate();await f.accounts.advance();snapshot=await f.accounts.snapshot();assert.equal(snapshot.activeAccountId,null);assert.equal(snapshot.selectedAccountId,f.entry.id);
+  current={...current,email:f.entry.email,accountKey:f.key,authorizationHome:f.home};assert.equal((await f.accounts.snapshot()).activeAccountId,f.entry.id);
+  f.accounts.readActive=async()=>{throw Error('disconnected');};snapshot=await f.accounts.snapshot();
+  assert.equal(snapshot.activeAccountId,null);assert.equal(snapshot.current.status,'unavailable');assert.equal(snapshot.current.email,undefined);
 });

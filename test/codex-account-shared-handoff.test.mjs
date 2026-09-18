@@ -91,3 +91,22 @@ test('expired empty source restarts exactly once and still requires a verified d
   f.state.value.accountVerified=false;
   await assert.rejects(f.controller().run(f.args),{code:'shared_account_completed_changed'});
 });
+
+test('expired source preserves every idle conversation and refuses changed source identity',async t=>{
+  const f=await fixture(t);
+  Object.assign(f.source,{accountKey:null,accountVerified:false,sourceAccountUnavailable:true,sourceAccountIdentityHash:h,
+    executable:'/verified/codex',authorizationHome:'/original',serverOptions:[]});
+  f.state.value=structuredClone(f.source);
+  f.state.value.sourceAccountIdentityHash=a;
+  await assert.rejects(f.controller().run(f.args),{code:'shared_account_destination_unverified'});
+  assert.deepEqual(f.state.effects,[]);
+  f.state.value=structuredClone(f.source);
+  const launch=f.driver.launch;f.driver.launch=async args=>{const r=await launch(args);f.state.value.accountVerified=true;delete f.state.value.sourceAccountUnavailable;delete f.state.value.sourceAccountIdentityHash;return r;};
+  assert.equal((await f.controller().run(f.args)).phase,'verified');
+  assert.deepEqual(f.state.value.threads,f.source.threads);
+  assert.deepEqual(f.state.effects,['release','release','stop','launch','resume','resume']);
+  await f.controller().run(f.args);assert.equal(f.state.effects.length,6);
+  for(const change of [s=>s.threads[0].busy=true,s=>s.threads[0].queueEmpty=false,s=>s.threads[0].approvalsEmpty=false,s=>s.sourceAccountIdentityHash='missing']){
+    const bad=structuredClone(f.source);change(bad);assert.throws(()=>validateSharedAccountCapture(bad));
+  }
+});

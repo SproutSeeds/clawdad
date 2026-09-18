@@ -1,0 +1,117 @@
+[
+  {
+    "path": "lib/codex-app-account-status.mjs",
+    "scope": "account-fix",
+    "sha256": "02f68b574f8b562ad582cf4d00ab2ec9a4d7d581956d166bbfa96d3018279623"
+  },
+  {
+    "path": "lib/codex-account-project-inventory.mjs",
+    "scope": "account-fix",
+    "sha256": "59371025d61f996dbafaf75bd5474a3452a516654d357dac4b6c2875f39ca634"
+  },
+  {
+    "path": "lib/codex-account-legacy-work.mjs",
+    "scope": "account-fix",
+    "sha256": "41df53e1520010a9b49ee5f65cfe7513a0e906835263efea5d3d15987ddb0738"
+  },
+  {
+    "path": "lib/codex-app-accounts.mjs",
+    "scope": "account-fix",
+    "sha256": "fffeb20841613934a1804a1199bbcfe23363cc9db767184fe6a0e49726cb4d96"
+  },
+  {
+    "path": "lib/codex-account-runtime-routing.mjs",
+    "scope": "account-fix",
+    "sha256": "4752959bbb1b168cbaef5dc94ffb961654c3eff5ac8aa3297b813d8e956349e1"
+  },
+  {
+    "path": "lib/server.mjs",
+    "scope": "account-fix",
+    "sha256": "d986713aa0ae159c5e222a990c3e29b2a6c5398bf7bd76d4465b941028bea2c8"
+  },
+  {
+    "path": "web/codex-accounts.js",
+    "scope": "account-fix",
+    "sha256": "30fcdf0c7d2cccf616963f7d73d04bc4665419c5429bd30286b7b626ff809dd3"
+  },
+  {
+    "path": "lib/codex-app-account-work.mjs",
+    "scope": "account-fix",
+    "sha256": "71d62d2ce05935e4500a55fe5185227c37f02bac41154578bbe456d2418b9be3"
+  },
+  {
+    "path": "test/codex-app-account-status.test.mjs",
+    "scope": "account-fix",
+    "sha256": "93dfed940d96187af202edf0608af38b0f57f90f12bee86881a993e2ff64b5df"
+  },
+  {
+    "path": "test/codex-app-accounts.test.mjs",
+    "scope": "account-fix",
+    "sha256": "093f28677fa6df60749a42a20c836cf55ecc3c470d69ebe451c75b5057078c29"
+  },
+  {
+    "path": "test/codex-account-project-inventory.test.mjs",
+    "scope": "account-fix",
+    "sha256": "afbbedfa65de2a3d9ccb2c531b768f8eb6f73fd1a090d1f4adec09335dfb273e"
+  },
+  {
+    "path": "test/codex-account-runtime-routing.test.mjs",
+    "scope": "account-fix",
+    "sha256": "cc1b5e76eb5f8f16a15883ef020bfbec9e66cfa80ee12907931e87cf2e7f89c5"
+  },
+  {
+    "path": "native/macos/build-app.sh",
+    "scope": "inherited-build-tools",
+    "sha256": "8f9a09a85ac5c247ec01c151ac9ce963b431008b595c65a96721f25201e95e0d"
+  },
+  {
+    "path": "native/macos/package-release.sh",
+    "scope": "inherited-build-tools",
+    "sha256": "8e01162feca8b592b265fdc1328506fcde6abfe80d9a0506dbdd052106d79569"
+  },
+  {
+    "path": "native/macos/storage-workflow.sh",
+    "scope": "inherited-build-tools",
+    "sha256": "57db0f72a14079b956d7e6a3c3a99c6009bc459a5c364a6ae8c4335a0d32771f"
+  },
+  {
+    "path": "lib/codex-account-shared-rpc.mjs",
+    "scope": "account-fix",
+    "sha256": "277bb8fe3db011c9589f0decc318466470f221a2b48b89c88169e4bf39fd2469"
+  },
+  {
+    "path": "lib/codex-account-shared-handoff.mjs",
+    "scope": "account-fix",
+    "sha256": "8f1c572e5abda613fd779cea90e725366139c3cc1aba53d9f642a295b9bfa2f8"
+  },
+  {
+    "path": "test/codex-account-shared-rpc.test.mjs",
+    "scope": "account-fix",
+    "sha256": "210e28f183cd05dda8e39423c110287fe63731dd5bbdbc92045d0b412c949dc6"
+  },
+  {
+    "path": "test/codex-account-shared-handoff.test.mjs",
+    "scope": "account-fix",
+    "sha256": "b92f23c56d05ac8ebb81dce317803b1dc5fa167b2ad547d41bbc715de7acb9cc"
+  },
+  {
+    "path": "test/fixtures/codex-accounts-desktop-server.mjs",
+    "scope": "account-fix",
+    "sha256": "60038418810fc0a8a4e6cfa2dc6e26a7bcaff67880c6d56a2685b1a675132523"
+  },
+  {
+    "path": "native/macos/Tests/ClawDadTests/CodexAccountsWebTests.swift",
+    "scope": "account-fix",
+    "sha256": "c622971f9366410239041e42854f188df9f24d658a6c799ea9d8dd15043f2720"
+  },
+  {
+    "path": "docs/releases/0.7.0-beta.20-macos-162-account-activation.md",
+    "scope": "account-fix",
+    "sha256": "3dab7e6303bd089051e85301f9a9a23cb1a871d3ce8bb7a03f82348690e5871e"
+  },
+  {
+    "path": "docs/mac-distribution.md",
+    "scope": "account-fix",
+    "sha256": "c712aea05dd539b6658ac32ce78d5176f88599dd2f37eb37f3fcc8b14f9edcf9"
+  }
+]

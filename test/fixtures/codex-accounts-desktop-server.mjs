@@ -12,7 +12,12 @@ const usage={snapshot:async()=>({status:'current',accountKey:'a'.repeat(64),rema
   observedAt:new Date().toISOString(),alerts:[],subscription:{method:'chatgpt',email:'fixture@example.test',plan:'pro'}})};
 usage.freshReading=usage.snapshot;
 runtime.accounts=new CodexAccounts({root:path.join(root,'Accounts'),usage,inspectConsumers:async()=>({complete:false,consumers:[],reasons:['Synthetic inventory only.']})});
-const profiles=[],jobs=[],requests=[];let drops=0;
+const profiles=[],jobs=[],requests=[];let drops=0,actualProfile=null,identityMismatch=false,identityUnavailable=false;
+runtime.accounts.readActive=async()=>{
+  if(identityUnavailable)throw Error('Fixture server offline');
+  const p=identityMismatch?profiles[1]:actualProfile;
+  return p?{email:p.email,status:'current',accountKey:p.accountKey,authorizationHome:p.home}:null;
+};
 runtime.accounts.authorizations={snapshot:async()=>({profiles}),request:async()=>({status:'verified'})};
 const canonical=path.join(root,'History');await fs.mkdir(canonical,{mode:0o700});
 for(const name of ['sessions','archived_sessions','thread-writer-locks'])await fs.mkdir(path.join(canonical,name),{mode:0o700});
@@ -25,7 +30,7 @@ for(const [index,email] of ['fixture@example.test','second@example.test'].entrie
 }
 runtime.accounts.readWork=async()=>({complete:true,jobs});
 runtime.accounts.adapter={capture:async()=>({kind:'absent'}),prepare:async(op,target)=>({method:'chatgpt',email:target.email,accountKey:profiles.find(p=>p.accountId===target.id).accountKey}),transition:async()=>({}),
-  verify:async op=>{const p=profiles.find(p=>p.accountId===op.targetId);return {accountKey:p.accountKey,runtime:{authorizationHome:p.home,sqliteHome:canonical,layout:layouts.get(p.accountId)}};}};
+  verify:async op=>{const p=profiles.find(p=>p.accountId===op.targetId);actualProfile=p;return {accountKey:p.accountKey,runtime:{authorizationHome:p.home,sqliteHome:canonical,layout:layouts.get(p.accountId)}};}};
 await runtime.load();await runtime.accounts.request({accountId:profiles[0].accountId,requestId:'initial',expectedRevision:2,confirmed:true});await runtime.accounts.advance();
 runtime.accounts.start({intervalMs:30});
 const page=await fs.readFile(new URL('../../web/index.html',import.meta.url),'utf8');
@@ -45,6 +50,9 @@ const server=http.createServer(async(req,res)=>{
   }
   if(url.pathname==='/v1/codex/weekly-usage')return json(res,200,await usage.snapshot());
   if(url.pathname==='/fixture/drop'){drops=1;return json(res,200,{ok:true});}
+  if(url.pathname==='/fixture/identity-mismatch'){identityMismatch=true;return json(res,200,{ok:true});}
+  if(url.pathname==='/fixture/identity-unavailable'){identityUnavailable=true;return json(res,200,{ok:true});}
+  if(url.pathname==='/fixture/identity-reset'){identityMismatch=false;identityUnavailable=false;return json(res,200,{ok:true});}
   if(url.pathname==='/fixture/evidence')return json(res,200,{requests,state:await runtime.accounts.snapshot(),jobs:runtime.state.jobs});
   if(await assistantHttp(req,res,url,runtime,{json,readBody:async r=>{let text='';for await(const chunk of r)text+=chunk;const body=JSON.parse(text);requests.push(body);if(body.action==='accounts.activate'&&drops){drops--;res.end=()=>res.destroy();}return body;}}))return;
   json(res,404,{error:'Fixture route unavailable'});

@@ -46,8 +46,12 @@ Gatekeeper can verify them even when the Mac is offline.
 ClawDad embeds Node 24.20.0 and ORP inside the app bundle. It does not require a
 global Node installation. When the customer approves Codex installation, the
 setup assistant uses OpenAI's official standalone installer for
-`~/.local/bin/codex`; ClawDad and Terminal then share the account and thread
-history under `~/.codex`.
+`~/.local/bin/codex`. ClawDad requires a saved account to be activated before
+starting app work and uses that profile's separate Keychain authentication from
+startup. Terminal keeps its own sign-in. Conversation history and configuration
+can remain shared under `~/.codex`; the app's active account is verified against
+the running app server rather than inferred from a Terminal login or allowance
+preview.
 
 ## First-Run Permissions
 

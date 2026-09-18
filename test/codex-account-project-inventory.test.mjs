@@ -19,7 +19,7 @@ test('old queued work retains one immutable request through progress and complet
   const f=await fixture(t),first=await readLegacyAccountInventory(f.projects);assert.equal(first.complete,true);assert.equal(first.jobs.length,1);
   await researchSave(f.file,{...f.record,status:'running',response:'partial'});
   const second=await readLegacyAccountInventory(f.projects);assert.equal(first.jobs[0].fingerprint,second.jobs[0].fingerprint);
-  await fs.unlink(f.item);await researchSave(f.file,{...f.record,status:'completed',response:'done'});
+  await fs.unlink(f.item);await researchSave(f.file,{...f.record,status:'answered',response:'done'});
   const done=await readLegacyAccountInventory(f.projects,{known:first.jobs});assert.equal(done.complete,true);assert.equal(done.jobs[0].status,'completed');
   assert.equal(done.jobs[0].fingerprint,first.jobs[0].fingerprint);assert.ok(!JSON.stringify(done).includes(f.record.message));
 });

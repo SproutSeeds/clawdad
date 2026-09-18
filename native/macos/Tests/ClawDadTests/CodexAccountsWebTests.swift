@@ -25,6 +25,12 @@ import WebKit
     try await wait(view,"document.getElementById('codexAccounts').textContent.includes('0% weekly remaining')")
     let untouched=try await view.evaluateJavaScript("document.getElementById('codexAccounts').firstChild.textContent==='Active · fixture@example.test'") as? Bool
     XCTAssertEqual(untouched,true,"Preview must not activate")
+    _=try await URLSession.shared.data(from:base.appendingPathComponent("fixture/identity-mismatch"))
+    try await wait(view,"document.getElementById('codexAccounts').firstChild.textContent==='Active · second@example.test'")
+    _=try await URLSession.shared.data(from:base.appendingPathComponent("fixture/identity-unavailable"))
+    try await wait(view,"document.getElementById('codexAccounts').firstChild.textContent==='Active account unavailable'")
+    _=try await URLSession.shared.data(from:base.appendingPathComponent("fixture/identity-reset"))
+    try await wait(view,"document.getElementById('codexAccounts').firstChild.textContent==='Active · fixture@example.test'")
     for width in [375,430,980] {
       view.setFrameSize(NSSize(width:width,height:900));window.setContentSize(view.frame.size)
       try await Task.sleep(for:.milliseconds(100))
